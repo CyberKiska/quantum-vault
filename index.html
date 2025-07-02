@@ -58,12 +58,12 @@
   </section>
 
   <script type="module">
-    // --- Libraries (User-specified versions) ---
-    import { ml_kem1024 } from 'https://esm.sh/@noble/post-quantum@0.4.1/ml-kem.js';
-    import { hkdf } from 'https://esm.sh/@noble/hashes@1.8.0/hkdf';
-    import { sha256 } from 'https://esm.sh/@noble/hashes@1.8.0/sha256';
-    import { sha3_512 } from 'https://esm.sh/@noble/hashes@1.8.0/sha3';
-    import { split, combine } from 'https://esm.sh/shamir-secret-sharing@0.0.4';
+    // --- Libraries ---
+    import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
+    import { hkdf } from '@noble/hashes/hkdf';
+    import { sha256 } from '@noble/hashes/sha256';
+    import { sha3_512 } from '@noble/hashes/sha3';
+    import { split, combine } from 'shamir-secret-sharing';
 
     // --- DOM Elements ---
     const allButtons = document.querySelectorAll('button');
