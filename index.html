@@ -167,7 +167,6 @@
     }
 
     // --- Event Handlers ---
-
     genKeyBtn.addEventListener('click', async () => {
       setButtonsDisabled(true);
       try {
@@ -272,7 +271,6 @@
             const containerHash = await hashBytes(containerBytes);
             log(`  Container hash: SHA3-512=${containerHash}`);
 
-            // FIX: The split function is asynchronous and must be awaited.
             const shardsObject = await split(containerBytes, shares, threshold);
             
             const shards = Object.values(shardsObject);
@@ -307,7 +305,6 @@
             
             const shards = await Promise.all([...files].map(f => readFileAsUint8Array(f)));
             
-            // FIX: The combine function is also asynchronous and must be awaited.
             const reconstructedBytes = await combine(shards);
             const reconstructedBlob = new Blob([reconstructedBytes]);
 
