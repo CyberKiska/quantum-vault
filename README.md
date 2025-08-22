@@ -47,5 +47,5 @@ The application incorporates the following dependencies that are released under 
 | Library               | Version | Copyright holder | Upstream repository                               |
 | --------------------- | ------- | ---------------- | ------------------------------------------------- |
 | shamir-secret-sharing | 0.0.4   | Privy            | https://github.com/privy-io/shamir-secret-sharing |
-| noble-post-quantum    | 0.4.1   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
+| noble-post-quantum    | 0.5.0   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
 | noble-hashes          | 1.8.0   | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
