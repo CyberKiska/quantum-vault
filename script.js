@@ -1,3 +1,4 @@
+// --- Libraries ---
 import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import { kmac256 } from '@noble/hashes/sha3-addons.js';
 import { sha3_512 } from '@noble/hashes/sha3.js';
@@ -5,7 +6,8 @@ import { split, combine } from 'shamir-secret-sharing';
 
 // --- Constants ---
 const MAGIC = new TextEncoder().encode('QVv1');
-const DEFAULT_CUSTOMIZATION = 'QuantumVault v1.2.0';
+const DEFAULT_CUSTOMIZATION = 'QuantumVault v1.2.1';
+const MINIMAL_CONTAINER_SIZE = 38; // Minimal size: MAGIC(4) + keyLen(4) + iv(12) + salt(16) + metaLen(2) = 38 bytes
 
 // --- DOM Elements ---
 const allButtons = document.querySelectorAll('button');
@@ -26,13 +28,24 @@ const logEl = document.getElementById('log');
 // --- Utility Functions ---
 const toHex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
 
+function toUint8(x) {
+    if (x instanceof Uint8Array) return x;
+    if (x instanceof ArrayBuffer) return new Uint8Array(x);
+    if (ArrayBuffer.isView(x)) return new Uint8Array(x.buffer, x.byteOffset, x.byteLength);
+    throw new TypeError('Expected ArrayBuffer or Uint8Array');
+}
+
 function log(msg) {
     logEl.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
     logEl.scrollTop = logEl.scrollHeight;
 }
 
 function logError(msg) {
-    logEl.innerHTML += `<span class="error">[${new Date().toLocaleTimeString()}] ERROR: ${msg}</span>\n`;
+    const errorSpan = document.createElement('span');
+    errorSpan.className = 'error';
+    errorSpan.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${msg}`;
+    logEl.appendChild(errorSpan);
+    logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -66,8 +79,8 @@ async function deriveKeyWithKmac(sharedSecret, salt, metaBytes) {
     kmacMessage.set(salt, 0);
     kmacMessage.set(metaBytes, salt.length);
 
-    const derivedKey = kmac256(sharedSecret, kmacMessage, 32, DEFAULT_CUSTOMIZATION);
-    const aesKey = await crypto.subtle.importKey('raw', derivedKey, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    const derivedKey = kmac256(sharedSecret, kmacMessage, 32, { customization: DEFAULT_CUSTOMIZATION });
+    const aesKey = await crypto.subtle.importKey('raw', derivedKey.buffer, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
     
     derivedKey.fill(0);
     sharedSecret.fill(0);
@@ -79,8 +92,12 @@ function normalizeEncapsulateResult(kemResult) {
     const encapsulatedKey = kemResult.cipherText || kemResult.ciphertext || kemResult.ct;
     const sharedSecret = kemResult.sharedSecret || kemResult.ss;
     if (!encapsulatedKey || !sharedSecret) throw new Error('KEM encapsulation failed: result is missing required fields.');
-    return { encapsulatedKey, sharedSecret };
+    return { 
+        encapsulatedKey: toUint8(encapsulatedKey), 
+        sharedSecret: toUint8(sharedSecret) 
+    };
 }
+
 
 async function encryptFile(fileBytes, publicKey) {
     const { encapsulatedKey, sharedSecret } = normalizeEncapsulateResult(await ml_kem1024.encapsulate(publicKey));
@@ -90,9 +107,9 @@ async function encryptFile(fileBytes, publicKey) {
 
     const meta = {
         KEM: 'ML-KEM-1024',
-        KDF: 'kmac256',
+        KDF: 'KMAC256',
         AEAD: 'AES-256-GCM',
-        fmt: 'QVv1-2-0',
+        fmt: 'QVv1-2-1',
         timestamp: new Date().toISOString(),
         fileHash: await hashBytes(fileBytes)
     };
@@ -123,6 +140,10 @@ async function encryptFile(fileBytes, publicKey) {
 }
 
 async function decryptFile(containerBytes, secretKey) {
+    if (containerBytes.length < MINIMAL_CONTAINER_SIZE) {
+        throw new Error(`File is too small to be a valid container (size: ${containerBytes.length} B).`);
+    }
+
     const dv = new DataView(containerBytes.buffer, containerBytes.byteOffset);
     let offset = 0;
 
@@ -147,6 +168,13 @@ async function decryptFile(containerBytes, secretKey) {
     const metaLen = dv.getUint16(offset, false);
     offset += 2;
 
+    if (metaLen <= 0 || metaLen > 4096) {
+        throw new Error(`Invalid metadata length: ${metaLen}. Must be between 1 and 4096.`);
+    }
+    if (offset + metaLen > containerBytes.length) {
+        throw new Error('Incomplete container: metadata length exceeds file size.');
+    }
+
     const metaBytes = containerBytes.subarray(offset, offset + metaLen);
     const metadata = JSON.parse(new TextDecoder().decode(metaBytes));
     offset += metaLen;
@@ -154,7 +182,9 @@ async function decryptFile(containerBytes, secretKey) {
     const header = containerBytes.subarray(0, offset);
     const encryptedData = containerBytes.subarray(offset);
 
-    const sharedSecret = await ml_kem1024.decapsulate(encapsulatedKey, secretKey);
+    const decapsulationResult = await ml_kem1024.decapsulate(encapsulatedKey, secretKey);
+    const sharedSecret = toUint8(decapsulationResult);
+
     if (!sharedSecret || sharedSecret.length === 0) {
         throw new Error('KEM decapsulation failed. The key may be incorrect or the ciphertext corrupted.');
     }
@@ -165,6 +195,7 @@ async function decryptFile(containerBytes, secretKey) {
     
     return { decryptedBlob: new Blob([decryptedData]), metadata };
 }
+
 
 // --- Event Handlers ---
 genKeyBtn.addEventListener('click', async () => {
@@ -243,7 +274,7 @@ decBtn.addEventListener('click', async () => {
             download(decryptedBlob, outName);
             log(`✅ File decrypted: ${outName} (${decryptedBlob.size} B)`);
             log(`Original file hash (from metadata): ${metadata.fileHash}`);
-            log(`Hash of decrypted content:          ${decHash}`);
+            log(`Hash of decrypted content: ${decHash}`);
             if (metadata.fileHash === decHash) {
                 log('✨ Hashes match! File integrity verified.');
             } else {
