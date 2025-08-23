@@ -1,8 +1,11 @@
-// --- Libraries ---
 import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
-import { hkdf } from '@noble/hashes/hkdf.js';
+import { kmac256 } from '@noble/hashes/sha3-addons.js';
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { split, combine } from 'shamir-secret-sharing';
+
+// --- Constants ---
+const MAGIC = new TextEncoder().encode('QVv1');
+const DEFAULT_CUSTOMIZATION = 'QuantumVault v1.2.0';
 
 // --- DOM Elements ---
 const allButtons = document.querySelectorAll('button');
@@ -57,52 +60,110 @@ async function hashBytes(bytes) {
 }
 
 // --- Core Cryptography ---
-async function deriveAesKey(sharedSecret, salt) {
-    const derived = hkdf(sha3_512, sharedSecret, salt, new Uint8Array(0), 32);
-    return crypto.subtle.importKey('raw', derived, 'AES-GCM', false, ['encrypt', 'decrypt']);
+
+async function deriveKeyWithKmac(sharedSecret, salt, metaBytes) {
+    const kmacMessage = new Uint8Array(salt.length + metaBytes.length);
+    kmacMessage.set(salt, 0);
+    kmacMessage.set(metaBytes, salt.length);
+
+    const derivedKey = kmac256(sharedSecret, kmacMessage, 32, DEFAULT_CUSTOMIZATION);
+    const aesKey = await crypto.subtle.importKey('raw', derivedKey, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    
+    derivedKey.fill(0);
+    sharedSecret.fill(0);
+
+    return aesKey;
+}
+
+function normalizeEncapsulateResult(kemResult) {
+    const encapsulatedKey = kemResult.cipherText || kemResult.ciphertext || kemResult.ct;
+    const sharedSecret = kemResult.sharedSecret || kemResult.ss;
+    if (!encapsulatedKey || !sharedSecret) throw new Error('KEM encapsulation failed: result is missing required fields.');
+    return { encapsulatedKey, sharedSecret };
 }
 
 async function encryptFile(fileBytes, publicKey) {
-    const { cipherText: encapsulatedKey, sharedSecret } = await ml_kem1024.encapsulate(publicKey);
-    if (!encapsulatedKey) {
-        throw new Error('Encapsulation failed. The returned key is undefined.');
-    }
+    const { encapsulatedKey, sharedSecret } = normalizeEncapsulateResult(await ml_kem1024.encapsulate(publicKey));
+    
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const salt = crypto.getRandomValues(new Uint8Array(16));
-    const aesKey = await deriveAesKey(sharedSecret, salt);
-    const encryptedData = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, fileBytes);
-    
-    const magicBytes = new TextEncoder().encode('QGv1');
+
+    const meta = {
+        KEM: 'ML-KEM-1024',
+        KDF: 'kmac256',
+        AEAD: 'AES-256-GCM',
+        fmt: 'QVv1-2-0',
+        timestamp: new Date().toISOString(),
+        fileHash: await hashBytes(fileBytes)
+    };
+    const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
+    const metaLenBytes = new Uint8Array(2);
+    new DataView(metaLenBytes.buffer).setUint16(0, metaBytes.length, false);
+
     const keyLenBytes = new Uint8Array(4);
     new DataView(keyLenBytes.buffer).setUint32(0, encapsulatedKey.length, false);
 
-    const header = new Uint8Array([...magicBytes, ...keyLenBytes, ...encapsulatedKey, ...iv, ...salt]);
+    const header = new Uint8Array(
+        MAGIC.length + keyLenBytes.length + encapsulatedKey.length + iv.length + salt.length + metaLenBytes.length + metaBytes.length
+    );
+    let p = 0;
+    header.set(MAGIC, p); p += MAGIC.length;
+    header.set(keyLenBytes, p); p += keyLenBytes.length;
+    header.set(encapsulatedKey, p); p += encapsulatedKey.length;
+    header.set(iv, p); p += iv.length;
+    header.set(salt, p); p += salt.length;
+    header.set(metaLenBytes, p); p += metaLenBytes.length;
+    header.set(metaBytes, p);
+
+    const aesKey = await deriveKeyWithKmac(sharedSecret, salt, metaBytes);
+    
+    const encryptedData = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: header }, aesKey, fileBytes);
+    
     return new Blob([header, new Uint8Array(encryptedData)], { type: 'application/octet-stream' });
 }
 
 async function decryptFile(containerBytes, secretKey) {
-    const magicBytes = new TextDecoder().decode(containerBytes.slice(0, 4));
-    if (magicBytes !== 'QGv1') throw new Error('Invalid file format or file is corrupted.');
+    const dv = new DataView(containerBytes.buffer, containerBytes.byteOffset);
+    let offset = 0;
 
-    let offset = 4;
-    const keyLen = new DataView(containerBytes.buffer).getUint32(offset, false);
+    const magic = containerBytes.subarray(offset, offset + MAGIC.length);
+    if (new TextDecoder().decode(magic) !== new TextDecoder().decode(MAGIC)) {
+        throw new Error('Invalid file format (magic bytes mismatch).');
+    }
+    offset += MAGIC.length;
+
+    const keyLen = dv.getUint32(offset, false);
     offset += 4;
     
-    const encapsulatedKey = containerBytes.slice(offset, offset + keyLen);
+    const encapsulatedKey = containerBytes.subarray(offset, offset + keyLen);
     offset += keyLen;
     
-    const iv = containerBytes.slice(offset, offset + 12);
+    const iv = containerBytes.subarray(offset, offset + 12);
     offset += 12;
     
-    const salt = containerBytes.slice(offset, offset + 16);
+    const salt = containerBytes.subarray(offset, offset + 16);
     offset += 16;
+
+    const metaLen = dv.getUint16(offset, false);
+    offset += 2;
+
+    const metaBytes = containerBytes.subarray(offset, offset + metaLen);
+    const metadata = JSON.parse(new TextDecoder().decode(metaBytes));
+    offset += metaLen;
     
-    const encryptedData = containerBytes.slice(offset);
+    const header = containerBytes.subarray(0, offset);
+    const encryptedData = containerBytes.subarray(offset);
 
     const sharedSecret = await ml_kem1024.decapsulate(encapsulatedKey, secretKey);
-    const aesKey = await deriveAesKey(sharedSecret, salt);
-    const decryptedData = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, encryptedData);
-    return new Blob([decryptedData]);
+    if (!sharedSecret || sharedSecret.length === 0) {
+        throw new Error('KEM decapsulation failed. The key may be incorrect or the ciphertext corrupted.');
+    }
+    
+    const aesKey = await deriveKeyWithKmac(sharedSecret, salt, metaBytes);
+    
+    const decryptedData = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: header }, aesKey, encryptedData);
+    
+    return { decryptedBlob: new Blob([decryptedData]), metadata };
 }
 
 // --- Event Handlers ---
@@ -140,9 +201,7 @@ encBtn.addEventListener('click', async () => {
         for (const file of dataFileInput.files) {
             log(`Encrypting file ${file.name} (${file.size} B)...`);
             const fileBytes = await readFileAsUint8Array(file);
-            const fileHash = await hashBytes(fileBytes);
-            log(`  Source file hash: SHA3-512=${fileHash}`);
-
+            
             const encBlob = await encryptFile(fileBytes, publicKey);
             const encBytes = await readFileAsUint8Array(encBlob);
             const encHash = await hashBytes(encBytes);
@@ -174,15 +233,23 @@ decBtn.addEventListener('click', async () => {
             log(`Decrypting file ${file.name} (${file.size} B)...`);
             const containerBytes = await readFileAsUint8Array(file);
             const containerHash = await hashBytes(containerBytes);
-            log(`  Container hash: SHA3-512=${containerHash}`);
+            log(`Container hash: SHA3-512=${containerHash}`);
 
-            const decBlob = await decryptFile(containerBytes, secretKey);
-            const decBytes = await readFileAsUint8Array(decBlob);
+            const { decryptedBlob, metadata } = await decryptFile(containerBytes, secretKey);
+            const decBytes = await readFileAsUint8Array(decryptedBlob);
             const decHash = await hashBytes(decBytes);
             const outName = file.name.replace(/\.qenc$/i, '');
 
-            download(decBlob, outName);
-            log(`✅ File decrypted: ${outName} (${decBlob.size} B) SHA3-512=${decHash}`);
+            download(decryptedBlob, outName);
+            log(`✅ File decrypted: ${outName} (${decryptedBlob.size} B)`);
+            log(`Original file hash (from metadata): ${metadata.fileHash}`);
+            log(`Hash of decrypted content:          ${decHash}`);
+            if (metadata.fileHash === decHash) {
+                log('✨ Hashes match! File integrity verified.');
+            } else {
+                logError('🚨 WARNING: Hashes do NOT match! File may have been corrupted.');
+            }
+            log(`Encrypted on (UTC): ${metadata.timestamp}`);
         }
     } catch (e) {
         logError(`Failed to decrypt file. Check if the key is correct. Details: ${e.message}`);
@@ -217,7 +284,7 @@ splitBtn.addEventListener('click', async () => {
             const shardBlob = new Blob([shardBytes]);
             const shardName = `${baseName}-${idx + 1}.qshard`;
             download(shardBlob, shardName);
-            log(`  ✂️ Shard created: ${shardName} (${shardBlob.size} B)`);
+            log(`✂️ Shard created: ${shardName} (${shardBlob.size} B)`);
         });
         log('✅ Splitting process completed successfully.');
 
@@ -251,7 +318,7 @@ combineBtn.addEventListener('click', async () => {
 
         download(reconstructedBlob, outName);
         log(`✅ Container combined: ${outName} (${reconstructedBlob.size} B) SHA3-512=${reconHash}`);
-        log('  Compare this hash with the original container hash to verify integrity.');
+        log('Compare this hash with the original container hash to verify integrity.');
 
     } catch (e) {
         logError(`Failed to combine container. Ensure the shards are from the same set and meet the threshold. Details: ${e.message}`);
