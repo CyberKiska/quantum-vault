@@ -12,7 +12,69 @@
 
 ------------
 
+## Architecture
+
+### Components
+* Post-quantum Module-Lattice-based Key Encapsulation Mechanism: **ML-KEM-1024**. Used to encapsulate/decapsulate a shared secret.
+* Key derivation function: **KMAC256**. Used to derive the AES encryption key from the shared secret.
+* Authenticated Encryption with Associated Data: **AES-256-GCM**. Used to encrypt the file payload and authenticate the header additional authenticated data (AAD).
+* Secret sharing algorithm: **Shamir's secret sharing**. Used to shard and reconstruct container files.
+
+### Container format (binary)
+Multibyte length fields use big-endian.
+
+| Data             | Length              | Description                   |
+| ---------------- | ------------------- | ----------------------------- |
+| MAGIC            | 4 bytes             | 'QVv1'                        |
+| keyLen           | 4 bytes BE          | length of encapsulatedKey     |
+| encapsulatedKey  | keyLen bytes        | KEM ciphertext                |
+| iv               | 12 bytes            | AES-GCM initialization vector |
+| salt             | 16 bytes            | random salt for KMAC          |
+| metaLen          | 2 bytes BE          | length of metaJson            |
+| metaJson         | metaLen bytes UTF-8 | JSON metadata                 |
+| ciphertext       | remaining bytes     | AES-GCM ciphertext (payload)  |
+
+Example metaJson fields:
+```json
+{
+  "KEM":"ML-KEM-1024",
+  "KDF":"KMAC256",
+  "AEAD":"AES-256-GCM",
+  "fmt":"QVv1-2-1",
+  "timestamp":"<ISO8601 time>",
+  "fileHash":"<SHA3-512 hex of original file>"
+}
+```
+AAD (authenticated additional data) is the entire header from MAGIC up to and including metaJson. AES-GCM authenticates both the ciphertext and AAD.
+
+### Encrypt flow (sender)
+1. Read plaintext bytes. Compute `fileHash = SHA3-512(plaintext)` (store in metadata).
+2. Call `ml_kem1024.encapsulate(publicKey)` and obtains:
+* `encapsulatedKey` (KEM ciphertext to send to recipient)
+* `sharedSecret` (ephemeral symmetric secret)
+3. Generate `iv` (12B) and `salt` (16B). Create `metaJson` (includes timestamp and `fileHash`) and compute `metaBytes` + `metaLen`.
+4. Build header as specified above.
+5. Derive AES key: `derived = KMAC256(sharedSecret, salt || metaBytes, outLen=32, customization='QuantumVault v1.2.1')`. Import as AES-GCM key via `crypto.subtle.importKey('raw', derived.buffer, { name: 'AES-GCM' }, false, ['encrypt','decrypt'])`. Zeroize `derived` and `sharedSecret`.
+6. Encrypt: `ciphertext = AES-GCM.encrypt(plaintext, iv, additionalData = header)`.
+7. Emit container = `header || ciphertext` (downloadable file with .qenc). Compute container hash for verification.
+
+### Decrypt flow (recipient)
+1. Read container bytes and ensure length >= minimal header size.
+2. Parse header fields (MAGIC, keyLen, encapsulatedKey, iv, salt, metaLen, metaJson). Validate `metaLen` and `keyLen` bounds.
+3. Validate metaJson KDF and KEM.
+4. `sharedSecret = ml_kem1024.decapsulate(encapsulatedKey, secretKey)`; normalize to `Uint8Array`.
+5. Derive AES key with `KMAC256(sharedSecret, salt || metaBytes, 32, { customization })`. Import key. Zeroize `derived` and `sharedSecret`.
+6. Decrypt with AES-GCM providing `additionalData = header`. If auth fails, raise an error (tampered container or wrong key).
+7. Validate decrypted plaintext by computing `SHA3-512(plaintext)` and comparing to `metaJson.fileHash`. If equal, accept; otherwise, warn about integrity mismatch.
+
+### Sharding (split / combine)
+* Split: take the binary container .qenc and run split(containerBytes, N, T) to produce N shards. Each shard is a binary file (.qshard).
+* Combine: collect at least T shards and run combine(shards) to produce the original container bytes.
+
+------------
+
 * Lattice-based key encapsulation mechanism, defined in [FIPS-203](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf). This algorithm, like other post-quantum algorithms, is designed to be resistant to attacks by quantum computers that could potentially break modern cryptosystems based on factorisation of large numbers or discrete logarithm, such as RSA and ECC. The ML-KEM-1024 provides Category 5 security level (roughly equivalent to AES-256) according to NIST guidelines.
+* KMAC is a NIST-approved ([SP 800-185](https://csrc.nist.gov/pubs/sp/800/185/final)) keyed algorithm based on KECCAK for MAC/PRF/KDF tasks. KMAC is considered a direct replacement for HMAC for the SHA-3 family.
 * Using audited libraries for hashing and secret-sharing: `noble-hashes` was independently audited by Cure53, and `shamir-secret-sharing` was audited by Cure53 and Zellic. The `noble-post-quantum` library has not been independently audited at this time.
 * Using SHA3-512 for hash sums is in line with post-quantum security recommendations, as quantum computers can reduce hash cracking time from 2^n to 2^n/2 operations. Australian ASD prohibits SHA256 and similar hashes after 2030.
 * There is no protection in JavaScript implementations of cryptographic algorithms against side-channel attacks. This is due to the way JIT compilers and rubbish collectors work in JavaScript environments, which makes achieving true runtime constancy extremely difficult. If an attacker can access application memory, they can potentially extract sensitive information.
@@ -38,7 +100,7 @@ This project is distributed under the terms of the GNU General Public License v3
 ### Third‑party software licensed under other licenses
 
 Browser encryption/decryption tool libraries:
-* SHA3-512 for hashing [noble-hashes](https://github.com/paulmillr/noble-hashes);
+* SHA3-512 for hashing and KMAC256 for KDF [noble-hashes](https://github.com/paulmillr/noble-hashes);
 * ML-KEM-1024 for post-quantum key encapsulation used in combination with AES-256-GCM for symmetric file encryption [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
 * Shamir's secret sharing algorithm for splitting [shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing).
 
