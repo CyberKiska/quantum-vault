@@ -1,7 +1,7 @@
 # Quantum Vault
 ## Encryption & Verification tool
 
-* [Features](#features) | [Problematisation](#problematisation) | [Architecture](#architecture) | [Honorable mention](#honorable mention) | [Development](#development) | [License](#license)
+* [Features](#features) | [Problematisation](#problematisation) | [Architecture](#architecture) | [Honorable mention](#honorable-mention) | [Development](#development) | [License](#license)
 
 ------------
 
