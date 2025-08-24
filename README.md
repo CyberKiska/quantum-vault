@@ -1,6 +1,10 @@
 # Quantum Vault
 ## Encryption & Verification tool
 
+* [Features](#features) | [Problematisation](#problematisation) | [Architecture](#architecture) | [Honorable mention](#honorable mention) | [Development](#development) | [License](#license)
+
+------------
+
 ## Features
 * **Generate** 3168‑byte secret key (`secretKey.qkey`) & 1568-byte public key (`publicKey.qkey`) for ML-KEM-1024 post-quantum key encapsulation algorithm.
 * **Encrypt** client-side arbitrary files using hybrid cryptography. In this approach, the ML-KEM-1024 securely negotiates a symmetric key between the sides, which is then used by AES-256-GCM to directly encrypt the file data.
@@ -9,6 +13,32 @@
 * **Restore** a cryptocontainer from a sufficient number of shards, according to a given threshold.
 * **Verifies** file integrity using SHA3-512 hash sum and provides process logs to track operations.
 * All cryptographic operations are performed directly in the client's browser, ensuring the confidentiality of user data.
+
+------------
+
+## Problematisation
+
+The risk of cryptographic obsolescence is a matter of concern. It is anticipated that classical asymmetric schemes (RSA, ECC) will become vulnerable once sufficiently large fault-tolerant quantum computers are developed. This process gives rise to two distinct risks associated with long-lived data:
+* It can be argued that the present is an opportune moment to harvest encrypted data, as this may be decrypted in the future when PQ capabilities are extant.
+* In the context of standards transition, it is anticipated that standards bodies will ultimately necessitate or advocate for the utilisation of post-quantum algorithms in novel systems and for archival data. Systems that do not employ PQC will encounter compatibility, compliance and migration expenses.
+
+High-value data must be made available with a high degree of reliability and protection against single-point failures. Distributed threshold storage (Shamir shares across independent storage providers) has been shown to address availability and improve censorship resistance, but it has also been demonstrated to introduce metadata and integrity challenges.
+
+It is imperative that users generate, back up, shard and restore cryptographic containers with minimal chance of loss or misconfiguration.
+
+Threat model (concise):
+* Adversary goals: confidentiality breach of stored files now or later; integrity forgeries; denial of recovery by withholding shares.
+* Adversary capabilities: network observers, storage provider compromise, passive archive collection (future decryption), host compromise (user device), malicious browser extension, supply-chain compromise of third-party libs.
+* Assumptions: attacker cannot simultaneously control threshold number of independent share custodians, user device may be compromised (lossy trust), users will use multiple independent storage locations for shares.
+
+### High-level goals
+
+1. Post-quantum confidentiality: Ensure that container data confidentiality resists known quantum attacks by using a lattice-based KEM (ML-KEM-1024) to agree symmetric keys and KMAC256 + AES-256-GCM hybrid encryption for payloads.
+2. Durable distributed storage: Enable secure splitting and reconstruction that provide configurable threshold/availability guarantees without leaking information below threshold.
+3. Zero-trust server model: All sensitive cryptographic operations and secrets must remain inside the user’s browser; no private material is uploaded or retained by any server.
+4. Integrity and provenance: Provide robust content integrity checks (SHA3-512) and authenticated metadata so users can detect tampering and identify container format and parameter versions.
+5. Usability & recoverability: Provide clear UX flows and automation for key generation, secure backups, shard distribution.
+6. Align algorithms and parameters with authoritative recommendations & auditability.
 
 ------------
 
@@ -73,6 +103,8 @@ AAD (authenticated additional data) is the entire header from MAGIC up to and in
 
 ------------
 
+## Honorable mention
+
 * Lattice-based key encapsulation mechanism, defined in [FIPS-203](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf). This algorithm, like other post-quantum algorithms, is designed to be resistant to attacks by quantum computers that could potentially break modern cryptosystems based on factorisation of large numbers or discrete logarithm, such as RSA and ECC. The ML-KEM-1024 provides Category 5 security level (roughly equivalent to AES-256) according to NIST guidelines.
 * KMAC is a NIST-approved ([SP 800-185](https://csrc.nist.gov/pubs/sp/800/185/final)) keyed algorithm based on KECCAK for MAC/PRF/KDF tasks. KMAC is considered a direct replacement for HMAC for the SHA-3 family.
 * Using audited libraries for hashing and secret-sharing: `noble-hashes` was independently audited by Cure53, and `shamir-secret-sharing` was audited by Cure53 and Zellic. The `noble-post-quantum` library has not been independently audited at this time.
@@ -82,16 +114,21 @@ AAD (authenticated additional data) is the entire header from MAGIC up to and in
 * Shamir's algorithm (SSS) provides information-theoretic security, which means that if there are less than a threshold number of shares, no information about the original secret can be obtained, regardless of computational power. Users need to independently ensure the reliability of storing each share.
 * Inspired by [diceslice](https://github.com/numago/diceslice) and [tidecoin](https://github.com/tidecoin/tidecoin).
 
+------------
+
 ## Development
+### Installation 
 ```bash
 npm install
 npm run dev
 ```
 
-## Build & Deploy to GitHub Pages
+### Build & Deploy to GitHub Pages
 ```bash
 npm run deploy
 ```
+
+------------
 
 ## License
 
