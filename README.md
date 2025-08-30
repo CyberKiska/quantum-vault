@@ -83,12 +83,6 @@ Threat model (concise):
 }
 ```
 
-*Note: when `aead_mode` is `per-chunk`, the `cipherPayload` field usually contains a stream of encrypted chunks, but for convenience of splitting into `.qcont`, we store per-chunk ciphertext next to it in the qcont step. `qenc.metaJSON` stores `chunkCount`, `chunk_size`, `perFragmentSize`, and `ciphertextLength` (total length).*
-
-AAD:
-* Single-container AEAD: entire header from MAGIC through `metaJSON`.
-* Per-chunk AEAD: `AAD_i = header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`.
-
 * `.qcont` composite shard file format (one file contains part of Shamir's splited key + part of RS fragment)
 
 | Data              | Length                    | Description                                          |
@@ -119,8 +113,8 @@ AAD:
   "chunkSize":8388608,
   "chunkCount":1,
   "containerHash":"<SHA3-512 hex of .qenc file>",
-  "encapBlobHash":"<SHA3-512 hex>",
-  "privateKeyHash":"<SHA3-512 hex>",
+  "encapBlobHash":"<SHA3-512 hex of encapsulated blob>",
+  "privateKeyHash":"<SHA3-512 hex of secretKey.qkey file>",
   "originalLength":123,
   "ciphertextLength":456,
   "domainStrings":{"kdf":"quantum-vault:kdf:v1","iv":"quantum-vault:iv:v1"},
@@ -129,6 +123,12 @@ AAD:
   "timestamp":"<ISO8601 time>"
 }
 ```
+
+AAD:
+* Single-container AEAD: entire header from MAGIC through `metaJSON`.
+* Per-chunk AEAD: `AAD_i = header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`.
+
+*Note: when `aead_mode` is `per-chunk`, the `cipherPayload` field usually contains a stream of encrypted chunks, but for convenience of splitting into `.qcont`, we store per-chunk ciphertext next to it in the qcont step. `qenc.metaJSON` stores `chunkCount`, `chunk_size`, `perFragmentSize`, and `ciphertextLength` (total length).*
 
 ### Encapsulation & KDF
 1. Receiver generates ML‑KEM‑1024 key pair (public `publicKey.qkey` 1568 B, private `secretKey.qkey` 3168 B).

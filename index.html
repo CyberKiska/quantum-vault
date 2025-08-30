@@ -12,8 +12,8 @@
   <section id="keys">
     <h2>1. Key Management</h2>
     <button id="genKeyBtn">🔑 Generate Key Pair</button>
-    <label>Secret Key (.qkey) <input type="file" id="privKeyInput" accept=".qkey"></label>
-    <label>Public Key (.qkey) <input type="file" id="pubKeyInput" accept=".qkey"></label>
+    <label>Secret Key (.qkey) <span class="info" title="ML‑KEM secret key (3168 bytes), required for decryption and shard splitting." aria-label="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span> <input type="file" id="privKeyInput" accept=".qkey"></label>
+    <label>Public Key (.qkey) <span class="info" title="ML‑KEM public key (1568 bytes), required for encryption." aria-label="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span> <input type="file" id="pubKeyInput" accept=".qkey"></label>
   </section>
 
   <section id="crypto">
@@ -32,29 +32,40 @@
       <label>Private key (.qkey) to split <input type="file" id="privKeyForQcontInput" accept=".qkey"></label>
     </div>
     <div id="rsParams">
-      <label>Total shards (n) <input type="number" id="rsN" value="4" min="3"></label>
-      <label>RS data shards (k) <input type="number" id="rsK" value="2" min="2"></label>
-      <small id="rsText">n=?, k=?, m=?, t=?; Need ≥ t shards to restore.</small>
+      <label>Total shards (n) <span class="info" title="n — total number of shard files." aria-label="n — total number of shard files.">ℹ</span> <input type="number" id="rsN" value="4" min="3"></label>
+      <label>RS data shards (k) <span class="info" title="k — in the context of Reed-Solomon erasure coding, the number of data shards (the number of fragments sufficient to recover the original bytes)." aria-label="k — in the context of Reed-Solomon erasure coding, the number of data shards.">ℹ</span> <input type="number" id="rsK" value="2" min="2"></label>
+      <small id="rsText">n=?, k=?, m=?, t=?; Need ≥ t shards to restore. <span class="info" title="m — in the context of RS is the number of redundant parity shards.\n\nt — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key)." aria-label="Definitions of m and t">ℹ</span></small>
       <div id="rsViz" aria-hidden="true">
         <div class="rs-bar">
-          <span class="rs-seg data" id="rsSegData"></span>
-          <span class="rs-seg parity" id="rsSegParity"></span>
+          <span class="rs-seg data" id="rsSegData"><span class="seg-label" id="rsDataLabel"></span></span>
+          <span class="rs-seg parity" id="rsSegParity"><span class="seg-label" id="rsParityLabel"></span></span>
           <span class="rs-marker" id="rsMarker"></span>
+          <span class="rs-marker-label" id="rsMarkerLabel"></span>
         </div>
+        <div class="rs-ticks" id="rsTicks" aria-hidden="true"></div>
         <div class="rs-legend">
           <span class="swatch data"></span> Data k
           <span class="swatch parity"></span> Parity m
           <span class="swatch marker"></span> Threshold t
         </div>
       </div>
-      <small>Tip: More availability = reduce k or t; More confidentiality = increase m. If someone controls t shards they can decrypt; with fewer than t shards they cannot.</small>
+      <details class="tip">
+        <summary>Tip</summary>
+        <div>
+        More availability = reduce k or t;<br />
+        More confidentiality = increase m.<br />
+        If someone controls t shards they can decrypt; with fewer than t shards they cannot.<br />
+        m — in the context of RS is the number of redundant parity shards. <br />
+        t — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key).
+        </div>
+      </details>
     </div>
     <button id="buildQcontBtn">🧩 Build .qcont shards</button>
     <hr>
     <div>
-      <label>.qcont shards <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
+      <label>Shards (.qcont) for combining <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
     </div>
-    <button id="restoreQcontBtn">♻️ Restore & Decrypt</button>
+    <button id="restoreQcontBtn">♻️ Restore key and container </button>
   </section>
 
   <section>

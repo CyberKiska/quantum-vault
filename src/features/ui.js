@@ -86,6 +86,30 @@ export function initUI() {
         if (rsSegData) rsSegData.style.width = `${Math.max(0, Math.min(100, pctData))}%`;
         if (rsSegParity) rsSegParity.style.width = `${Math.max(0, Math.min(100, pctParity))}%`;
         if (rsMarker) rsMarker.style.left = `${Math.max(0, Math.min(100, pctT))}%`;
+        // Segment labels and marker label
+        const dataLabel = document.getElementById('rsDataLabel');
+        const parityLabel = document.getElementById('rsParityLabel');
+        const markerLabel = document.getElementById('rsMarkerLabel');
+        if (dataLabel) dataLabel.textContent = `k=${k} (${Math.round((k / Math.max(1, n)) * 100)}%)`;
+        if (parityLabel) parityLabel.textContent = `m=${m} (${Math.round((m / Math.max(1, n)) * 100)}%)`;
+        if (markerLabel) {
+            markerLabel.textContent = `t=${t}`;
+            markerLabel.style.left = `${Math.max(0, Math.min(100, pctT))}%`;
+        }
+        // Axis ticks 0..n
+        const ticks = document.getElementById('rsTicks');
+        if (ticks) {
+            ticks.innerHTML = '';
+            if (n > 0) {
+                for (let i = 0; i <= n; i++) {
+                    const tick = document.createElement('span');
+                    tick.className = 'tick';
+                    tick.style.left = `${(i / n) * 100}%`;
+                    tick.title = String(i);
+                    ticks.appendChild(tick);
+                }
+            }
+        }
         const bar = rsSegData && rsSegData.parentElement ? rsSegData.parentElement : null;
         if (bar && bar.classList) bar.classList.toggle('rs-error', !even);
     }
