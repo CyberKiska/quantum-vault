@@ -9,8 +9,8 @@
 * **Generate** 3168‑byte secret key (`secretKey.qkey`) & 1568-byte public key (`publicKey.qkey`) for ML-KEM-1024 post-quantum key encapsulation algorithm.
 * **Encrypt** client-side arbitrary files using hybrid cryptography. In this approach, the ML-KEM-1024 securely negotiates a symmetric key between the sides, which is then used by AES-256-GCM to directly encrypt the file data.
 * **Decrypt** `.qenc` containers created by this tool.
-* **Split** `.qenc` cryptocontainers into multiple shards. You can set the required minimum number of shares (threshold) required for subsequent recovery of the secret. If the number of shares is less than this, no information about the original secret can be retrieved.
-* **Restore** a cryptocontainer from a sufficient number of shards, according to a given threshold.
+* **Split** `.qenc` cryptocontainers with `.qkey` private keys into multiple `.qcont` shards. You choose total shards n and RS data k; threshold t is computed as `t = k + (n-k)/2`. With fewer than t shards, no information about the original secret can be retrieved.
+* **Restore** a `.qenc` container and the private `.qkey` from a sufficient number of `.qcont` shards (>= t).
 * **Verifies** file integrity using SHA3-512 hash sum and provides process logs to track operations.
 * All cryptographic operations are performed directly in the client's browser, ensuring the confidentiality of user data.
 
@@ -46,47 +46,108 @@ Threat model (concise):
 
 ### Components
 * Post-quantum Module-Lattice-based Key Encapsulation Mechanism: **ML-KEM-1024**. Used to encapsulate/decapsulate a shared secret.
-* Key derivation function: **KMAC256**. Used to derive the AES encryption key from the shared secret.
+* Key derivation function: **KMAC256**. Used to derive the AES encryption key and AES IV's from the shared secret.
 * Authenticated Encryption with Associated Data: **AES-256-GCM**. Used to encrypt the file payload and authenticate the header additional authenticated data (AAD).
-* Secret sharing algorithm: **Shamir's secret sharing**. Used to shard and reconstruct container files.
+* Secret sharing algorithm: **Shamir's secret sharing**. Used to shard and reconstruct private keys files.
+* File sharing algorithm: **Reed-Solomon codes**. Used to shard and reconstruct containers files.
 
 ### Container format (binary)
-Multibyte length fields use big-endian.
+* `.qenc` file format (one file is encrypted container - single-stream or per-chunk AEAD)
 
-| Data             | Length              | Description                   |
-| ---------------- | ------------------- | ----------------------------- |
-| MAGIC            | 4 bytes             | 'QVv1'                        |
-| keyLen           | 4 bytes BE          | length of encapsulatedKey     |
-| encapsulatedKey  | keyLen bytes        | KEM ciphertext                |
-| iv               | 12 bytes            | AES-GCM initialization vector |
-| salt             | 16 bytes            | random salt for KMAC          |
-| metaLen          | 2 bytes BE          | length of metaJson            |
-| metaJson         | metaLen bytes UTF-8 | JSON metadata                 |
-| ciphertext       | remaining bytes     | AES-GCM ciphertext (payload)  |
+| Data            | Length              | Description                                  |
+| --------------- | ------------------- | -------------------------------------------- |
+| MAGIC           | 4 bytes             | ASCII `QVv1`                                 |
+| keyLen          | 4 bytes (Uint32 BE) | length of `encapsulatedKey`                  |
+| encapsulatedKey | keyLen bytes        | ML‑KEM ciphertext                            |
+| containerNonce  | 12 bytes            | AES‑GCM IV (single-container mode)           |
+| kdfSalt         | 16 bytes            | random salt for KMAC                         |
+| metaLen         | 2 bytes (Uint16 BE) | length of `metaJSON`                         |
+| metaJSON        | metaLen bytes UTF‑8 | JSON metadata                                |
+| ciphertext      | remaining bytes     | AES‑GCM ciphertext (single or concatenation) |
 
-Example metaJson fields:
+`.qenc` metaJSON (indicative):
 ```json
 {
   "KEM":"ML-KEM-1024",
   "KDF":"KMAC256",
   "AEAD":"AES-256-GCM",
-  "fmt":"QVv1-2-1",
+  "fmt":"QVv1-3-0",
+  "aead_mode":"single-container-aead | per-chunk-aead",
+  "iv_strategy":"single-iv | kmac-derive-v1",
   "timestamp":"<ISO8601 time>",
-  "fileHash":"<SHA3-512 hex of original file>"
+  "fileHash":"<SHA3-512 hex of original file>",
+  "originalLength": 123,
+  "chunkSize": 8388608,
+  "chunkCount": 1,
+  "domainStrings": { "kdf":"quantum-vault:kdf:v1", "iv":"quantum-vault:chunk-iv:v1" }
 }
 ```
-AAD (authenticated additional data) is the entire header from MAGIC up to and including metaJson. AES-GCM authenticates both the ciphertext and AAD.
+
+*Note: when `aead_mode` is `per-chunk`, the `cipherPayload` field usually contains a stream of encrypted chunks, but for convenience of splitting into `.qcont`, we store per-chunk ciphertext next to it in the qcont step. `qenc.metaJSON` stores `chunkCount`, `chunk_size`, `perFragmentSize`, and `ciphertextLength` (total length).*
+
+AAD:
+* Single-container AEAD: entire header from MAGIC through `metaJSON`.
+* Per-chunk AEAD: `AAD_i = header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`.
+
+* `.qcont` composite shard file format (one file contains part of Shamir's splited key + part of RS fragment)
+
+| Data              | Length                    | Description                                          |
+| ----------------- | ------------------------- | ---------------------------------------------------- |
+| MAGIC_SHARD       | 4 bytes                   | ASCII `QVC1`                                         |
+| metaLen           | 2 bytes (Uint16 BE)       |                                                      |
+| metaJSON          | metaLen bytes (UTF‑8)     | RS params, counts, hashes, etc.                      |
+| encapBlobLen      | 4 bytes (Uint32 BE)       |                                                      |
+| encapBlob         | encapBlobLen bytes        | ML‑KEM ciphertext                                    |
+| containerNonce    | 12 bytes                  | from `.qenc` header                                  |
+| kdfSalt           | 16 bytes                  | from `.qenc` header                                  |
+| qencMetaLen       | 2 bytes (Uint16 BE)       |                                                      |
+| qencMetaBytes     | qencMetaLen bytes (UTF‑8) | original `.qenc` metadata (dup for convenience)      |
+| shardIndex        | 2 bytes (Uint16 BE)       | 0‑based index (0..n‑1)                               |
+| shareLen          | 2 bytes (Uint16 BE)       |                                                      |
+| shareBytes        | shareLen bytes            | one Shamir share                                     |
+| fragments stream  | …                         | concatenation of per‑chunk fragments for this shard; |
+|                   |                           | each fragment is stored as `[len32 | fragmentBytes]` |
+
+`.qcont` metaJSON (indicative):
+```json
+{
+  "containerId":"<SHA3-512 hex of .qenc header>",
+  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-1"},
+  "aead_mode":"single-container | per-chunk",
+  "iv_strategy":"single-iv | kmac-derive-v1",
+  "n":5,"k":3,"m":2,"t":4,
+  "chunkSize":8388608,
+  "chunkCount":1,
+  "containerHash":"<SHA3-512 hex of .qenc file>",
+  "encapBlobHash":"<SHA3-512 hex>",
+  "privateKeyHash":"<SHA3-512 hex>",
+  "originalLength":123,
+  "ciphertextLength":456,
+  "domainStrings":{"kdf":"quantum-vault:kdf:v1","iv":"quantum-vault:iv:v1"},
+  "fragmentFormat":"len32-prefixed",
+  "perFragmentSize":789,
+  "timestamp":"<ISO8601 time>"
+}
+```
+
+### Encapsulation & KDF
+1. Receiver generates ML‑KEM‑1024 key pair (public `publicKey.qkey` 1568 B, private `secretKey.qkey` 3168 B).
+2. Sender: `{encapsulatedKey, sharedSecret} = ml_kem1024.encapsulate(publicKey)`.
+3. Generate `kdfSalt` (16 B) and `containerNonce` (12 B).
+4. Derive keys with KMAC256:
+   - `Kraw = KMAC256(sharedSecret, (kdfSalt || metaBytes), 32, customization = domainStrings.kdf)`
+   - `Kenc = KMAC256(Kraw, [1], 32, customization='quantum-vault:kenc:v1')`
+   - `Kiv  = KMAC256(Kraw, [2], 32, customization='quantum-vault:kiv:v1')`
+   - Import `Kenc` as AES‑GCM key. Per‑chunk IV_i = first 12 bytes of `KMAC256(Kiv, (containerNonce || uint32_be(chunkIndex)), 16, customization=domainStrings.iv)`.
 
 ### Encrypt flow (sender)
-1. Read plaintext bytes. Compute `fileHash = SHA3-512(plaintext)` (store in metadata).
-2. Call `ml_kem1024.encapsulate(publicKey)` and obtains:
-* `encapsulatedKey` (KEM ciphertext to send to recipient)
-* `sharedSecret` (ephemeral symmetric secret)
-3. Generate `iv` (12B) and `salt` (16B). Create `metaJson` (includes timestamp and `fileHash`) and compute `metaBytes` + `metaLen`.
-4. Build header as specified above.
-5. Derive AES key: `derived = KMAC256(sharedSecret, salt || metaBytes, outLen=32, customization='QuantumVault v1.2.1')`. Import as AES-GCM key via `crypto.subtle.importKey('raw', derived.buffer, { name: 'AES-GCM' }, false, ['encrypt','decrypt'])`. Zeroize `derived` and `sharedSecret`.
-6. Encrypt: `ciphertext = AES-GCM.encrypt(plaintext, iv, additionalData = header)`.
-7. Emit container = `header || ciphertext` (downloadable file with .qenc). Compute container hash for verification.
+* Single-container AEAD (small files):
+1. Generate containerNonce (12B) random; call ciphertext = AES-GCM.encrypt(plaintext, iv=containerNonce, key=aesKey, AAD=headerBytes).
+2. Produce .qenc with ciphertext and metaJSON. Later split .qenc into shards via RS.
+* Per-chunk AEAD (big files):
+1. Break plaintext into chunks of chunk_size. For each chunk index i compute per-chunk IV via Kiv as key to KMAC256 for IV derivation;
+2. Build header as specified above.
+3. For each cipherChunk_i, pad to multiple expected size and then call RS fragments = window.erasure.split(paddedChunk, k, allowedFailures). Append fragments[j] to shard j's fragBlob.
 
 ### Decrypt flow (recipient)
 1. Read container bytes and ensure length >= minimal header size.
@@ -139,12 +200,14 @@ This project is distributed under the terms of the GNU General Public License v3
 Browser encryption/decryption tool libraries:
 * SHA3-512 for hashing and KMAC256 for KDF [noble-hashes](https://github.com/paulmillr/noble-hashes);
 * ML-KEM-1024 for post-quantum key encapsulation used in combination with AES-256-GCM for symmetric file encryption [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
-* Shamir's secret sharing algorithm for splitting [shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing).
+* Shamir's secret sharing algorithm for splitting [shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing);
+* Reed-Solomon erasure codes for splitting [ErasureCodes](https://github.com/ianopolous/ErasureCodes/).
 
 The application incorporates the following dependencies that are released under the permissive MIT License and Apache License 2.0.
 
 | Library               | Version | Copyright holder | Upstream repository                               |
 | --------------------- | ------- | ---------------- | ------------------------------------------------- |
 | shamir-secret-sharing | 0.0.4   | Privy            | https://github.com/privy-io/shamir-secret-sharing |
-| noble-post-quantum    | 0.5.0   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
-| noble-hashes          | 1.8.0   | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
+| noble-post-quantum    | 0.5.1   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
+| noble-hashes          | 2.0.0   | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
+| ErasureCodes          | 9f937b9 | Dr Ian Preston   | https://github.com/ianopolous/ErasureCodes        |

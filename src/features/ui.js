@@ -1,0 +1,157 @@
+import { encryptFile, decryptFile, hashBytes, generateKeyPair } from '../core/crypto.js';
+
+export function initUI() {
+    const allButtons = document.querySelectorAll('button');
+    const el = (id) => document.getElementById(id);
+
+    const privKeyInput = el('privKeyInput');
+    const pubKeyInput = el('pubKeyInput');
+    const dataFileInput = el('dataFileInput');
+    const qencForQcontInput = el('qencForQcontInput');
+    const privKeyForQcontInput = el('privKeyForQcontInput');
+    const rsNInput = el('rsN');
+    const rsKInput = el('rsK');
+    const rsTextEl = el('rsText');
+    const rsSegData = el('rsSegData');
+    const rsSegParity = el('rsSegParity');
+    const rsMarker = el('rsMarker');
+    const buildQcontBtn = el('buildQcontBtn');
+    const qcontShardsInput = el('qcontShardsInput');
+    const restoreQcontBtn = el('restoreQcontBtn');
+    const genKeyBtn = el('genKeyBtn');
+    const encBtn = el('encBtn');
+    const decBtn = el('decBtn');
+    const logEl = el('log');
+
+    const toHex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    function log(msg) {
+        const line = document.createElement('span');
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        logEl.appendChild(line);
+        logEl.appendChild(document.createTextNode('\n'));
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+    function logError(err) {
+        const text = (err && err.message) ? err.message : (typeof err === 'string' ? err : String(err));
+        const errorSpan = document.createElement('span');
+        errorSpan.className = 'error';
+        errorSpan.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${text}`;
+        logEl.appendChild(errorSpan);
+        logEl.appendChild(document.createTextNode('\n'));
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+    function setButtonsDisabled(disabled) { allButtons.forEach(button => button.disabled = disabled); }
+    async function readFileAsUint8Array(file) { return new Uint8Array(await file.arrayBuffer()); }
+    function download(blob, filename) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        URL.revokeObjectURL(a.href);
+        a.remove();
+    }
+    function logDownloadLink(blob, filename, label) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.textContent = label || `Download ${filename}`;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        logEl.appendChild(a);
+        logEl.appendChild(document.createTextNode('\n'));
+    }
+
+    function updateRsHints() {
+        if (!rsNInput || !rsKInput) return;
+        let n = parseInt(rsNInput.value, 10); if (Number.isNaN(n)) n = 0;
+        let k = parseInt(rsKInput.value, 10); if (Number.isNaN(k)) k = 0;
+        if (n < 0) n = 0;
+        if (k < 0) k = 0;
+        if (k >= n) n = k + 1;
+        const m = n - k;
+        const even = (m % 2) === 0;
+        const allowedFailures = even ? (m / 2) : Math.floor(m / 2);
+        const t = k + allowedFailures;
+        if (rsTextEl) {
+            const warnEven = even ? '' : ' (adjust n or k so that n − k is even)';
+            const warnEdge = (n === 4 && k === 2) ? ' WARNING: configuration n=4,k=2 is known to be unstable. Use n≥5 (e.g., n=5,k=3).' : '';
+            rsTextEl.textContent = `Total: n=${n}. Data: k=${k}. Parity: m=${m}. Threshold: t=${t}. Need ≥ t shards to restore.${warnEven}${warnEdge}`;
+        }
+        const pctData = n ? (k / n) * 100 : 0;
+        const pctParity = n ? (m / n) * 100 : 0;
+        const pctT = n ? (t / n) * 100 : 0;
+        if (rsSegData) rsSegData.style.width = `${Math.max(0, Math.min(100, pctData))}%`;
+        if (rsSegParity) rsSegParity.style.width = `${Math.max(0, Math.min(100, pctParity))}%`;
+        if (rsMarker) rsMarker.style.left = `${Math.max(0, Math.min(100, pctT))}%`;
+        const bar = rsSegData && rsSegData.parentElement ? rsSegData.parentElement : null;
+        if (bar && bar.classList) bar.classList.toggle('rs-error', !even);
+    }
+    [rsNInput, rsKInput].forEach(elm => elm && elm.addEventListener('input', updateRsHints));
+    document.addEventListener('DOMContentLoaded', updateRsHints);
+    updateRsHints();
+
+    // --- Event Handlers ---
+    genKeyBtn?.addEventListener('click', async () => {
+        setButtonsDisabled(true);
+        try {
+            log('Generating ML-KEM Kyber 1024 key pair...');
+            const { secretKey, publicKey } = await generateKeyPair();
+            const skHash = await hashBytes(secretKey);
+            const pkHash = await hashBytes(publicKey);
+            log(`Private Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
+            log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
+            download(new Blob([secretKey]), 'secretKey.qkey');
+            download(new Blob([publicKey]), 'publicKey.qkey');
+            log('✅ Keys generated and downloaded successfully.');
+        } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
+    });
+
+    encBtn?.addEventListener('click', async () => {
+        if (!pubKeyInput?.files?.[0]) { logError('Please select a public key (.qkey).'); return; }
+        if (!dataFileInput?.files?.length) { logError('Please select file(s) to encrypt.'); return; }
+        setButtonsDisabled(true);
+        try {
+            const publicKey = await readFileAsUint8Array(pubKeyInput.files[0]);
+            for (const file of dataFileInput.files) {
+                log(`Encrypting file ${file.name} (${file.size} B)...`);
+                const fileBytes = await readFileAsUint8Array(file);
+                const encBlob = await encryptFile(fileBytes, publicKey);
+                const encBytes = await readFileAsUint8Array(encBlob);
+                const encHash = await hashBytes(encBytes);
+                download(encBlob, `${file.name}.qenc`);
+                log(`✅ File encrypted: ${file.name}.qenc (${encBlob.size} B) SHA3-512=${encHash}`);
+            }
+        } catch (e) { logError(e); } finally { setButtonsDisabled(false); dataFileInput.value = ''; }
+    });
+
+    decBtn?.addEventListener('click', async () => {
+        if (!privKeyInput?.files?.[0]) { logError('Please select a private key (.qkey).'); return; }
+        if (!dataFileInput?.files?.length) { logError('Please select file(s) to decrypt (.qenc).'); return; }
+        setButtonsDisabled(true);
+        try {
+            const secretKey = await readFileAsUint8Array(privKeyInput.files[0]);
+            for (const file of dataFileInput.files) {
+                if (!file.name.toLowerCase().endsWith('.qenc')) { log(`Skipping file ${file.name} as it is not a .qenc container.`); continue; }
+                log(`Decrypting file ${file.name} (${file.size} B)...`);
+                const containerBytes = await readFileAsUint8Array(file);
+                const containerHash = await hashBytes(containerBytes);
+                log(`Container hash: SHA3-512=${containerHash}`);
+                const { decryptedBlob, metadata } = await decryptFile(containerBytes, secretKey);
+                const decBytes = await readFileAsUint8Array(decryptedBlob);
+                const decHash = await hashBytes(decBytes);
+                const outName = file.name.replace(/\.qenc$/i, '');
+                download(decryptedBlob, outName);
+                log(`✅ File decrypted: ${outName} (${decryptedBlob.size} B)`);
+                log(`Original file hash (from metadata): ${metadata.fileHash}`);
+                log(`Hash of decrypted content: ${decHash}`);
+                if (metadata.fileHash === decHash) log('Hashes match! File integrity verified.'); else logError('WARNING: Hashes do NOT match! File may have been corrupted.');
+                log(`Encrypted on (UTC): ${metadata.timestamp}`);
+            }
+        } catch (e) { logError(e); } finally { setButtonsDisabled(false); dataFileInput.value = ''; }
+    });
+
+}
+

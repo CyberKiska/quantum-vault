@@ -108,3 +108,57 @@ hr {
     border-top: 1px solid #dddfe2; 
     margin: 1.5em 0; 
 }
+
+/* RS / SSS visualization */
+.rs-bar {
+    position: relative;
+    height: 10px;
+    background: #e9ecef;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-top: 4px;
+}
+.rs-seg {
+    display: block;
+    height: 100%;
+    float: left;
+}
+.rs-seg.data { 
+    background: #4dabf7; 
+}
+.rs-seg.parity { 
+    background: #ffd43b; 
+}
+.rs-marker {
+    position: absolute;
+    top: -2px;
+    width: 2px;
+    height: 14px;
+    background: #fa5252;
+}
+.rs-legend {
+    font-size: 12px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 4px;
+}
+.swatch { 
+    display: inline-block; 
+    width: 10px; 
+    height: 10px; 
+    margin-right: 4px; 
+    border-radius: 2px; 
+}
+.swatch.data { 
+    background: #4dabf7; 
+}
+.swatch.parity { 
+    background: #ffd43b; 
+}
+.swatch.marker { 
+    background: #fa5252; 
+}
+.rs-bar.rs-error { 
+    outline: 2px solid #fa5252; 
+}

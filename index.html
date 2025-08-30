@@ -23,17 +23,38 @@
     <button id="decBtn">🔓 Decrypt</button>
   </section>
 
-  <section id="shamir">
-    <h2>3. Shamir's Secret Sharing</h2>
-    <label>Container (.qenc) for splitting <input type="file" id="containerToSplitInput" accept=".qenc"></label>
-    <div id="shamirParams">
-      <label>Total parts (N) <input type="number" id="shamirShares" value="7" min="2"></label>
-      <label>Threshold (T) <input type="number" id="shamirThreshold" value="5" min="2"></label>
+  <section id="qcont">
+    <h2>3. Build / Restore .qcont Shards (Reed-Solomon + Shamir's Secret Sharing)</h2>
+    <div>
+      <label>Encrypted container (.qenc) to split <input type="file" id="qencForQcontInput" accept=".qenc"></label>
     </div>
-    <button id="splitBtn">✂️ Split container</button>
+    <div>
+      <label>Private key (.qkey) to split <input type="file" id="privKeyForQcontInput" accept=".qkey"></label>
+    </div>
+    <div id="rsParams">
+      <label>Total shards (n) <input type="number" id="rsN" value="4" min="3"></label>
+      <label>RS data shards (k) <input type="number" id="rsK" value="2" min="2"></label>
+      <small id="rsText">n=?, k=?, m=?, t=?; Need ≥ t shards to restore.</small>
+      <div id="rsViz" aria-hidden="true">
+        <div class="rs-bar">
+          <span class="rs-seg data" id="rsSegData"></span>
+          <span class="rs-seg parity" id="rsSegParity"></span>
+          <span class="rs-marker" id="rsMarker"></span>
+        </div>
+        <div class="rs-legend">
+          <span class="swatch data"></span> Data k
+          <span class="swatch parity"></span> Parity m
+          <span class="swatch marker"></span> Threshold t
+        </div>
+      </div>
+      <small>Tip: More availability = reduce k or t; More confidentiality = increase m. If someone controls t shards they can decrypt; with fewer than t shards they cannot.</small>
+    </div>
+    <button id="buildQcontBtn">🧩 Build .qcont shards</button>
     <hr>
-    <label>Shards (.qshard) for combining <input type="file" id="shardsToCombineInput" accept=".qshard" multiple></label>
-    <button id="combineBtn">🔗 Combine from shards</button>
+    <div>
+      <label>.qcont shards <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
+    </div>
+    <button id="restoreQcontBtn">♻️ Restore & Decrypt</button>
   </section>
 
   <section>
@@ -41,6 +62,7 @@
     <pre id="log"></pre>
   </section>
 
-  <script type="module" src="script.js"></script>
+  <script src="/third-party/erasure.js"></script>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>
