@@ -1,5 +1,4 @@
 import { MAGIC, CHUNK_SIZE, hashBytes } from '../../core/crypto.js';
-import { split } from 'shamir-secret-sharing';
 
 async function hexDigest(u8) {
     const buf = await crypto.subtle.digest('SHA-256', u8);
@@ -112,7 +111,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
 
     const t = k + (m / 2);
     if (t > n) throw new Error('Invalid threshold computed');
-    const shares = await split(privKeyBytes, n, t);
+    const shares = await (await import('shamir-secret-sharing')).split(privKeyBytes, n, t);
     const shardBuffers = Array.from({ length: n }, () => []);
 
     const chunkSize = meta.chunkSize || CHUNK_SIZE;
