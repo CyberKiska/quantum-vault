@@ -1,7 +1,12 @@
-import { encryptFile, decryptFile, hashBytes, generateKeyPair } from '../core/crypto.js';
+import { encryptFile, decryptFile, hashBytes, generateKeyPair } from '../../crypto/index.js';
+import { UserEntropyCollector } from '../../crypto/entropy.js';
+import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
+
+// Pro mode state
+let userEntropyCollected = false;
+let entropyCollector = null;
 
 export function initUI() {
-    const allButtons = document.querySelectorAll('button');
     const el = (id) => document.getElementById(id);
 
     const privKeyInput = el('privKeyInput');
@@ -41,18 +46,7 @@ export function initUI() {
         logEl.appendChild(document.createTextNode('\n'));
         logEl.scrollTop = logEl.scrollHeight;
     }
-    function setButtonsDisabled(disabled) { allButtons.forEach(button => button.disabled = disabled); }
-    async function readFileAsUint8Array(file) { return new Uint8Array(await file.arrayBuffer()); }
-    function download(blob, filename) {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        URL.revokeObjectURL(a.href);
-        a.remove();
-    }
+    // setButtonsDisabled, readFileAsUint8Array, download are imported from utils.js
     function logDownloadLink(blob, filename, label) {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -117,19 +111,94 @@ export function initUI() {
     document.addEventListener('DOMContentLoaded', updateRsHints);
     updateRsHints();
 
+    // Advanced entropy collection
+    const advancedEntropyBtn = el('advancedEntropyBtn');
+    const entropyStatus = el('entropyStatus');
+    const entropyText = el('entropyText');
+    const entropyBar = el('entropyBar');
+
+    async function collectAdvancedEntropy() {
+        if (entropyCollector) return;
+
+        try {
+            entropyStatus.style.display = 'block';
+            entropyText.textContent = 'Move mouse, type, resize window... Collecting entropy...';
+            advancedEntropyBtn.disabled = true;
+            advancedEntropyBtn.textContent = '🎲 Collecting...';
+
+            entropyCollector = new UserEntropyCollector();
+
+            // Update progress with enhanced information including entropy estimation
+            const progressInterval = setInterval(() => {
+                if (!entropyCollector) {
+                    clearInterval(progressInterval);
+                    return;
+                }
+                const progress = entropyCollector.getProgress();
+                entropyBar.style.width = `${progress.percentage}%`;
+                entropyText.textContent = `Events: ${progress.collected}/${progress.required} (${progress.percentage}%) | Queue: ${progress.queueSize} | Est. Entropy: ${Math.round(progress.estimatedEntropyBits)} bits`;
+            }, 200);
+
+            await entropyCollector.startCollection();
+
+            clearInterval(progressInterval);
+            userEntropyCollected = true;
+            entropyCollector = null;
+
+            entropyText.textContent = '✅ Advanced entropy collected successfully! 64-byte seed ready.';
+            entropyBar.style.width = '100%';
+            advancedEntropyBtn.textContent = '✅ Entropy Collected';
+            advancedEntropyBtn.style.backgroundColor = '#28a745';
+
+        } catch (error) {
+            log(`Entropy collection failed: ${error.message}`);
+            entropyText.textContent = '❌ Entropy collection failed - will use secure random only';
+            advancedEntropyBtn.disabled = false;
+            advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+        }
+    }
+
+    advancedEntropyBtn?.addEventListener('click', collectAdvancedEntropy);
+
     // --- Event Handlers ---
     genKeyBtn?.addEventListener('click', async () => {
         setButtonsDisabled(true);
         try {
-            log('Generating ML-KEM Kyber 1024 key pair...');
-            const { secretKey, publicKey } = await generateKeyPair();
+            log('Generating ML-KEM-1024 key pair...');
+            
+            if (userEntropyCollected) {
+                log('Using crypto.getRandomValues() + collected user entropy for enhanced security');
+            } else {
+                log('Using crypto.getRandomValues() with 64-byte seed (secure default)');
+            }
+            
+            // Generate keys with collected entropy if available
+            const { secretKey, publicKey, seedInfo } = await generateKeyPair({ 
+                collectUserEntropy: userEntropyCollected 
+            });
+            
             const skHash = await hashBytes(secretKey);
             const pkHash = await hashBytes(publicKey);
+            
+            log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (enhanced with user entropy)' : ''}`);
             log(`Private Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
             log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
+            
             download(new Blob([secretKey]), 'secretKey.qkey');
             download(new Blob([publicKey]), 'publicKey.qkey');
             log('✅ Keys generated and downloaded successfully.');
+            
+            // Reset entropy collection state
+            userEntropyCollected = false;
+            if (advancedEntropyBtn) {
+                advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+                advancedEntropyBtn.style.backgroundColor = '';
+                advancedEntropyBtn.disabled = false;
+            }
+            if (entropyStatus) {
+                entropyStatus.style.display = 'none';
+            }
+            
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });
 
@@ -142,7 +211,7 @@ export function initUI() {
             for (const file of dataFileInput.files) {
                 log(`Encrypting file ${file.name} (${file.size} B)...`);
                 const fileBytes = await readFileAsUint8Array(file);
-                const encBlob = await encryptFile(fileBytes, publicKey);
+                const encBlob = await encryptFile(fileBytes, publicKey, file.name);
                 const encBytes = await readFileAsUint8Array(encBlob);
                 const encHash = await hashBytes(encBytes);
                 download(encBlob, `${file.name}.qenc`);
@@ -166,7 +235,14 @@ export function initUI() {
                 const { decryptedBlob, metadata } = await decryptFile(containerBytes, secretKey);
                 const decBytes = await readFileAsUint8Array(decryptedBlob);
                 const decHash = await hashBytes(decBytes);
-                const outName = file.name.replace(/\.qenc$/i, '');
+
+                // Use original filename from metadata if available, otherwise fallback to stripping .qenc
+                let outName = metadata.originalFilename;
+                if (!outName) {
+                    // Backward compatibility: strip .qenc extension from input filename
+                    outName = file.name.replace(/\.qenc$/i, '');
+                }
+
                 download(decryptedBlob, outName);
                 log(`✅ File decrypted: ${outName} (${decryptedBlob.size} B)`);
                 log(`Original file hash (from metadata): ${metadata.fileHash}`);

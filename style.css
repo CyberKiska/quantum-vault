@@ -7,14 +7,87 @@ body {
     color: #1c1e21; 
 }
 
+/* Header Container */
+.header-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5em;
+}
+
+.header-container h1 {
+    margin: 0;
+}
+
+/* Mode Toggle */
+.mode-toggle-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+}
+
+.mode-toggle {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.mode-toggle input[type="checkbox"] {
+    display: none;
+}
+
+.toggle-slider {
+    position: relative;
+    width: 50px;
+    height: 24px;
+    background-color: #ccc;
+    border-radius: 24px;
+    transition: background-color 0.3s;
+    margin-right: 8px;
+}
+
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background-color: white;
+    border-radius: 50%;
+    transition: transform 0.3s;
+}
+
+.mode-toggle input[type="checkbox"]:checked + .toggle-slider {
+    background-color: #007bff;
+}
+
+.mode-toggle input[type="checkbox"]:checked + .toggle-slider::before {
+    transform: translateX(26px);
+}
+
+.toggle-label {
+    font-weight: 600;
+    color: #0056b3;
+    font-size: 0.9em;
+}
+
 /* Headings */
 h1, h2 { 
     text-align: center; 
     color: #0056b3; 
 }
 
-h1 { 
-    font-size: 2.5em; 
+h1 {
+    font-size: 2.5em;
+}
+
+h4 {
+    margin: 1em 0 0.5em 0;
+    color: #0056b3;
+    font-size: 1.1em;
+    font-weight: 600;
 }
 
 /* Section Styling */
@@ -222,4 +295,230 @@ hr {
 }
 .tip[open] summary { 
     margin-bottom: 4px; 
+}
+
+/* Lite Mode Styles */
+.lite-mode-section {
+    background-color: #f8f9fa;
+    border: 2px solid #007bff;
+    border-radius: 12px;
+}
+
+.lite-status {
+    background-color: white;
+    border-radius: 8px;
+    padding: 1em;
+    margin-bottom: 1.5em;
+    border: 1px solid #e9ecef;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    justify-content: space-between;
+}
+
+.status-icon {
+    font-size: 1.2em;
+}
+
+.status-text {
+    font-weight: 500;
+    color: #495057;
+}
+
+.lite-workflow {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5em;
+}
+
+.lite-step {
+    background-color: white;
+    border-radius: 8px;
+    padding: 1.5em;
+    border: 1px solid #e9ecef;
+}
+
+.lite-step h3 {
+    margin-top: 0;
+    margin-bottom: 1em;
+    color: #0056b3;
+    font-size: 1.2em;
+}
+
+.lite-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+}
+
+.lite-controls label {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    margin: 0;
+}
+
+.lite-controls input[type="number"] {
+    width: 80px;
+    margin-left: auto;
+}
+
+/* Pro mode specific adjustments */
+.pro-mode-encrypt-decrypt {
+    display: flex;
+    gap: 0.5em !important;
+}
+
+.pro-mode-section-3 .lite-controls {
+    margin-bottom: 2em;
+}
+
+.pro-mode-section-3 .lite-controls:first-child {
+    margin-bottom: 2.5em;
+}
+
+.threshold-display {
+    background-color: #e3f2fd;
+    border: 1px solid #2196f3;
+    border-radius: 6px;
+    padding: 0.8em;
+    margin-top: 1em;
+    text-align: center;
+}
+
+.threshold-display span {
+    font-weight: 600;
+    color: #1976d2;
+}
+
+.download-section {
+    margin-top: 1em;
+    padding: 1em;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    border: 1px dashed #6c757d;
+    text-align: center;
+}
+
+.download-section button {
+    background-color: #28a745;
+    margin-bottom: 0.5em;
+}
+
+.download-section button:hover:not(:disabled) {
+    background-color: #218838;
+}
+
+.download-section small {
+    display: block;
+    color: #6c757d;
+    font-style: italic;
+}
+
+.download-keys-btn {
+    background-color: #28a745 !important;
+    font-size: 0.8em !important;
+    padding: 0.4em 0.8em !important;
+    width: auto !important;
+    margin: 0 !important;
+    border-radius: 4px !important;
+}
+
+.download-keys-btn:hover:not(:disabled) {
+    background-color: #218838 !important;
+}
+
+.validation-message {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    padding: 0.5em;
+    margin-top: 0.5em;
+    font-size: 0.9em;
+}
+
+.validation-message.warning {
+    background-color: #fff3cd;
+    color: #856404;
+    border-color: #ffeeba;
+}
+
+.validation-message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border-color: #c3e6cb;
+}
+
+/* Pro Mode Sections */
+.pro-mode-sections {
+    background-color: white;
+    border: 1px solid #dddfe2;
+    padding: 1.5em;
+    margin-bottom: 1.5em;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Advanced Entropy Collection UI */
+.key-generation {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    margin-bottom: 1em;
+}
+
+.key-generation button {
+    align-self: flex-start;
+}
+
+.entropy-btn {
+    background-color: #17a2b8 !important;
+    font-size: 0.85em !important;
+    padding: 0.4em 0.8em !important;
+    width: auto !important;
+}
+
+.entropy-btn:hover:not(:disabled) {
+    background-color: #138496 !important;
+}
+
+.entropy-btn:disabled {
+    background-color: #6c757d !important;
+    cursor: not-allowed;
+}
+
+.entropy-status {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 0.8em;
+    margin-top: 0.5em;
+    font-size: 0.9em;
+}
+
+.entropy-progress {
+    background-color: #e9ecef;
+    border-radius: 4px;
+    height: 20px;
+    margin-top: 0.5em;
+    overflow: hidden;
+}
+
+.entropy-bar {
+    background-color: #28a745;
+    height: 100%;
+    transition: width 0.3s ease;
+    border-radius: 4px;
+}
+
+.entropy-info {
+    display: block;
+    margin-top: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    line-height: 1.3;
 }

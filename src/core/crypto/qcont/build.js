@@ -1,89 +1,16 @@
-import { MAGIC, CHUNK_SIZE, hashBytes } from '../../core/crypto.js';
+import { MAGIC, CHUNK_SIZE, hashBytes } from '../index.js';
+import { log, logError } from '../../features/ui/logging.js';
+import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams } from '../../../utils.js';
 
-async function hexDigest(u8) {
-    const buf = await crypto.subtle.digest('SHA-256', u8);
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function combinations(arr, k) {
-    const res = [];
-    const comb = [];
-    function dfs(start, depth) {
-        if (depth === k) { res.push(comb.slice()); return; }
-        for (let i = start; i < arr.length; i++) {
-            comb.push(arr[i]);
-            dfs(i + 1, depth + 1);
-            comb.pop();
-        }
-    }
-    dfs(0, 0);
-    return res;
-}
-
-async function smokeTestOnSplit(chunkBytes, k, m) {
-    const n = k + m;
-    const frags = window.erasure.split(chunkBytes, k, m/2);
-    console.log('SMOKE: split returned', frags.length, 'fragments, lens=', frags.map(f=>f.length));
-    const idxs = frags.map((_, i) => i);
-    const combos = combinations(idxs, k);
-    for (const combo of combos) {
-        const encoded = new Array(n);
-        for (let i = 0; i < n; i++) encoded[i] = new Uint8Array(frags[0].length);
-        for (const idx of combo) encoded[idx] = frags[idx];
-        try {
-            const rec = window.erasure.recombine(encoded, chunkBytes.length, k, m/2);
-            const ok = (rec.length === chunkBytes.length) && ((await hexDigest(rec)) === (await hexDigest(chunkBytes)));
-            console.log('SMOKE combo', combo, '-> OK?', ok);
-        } catch (e) {
-            console.error('SMOKE combo', combo, '-> FAIL', String(e));
-        }
-    }
-}
-
-function validateRsParams(n, k) {
+// Parameter validation
+function validateRsParamsLocal(n, k) {
+    if (!validateRsParams(n, k)) return false;
     if (n === 4 && k === 2) {
         const msg = 'Warning: configuration n=4, k=2 is known to be unstable with this erasure library (edge-case decoding errors). Please choose n≥5 (recommended n=5,k=3 for balance, or n=6,k=2 for accessibility).';
         alert(msg);
         return false;
     }
     return true;
-}
-
-function log(msg) {
-    const logEl = document.getElementById('log');
-    if (!logEl) return;
-    logEl.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
-    logEl.scrollTop = logEl.scrollHeight;
-}
-function logError(err) {
-    const logEl = document.getElementById('log');
-    if (!logEl) return;
-    const text = (err && err.message) ? err.message : (typeof err === 'string' ? err : String(err));
-    const errorSpan = document.createElement('span');
-    errorSpan.className = 'error';
-    errorSpan.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${text}`;
-    logEl.appendChild(errorSpan);
-    logEl.appendChild(document.createTextNode('\n'));
-    logEl.scrollTop = logEl.scrollHeight;
-}
-function setButtonsDisabled(disabled) {
-    document.querySelectorAll('button').forEach(btn => { btn.disabled = disabled; });
-}
-async function readFileAsUint8Array(file) { return new Uint8Array(await file.arrayBuffer()); }
-function download(blob, filename) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    URL.revokeObjectURL(a.href);
-    a.remove();
-}
-
-function kmac(bytes, custom) {
-    // compatibility shim (if needed in future)
-    return bytes && custom; // unused here, reserved
 }
 
 export async function buildQcontShards(qencBytes, privKeyBytes, params) {
@@ -111,7 +38,8 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
 
     const t = k + (m / 2);
     if (t > n) throw new Error('Invalid threshold computed');
-    const shares = await (await import('shamir-secret-sharing')).split(privKeyBytes, n, t);
+    const { splitSecret } = await import('../splitting/sss.js');
+    const shares = await splitSecret(privKeyBytes, n, t);
     const shardBuffers = Array.from({ length: n }, () => []);
 
     const chunkSize = meta.chunkSize || CHUNK_SIZE;
@@ -144,18 +72,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
         }
 
         const allowedFailures = m / 2;
-        const fragments = window.erasure.split(chunkForRS, k, allowedFailures);
-        // Debug: log fragment hashes and mapping to shardIndex j
-        for (let j = 0; j < fragments.length; j++) {
-            const frag = fragments[j];
-            const h = await hexDigest(frag);
-            console.log(`CREATION: chunk[${i}] fragment[${j}] length=${frag.length} sha256=${h}`);
-            console.log(` -> will write to shardIndex=${j} (expect file name contains idx=${j+1})`);
-        }
-        // Smoke test only on first chunk to limit cost
-        if (i === 0) {
-            await smokeTestOnSplit(chunkForRS, k, m);
-        }
+        const fragments = window.erasure.split(chunkForRS, k, m/2);
         if (fragments.length !== n) throw new Error('RS split returned unexpected number of fragments');
         if (i === 0) perFragmentSize = fragments[0].length;
         for (let j = 0; j < fragments.length; j++) {
@@ -241,7 +158,7 @@ export function initQcontBuildUI() {
             if (Number.isNaN(n) || Number.isNaN(k)) throw new Error('Invalid parameters');
             if (k < 2 || n <= k) throw new Error('Require 2 <= k < n');
             if (((n - k) % 2) !== 0) throw new Error('(n - k) must be even');
-            if (!validateRsParams(n, k)) { return; }
+            if (!validateRsParamsLocal(n, k)) { return; }
             const t = k + ((n - k) / 2);
             log(`Building .qcont shards with n=${n}, k=${k}, m=${n - k} (t=${t}), chunkSize=8 MiB ...`);
             const qconts = await buildQcontShards(qencBytes, privKeyBytes, { n, k });
@@ -255,5 +172,3 @@ export function initQcontBuildUI() {
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });
 }
-
-

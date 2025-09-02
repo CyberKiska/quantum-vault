@@ -1,41 +1,6 @@
-import { MAGIC, CHUNK_SIZE, hashBytes } from '../../core/crypto.js';
-
-async function hexDigest(u8) {
-    const buf = await crypto.subtle.digest('SHA-256', u8);
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function log(msg) {
-    const logEl = document.getElementById('log');
-    if (!logEl) return;
-    logEl.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
-    logEl.scrollTop = logEl.scrollHeight;
-}
-function logError(err) {
-    const logEl = document.getElementById('log');
-    if (!logEl) return;
-    const text = (err && err.message) ? err.message : (typeof err === 'string' ? err : String(err));
-    const errorSpan = document.createElement('span');
-    errorSpan.className = 'error';
-    errorSpan.textContent = `[${new Date().toLocaleTimeString()}] ERROR: ${text}`;
-    logEl.appendChild(errorSpan);
-    logEl.appendChild(document.createTextNode('\n'));
-    logEl.scrollTop = logEl.scrollHeight;
-}
-function setButtonsDisabled(disabled) {
-    document.querySelectorAll('button').forEach(btn => { btn.disabled = disabled; });
-}
-async function readFileAsUint8Array(file) { return new Uint8Array(await file.arrayBuffer()); }
-function download(blob, filename) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    URL.revokeObjectURL(a.href);
-    a.remove();
-}
+import { MAGIC, CHUNK_SIZE, hashBytes } from '../index.js';
+import { log, logError } from '../../features/ui/logging.js';
+import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
 
 export function initQcontRestoreUI() {
     const qcontShardsInput = document.getElementById('qcontShardsInput');
@@ -45,6 +10,7 @@ export function initQcontRestoreUI() {
         const files = qcontShardsInput?.files;
         if (!files?.length) { logError('Select .qcont shards'); return; }
         if (files.length < 2) { logError('Select at least two .qcont shards'); return; }
+        // First check: all file sizes identical
         const firstSize = files[0].size;
         for (let i = 1; i < files.length; i++) {
             if (files[i].size !== firstSize) { logError('All selected .qcont shards must have the same file size.'); return; }
@@ -69,19 +35,14 @@ export function initQcontRestoreUI() {
                 const shareLen = dv.getUint16(off, false); off += 2;
                 const share = arr.subarray(off, off + shareLen); off += shareLen;
                 const fragments = arr.subarray(off);
-                console.log(`RESTORE: shardIndex=${shardIndex} totalFragBytes=${fragments.length}`);
-                // If perFragmentSize known — log first fragment hash for correlation
-                const pfs = metaJSON.perFragmentSize;
-                if (pfs && fragments.length >= (4 + pfs)) {
-                    const dvf = new DataView(fragments.buffer, fragments.byteOffset);
-                    const fLen = dvf.getUint32(0, false);
-                    const fStart = 4;
-                    const fEnd = fStart + Math.min(fLen, pfs);
-                    const firstFrag = fragments.subarray(fStart, fEnd);
-                    hexDigest(firstFrag).then(h => console.log(`  -> firstFrag len=${firstFrag.length} sha256=${h}`));
-                }
                 return { metaJSON, encapsulatedKey, iv, salt, qencMetaBytes, shardIndex, share, fragments };
             });
+            // Additional pre-check: ensure all containerId hashes match
+            const containerIdSet = new Set(shards.map(s => s.metaJSON?.containerId));
+            if (containerIdSet.size !== 1) {
+                logError('Selected shards belong to different containers (containerId mismatch).');
+                return;
+            }
             const byId = new Map();
             for (const s of shards) {
                 const id = s.metaJSON.containerId;
@@ -103,7 +64,8 @@ export function initQcontRestoreUI() {
 
             const sortedGroup = group.slice().sort((a, b) => a.shardIndex - b.shardIndex);
             const selectedShares = sortedGroup.slice(0, t).map(s => s.share);
-            const privKey = await (await import('shamir-secret-sharing')).combine(selectedShares);
+            const { combineShares } = await import('../splitting/sss.js');
+            const privKey = await combineShares(selectedShares);
 
             const encodeSize = Math.floor(256 / n) * n;
             const inputSize = (encodeSize * k) / n;
@@ -201,5 +163,3 @@ export function initQcontRestoreUI() {
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });
 }
-
-
