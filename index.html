@@ -4,70 +4,145 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Quantum Vault</title>
-  <script type="module" crossorigin src="/quantum-vault/assets/index-C-7YbMZM.js"></script>
-  <link rel="stylesheet" crossorigin href="/quantum-vault/assets/index-CiBsFRbN.css">
+  <script type="module" crossorigin src="/quantum-vault/assets/index-BbuMKs9Q.js"></script>
+  <link rel="stylesheet" crossorigin href="/quantum-vault/assets/index-hXucUHTv.css">
 </head>
 <body>
-  <h1>Quantum Vault 🛡️</h1>
-  
-  <section id="keys">
-    <h2>1. Key Management</h2>
-    <button id="genKeyBtn">🔑 Generate Key Pair</button>
-    <label>Secret Key (.qkey) <span class="info" title="ML‑KEM secret key (3168 bytes), required for decryption and shard splitting." aria-label="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span> <input type="file" id="privKeyInput" accept=".qkey"></label>
-    <label>Public Key (.qkey) <span class="info" title="ML‑KEM public key (1568 bytes), required for encryption." aria-label="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span> <input type="file" id="pubKeyInput" accept=".qkey"></label>
-  </section>
-
-  <section id="crypto">
-    <h2>2. Encryption / Decryption</h2>
-    <label>File for operations <input type="file" id="dataFileInput" multiple></label>
-    <button id="encBtn">🔒 Encrypt</button>
-    <button id="decBtn">🔓 Decrypt</button>
-  </section>
-
-  <section id="qcont">
-    <h2>3. Build / Restore .qcont Shards (Reed-Solomon + Shamir's Secret Sharing)</h2>
-    <div>
-      <label>Encrypted container (.qenc) to split <input type="file" id="qencForQcontInput" accept=".qenc"></label>
+  <div class="header-container">
+    <h1>Quantum Vault 🛡️</h1>
+    <div class="mode-toggle-container">
+      <label class="mode-toggle">
+        <input type="checkbox" id="modeToggle">
+        <span class="toggle-slider"></span>
+        <span class="toggle-label">Pro Mode</span>
+      </label>
     </div>
-    <div>
-      <label>Private key (.qkey) to split <input type="file" id="privKeyForQcontInput" accept=".qkey"></label>
+  </div>
+
+  <!-- Lite Mode Section (Default) -->
+  <section id="liteMode" class="lite-mode-section">
+    
+    <div class="lite-status">
+      <div id="keyStatus" class="status-item">
+        <span class="status-icon">🔑</span>
+        <span class="status-text">Generating keys...</span>
+        <button id="liteDownloadKeysBtn" class="download-keys-btn" style="display: none;">📥 Keys</button>
+      </div>
     </div>
-    <div id="rsParams">
-      <label>Total shards (n) <span class="info" title="n — total number of shard files." aria-label="n — total number of shard files.">ℹ</span> <input type="number" id="rsN" value="4" min="3"></label>
-      <label>RS data shards (k) <span class="info" title="k — in the context of Reed-Solomon erasure coding, the number of data shards (the number of fragments sufficient to recover the original bytes)." aria-label="k — in the context of Reed-Solomon erasure coding, the number of data shards.">ℹ</span> <input type="number" id="rsK" value="2" min="2"></label>
-      <small id="rsText">n=?, k=?, m=?, t=?; Need ≥ t shards to restore. <span class="info" title="m — in the context of RS is the number of redundant parity shards.\n\nt — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key)." aria-label="Definitions of m and t">ℹ</span></small>
-      <div id="rsViz" aria-hidden="true">
-        <div class="rs-bar">
-          <span class="rs-seg data" id="rsSegData"><span class="seg-label" id="rsDataLabel"></span></span>
-          <span class="rs-seg parity" id="rsSegParity"><span class="seg-label" id="rsParityLabel"></span></span>
-          <span class="rs-marker" id="rsMarker"></span>
-          <span class="rs-marker-label" id="rsMarkerLabel"></span>
+
+    <div class="lite-workflow">
+      <div class="lite-step">
+        <h3>1. Select files to protect</h3>
+        <label>Files to encrypt and split <input type="file" id="liteFilesInput" multiple></label>
+      </div>
+
+      <div class="lite-step">
+        <h3>2. Configure settings & Create shards</h3>
+        <div class="lite-controls">
+          <label>Total shards (n) <span class="info" title="Total number of shard files to create">ℹ</span> <input type="number" id="liteN" value="5" min="5" max="25"></label>
+          <label>Aproximated recovery threshold (%) <span class="info" title="Approximate percentage of shards needed for recovery">ℹ</span> <input type="number" id="liteThreshold" value="60" min="50" max="90" step="5">%</label>
+          <div class="threshold-display">
+            <span id="thresholdText">≥4 shards required for recovery (80%)</span>
+          </div>
+          <div id="configValidation" class="validation-message" style="display: none;"></div>
         </div>
-        <div class="rs-ticks" id="rsTicks" aria-hidden="true"></div>
-        <div class="rs-legend">
-          <span class="swatch data"></span> Data k
-          <span class="swatch parity"></span> Parity m
-          <span class="swatch marker"></span> Threshold t
+        <button id="liteCreateShardsBtn" disabled>🛡️ Encrypt & Create Shards</button>
+      </div>
+
+      <div class="lite-step">
+        <h3>3. Restore from Shards</h3>
+        <label>Shard files (.qcont) <input type="file" id="liteShardsInput" accept=".qcont" multiple></label>
+        <button id="liteRestoreBtn">♻️ Restore original files</button>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Pro Mode Sections (Hidden by default) -->
+  <div id="proMode" class="pro-mode-sections" style="display: none;">
+    <div class="lite-workflow">
+      <div class="lite-step">
+        <h3>1. Key Management & Generation</h3>
+        <div class="key-generation">
+          <button id="genKeyBtn">🔑 Generate Key Pair</button>
+          <button id="advancedEntropyBtn" class="entropy-btn">🎲 Collect Additional Entropy</button>
+          <div id="entropyStatus" class="entropy-status" style="display: none;">
+            <span id="entropyText">Move mouse, type on keyboard, resize window for privacy-preserving entropy collection...</span>
+            <div id="entropyProgress" class="entropy-progress">
+              <div id="entropyBar" class="entropy-bar" style="width: 0%"></div>
+            </div>
+            <small class="entropy-info">Privacy-preserving collection: mouse movement deltas, keyboard timing, window size buckets, touch coordinates (quantized). All data processed asynchronously with SHA3-512 + KMAC256 mixing.</small>
+          </div>
+        </div>
+        <div class="lite-controls">
+          <label>Secret Key (.qkey) <span class="info" title="ML‑KEM secret key (3168 bytes), required for decryption and shard splitting." aria-label="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span> <input type="file" id="privKeyInput" accept=".qkey"></label>
+          <label>Public Key (.qkey) <span class="info" title="ML‑KEM public key (1568 bytes), required for encryption." aria-label="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span> <input type="file" id="pubKeyInput" accept=".qkey"></label>
         </div>
       </div>
-      <details class="tip">
-        <summary>Tip</summary>
-        <div>
-        More availability = reduce k or t;<br />
-        More confidentiality = increase m.<br />
-        If someone controls t shards they can decrypt; with fewer than t shards they cannot.<br />
-        m — in the context of RS is the number of redundant parity shards. <br />
-        t — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key).
+
+      <div class="lite-step">
+        <h3>2. Encrypt / Decrypt Files</h3>
+        <div class="lite-controls">
+          <label>Files for operations <input type="file" id="dataFileInput" multiple></label>
         </div>
-      </details>
+        <div class="lite-controls pro-mode-encrypt-decrypt">
+          <button id="encBtn" style="flex: 1;">🔒 Encrypt</button>
+          <button id="decBtn" style="flex: 1;">🔓 Decrypt</button>
+        </div>
+      </div>
+
+      <div class="lite-step pro-mode-section-3">
+        <h3>3. Build / Restore .qcont Shards</h3>
+        <div class="lite-controls">
+          <label>Encrypted container (.qenc) to split <input type="file" id="qencForQcontInput" accept=".qenc"></label>
+          <label>Private key (.qkey) to split <input type="file" id="privKeyForQcontInput" accept=".qkey"></label>
+        </div>
+
+        <div class="lite-controls">
+          <div id="rsParams" style="margin-bottom: 1em;">
+            <div style="display: flex; gap: 1em; align-items: center; margin-bottom: 0.5em;">
+              <label style="flex: 1;">Total shards (n) <span class="info" title="n — total number of shard files." aria-label="n — total number of shard files.">ℹ</span> <input type="number" id="rsN" value="4" min="3" style="width: 80px;"></label>
+              <label style="flex: 1;">RS data shards (k) <span class="info" title="k — in the context of Reed-Solomon erasure coding, the number of data shards (the number of fragments sufficient to recover the original bytes)." aria-label="k — in the context of Reed-Solomon erasure coding, the number of data shards.">ℹ</span> <input type="number" id="rsK" value="2" min="2" style="width: 80px;"></label>
+            </div>
+            <small id="rsText" style="display: block; margin-bottom: 0.5em;">n=?, k=?, m=?, t=?; Need ≥ t shards to restore. <span class="info" title="m — in the context of RS is the number of redundant parity shards.\n\nt — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key)." aria-label="Definitions of m and t">ℹ</span></small>
+            <div id="rsViz" aria-hidden="true">
+              <div class="rs-bar">
+                <span class="rs-seg data" id="rsSegData"><span class="seg-label" id="rsDataLabel"></span></span>
+                <span class="rs-seg parity" id="rsSegParity"><span class="seg-label" id="rsParityLabel"></span></span>
+                <span class="rs-marker" id="rsMarker"></span>
+                <span class="rs-marker-label" id="rsMarkerLabel"></span>
+              </div>
+              <div class="rs-ticks" id="rsTicks" aria-hidden="true"></div>
+              <div class="rs-legend">
+                <span class="swatch data"></span> Data k
+                <span class="swatch parity"></span> Parity m
+                <span class="swatch marker"></span> Threshold t
+              </div>
+            </div>
+            <details class="tip" style="margin-top: 0.5em;">
+              <summary>Configuration Tips</summary>
+              <div>
+              More availability = reduce k or t;<br />
+              More confidentiality = increase m.<br />
+              If someone controls t shards they can decrypt; with fewer than t shards they cannot.<br />
+              m — in the context of RS is the number of redundant parity shards. <br />
+              t — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key).
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <button id="buildQcontBtn" style="margin-bottom: 1em;">🧩 Build .qcont shards</button>
+
+        <hr style="margin: 1.5em 0;">
+
+        <h4 style="margin-top: 1em; margin-bottom: 0.5em; color: #0056b3;">Restore from Shards</h4>
+        <div class="lite-controls">
+          <label>Shards (.qcont) for combining <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
+        </div>
+        <button id="restoreQcontBtn">♻️ Restore key and container</button>
+      </div>
     </div>
-    <button id="buildQcontBtn">🧩 Build .qcont shards</button>
-    <hr>
-    <div>
-      <label>Shards (.qcont) for combining <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
-    </div>
-    <button id="restoreQcontBtn">♻️ Restore key and container </button>
-  </section>
+  </div>
 
   <section>
     <h2>Operations Log</h2>
