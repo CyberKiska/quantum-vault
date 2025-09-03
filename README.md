@@ -44,12 +44,65 @@ Threat model (concise):
 
 ## Architecture
 
+### Project repository structure
+```
+index.html                     # Main HTML file
+style.css                      # Main CSS styles file
+package.json                   # Dependencies, downloadable libraries
+public/third-party/erasure.js  # ErasureCodes library
+src/
+├── main.js                    # Application entry point
+├── utils.js                   # Consolidated utility functions  
+├── core/
+   ├── crypto/                 # Core cryptographic modules
+   │   ├── index.js            # Main crypto orchestration
+   │   ├── constants.js        # Storage of permanent variables
+   │   ├── mlkem.js            # ML-KEM-1024 implementation
+   │   ├── aes.js              # AES-256-GCM + KMAC256
+   │   ├── entropy.js          # Enhanced entropy collection
+   │   ├── qcont/              # .qcont format handling
+   │   │   ├── build.js        # Shard building
+   │   │   └── restore.js      # Shard restoration
+   │   └── splitting/          # Secret/data splitting
+   │       └── sss.js          # Shamir Secret Sharing
+   └── features/               # Application features
+       ├── lite-mode.js        # Simplified interface
+       └── ui/                 # User interface modules
+           ├── ui.js           # Pro mode interface
+           └── logging.js      # Consistent logging
+```
+
 ### Components
 * Post-quantum Module-Lattice-based Key Encapsulation Mechanism: **ML-KEM-1024**. Used to encapsulate/decapsulate a shared secret.
 * Key derivation function: **KMAC256**. Used to derive the AES encryption key and AES IV's from the shared secret.
 * Authenticated Encryption with Associated Data: **AES-256-GCM**. Used to encrypt the file payload and authenticate the header additional authenticated data (AAD).
 * Secret sharing algorithm: **Shamir's secret sharing**. Used to shard and reconstruct private keys files.
 * File sharing algorithm: **Reed-Solomon codes**. Used to shard and reconstruct containers files.
+
+```mermaid
+graph TB
+    subgraph "🔐 Cryptographic Flow"
+        I["🔑 ML-KEM-1024 Key Generation"] --> J["🛡 ML-KEM Encapsulation"]
+        J --> K["🌊 KMAC256 Key Derivation"]
+        K --> L["🔐 AES-256-GCM Encryption<br/>(Per-chunk or single)"]
+        H["📂 User Data"] --> L
+        L --> M["🔀 Shamir Secret Sharing<br/>(Private key)"]
+        L --> N["📦 Reed-Solomon Encoding<br/>(Encrypted data)"]
+        M --> O["📄 .qcont Shards"]
+        N --> O
+        O --> P["🌍 Distributed Storage"]
+    end
+    
+    style H fill:#ffebee
+    style I fill:#e1f5fe
+    style J fill:#e8f5e8
+    style K fill:#f1f8e9
+    style L fill:#fff3e0
+    style M fill:#fce4ec
+    style N fill:#e0f2f1
+    style O fill:#fff8e1
+    style P fill:#ffebee
+```
 
 ### Container format (binary)
 * `.qenc` file format (one file is encrypted container - single-stream or per-chunk AEAD)
