@@ -39,7 +39,19 @@ const SEED_LENGTH = CONFIG.seedLength;
 
 // Generate seed using crypto.getRandomValues()
 export function generateBaseSeed() {
-    return crypto.getRandomValues(new Uint8Array(SEED_LENGTH));
+    const seed = crypto.getRandomValues(new Uint8Array(SEED_LENGTH));
+
+    // CSPRNG health check (cf. NIST SP 800-90B §4.3)
+    const probe = crypto.getRandomValues(new Uint8Array(SEED_LENGTH));
+    let identical = true;
+    for (let i = 0; i < seed.length; i++) {
+        if (seed[i] !== probe[i]) { identical = false; break; }
+    }
+    if (identical) {
+        throw new Error('CSPRNG health check failed: consecutive outputs are identical');
+    }
+
+    return seed;
 }
 
 // Privacy-preserving mouse movement summarization

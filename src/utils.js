@@ -63,3 +63,26 @@ export function calculateShamirThreshold(n, k) {
     const m = n - k;
     return k + (m / 2);
 }
+
+// Constant-time comparison for Uint8Arrays (best-effort in JS; ref. CWE-208)
+export function timingSafeEqual(a, b) {
+    if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) return false;
+    if (a.length !== b.length) return false;
+    let result = 0;
+    for (let i = 0; i < a.length; i++) {
+        result |= a[i] ^ b[i];
+    }
+    return result === 0;
+}
+
+// Hex string → Uint8Array
+export function fromHex(hex) {
+    if (typeof hex !== 'string' || hex.length % 2 !== 0) {
+        throw new Error('Invalid hex string');
+    }
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    }
+    return bytes;
+}

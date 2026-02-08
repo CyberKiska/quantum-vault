@@ -63,6 +63,8 @@ src/
    │   ├── qcont/              # .qcont format handling
    │   │   ├── build.js        # Shard building
    │   │   └── restore.js      # Shard restoration
+   │   ├── qenc/               # .qenc format handling
+   │   │   └── format.js       # Creating and parsing header
    │   └── splitting/          # Secret/data splitting
    │       └── sss.js          # Shamir Secret Sharing
    └── features/               # Application features
@@ -112,10 +114,11 @@ graph TB
 | MAGIC           | 4 bytes             | ASCII `QVv1`                                 |
 | keyLen          | 4 bytes (Uint32 BE) | length of `encapsulatedKey`                  |
 | encapsulatedKey | keyLen bytes        | ML‑KEM ciphertext                            |
-| containerNonce  | 12 bytes            | AES‑GCM IV (single-container mode)           |
+| containerNonce  | 12 bytes            | container nonce / IV root                    |
 | kdfSalt         | 16 bytes            | random salt for KMAC                         |
 | metaLen         | 2 bytes (Uint16 BE) | length of `metaJSON`                         |
 | metaJSON        | metaLen bytes UTF‑8 | JSON metadata                                |
+| keyCommitment   | 32 bytes            | SHA3‑256(Kenc) key commitment (QVv1-4-0+)    |
 | ciphertext      | remaining bytes     | AES‑GCM ciphertext (single or concatenation) |
 
 `.qenc` metaJSON (indicative):
@@ -124,17 +127,38 @@ graph TB
   "KEM":"ML-KEM-1024",
   "KDF":"KMAC256",
   "AEAD":"AES-256-GCM",
-  "fmt":"QVv1-3-0",
+  "fmt":"QVv1-4-0",
   "aead_mode":"single-container-aead | per-chunk-aead",
   "iv_strategy":"single-iv | kmac-derive-v1",
-  "timestamp":"<ISO8601 time>",
-  "fileHash":"<SHA3-512 hex of original file>",
-  "originalLength": 123,
+  "hasKeyCommitment": true,
+  "payloadFormat":"wrapped-v1",
+  "payloadLength": 12345,
   "chunkSize": 8388608,
   "chunkCount": 1,
   "domainStrings": { "kdf":"quantum-vault:kdf:v1", "iv":"quantum-vault:chunk-iv:v1" }
 }
 ```
+
+Private metadata (encrypted inside payload, `wrapped-v1`):
+```json
+{
+  "originalFilename":"<string|null>",
+  "timestamp":"<ISO8601 time>",
+  "fileHash":"<SHA3-512 hex of original file>",
+  "originalLength": 123
+}
+```
+
+Payload format (`wrapped-v1`):
+```
+[uint32be privateMetaLen][privateMetaJSON][fileBytes]
+```
+
+*Note: when `aead_mode` is `per-chunk-aead`, the ciphertext is a concatenation of per‑chunk AES‑GCM outputs (each chunk includes its 16‑byte tag).*
+
+AAD:
+* Single-container AEAD: entire header from MAGIC through `metaJSON`.
+* Per-chunk AEAD: `AAD_i = header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`.
 
 * `.qcont` composite shard file format (one file contains part of Shamir's splited key + part of RS fragment)
 
@@ -149,6 +173,8 @@ graph TB
 | kdfSalt           | 16 bytes                  | from `.qenc` header                                  |
 | qencMetaLen       | 2 bytes (Uint16 BE)       |                                                      |
 | qencMetaBytes     | qencMetaLen bytes (UTF‑8) | original `.qenc` metadata (dup for convenience)      |
+| keyCommitLen      | 1 byte                    | key commitment length (0 or 32)                      |
+| keyCommitBytes    | keyCommitLen bytes        | SHA3‑256(Kenc) from `.qenc` header (if present)       |
 | shardIndex        | 2 bytes (Uint16 BE)       | 0‑based index (0..n‑1)                               |
 | shareLen          | 2 bytes (Uint16 BE)       |                                                      |
 | shareBytes        | shareLen bytes            | one Shamir share                                     |
@@ -159,29 +185,31 @@ graph TB
 ```json
 {
   "containerId":"<SHA3-512 hex of .qenc header>",
-  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-1"},
+  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-2"},
   "aead_mode":"single-container | per-chunk",
   "iv_strategy":"single-iv | kmac-derive-v1",
   "n":5,"k":3,"m":2,"t":4,
+  "rsEncodeBase":255,
   "chunkSize":8388608,
   "chunkCount":1,
   "containerHash":"<SHA3-512 hex of .qenc file>",
-  "encapBlobHash":"<SHA3-512 hex of encapsulated blob>",
-  "privateKeyHash":"<SHA3-512 hex of secretKey.qkey file>",
+  "encapBlobHash":"<SHA3-512 hex>",
+  "privateKeyHash":"<SHA3-512 hex>",
+  "payloadLength":12345,
   "originalLength":123,
   "ciphertextLength":456,
-  "domainStrings":{"kdf":"quantum-vault:kdf:v1","iv":"quantum-vault:iv:v1"},
+  "domainStrings":{"kdf":"quantum-vault:kdf:v1","iv":"quantum-vault:chunk-iv:v1"},
   "fragmentFormat":"len32-prefixed",
   "perFragmentSize":789,
+  "hasKeyCommitment":true,
+  "keyCommitmentHex":"<hex>",
+  "shareCommitments":["<hex>", "..."],
+  "fragmentBodyHashes":["<hex>", "..."],
   "timestamp":"<ISO8601 time>"
 }
 ```
 
-AAD:
-* Single-container AEAD: entire header from MAGIC through `metaJSON`.
-* Per-chunk AEAD: `AAD_i = header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`.
-
-*Note: when `aead_mode` is `per-chunk`, the `cipherPayload` field usually contains a stream of encrypted chunks, but for convenience of splitting into `.qcont`, we store per-chunk ciphertext next to it in the qcont step. `qenc.metaJSON` stores `chunkCount`, `chunk_size`, `perFragmentSize`, and `ciphertextLength` (total length).*
+*Note: for `wrapped-v1`, `payloadLength` refers to the encrypted payload size (private metadata + file bytes). The original file length is stored inside the private metadata.*
 
 ### Encapsulation & KDF
 1. Receiver generates ML‑KEM‑1024 key pair (public `publicKey.qkey` 1568 B, private `secretKey.qkey` 3168 B).
@@ -192,15 +220,18 @@ AAD:
    - `Kenc = KMAC256(Kraw, [1], 32, customization='quantum-vault:kenc:v1')`
    - `Kiv  = KMAC256(Kraw, [2], 32, customization='quantum-vault:kiv:v1')`
    - Import `Kenc` as AES‑GCM key. Per‑chunk IV_i = first 12 bytes of `KMAC256(Kiv, (containerNonce || uint32_be(chunkIndex)), 16, customization=domainStrings.iv)`.
+   - Key commitment: `keyCommitment = SHA3-256(Kenc)` (stored in header for QVv1-4-0+).
 
 ### Encrypt flow (sender)
 * Single-container AEAD (small files):
-1. Generate containerNonce (12B) random; call ciphertext = AES-GCM.encrypt(plaintext, iv=containerNonce, key=aesKey, AAD=headerBytes).
-2. Produce .qenc with ciphertext and metaJSON. Later split .qenc into shards via RS.
+1. Build payload as `wrapped-v1` (private metadata + file bytes).
+2. Generate containerNonce (12B) random; call ciphertext = AES-GCM.encrypt(payload, iv=containerNonce, key=aesKey, AAD=headerBytes).
+3. Produce `.qenc` with header (including key commitment) + ciphertext.
 * Per-chunk AEAD (big files):
-1. Break plaintext into chunks of chunk_size. For each chunk index i compute per-chunk IV via Kiv as key to KMAC256 for IV derivation;
-2. Build header as specified above.
-3. For each cipherChunk_i, pad to multiple expected size and then call RS fragments = window.erasure.split(paddedChunk, k, allowedFailures). Append fragments[j] to shard j's fragBlob.
+1. Build payload as `wrapped-v1`.
+2. Break payload into chunks of `chunkSize`. For each chunk index i compute per‑chunk IV via Kiv as key to KMAC256 for IV derivation.
+3. Encrypt each chunk with AES‑GCM using `AAD_i = header || uint32_be(i) || uint32_be(plainLen_i)`.
+4. Concatenate all `cipherChunk_i` to form the ciphertext stream in `.qenc`.
 
 ### Decrypt flow (recipient)
 1. Read container bytes and ensure length >= minimal header size.
@@ -208,12 +239,14 @@ AAD:
 3. Validate metaJson KDF and KEM.
 4. `sharedSecret = ml_kem1024.decapsulate(encapsulatedKey, secretKey)`; normalize to `Uint8Array`.
 5. Derive AES key with `KMAC256(sharedSecret, salt || metaBytes, 32, { customization })`. Import key. Zeroize `derived` and `sharedSecret`.
-6. Decrypt with AES-GCM providing `additionalData = header`. If auth fails, raise an error (tampered container or wrong key).
-7. Validate decrypted plaintext by computing `SHA3-512(plaintext)` and comparing to `metaJson.fileHash`. If equal, accept; otherwise, warn about integrity mismatch.
+6. Verify `keyCommitment` if present (QVv1-4-0+) before decryption.
+7. Decrypt with AES-GCM providing `additionalData = header`. If auth fails, raise an error (tampered container or wrong key).
+8. If `payloadFormat` is `wrapped-v1`, unpack private metadata and recover original file bytes.
+9. Validate decrypted file by computing `SHA3-512(fileBytes)` and comparing to `privateMeta.fileHash`. If equal, accept; otherwise, warn about integrity mismatch.
 
 ### Sharding (split / combine)
-* Split: take the binary container .qenc and run split(containerBytes, N, T) to produce N shards. Each shard is a binary file (.qshard).
-* Combine: collect at least T shards and run combine(shards) to produce the original container bytes.
+* Split (.qenc → .qcont): parse the `.qenc` header, Shamir‑split the ML‑KEM private key into `n` shares with threshold `t = k + (n-k)/2`, and Reed‑Solomon split the ciphertext into `n` fragments tolerating up to `(n-k)/2` erasures. Each `.qcont` shard stores one Shamir share plus its fragment stream, along with share commitments and fragment body hashes for integrity.
+* Combine (.qcont → .qenc + .qkey): collect at least `t` valid shards, verify share commitments and fragment hashes (if present), reconstruct the private key via Shamir, reconstruct ciphertext via RS, rebuild the `.qenc` header (including key commitment if present), and verify SHA3‑512 hashes for both the container and private key.
 
 ------------
 
@@ -254,13 +287,12 @@ Browser encryption/decryption tool libraries:
 * SHA3-512 for hashing and KMAC256 for KDF [noble-hashes](https://github.com/paulmillr/noble-hashes);
 * ML-KEM-1024 for post-quantum key encapsulation used in combination with AES-256-GCM for symmetric file encryption [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
 * Shamir's secret sharing algorithm for splitting [shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing);
-* Reed-Solomon erasure codes for splitting [ErasureCodes](https://github.com/ianopolous/ErasureCodes/).
+* Reed-Solomon erasure codes for splitting based on [ErasureCodes](https://github.com/ianopolous/ErasureCodes/).
 
 The application incorporates the following dependencies that are released under the permissive MIT License and Apache License 2.0.
 
 | Library               | Version | Copyright holder | Upstream repository                               |
 | --------------------- | ------- | ---------------- | ------------------------------------------------- |
 | shamir-secret-sharing | 0.0.4   | Privy            | https://github.com/privy-io/shamir-secret-sharing |
-| noble-post-quantum    | 0.5.1   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
-| noble-hashes          | 2.0.0   | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
-| ErasureCodes          | 9f937b9 | Dr Ian Preston   | https://github.com/ianopolous/ErasureCodes        |
+| noble-post-quantum    | 0.5.4   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
+| noble-hashes          | 2.0.1   | Paul Miller      | https://github.com/paulmillr/noble-hashes         |

@@ -1,6 +1,8 @@
 // --- AES-256-GCM Symmetric Encryption ---
 
 import { kmac256 } from '@noble/hashes/sha3-addons.js';
+import { sha3_256 } from '@noble/hashes/sha3.js';
+import { timingSafeEqual } from '../../utils.js';
 import { CHUNK_SIZE, DEFAULT_CUSTOMIZATION } from './constants.js';
 
 // Constants
@@ -125,4 +127,19 @@ export function clearKeys(...keys) {
             key.fill(0);
         }
     });
+}
+
+// Compute key commitment: SHA3-256(Kenc)
+// Prevents AES-GCM key-commitment attacks (Albertini et al., USENIX Security 2020)
+export function computeKeyCommitment(Kenc) {
+    if (!(Kenc instanceof Uint8Array) || Kenc.length !== 32) {
+        throw new Error('Kenc must be 32-byte Uint8Array');
+    }
+    return sha3_256(Kenc);
+}
+
+// Verify key commitment using constant-time comparison (CWE-208)
+export function verifyKeyCommitment(Kenc, expectedCommitment) {
+    const computed = computeKeyCommitment(Kenc);
+    return timingSafeEqual(computed, expectedCommitment);
 }

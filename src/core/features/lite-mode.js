@@ -1,7 +1,9 @@
 // --- Lite Mode - Simplified Interface ---
+// Lite mode is a thin UI wrapper over the same cryptographic operations as Pro mode
 
 import { encryptFile, decryptFile, generateKeyPair, hashBytes } from '../crypto/index.js';
 import { buildQcontShards } from '../crypto/qcont/build.js';
+import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp } from '../../utils.js';
 import { log, logError, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess } from './ui/logging.js';
 
@@ -17,51 +19,37 @@ function calculateParametersFromThreshold(n, thresholdPercent) {
         return { error: 'Total shards must be at least 5 (configurations with n≤4 are unstable)' };
     }
     
-    // Target threshold as number of shards
+    if (!Number.isFinite(thresholdPercent)) {
+        return { error: 'Invalid threshold percent' };
+    }
+
+    // Target threshold as number of shards (rounded up for safety)
     const targetT = Math.ceil((thresholdPercent / 100) * n);
-    
-    // Find the best k that gives us closest to target threshold
-    // Formula: t = k + (m/2), where m = n - k
-    // So: t = k + (n-k)/2 = k + n/2 - k/2 = k/2 + n/2
-    // Therefore: k = 2*t - n
-    let k = 2 * targetT - n;
-    
-    // Ensure k is valid (k >= 3 and k < n) to avoid unstable configurations
-    k = Math.max(3, Math.min(k, n - 1));
-    
-    // Ensure (n-k) is even for compatibility
-    let m = n - k;
-    if (m % 2 !== 0) {
-        // Adjust k to make m even
-        if (k + 1 < n && k + 1 >= 3) {
-            k += 1;
-        } else if (k - 1 >= 3) {
-            k -= 1;
-        } else {
-            return { error: 'Cannot find valid configuration - try adjusting total shards or threshold' };
+
+    // Search all valid k to find the closest achievable threshold
+    let best = null;
+    for (let k = 2; k < n; k++) {
+        if (!validateRsParams(n, k)) continue;
+        const m = n - k;
+        const t = calculateShamirThreshold(n, k);
+        if (!Number.isInteger(t)) continue;
+        const actualThresholdPercent = Math.round((t / n) * 100);
+        const diff = Math.abs(t - targetT);
+        if (!best || diff < best.diff || (diff === best.diff && t > best.t)) {
+            best = { n, k, m, t, actualThresholdPercent, diff };
         }
-        m = n - k;
     }
-    
-    // Additional validation for unstable configurations
-    if (n <= 4 && k <= 2) {
-        return { error: 'Configuration n≤4, k≤2 is unstable. Please use n≥5 with k≥3' };
+
+    if (!best) {
+        return { error: 'Cannot find valid configuration - try adjusting total shards or threshold' };
     }
-    
-    const finalT = calculateShamirThreshold(n, k);
-    const actualThresholdPercent = Math.round((finalT / n) * 100);
-    
-    // Ensure t is a whole number (it should be, but double-check)
-    if (finalT !== Math.floor(finalT)) {
-        return { error: 'Invalid configuration results in fractional threshold' };
-    }
-    
+
     return {
-        n,
-        k,
-        m,
-        t: Math.floor(finalT), // Ensure whole number
-        actualThresholdPercent
+        n: best.n,
+        k: best.k,
+        m: best.m,
+        t: best.t,
+        actualThresholdPercent: best.actualThresholdPercent
     };
 }
 
@@ -110,11 +98,11 @@ function updateThresholdDisplay() {
     // Show success if configuration is good
     if (validationDiv && params.actualThresholdPercent !== thresholdPercent) {
         validationDiv.className = 'validation-message warning';
-        validationDiv.textContent = `Configuration adjusted: actual threshold is ${params.actualThresholdPercent}% (${params.t} shards)`;
+        validationDiv.textContent = `Configuration adjusted: actual threshold is ${params.actualThresholdPercent}% (${params.t} shards). Using n=${params.n}, k=${params.k}, m=${params.m} (can lose up to ${params.m / 2}).`;
         validationDiv.style.display = 'block';
     } else if (validationDiv) {
         validationDiv.className = 'validation-message success';
-        validationDiv.textContent = `✓ Valid configuration: n=${params.n}, k=${params.k}, t=${params.t}`;
+        validationDiv.textContent = `✓ Valid configuration: n=${params.n}, k=${params.k}, m=${params.m}, t=${params.t} (can lose up to ${params.m / 2}).`;
         validationDiv.style.display = 'block';
     }
     
@@ -272,7 +260,7 @@ async function createLiteShards() {
     }
 }
 
-// Restore from shards (simplified)
+// Restore from shards (simplified) - uses shared core logic from qcont/restore.js
 async function restoreLiteShards() {
     const shardsInput = document.getElementById('liteShardsInput');
     
@@ -289,180 +277,59 @@ async function restoreLiteShards() {
     setButtonsDisabled(true);
     
     try {
-        // Use the existing restoration logic from qcont/restore.js but adapted for lite mode
+        // Parse shards using shared function
         const shardBytesArr = await Promise.all([...shardsInput.files].map(readFileAsUint8Array));
-        const shards = shardBytesArr.map(arr => {
-            const dv = new DataView(arr.buffer, arr.byteOffset);
-            let off = 0;
-            const magic = new TextDecoder().decode(arr.subarray(off, off + 4)); off += 4;
-            if (magic !== 'QVC1') throw new Error('Invalid .qcont magic');
-            const metaLen = dv.getUint16(off, false); off += 2;
-            const metaJSON = JSON.parse(new TextDecoder().decode(arr.subarray(off, off + metaLen))); off += metaLen;
-            const encapLen = dv.getUint32(off, false); off += 4;
-            const encapsulatedKey = arr.subarray(off, off + encapLen); off += encapLen;
-            const iv = arr.subarray(off, off + 12); off += 12;
-            const salt = arr.subarray(off, off + 16); off += 16;
-            const qencMetaLen = dv.getUint16(off, false); off += 2;
-            const qencMetaBytes = arr.subarray(off, off + qencMetaLen); off += qencMetaLen;
-            const shardIndex = dv.getUint16(off, false); off += 2;
-            const shareLen = dv.getUint16(off, false); off += 2;
-            const share = arr.subarray(off, off + shareLen); off += shareLen;
-            const fragments = arr.subarray(off);
-            return { metaJSON, encapsulatedKey, iv, salt, qencMetaBytes, shardIndex, share, fragments };
+        const shards = shardBytesArr.map(parseShard);
+        
+        // Log restoration start
+        const containerId = shards[0]?.metaJSON?.containerId;
+        logRestoration(shardsInput.files.length, containerId, { isLiteMode: true });
+        
+        // Restore using shared core logic
+        const result = await restoreFromShards(shards, {
+            onLog: (msg) => log(msg, { isLiteMode: true }),
+            onError: (msg) => logError(msg, { isLiteMode: true })
         });
-
-        // Additional pre-check: ensure all selected shards belong to same containerId
-        const idSet = new Set(shards.map(s => s.metaJSON?.containerId));
-        if (idSet.size !== 1) {
-            logError('Selected shards belong to different containers (containerId mismatch)', { isLiteMode: true });
+        
+        const { qencBytes, privKey, containerHash, qencOk, qkeyOk } = result;
+        
+        if (!qencOk || !qkeyOk) {
+            logError('Hash verification failed for container', { isLiteMode: true });
             return;
         }
         
-        // Group by container ID
-        const byId = new Map();
-        for (const s of shards) {
-            const id = s.metaJSON.containerId;
-            if (!byId.has(id)) byId.set(id, []);
-            byId.get(id).push(s);
+        // Lite mode extra step: decrypt the container to get the original file
+        const { decryptedBlob, metadata } = await decryptFile(qencBytes, privKey);
+        
+        // Try to restore original filename
+        const qencHash = await hashBytes(qencBytes);
+        let originalName = originalFileNames.get(qencHash);
+        
+        if (!originalName) {
+            // Fallback: try with containerHash
+            originalName = originalFileNames.get(containerHash);
         }
         
-        // Process each container
-        for (const [containerId, group] of byId.entries()) {
-            logRestoration(shardsInput.files.length, containerId, { isLiteMode: true });
-            
-            const { n, k, m, t, ciphertextLength, chunkSize, chunkCount, containerHash, privateKeyHash, aead_mode } = group[0].metaJSON;
-            const isPerChunkMode = aead_mode === 'per-chunk' || aead_mode === 'per-chunk-aead';
-            
-            if (group.length < t) {
-                throw new Error(`Need at least ${t} shards for container, got ${group.length}`);
-            }
-            
-            // Restore private key from Shamir shares
-            const sortedGroup = group.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-            const selectedShares = sortedGroup.slice(0, t).map(s => s.share);
-            
-            // Import combineShares function
-            const { combineShares } = await import('../crypto/splitting/sss.js');
-            const privKey = await combineShares(selectedShares);
-            
-            // Reconstruct encrypted container
-            const encodeSize = Math.floor(256 / n) * n;
-            const inputSize = (encodeSize * k) / n;
-            const totalChunks = chunkCount;
-            const cipherChunks = [];
-            const shardOffsets = new Array(n).fill(0);
-            
-            for (let i = 0; i < totalChunks; i++) {
-                const plainLen = Math.min(chunkSize, (group[0].metaJSON.originalLength) - (i * chunkSize));
-                const thisLen = isPerChunkMode ? (plainLen + 16) : ciphertextLength;
-                const encodeSize = Math.floor(256 / n) * n;
-                const inputSize = (encodeSize * k) / n;
-                const symbolSize = inputSize / k;
-                const blocks = Math.ceil(thisLen / inputSize);
-                const expectedFragLen = blocks * symbolSize;
-
-                const encoded = new Array(n);
-                for (let j = 0; j < n; j++) {
-                    const fragStream = group.find(s => s.shardIndex === j)?.fragments;
-                    if (!fragStream) {
-                        encoded[j] = new Uint8Array(expectedFragLen);
-                        continue;
-                    }
-                    const off = shardOffsets[j];
-                    const dvFrag = new DataView(fragStream.buffer, fragStream.byteOffset + off);
-                    const fragLen = dvFrag.getUint32(0, false);
-                    const fragStart = off + 4;
-                    const fragEnd = fragStart + fragLen;
-                    let fragSlice = fragStream.subarray(fragStart, fragEnd);
-                    if (fragLen < expectedFragLen) {
-                        const padded = new Uint8Array(expectedFragLen);
-                        padded.set(fragSlice);
-                        fragSlice = padded;
-                    } else if (fragLen > expectedFragLen) {
-                        fragSlice = fragSlice.subarray(0, expectedFragLen);
-                    }
-                    encoded[j] = fragSlice;
-                    shardOffsets[j] = fragEnd;
-                }
-                const recombined = window.erasure.recombine(encoded, thisLen, k, m/2);
-                cipherChunks.push(recombined);
-                if (!isPerChunkMode) break;
-            }
-            
-            const ciphertext = isPerChunkMode
-                ? (() => { const total = cipherChunks.reduce((a, c) => a + c.length, 0); const out = new Uint8Array(total); let p = 0; for (const ch of cipherChunks) { out.set(ch, p); p += ch.length; } return out; })()
-                : cipherChunks[0];
-            
-            // Reconstruct .qenc header
-            const { encapsulatedKey, iv, salt, qencMetaBytes } = group[0];
-            const keyLenBytes = new Uint8Array(4); new DataView(keyLenBytes.buffer).setUint32(0, encapsulatedKey.length, false);
-            const metaLenBytes = new Uint8Array(2); new DataView(metaLenBytes.buffer).setUint16(0, qencMetaBytes.length, false);
-            const MAGIC = new TextEncoder().encode('QVv1');
-            const header = new Uint8Array(MAGIC.length + 4 + encapsulatedKey.length + 12 + 16 + 2 + qencMetaBytes.length);
-            let p = 0;
-            header.set(MAGIC, p); p += MAGIC.length;
-            header.set(keyLenBytes, p); p += 4;
-            header.set(encapsulatedKey, p); p += encapsulatedKey.length;
-            header.set(iv, p); p += 12;
-            header.set(salt, p); p += 16;
-            header.set(metaLenBytes, p); p += 2;
-            header.set(qencMetaBytes, p);
-            
-            const qencBytes = new Uint8Array(header.length + ciphertext.length);
-            qencBytes.set(header, 0);
-            qencBytes.set(ciphertext, header.length);
-            
-            // Verify hashes
-            const recoveredQencHash = await hashBytes(qencBytes);
-            const recoveredPrivHash = await hashBytes(privKey);
-            const qencOk = recoveredQencHash === containerHash;
-            const qkeyOk = recoveredPrivHash === privateKeyHash;
-            
-            if (!qencOk || !qkeyOk) {
-                logError(`Hash verification failed for container`, { isLiteMode: true });
-                continue;
-            }
-            
-            // Now decrypt the container to get the original file
-            const { decryptedBlob, metadata } = await decryptFile(qencBytes, privKey);
-
-            // Try to restore original filename using the correct hash
-            // Use the hash of the reconstructed qencBytes (same as encHash from encryption)
-            const qencHash = await hashBytes(qencBytes);
-            let originalName = originalFileNames.get(qencHash);
-
-            if (!originalName) {
-                // Fallback: try with containerHash as well (for backward compatibility)
-                originalName = originalFileNames.get(containerHash);
-            }
-
-            if (!originalName) {
-                // Final fallback: use container ID with .file extension
-                originalName = `restored-${containerId.slice(0, 8)}.file`;
-            }
-
-            download(decryptedBlob, originalName);
-
-            // Verify file integrity
-            const decBytes = await readFileAsUint8Array(decryptedBlob);
-            const decHash = await hashBytes(decBytes);
-            const integrityOk = metadata.fileHash === decHash;
-
-            // Log restoration success with ISO8601 timestamp
-            const encryptionTime = metadata.timestamp || 'Unknown';
-            logRestorationSuccess(originalName, decryptedBlob.size, encryptionTime, integrityOk, { isLiteMode: true });
+        if (!originalName) {
+            // Use metadata filename if available, otherwise use container ID
+            originalName = metadata.originalFilename || `restored-${result.containerId.slice(0, 8)}.file`;
         }
         
-        // Final success message
-        const containerCount = byId.size;
-        if (containerCount === 1) {
-            log('🎉 Container restored successfully', { isLiteMode: true });
-        } else {
-            log(`🎉 ${containerCount} containers restored successfully`, { isLiteMode: true });
-        }
+        download(decryptedBlob, originalName);
+        
+        // Verify file integrity
+        const decBytes = await readFileAsUint8Array(decryptedBlob);
+        const decHash = await hashBytes(decBytes);
+        const integrityOk = metadata.fileHash === decHash;
+        
+        // Log restoration success
+        const encryptionTime = metadata.timestamp || 'Unknown';
+        logRestorationSuccess(originalName, decryptedBlob.size, encryptionTime, integrityOk, { isLiteMode: true });
+        
+        log('🎉 Container restored successfully', { isLiteMode: true });
         
     } catch (error) {
-        logError(`Restoration failed: ${error.message}`, { isLiteMode: true });
+        logError(`Restoration failed: ${error?.message ?? error}`, { isLiteMode: true });
     } finally {
         setButtonsDisabled(false);
     }
