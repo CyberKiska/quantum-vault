@@ -379,14 +379,17 @@ GaloisPolynomial.create = function(coeffs, f) {
 
     var f = new Galois();
     
-    // (Uint8Array, int, int)-> Uint8Array
-    exports.split = function(ints, originalBlobs, allowedFailures)
+    // (Uint8Array, int, int, int?)-> Uint8Array
+    // maxCodeword is optional; defaults to GF size - 1 (255) to avoid evaluation collisions.
+    exports.split = function(ints, originalBlobs, allowedFailures, maxCodeword)
     {
         var n = originalBlobs + allowedFailures*2;
         var bouts = [];
         for (var i=0; i < n; i++)
             bouts.push(new ByteArrayOutputStream((symbolSize*ints.length/inputSize)|0));
-        var encodeSize = ((f.size/n)|0)*n;
+        var max = (typeof maxCodeword === 'number' && maxCodeword > 0) ? maxCodeword : (f.size - 1);
+        if (max > f.size) max = f.size;
+        var encodeSize = ((max/n)|0)*n;
         var inputSize = encodeSize*originalBlobs/n;
         var nec = encodeSize-inputSize;
         var symbolSize = inputSize/originalBlobs;
@@ -409,11 +412,14 @@ GaloisPolynomial.create = function(coeffs, f) {
         return res;
     }
 
-    // (Uint8Array[], int, int, int) -> Uint8Array
-    exports.recombine = function(encoded, truncateTo, originalBlobs, allowedFailures)
+    // (Uint8Array[], int, int, int, int?) -> Uint8Array
+    // maxCodeword is optional; defaults to GF size - 1 (255) to avoid evaluation collisions.
+    exports.recombine = function(encoded, truncateTo, originalBlobs, allowedFailures, maxCodeword)
     {
         const n = originalBlobs + allowedFailures*2;
-        const encodeSize = ((f.size/n)|0)*n;
+        var max = (typeof maxCodeword === 'number' && maxCodeword > 0) ? maxCodeword : (f.size - 1);
+        if (max > f.size) max = f.size;
+        const encodeSize = ((max/n)|0)*n;
         const inputSize = encodeSize*originalBlobs/n;
         const nec = encodeSize-inputSize;
         const symbolSize = inputSize/originalBlobs;

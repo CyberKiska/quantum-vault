@@ -4,150 +4,278 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Quantum Vault</title>
-  <script type="module" crossorigin src="/quantum-vault/assets/index-BbuMKs9Q.js"></script>
-  <link rel="stylesheet" crossorigin href="/quantum-vault/assets/index-hXucUHTv.css">
+  <script type="module" crossorigin src="/quantum-vault/assets/index-CE1aLO3T.js"></script>
+  <link rel="stylesheet" crossorigin href="/quantum-vault/assets/index-Chhtuloh.css">
 </head>
 <body>
-  <div class="header-container">
-    <h1>Quantum Vault 🛡️</h1>
-    <div class="mode-toggle-container">
-      <label class="mode-toggle">
-        <input type="checkbox" id="modeToggle">
-        <span class="toggle-slider"></span>
-        <span class="toggle-label">Pro Mode</span>
-      </label>
-    </div>
-  </div>
-
-  <!-- Lite Mode Section (Default) -->
-  <section id="liteMode" class="lite-mode-section">
-    
-    <div class="lite-status">
-      <div id="keyStatus" class="status-item">
-        <span class="status-icon">🔑</span>
-        <span class="status-text">Generating keys...</span>
-        <button id="liteDownloadKeysBtn" class="download-keys-btn" style="display: none;">📥 Keys</button>
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="logo-icon">🛡️</span>
+        <div class="brand-text">
+          <h1>Quantum Vault</h1>
+          <span class="version-badge">v1.4.0</span>
+        </div>
       </div>
-    </div>
-
-    <div class="lite-workflow">
-      <div class="lite-step">
-        <h3>1. Select files to protect</h3>
-        <label>Files to encrypt and split <input type="file" id="liteFilesInput" multiple></label>
+      <div class="header-controls">
+        <div class="mode-switch-container">
+          <span class="mode-label">Lite</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="modeToggle">
+            <span class="slider"></span>
+          </label>
+          <span class="mode-label">Pro</span>
+        </div>
       </div>
+    </header>
 
-      <div class="lite-step">
-        <h3>2. Configure settings & Create shards</h3>
-        <div class="lite-controls">
-          <label>Total shards (n) <span class="info" title="Total number of shard files to create">ℹ</span> <input type="number" id="liteN" value="5" min="5" max="25"></label>
-          <label>Aproximated recovery threshold (%) <span class="info" title="Approximate percentage of shards needed for recovery">ℹ</span> <input type="number" id="liteThreshold" value="60" min="50" max="90" step="5">%</label>
-          <div class="threshold-display">
-            <span id="thresholdText">≥4 shards required for recovery (80%)</span>
+    <!-- Main Content Stage -->
+    <main class="main-stage">
+      
+      <!-- LITE MODE -->
+      <section id="liteMode" class="mode-section active">
+        <div class="mode-nav">
+          <button id="liteTabProtect" class="nav-tab active">Encrypt & Split</button>
+          <button id="liteTabRestore" class="nav-tab">Recover</button>
+        </div>
+
+        <!-- Lite View: Protect -->
+        <div id="liteViewProtect" class="view-container active">
+          
+          <div class="visual-pipeline-container">
+             <!-- Visual Pipeline Placeholder -->
+             <div class="pipeline-step step-file">
+               <span class="icon">📄</span>
+               <span class="label">File</span>
+             </div>
+             <div class="pipeline-arrow">→</div>
+             <div class="pipeline-step step-lock">
+               <span class="icon">🔒</span>
+               <span class="label">Encrypt</span>
+             </div>
+             <div class="pipeline-arrow">→</div>
+             <div class="pipeline-step step-split">
+               <span class="icon">🧩</span>
+               <span class="label">Split</span>
+             </div>
           </div>
-          <div id="configValidation" class="validation-message" style="display: none;"></div>
-        </div>
-        <button id="liteCreateShardsBtn" disabled>🛡️ Encrypt & Create Shards</button>
-      </div>
 
-      <div class="lite-step">
-        <h3>3. Restore from Shards</h3>
-        <label>Shard files (.qcont) <input type="file" id="liteShardsInput" accept=".qcont" multiple></label>
-        <button id="liteRestoreBtn">♻️ Restore original files</button>
-      </div>
-    </div>
-  </section>
-  
-  <!-- Pro Mode Sections (Hidden by default) -->
-  <div id="proMode" class="pro-mode-sections" style="display: none;">
-    <div class="lite-workflow">
-      <div class="lite-step">
-        <h3>1. Key Management & Generation</h3>
-        <div class="key-generation">
-          <button id="genKeyBtn">🔑 Generate Key Pair</button>
-          <button id="advancedEntropyBtn" class="entropy-btn">🎲 Collect Additional Entropy</button>
-          <div id="entropyStatus" class="entropy-status" style="display: none;">
-            <span id="entropyText">Move mouse, type on keyboard, resize window for privacy-preserving entropy collection...</span>
-            <div id="entropyProgress" class="entropy-progress">
-              <div id="entropyBar" class="entropy-bar" style="width: 0%"></div>
+          <div class="action-card">
+            <div class="dropzone-area" id="liteDropzone">
+              <h3>Select files to protect</h3>
+              <p>Drag & drop or click to select</p>
+              <input type="file" id="liteFilesInput" multiple>
+              <div id="liteFilesList" class="files-list" style="display: none;"></div>
             </div>
-            <small class="entropy-info">Privacy-preserving collection: mouse movement deltas, keyboard timing, window size buckets, touch coordinates (quantized). All data processed asynchronously with SHA3-512 + KMAC256 mixing.</small>
+            
+            <div class="config-area">
+              <div class="key-status-row">
+                 <div id="keyStatus" class="status-badge">
+                   <span class="status-icon">🔑</span>
+                   <span class="status-text">Generating keys...</span>
+                 </div>
+                 <button id="liteDownloadKeysBtn" class="secondary-btn small-btn" style="display: none;">
+                   📥 Backup Keys
+                 </button>
+              </div>
+
+              <div class="config-controls">
+                <div class="input-group">
+                  <label>Total shards (n) <span class="info" title="Total number of shard files to create">ℹ</span></label>
+                  <input type="number" id="liteN" value="5" min="5" max="25">
+                </div>
+                <div class="input-group">
+                  <label>Approximate recovery threshold (%) <span class="info" title="Approximate percentage of shards needed for recovery">ℹ</span></label>
+                  <input type="number" id="liteThreshold" value="60" min="50" max="90" step="5">
+                </div>
+              </div>
+              <div class="threshold-display">
+                <span id="thresholdText" class="value-display">Requested 60% -> Achievable 80% (>=4/5 shards)</span>
+                <span id="thresholdDelta" class="threshold-delta"></span>
+                <small id="thresholdHint" class="info-text">Discrete by RS/SSS constraints.</small>
+              </div>
+            </div>
+
+            <button id="liteCreateShardsBtn" class="primary-btn big-btn" disabled>🛡️ Encrypt & Create Shards</button>
           </div>
         </div>
-        <div class="lite-controls">
-          <label>Secret Key (.qkey) <span class="info" title="ML‑KEM secret key (3168 bytes), required for decryption and shard splitting." aria-label="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span> <input type="file" id="privKeyInput" accept=".qkey"></label>
-          <label>Public Key (.qkey) <span class="info" title="ML‑KEM public key (1568 bytes), required for encryption." aria-label="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span> <input type="file" id="pubKeyInput" accept=".qkey"></label>
-        </div>
-      </div>
 
-      <div class="lite-step">
-        <h3>2. Encrypt / Decrypt Files</h3>
-        <div class="lite-controls">
-          <label>Files for operations <input type="file" id="dataFileInput" multiple></label>
-        </div>
-        <div class="lite-controls pro-mode-encrypt-decrypt">
-          <button id="encBtn" style="flex: 1;">🔒 Encrypt</button>
-          <button id="decBtn" style="flex: 1;">🔓 Decrypt</button>
-        </div>
-      </div>
+        <!-- Lite View: Restore -->
+        <div id="liteViewRestore" class="view-container" style="display: none;">
+           <div class="visual-pipeline-container">
+             <div class="pipeline-step step-split">
+               <span class="icon">🧩</span>
+               <span class="label">Shards</span>
+             </div>
+             <div class="pipeline-arrow">→</div>
+             <div class="pipeline-step step-combine">
+               <span class="icon">✨</span>
+               <span class="label">Combine</span>
+             </div>
+             <div class="pipeline-arrow">→</div>
+             <div class="pipeline-step step-file">
+               <span class="icon">📄</span>
+               <span class="label">File</span>
+             </div>
+          </div>
 
-      <div class="lite-step pro-mode-section-3">
-        <h3>3. Build / Restore .qcont Shards</h3>
-        <div class="lite-controls">
-          <label>Encrypted container (.qenc) to split <input type="file" id="qencForQcontInput" accept=".qenc"></label>
-          <label>Private key (.qkey) to split <input type="file" id="privKeyForQcontInput" accept=".qkey"></label>
-        </div>
-
-        <div class="lite-controls">
-          <div id="rsParams" style="margin-bottom: 1em;">
-            <div style="display: flex; gap: 1em; align-items: center; margin-bottom: 0.5em;">
-              <label style="flex: 1;">Total shards (n) <span class="info" title="n — total number of shard files." aria-label="n — total number of shard files.">ℹ</span> <input type="number" id="rsN" value="4" min="3" style="width: 80px;"></label>
-              <label style="flex: 1;">RS data shards (k) <span class="info" title="k — in the context of Reed-Solomon erasure coding, the number of data shards (the number of fragments sufficient to recover the original bytes)." aria-label="k — in the context of Reed-Solomon erasure coding, the number of data shards.">ℹ</span> <input type="number" id="rsK" value="2" min="2" style="width: 80px;"></label>
+          <div class="action-card">
+            <div class="dropzone-area" id="liteShardsDropzone">
+              <h3>Select Shards to Restore</h3>
+              <p>Select multiple .qcont files</p>
+              <input type="file" id="liteShardsInput" accept=".qcont" multiple>
             </div>
-            <small id="rsText" style="display: block; margin-bottom: 0.5em;">n=?, k=?, m=?, t=?; Need ≥ t shards to restore. <span class="info" title="m — in the context of RS is the number of redundant parity shards.\n\nt — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key)." aria-label="Definitions of m and t">ℹ</span></small>
-            <div id="rsViz" aria-hidden="true">
-              <div class="rs-bar">
+            <div id="shardsStatus" class="shards-status" style="display: none;">
+              <span id="shardsStatusText">0 shards selected</span>
+            </div>
+            <button id="liteRestoreBtn" class="primary-btn big-btn" disabled>♻️ Restore Original Files</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PRO MODE -->
+      <section id="proMode" class="mode-section" style="display: none;">
+        <div class="mode-nav">
+          <button id="proTabIdentity" class="nav-tab active"><span class="step-num">1</span> Key Management</button>
+          <button id="proTabEncryption" class="nav-tab"><span class="step-num">2</span> Encryption</button>
+          <button id="proTabDistribution" class="nav-tab"><span class="step-num">3</span> Split (Sharding)</button>
+          <button id="proTabRestore" class="nav-tab">Reconstruct</button>
+        </div>
+
+        <!-- Pro View: Identity -->
+        <div id="proViewIdentity" class="view-container active">
+          <div class="panel">
+            <h3>Key Generation</h3>
+            <div class="control-group">
+               <button id="genKeyBtn" class="secondary-btn">🔑 Generate New Key Pair</button>
+               <button id="advancedEntropyBtn" class="secondary-btn">🎲 Collect Advanced Entropy</button>
+            </div>
+            
+            <div id="entropyStatus" class="entropy-status" style="display: none;">
+              <span id="entropyText">Collecting entropy...</span>
+              <div class="progress-bar-bg"><div id="entropyBar" class="progress-bar-fill" style="width: 0%"></div></div>
+              <small class="entropy-info">Privacy-preserving collection: mouse/keyboard timing, window resizing. Local processing only.</small>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Active Keys</h3>
+            <div class="control-group">
+              <label>Secret Key (.qkey) <span class="info" title="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span> <input type="file" id="privKeyInput" accept=".qkey"></label>
+              <label>Public Key (.qkey) <span class="info" title="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span> <input type="file" id="pubKeyInput" accept=".qkey"></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pro View: Encryption -->
+        <div id="proViewEncryption" class="view-container" style="display: none;">
+          <div class="panel">
+            <h3>File Operations</h3>
+            <div class="control-group">
+              <label>Input Files <input type="file" id="dataFileInput" multiple></label>
+              <div id="proFilesList" class="files-list" style="display: none;"></div>
+            </div>
+            <div id="proEncStrategyGroup" class="strategy-group" style="display: none;">
+              <span class="strategy-title">Container strategy</span>
+              <label class="strategy-option">
+                <input type="radio" id="proEncStrategyPack" name="proEncStrategy" value="pack" checked>
+                Pack files into one container
+              </label>
+              <label class="strategy-option">
+                <input type="radio" id="proEncStrategyPerFile" name="proEncStrategy" value="per-file">
+                One container per file
+              </label>
+            </div>
+            <div id="proEncryptionWarning" class="operation-warning">
+              <small>Load keys in tab "1. Key Management": public key for encryption, private key for decryption.</small>
+            </div>
+            <div class="button-row">
+              <button id="encBtn" class="action-btn">🔒 Encrypt (.qenc)</button>
+              <button id="decBtn" class="action-btn">🔓 Decrypt (File)</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pro View: Distribution -->
+        <div id="proViewDistribution" class="view-container" style="display: none;">
+           <div class="panel">
+            <h3>Sharding Configuration (SSS + RS)</h3>
+            <div class="control-group">
+              <label>Input .qenc <input type="file" id="qencForQcontInput" accept=".qenc"></label>
+              <label>Input Private .qkey (to split) <input type="file" id="privKeyForQcontInput" accept=".qkey"></label>
+            </div>
+
+            <div class="rs-controls">
+                <label>Total Shards (n) <input type="number" id="rsN" value="5" min="3"></label>
+                <label>Data Shards (k) <input type="number" id="rsK" value="3" min="2"></label>
+            </div>
+            <div style="background: var(--bg-input); padding: var(--space-sm); border-radius: var(--radius-sm); margin-top: var(--space-sm);">
+                <small id="rsText" class="info-text rs-summary">Params info...</small>
+                <div id="rsConstraints" class="rs-constraints">
+                  <div id="rsRuleN" class="constraint-item">n &gt;= 5</div>
+                  <div id="rsRuleRange" class="constraint-item">2 &lt;= k &lt; n</div>
+                  <div id="rsRuleEven" class="constraint-item">(n - k) must be even</div>
+                </div>
+            </div>
+            
+            <!-- RS Viz (Existing) -->
+            <div id="rsViz" class="rs-viz-bar">
+                <div class="rs-bar">
                 <span class="rs-seg data" id="rsSegData"><span class="seg-label" id="rsDataLabel"></span></span>
                 <span class="rs-seg parity" id="rsSegParity"><span class="seg-label" id="rsParityLabel"></span></span>
                 <span class="rs-marker" id="rsMarker"></span>
                 <span class="rs-marker-label" id="rsMarkerLabel"></span>
               </div>
-              <div class="rs-ticks" id="rsTicks" aria-hidden="true"></div>
+              <div class="rs-ticks" id="rsTicks"></div>
               <div class="rs-legend">
                 <span class="swatch data"></span> Data k
                 <span class="swatch parity"></span> Parity m
                 <span class="swatch marker"></span> Threshold t
               </div>
+              <details class="tip">
+                  <summary>Configuration Tips</summary>
+                  <div>
+                  More availability = reduce k or t;<br />
+                  More confidentiality = increase m.<br />
+                  If someone controls t shards they can decrypt; with fewer than t shards they cannot.<br />
+                  m — in the context of RS is the number of redundant parity shards.<br />
+                  t — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key).<br />
+                  </div>
+                </details>
             </div>
-            <details class="tip" style="margin-top: 0.5em;">
-              <summary>Configuration Tips</summary>
-              <div>
-              More availability = reduce k or t;<br />
-              More confidentiality = increase m.<br />
-              If someone controls t shards they can decrypt; with fewer than t shards they cannot.<br />
-              m — in the context of RS is the number of redundant parity shards. <br />
-              t — in the context of SSS, this is the threshold: the minimum number of Shamir shards required to recover the secret (private key).
-              </div>
-            </details>
-          </div>
+
+            <button id="buildQcontBtn" class="action-btn" disabled>🧩 Build Shards</button>
+           </div>
         </div>
 
-        <button id="buildQcontBtn" style="margin-bottom: 1em;">🧩 Build .qcont shards</button>
-
-        <hr style="margin: 1.5em 0;">
-
-        <h4 style="margin-top: 1em; margin-bottom: 0.5em; color: #0056b3;">Restore from Shards</h4>
-        <div class="lite-controls">
-          <label>Shards (.qcont) for combining <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
+        <!-- Pro View: Restore (New) -->
+        <div id="proViewRestore" class="view-container" style="display: none;">
+           <div class="panel">
+            <h3>Reconstruct Container</h3>
+            <div class="control-group">
+               <label>Input Shards <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
+            </div>
+            <div id="proShardsStatus" class="shards-status" style="display: none;">
+              <span id="proShardsStatusText">0 shards selected</span>
+            </div>
+            <button id="restoreQcontBtn" class="action-btn" disabled>♻️ Restore</button>
+           </div>
         </div>
-        <button id="restoreQcontBtn">♻️ Restore key and container</button>
+      </section>
+
+    </main>
+
+    <footer class="app-footer">
+      <div class="log-container" id="logContainer">
+        <div class="log-header">
+          <h3>Operations Log</h3>
+          <button id="logToggleBtn" class="secondary-btn small-btn" type="button">Show Log</button>
+        </div>
+        <pre id="log"></pre>
       </div>
-    </div>
+    </footer>
   </div>
-
-  <section>
-    <h2>Operations Log</h2>
-    <pre id="log"></pre>
-  </section>
 
   <script src="/quantum-vault/third-party/erasure.js"></script>
 </body>
