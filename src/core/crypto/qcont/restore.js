@@ -1,58 +1,141 @@
+import { sha3_512 } from '@noble/hashes/sha3.js';
 import { CHUNK_SIZE, hashBytes } from '../index.js';
 import { log, logError } from '../../features/ui/logging.js';
-import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
+import { setButtonsDisabled, readFileAsUint8Array, download, bytesEqual, toHex } from '../../../utils.js';
 import { buildQencHeader } from '../qenc/format.js';
+import { QCONT_FORMAT_VERSION } from '../constants.js';
 
-function bytesEqual(a, b) {
-    if (a === b) return true;
-    if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) return false;
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-        if (a[i] !== b[i]) return false;
+const QCONT_MAGIC = 'QVC1';
+const KEY_COMMITMENT_MAX_LEN = 32;
+
+function createShardFingerprint(parts) {
+    const total = parts.reduce((acc, part) => acc + part.length, 0);
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+        merged.set(part, offset);
+        offset += part.length;
     }
-    return true;
+    return toHex(sha3_512(merged));
+}
+
+function parseShardUnsafe(arr) {
+    if (!(arr instanceof Uint8Array)) {
+        throw new Error('Shard must be a Uint8Array');
+    }
+    if (arr.length < 4 + 2 + 4 + 12 + 16 + 2 + 1 + 2 + 2) {
+        throw new Error('Shard is too small to contain a valid header');
+    }
+
+    const dv = new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+    let off = 0;
+    const ensure = (need, reason) => {
+        if (off + need > arr.length) {
+            throw new Error(`Shard is truncated: ${reason}`);
+        }
+    };
+    const readU16 = (reason) => {
+        ensure(2, reason);
+        const v = dv.getUint16(off, false);
+        off += 2;
+        return v;
+    };
+    const readU32 = (reason) => {
+        ensure(4, reason);
+        const v = dv.getUint32(off, false);
+        off += 4;
+        return v;
+    };
+    const readBytes = (len, reason) => {
+        ensure(len, reason);
+        const out = arr.subarray(off, off + len);
+        off += len;
+        return out;
+    };
+
+    const magic = new TextDecoder().decode(readBytes(4, 'magic'));
+    if (magic !== QCONT_MAGIC) {
+        throw new Error('Invalid .qcont magic');
+    }
+
+    const metaLen = readU16('metaLen');
+    if (metaLen <= 0) throw new Error('Invalid shard metadata length');
+    const metaBytes = readBytes(metaLen, 'metaJSON');
+    let metaJSON;
+    try {
+        metaJSON = JSON.parse(new TextDecoder().decode(metaBytes));
+    } catch (error) {
+        throw new Error(`Invalid shard metadata JSON: ${error?.message || error}`);
+    }
+    if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION) {
+        throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}, got ${metaJSON?.alg?.fmt ?? 'unknown'}`);
+    }
+
+    const encapLen = readU32('encapsulatedKey length');
+    if (encapLen <= 0) throw new Error('Invalid encapsulated key length');
+    const encapsulatedKey = readBytes(encapLen, 'encapsulatedKey');
+
+    const iv = readBytes(12, 'container nonce');
+    const salt = readBytes(16, 'kdf salt');
+
+    const qencMetaLen = readU16('qenc metadata length');
+    if (qencMetaLen <= 0) throw new Error('Invalid qenc metadata length');
+    const qencMetaBytes = readBytes(qencMetaLen, 'qenc metadata');
+
+    const kcLen = readBytes(1, 'key commitment length')[0];
+    if (kcLen > KEY_COMMITMENT_MAX_LEN) {
+        throw new Error(`Invalid key commitment length: ${kcLen}`);
+    }
+    const keyCommit = kcLen > 0 ? readBytes(kcLen, 'key commitment') : null;
+
+    const shardIndex = readU16('shard index');
+    const shareLen = readU16('share length');
+    if (shareLen <= 0) throw new Error('Invalid Shamir share length');
+    const share = readBytes(shareLen, 'Shamir share');
+    const fragments = arr.subarray(off);
+
+    const headerFingerprint = createShardFingerprint([
+        metaBytes,
+        encapsulatedKey,
+        iv,
+        salt,
+        qencMetaBytes,
+        keyCommit || new Uint8Array(0)
+    ]);
+
+    return {
+        metaJSON,
+        metaBytes,
+        encapsulatedKey,
+        iv,
+        salt,
+        qencMetaBytes,
+        keyCommit,
+        shardIndex,
+        share,
+        fragments,
+        headerFingerprint,
+        diagnostics: { errors: [], warnings: [] }
+    };
 }
 
 /**
  * Parse a single .qcont shard from raw bytes
  * @param {Uint8Array} arr - Raw shard bytes
- * @returns {object} Parsed shard structure
+ * @param {object} [options]
+ * @param {boolean} [options.strict=true]
+ * @returns {object} Parsed shard structure with diagnostics/fingerprint
  */
-export function parseShard(arr) {
-    const dv = new DataView(arr.buffer, arr.byteOffset);
-    let off = 0;
-    
-    const magic = new TextDecoder().decode(arr.subarray(off, off + 4)); off += 4;
-    if (magic !== 'QVC1') throw new Error('Invalid .qcont magic');
-    
-    const metaLen = dv.getUint16(off, false); off += 2;
-    const metaJSON = JSON.parse(new TextDecoder().decode(arr.subarray(off, off + metaLen))); off += metaLen;
-    
-    const encapLen = dv.getUint32(off, false); off += 4;
-    const encapsulatedKey = arr.subarray(off, off + encapLen); off += encapLen;
-    
-    const iv = arr.subarray(off, off + 12); off += 12;
-    const salt = arr.subarray(off, off + 16); off += 16;
-    
-    const qencMetaLen = dv.getUint16(off, false); off += 2;
-    const qencMetaBytes = arr.subarray(off, off + qencMetaLen); off += qencMetaLen;
-    
-    // Parse key commitment if present (QVqcont-2+)
-    let keyCommit = null;
-    if (metaJSON.alg?.fmt === 'QVqcont-2') {
-        const kcLen = arr[off]; off += 1;
-        if (kcLen > 0) {
-            keyCommit = arr.subarray(off, off + kcLen);
-            off += kcLen;
-        }
+export function parseShard(arr, options = {}) {
+    const { strict = true } = options;
+    try {
+        return parseShardUnsafe(arr);
+    } catch (error) {
+        if (strict) throw error;
+        return {
+            diagnostics: { errors: [error?.message || String(error)], warnings: [] }
+        };
     }
-    
-    const shardIndex = dv.getUint16(off, false); off += 2;
-    const shareLen = dv.getUint16(off, false); off += 2;
-    const share = arr.subarray(off, off + shareLen); off += shareLen;
-    const fragments = arr.subarray(off);
-    
-    return { metaJSON, encapsulatedKey, iv, salt, qencMetaBytes, keyCommit, shardIndex, share, fragments };
 }
 
 /**
@@ -61,31 +144,94 @@ export function parseShard(arr) {
  * 
  * @param {object[]} shards - Array of parsed shard objects (from parseShard)
  * @param {object} options - Optional callbacks for logging
- * @param {function} options.onLog - Log callback (msg) => void
- * @param {function} options.onError - Error log callback (msg) => void
+ * @param {function} [options.onLog] - Log callback (msg) => void
+ * @param {function} [options.onError] - Error log callback (msg) => void
+ * @param {boolean} [options.strict=true]
+ * @param {boolean} [options.consensusRequired=true]
  * @returns {Promise<object>} { qencBytes, privKey, containerId, containerHash, privateKeyHash, qencOk, qkeyOk }
  */
 export async function restoreFromShards(shards, options = {}) {
     const onLog = options.onLog || (() => {});
     const onError = options.onError || (() => {});
-    
+    const strict = options.strict ?? true;
+    const consensusRequired = options.consensusRequired ?? true;
+
+    if (!Array.isArray(shards) || shards.length === 0) {
+        throw new Error('No shards provided');
+    }
+
+    const prepared = [];
+    for (let i = 0; i < shards.length; i++) {
+        const shard = shards[i];
+        if (shard?.diagnostics?.errors?.length) {
+            if (strict) {
+                throw new Error(`Shard parse failed at input index ${i}: ${shard.diagnostics.errors.join('; ')}`);
+            }
+            continue;
+        }
+        prepared.push({
+            ...shard,
+            inputOrder: i,
+            inputShardIndex: Number.isInteger(shard?.shardIndex) ? shard.shardIndex : i
+        });
+    }
+    if (prepared.length === 0) {
+        throw new Error('No valid shards after parsing');
+    }
+
+    let group = prepared;
+    let consensusInfo = null;
+    const rejectedShardIndices = [];
+
+    if (consensusRequired) {
+        const byFingerprint = new Map();
+        for (const shard of prepared) {
+            const fp = shard.headerFingerprint;
+            if (typeof fp !== 'string' || fp.length === 0) {
+                if (strict) throw new Error('Shard is missing header fingerprint');
+                rejectedShardIndices.push(shard.inputShardIndex);
+                continue;
+            }
+            if (!byFingerprint.has(fp)) byFingerprint.set(fp, []);
+            byFingerprint.get(fp).push(shard);
+        }
+        if (byFingerprint.size === 0) {
+            throw new Error('No valid shard cohort found');
+        }
+
+        let bestFingerprint = null;
+        let bestGroup = null;
+        for (const [fingerprint, cohort] of byFingerprint.entries()) {
+            if (!bestGroup || cohort.length > bestGroup.length) {
+                bestFingerprint = fingerprint;
+                bestGroup = cohort;
+            }
+        }
+        group = bestGroup;
+        for (const shard of prepared) {
+            if (shard.headerFingerprint !== bestFingerprint) {
+                rejectedShardIndices.push(shard.inputShardIndex);
+            }
+        }
+        consensusInfo = {
+            consensusRequired: true,
+            fingerprint: bestFingerprint,
+            totalInput: prepared.length,
+            cohortSize: group.length,
+            rejectedCount: rejectedShardIndices.length
+        };
+        onLog(`Header consensus selected ${group.length}/${prepared.length} shard(s).`);
+    }
+
     // Validate all shards belong to same container
-    const containerIdSet = new Set(shards.map(s => s.metaJSON?.containerId));
+    const containerIdSet = new Set(group.map(s => s.metaJSON?.containerId));
     if (containerIdSet.size !== 1) {
         throw new Error('Selected shards belong to different containers (containerId mismatch)');
     }
-    
-    // Group by container ID (supports future multi-container restore)
-    const byId = new Map();
-    for (const s of shards) {
-        const id = s.metaJSON.containerId;
-        if (!byId.has(id)) byId.set(id, []);
-        byId.get(id).push(s);
-    }
-    
-    const [containerId, group] = [...byId.entries()][0];
+
+    const containerId = group[0].metaJSON.containerId;
     const { n, k, m, t: metaT, ciphertextLength, chunkSize, chunkCount, containerHash, privateKeyHash, aead_mode } = group[0].metaJSON;
-    const rsEncodeBase = Number.isInteger(group[0].metaJSON.rsEncodeBase) ? group[0].metaJSON.rsEncodeBase : 256;
+    const rsEncodeBase = Number.isInteger(group[0].metaJSON.rsEncodeBase) ? group[0].metaJSON.rsEncodeBase : 255;
     if ((m % 2) !== 0) {
         throw new Error('Invalid shard parameters: n - k must be even');
     }
@@ -94,13 +240,19 @@ export async function restoreFromShards(shards, options = {}) {
     if (metaT !== t) {
         throw new Error(`Shard threshold mismatch: meta t=${metaT}, expected t=${t} from n/k`);
     }
-    const isPerChunkMode = aead_mode === 'per-chunk' || aead_mode === 'per-chunk-aead';
+    const isPerChunkMode = aead_mode === 'per-chunk';
+    if (!isPerChunkMode && aead_mode !== 'single-container') {
+        throw new Error(`Unsupported shard AEAD mode: ${aead_mode ?? 'unknown'}`);
+    }
     const effectiveLength = group[0].metaJSON.payloadLength || group[0].metaJSON.originalLength;
     
     // Validate shard parameters consistency
     for (const s of group) {
         const mm = s.metaJSON;
-        if (mm.containerId !== containerId || mm.n !== n || mm.k !== k || mm.m !== m || mm.t !== t) {
+        if (
+            mm.containerId !== containerId || mm.n !== n || mm.k !== k || mm.m !== m || mm.t !== t ||
+            mm.ciphertextLength !== ciphertextLength || mm.chunkCount !== chunkCount || mm.chunkSize !== chunkSize
+        ) {
             throw new Error('Shard parameter mismatch (containerId/n/k/m/t)');
         }
     }
@@ -203,10 +355,6 @@ export async function restoreFromShards(shards, options = {}) {
     if (totalBad > allowedFailures) {
         throw new Error(`Too many missing/corrupted shards for RS reconstruction: allowed ${allowedFailures}, got ${totalBad}`);
     }
-    if (rsEncodeBase === 256 && (missingIndices.has(0) || missingIndices.has(n - 1) || corruptedShardIndices.has(0) || corruptedShardIndices.has(n - 1))) {
-        onError('Legacy RS codeword length 256 cannot recover if shard 1 or shard n is missing/corrupted. Include those shards or rebuild with updated format.');
-    }
-    
     // Restore private key from Shamir shares
     const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
     const selectedShares = sortedShares.slice(0, t).map(s => s.share);
@@ -274,6 +422,15 @@ export async function restoreFromShards(shards, options = {}) {
         cipherChunks.push(recombined);
         if (!isPerChunkMode) break;
     }
+
+    for (let j = 0; j < n; j++) {
+        if (corruptedShardIndices.has(j)) continue;
+        const shard = shardByIndex.get(j);
+        if (!shard) continue;
+        if (shardOffsets[j] !== shard.fragments.length) {
+            throw new Error(`Fragment stream has trailing or missing data in shard ${j}`);
+        }
+    }
     
     const ciphertext = isPerChunkMode
         ? (() => {
@@ -316,6 +473,8 @@ export async function restoreFromShards(shards, options = {}) {
         privateKeyHash,
         recoveredQencHash,
         recoveredPrivHash,
+        rejectedShardIndices,
+        consensusInfo,
         qencOk,
         qkeyOk
     };

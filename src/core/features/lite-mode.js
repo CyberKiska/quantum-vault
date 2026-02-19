@@ -3,14 +3,19 @@
 
 import { encryptFile, decryptFile, generateKeyPair, hashBytes } from '../crypto/index.js';
 import { buildQcontShards } from '../crypto/qcont/build.js';
+import { assessShardSelection } from '../crypto/qcont/preview.js';
 import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
-import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp } from '../../utils.js';
+import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
+import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import { log, logError, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess } from './ui/logging.js';
+import { updateShardSelectionStatus } from './ui/shards-status.js';
 
 // Global state for Lite mode
 let liteKeys = null;
 let isLiteMode = true; // Default to Lite mode
 let originalFileNames = new Map(); // Track original file names for restoration
+let liteShardsStatusSeq = 0;
+let liteLogCollapsed = true;
 
 // Compute RS/SSS params from desired threshold percent
 function calculateParametersFromThreshold(n, thresholdPercent) {
@@ -26,19 +31,28 @@ function calculateParametersFromThreshold(n, thresholdPercent) {
     // Target threshold as number of shards (rounded up for safety)
     const targetT = Math.ceil((thresholdPercent / 100) * n);
 
-    // Search all valid k to find the closest achievable threshold
-    let best = null;
+    // Search all valid k with a safety-first policy:
+    // prefer the smallest achievable threshold that is >= requested.
+    let bestAtOrAbove = null;
+    let bestBelow = null;
     for (let k = 2; k < n; k++) {
         if (!validateRsParams(n, k)) continue;
         const m = n - k;
         const t = calculateShamirThreshold(n, k);
         if (!Number.isInteger(t)) continue;
         const actualThresholdPercent = Math.round((t / n) * 100);
-        const diff = Math.abs(t - targetT);
-        if (!best || diff < best.diff || (diff === best.diff && t > best.t)) {
-            best = { n, k, m, t, actualThresholdPercent, diff };
+        const candidate = { n, k, m, t, actualThresholdPercent };
+
+        if (t >= targetT) {
+            if (!bestAtOrAbove || t < bestAtOrAbove.t) {
+                bestAtOrAbove = candidate;
+            }
+        } else if (!bestBelow || t > bestBelow.t) {
+            bestBelow = candidate;
         }
     }
+
+    const best = bestAtOrAbove || bestBelow;
 
     if (!best) {
         return { error: 'Cannot find valid configuration - try adjusting total shards or threshold' };
@@ -53,29 +67,62 @@ function calculateParametersFromThreshold(n, thresholdPercent) {
     };
 }
 
-// Update threshold display
+function getAchievableThresholdsForN(n) {
+    const thresholdsByPercent = new Map();
+    for (let k = 2; k < n; k++) {
+        if (!validateRsParams(n, k)) continue;
+        const m = n - k;
+        const t = calculateShamirThreshold(n, k);
+        if (!Number.isInteger(t)) continue;
+        const actualThresholdPercent = Math.round((t / n) * 100);
+        thresholdsByPercent.set(actualThresholdPercent, { n, k, m, t, actualThresholdPercent });
+    }
+    return [...thresholdsByPercent.values()].sort((a, b) => a.actualThresholdPercent - b.actualThresholdPercent);
+}
+
+function getAlternativeNRecommendations(requestedPercent, currentN, limit = 2) {
+    const candidates = [];
+    for (let n = 5; n <= 25; n++) {
+        if (n === currentN) continue;
+        const params = calculateParametersFromThreshold(n, requestedPercent);
+        if (params.error) continue;
+        candidates.push({
+            n,
+            actualThresholdPercent: params.actualThresholdPercent,
+            diff: Math.abs(params.actualThresholdPercent - requestedPercent)
+        });
+    }
+    candidates.sort((a, b) => a.diff - b.diff || a.n - b.n);
+    return candidates.slice(0, limit);
+}
+
+// Update threshold display logic
 function updateThresholdDisplay() {
     const nInput = document.getElementById('liteN');
     const thresholdInput = document.getElementById('liteThreshold');
     const thresholdText = document.getElementById('thresholdText');
-    const validationDiv = document.getElementById('configValidation');
+    const thresholdDelta = document.getElementById('thresholdDelta');
+    const thresholdHint = document.getElementById('thresholdHint');
     
     if (!nInput || !thresholdInput || !thresholdText) return;
     
     const n = parseInt(nInput.value, 10);
     const thresholdPercent = parseInt(thresholdInput.value, 10);
     
-    // Clear previous validation
-    if (validationDiv) {
-        validationDiv.style.display = 'none';
-        validationDiv.className = 'validation-message';
+    if (thresholdDelta) {
+        thresholdDelta.textContent = '';
+        thresholdDelta.className = 'threshold-delta';
+    }
+    if (thresholdHint) {
+        thresholdHint.textContent = 'Discrete by RS/SSS constraints.';
+        thresholdHint.className = 'info-text';
     }
     
     if (isNaN(n) || isNaN(thresholdPercent) || n < 5) {
         thresholdText.textContent = 'Invalid parameters';
-        if (validationDiv && n < 5 && n > 0) {
-            validationDiv.textContent = 'Total shards must be at least 5 (configurations with n≤4 are unstable)';
-            validationDiv.style.display = 'block';
+        if (thresholdHint) {
+            thresholdHint.className = 'info-text error';
+            thresholdHint.textContent = 'Total shards must be at least 5 (n >= 5) to compute a recoverable threshold.';
         }
         updateCreateShardsButton();
         return;
@@ -85,25 +132,42 @@ function updateThresholdDisplay() {
     
     if (params.error) {
         thresholdText.textContent = 'Configuration Error';
-        if (validationDiv) {
-            validationDiv.textContent = params.error;
-            validationDiv.style.display = 'block';
+        if (thresholdHint) {
+            thresholdHint.className = 'info-text error';
+            thresholdHint.textContent = `Adjust parameters to a recoverable configuration: ${params.error}`;
         }
         updateCreateShardsButton();
         return;
     }
     
-    thresholdText.textContent = `≥${params.t} shards required for recovery (${params.actualThresholdPercent}%)`;
+    const delta = params.actualThresholdPercent - thresholdPercent;
+    thresholdText.textContent = `Requested ${thresholdPercent}% -> Achievable ${params.actualThresholdPercent}% (>=${params.t}/${params.n} shards)`;
     
-    // Show success if configuration is good
-    if (validationDiv && params.actualThresholdPercent !== thresholdPercent) {
-        validationDiv.className = 'validation-message warning';
-        validationDiv.textContent = `Configuration adjusted: actual threshold is ${params.actualThresholdPercent}% (${params.t} shards). Using n=${params.n}, k=${params.k}, m=${params.m} (can lose up to ${params.m / 2}).`;
-        validationDiv.style.display = 'block';
-    } else if (validationDiv) {
-        validationDiv.className = 'validation-message success';
-        validationDiv.textContent = `✓ Valid configuration: n=${params.n}, k=${params.k}, m=${params.m}, t=${params.t} (can lose up to ${params.m / 2}).`;
-        validationDiv.style.display = 'block';
+    if (thresholdDelta) {
+        if (delta === 0) {
+            thresholdDelta.className = 'threshold-delta success';
+            thresholdDelta.textContent = 'Exact match';
+        } else {
+            const sign = delta > 0 ? '+' : '';
+            thresholdDelta.className = 'threshold-delta warning';
+            thresholdDelta.textContent = `${sign}${delta} pp`;
+        }
+    }
+
+    if (thresholdHint) {
+        const achievable = getAchievableThresholdsForN(n);
+        const achievablePercents = achievable.map(item => `${item.actualThresholdPercent}%`).join(', ');
+        if (delta !== 0) {
+            const alternatives = getAlternativeNRecommendations(thresholdPercent, n, 2);
+            const recommendation = alternatives.length
+                ? ` Try n=${alternatives[0].n} (${alternatives[0].actualThresholdPercent}%)${alternatives[1] ? ` or n=${alternatives[1].n} (${alternatives[1].actualThresholdPercent}%)` : ''}.`
+                : '';
+            thresholdHint.textContent = `Requested ${thresholdPercent}% is not directly achievable with n=${params.n}. Using nearest recoverable threshold ${params.actualThresholdPercent}% (k=${params.k}, m=${params.m}, t=${params.t}). Achievable thresholds for n=${n}: ${achievablePercents}.${recommendation}`;
+            thresholdHint.className = 'info-text warning';
+        } else {
+            thresholdHint.textContent = `Valid configuration: n=${params.n}, k=${params.k}, m=${params.m}, t=${params.t} (can lose up to ${params.m / 2} shards). Achievable thresholds for n=${n}: ${achievablePercents}.`;
+            thresholdHint.className = 'info-text';
+        }
     }
     
     updateCreateShardsButton();
@@ -138,7 +202,7 @@ async function generateLiteKeys() {
         
         // Show download keys button
         const downloadBtn = document.getElementById('liteDownloadKeysBtn');
-        if (downloadBtn) downloadBtn.style.display = 'inline-block';
+        if (downloadBtn) downloadBtn.style.display = 'inline-flex';
         
         updateCreateShardsButton();
         
@@ -149,6 +213,48 @@ async function generateLiteKeys() {
         if (statusText) statusText.textContent = 'Key generation failed ✗';
         if (statusIcon) statusIcon.textContent = '❌';
     }
+}
+
+// Update file list display
+function updateFileListDisplay() {
+    const filesInput = document.getElementById('liteFilesInput');
+    const filesList = document.getElementById('liteFilesList');
+    
+    if (!filesInput || !filesList) return;
+    
+    if (!filesInput.files || filesInput.files.length === 0) {
+        filesList.style.display = 'none';
+        return;
+    }
+    
+    filesList.innerHTML = '';
+    for (const file of filesInput.files) {
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        item.innerHTML = `<span class="file-name">📄 ${file.name}</span><span class="file-size">${formatFileSize(file.size)}</span>`;
+        filesList.appendChild(item);
+    }
+    filesList.style.display = 'block';
+}
+
+// Update shards status indicator
+async function updateShardsStatus() {
+    const shardsInput = document.getElementById('liteShardsInput');
+    const statusDiv = document.getElementById('shardsStatus');
+    const statusText = document.getElementById('shardsStatusText');
+    const restoreBtn = document.getElementById('liteRestoreBtn');
+    
+    if (!shardsInput || !statusDiv || !statusText) return;
+    
+    const files = [...(shardsInput.files || [])];
+    const requestId = ++liteShardsStatusSeq;
+    await updateShardSelectionStatus({
+        files,
+        statusDiv,
+        statusText,
+        actionButton: restoreBtn,
+        isCurrent: () => requestId === liteShardsStatusSeq
+    });
 }
 
 // Update create shards button state
@@ -185,10 +291,31 @@ function downloadLiteKeys() {
     }
     
     const timestamp = createFilenameTimestamp();
+    // Download secret key first (most important)
     download(new Blob([liteKeys.secretKey]), `quantum-vault-${timestamp}-secretKey.qkey`);
-    download(new Blob([liteKeys.publicKey]), `quantum-vault-${timestamp}-publicKey.qkey`);
+    
+    // Small delay to prevent browser from blocking the second download
+    setTimeout(() => {
+        download(new Blob([liteKeys.publicKey]), `quantum-vault-${timestamp}-publicKey.qkey`);
+    }, 500);
     
     log('✅ Backup keys downloaded', { isLiteMode: true });
+}
+
+// Pipeline Visualization Helper
+function updateLitePipeline(viewId, activeStepClass) {
+    const view = document.getElementById(viewId);
+    if (!view) return;
+    const steps = view.querySelectorAll('.pipeline-step');
+    steps.forEach(step => {
+        if (activeStepClass === null) {
+             step.classList.remove('active');
+        } else if (step.classList.contains(activeStepClass)) {
+            step.classList.add('active');
+        } else {
+            step.classList.remove('active');
+        }
+    });
 }
 
 // Create shards workflow
@@ -216,47 +343,75 @@ async function createLiteShards() {
     }
     
     setButtonsDisabled(true);
+    updateLitePipeline('liteViewProtect', 'step-lock'); // Start: Encrypting
     
     try {
         const params = calculateParametersFromThreshold(n, thresholdPercent);
-        
-        for (const file of filesInput.files) {
-            // 1. Encrypt file
-            const fileBytes = await readFileAsUint8Array(file);
-            const encBlob = await encryptFile(fileBytes, liteKeys.publicKey, file.name);
-            const encBytes = await readFileAsUint8Array(encBlob);
-            
-            // Store original filename for later restoration
-            const encHash = await hashBytes(encBytes);
-            originalFileNames.set(encHash, file.name);
-            
-            // Log encryption
-            logFileEncryption(file.name, file.size, encHash, { isLiteMode: true });
-            
-            // 2. Create shards from encrypted container + private key
-            const qconts = await buildQcontShards(encBytes, liteKeys.secretKey, {
-                n: params.n,
-                k: params.k
-            });
-            
-            // 3. Download shards
-            const baseName = file.name.replace(/\.[^/.]+$/, ""); // Remove extension
-            qconts.forEach(({ blob, index }) => {
-                const shardName = `${baseName}.part${index + 1}-of-${qconts.length}.qcont`;
-                download(blob, shardName);
-            });
-            
-            // Log shard creation
-            logShardCreation(qconts.length, params, file.name, { isLiteMode: true });
+        if (params.error) {
+            throw new Error(params.error);
         }
+
+        const inputFiles = [...filesInput.files];
+        const isBundle = inputFiles.length > 1;
+
+        let payloadBytes;
+        let payloadName;
+        let payloadLabel;
+        if (isBundle) {
+            const { bundleName, bundleBytes, fileCount } = await createBundlePayloadFromFiles(inputFiles);
+            payloadBytes = bundleBytes;
+            payloadName = bundleName;
+            payloadLabel = `${fileCount} files bundle`;
+
+            const totalInputSize = inputFiles.reduce((acc, file) => acc + file.size, 0);
+            log(`Bundled ${fileCount} files (${formatFileSize(totalInputSize)}) into ${bundleName}`, { isLiteMode: true });
+        } else {
+            const file = inputFiles[0];
+            payloadBytes = await readFileAsUint8Array(file);
+            payloadName = file.name;
+            payloadLabel = file.name;
+        }
+
+        // 1. Encrypt payload (single file or multi-file bundle)
+        const encBlob = await encryptFile(payloadBytes, liteKeys.publicKey, payloadName);
+        const encBytes = await readFileAsUint8Array(encBlob);
+        const encHash = await hashBytes(encBytes);
+        originalFileNames.set(encHash, payloadName);
+
+        // Log encryption
+        logFileEncryption(payloadLabel, payloadBytes.length, encHash, { isLiteMode: true });
+
+        updateLitePipeline('liteViewProtect', 'step-split'); // Transition: Splitting
         
-        log('🛡️ All files encrypted and split into shards', { isLiteMode: true });
+        // 2. Create shards from encrypted container + private key
+        const qconts = await buildQcontShards(encBytes, liteKeys.secretKey, {
+            n: params.n,
+            k: params.k
+        });
+        
+        // 3. Download shards
+        const baseName = payloadName.replace(/\.[^/.]+$/, ''); // Remove extension
+        qconts.forEach(({ blob, index }) => {
+            const shardName = `${baseName}.part${index + 1}-of-${qconts.length}.qcont`;
+            download(blob, shardName);
+        });
+        
+        // Log shard creation
+        logShardCreation(qconts.length, params, payloadLabel, { isLiteMode: true });
+        
+        if (isBundle) {
+            log('🛡️ Files bundled, encrypted, and split into shards', { isLiteMode: true });
+        } else {
+            log('🛡️ File encrypted and split into shards', { isLiteMode: true });
+        }
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
     } catch (error) {
         logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
     } finally {
         setButtonsDisabled(false);
+        updateCreateShardsButton();
+        setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
     }
 }
 
@@ -268,18 +423,20 @@ async function restoreLiteShards() {
         logError('Please select shard files to restore', { isLiteMode: true });
         return;
     }
-    
-    if (shardsInput.files.length < 2) {
-        logError('Please select at least 2 shard files', { isLiteMode: true });
+
+    const assessment = await assessShardSelection([...(shardsInput.files || [])]);
+    if (!assessment.ready) {
+        logError(assessment.message || 'Selected shards do not meet the recovery threshold', { isLiteMode: true });
         return;
     }
     
     setButtonsDisabled(true);
+    updateLitePipeline('liteViewRestore', 'step-combine'); // Start: Combining
     
     try {
         // Parse shards using shared function
         const shardBytesArr = await Promise.all([...shardsInput.files].map(readFileAsUint8Array));
-        const shards = shardBytesArr.map(parseShard);
+        const shards = shardBytesArr.map((arr) => parseShard(arr, { strict: true }));
         
         // Log restoration start
         const containerId = shards[0]?.metaJSON?.containerId;
@@ -300,31 +457,44 @@ async function restoreLiteShards() {
         
         // Lite mode extra step: decrypt the container to get the original file
         const { decryptedBlob, metadata } = await decryptFile(qencBytes, privKey);
-        
-        // Try to restore original filename
-        const qencHash = await hashBytes(qencBytes);
-        let originalName = originalFileNames.get(qencHash);
-        
-        if (!originalName) {
-            // Fallback: try with containerHash
-            originalName = originalFileNames.get(containerHash);
-        }
-        
-        if (!originalName) {
-            // Use metadata filename if available, otherwise use container ID
-            originalName = metadata.originalFilename || `restored-${result.containerId.slice(0, 8)}.file`;
-        }
-        
-        download(decryptedBlob, originalName);
-        
-        // Verify file integrity
         const decBytes = await readFileAsUint8Array(decryptedBlob);
         const decHash = await hashBytes(decBytes);
         const integrityOk = metadata.fileHash === decHash;
-        
-        // Log restoration success
+
+        if (!integrityOk) {
+            logError('File integrity check failed - hashes do not match', { isLiteMode: true });
+            return;
+        }
+
+        let restoredLabel;
+        if (isBundlePayload(decBytes)) {
+            const entries = parseBundlePayload(decBytes);
+            for (const entry of entries) {
+                download(new Blob([entry.bytes]), entry.name);
+            }
+            restoredLabel = `${entries.length} files bundle`;
+            log(`📦 Restored ${entries.length} files from encrypted bundle`, { isLiteMode: true });
+        } else {
+            // Try to restore original filename
+            const qencHash = await hashBytes(qencBytes);
+            let originalName = originalFileNames.get(qencHash);
+            
+            if (!originalName) {
+                // Fallback: try with containerHash
+                originalName = originalFileNames.get(containerHash);
+            }
+            
+            if (!originalName) {
+                // Use metadata filename if available, otherwise use container ID
+                originalName = metadata.originalFilename || `restored-${result.containerId.slice(0, 8)}.file`;
+            }
+
+            download(new Blob([decBytes]), originalName);
+            restoredLabel = originalName;
+        }
+
         const encryptionTime = metadata.timestamp || 'Unknown';
-        logRestorationSuccess(originalName, decryptedBlob.size, encryptionTime, integrityOk, { isLiteMode: true });
+        logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
         log('🎉 Container restored successfully', { isLiteMode: true });
         
@@ -332,7 +502,58 @@ async function restoreLiteShards() {
         logError(`Restoration failed: ${error?.message ?? error}`, { isLiteMode: true });
     } finally {
         setButtonsDisabled(false);
+        void updateShardsStatus();
+        setTimeout(() => updateLitePipeline('liteViewRestore', null), 2000); // Reset after delay
     }
+}
+
+function initLiteTabs() {
+    const tabProtect = document.getElementById('liteTabProtect');
+    const tabRestore = document.getElementById('liteTabRestore');
+    const viewProtect = document.getElementById('liteViewProtect');
+    const viewRestore = document.getElementById('liteViewRestore');
+
+    if (tabProtect && tabRestore && viewProtect && viewRestore) {
+        tabProtect.addEventListener('click', () => {
+            tabProtect.classList.add('active');
+            tabRestore.classList.remove('active');
+            viewProtect.style.display = 'block';
+            viewRestore.style.display = 'none';
+            viewProtect.classList.add('active');
+            viewRestore.classList.remove('active');
+        });
+
+        tabRestore.addEventListener('click', () => {
+            tabProtect.classList.remove('active');
+            tabRestore.classList.add('active');
+            viewProtect.style.display = 'none';
+            viewRestore.style.display = 'block';
+            viewProtect.classList.remove('active');
+            viewRestore.classList.add('active');
+        });
+    }
+}
+
+function updateOperationsLogVisibility() {
+    const logContainer = document.getElementById('logContainer');
+    const logToggleBtn = document.getElementById('logToggleBtn');
+    if (!logContainer || !logToggleBtn) return;
+
+    if (isLiteMode) {
+        logToggleBtn.style.display = 'inline-flex';
+        logContainer.classList.toggle('collapsed', liteLogCollapsed);
+        logToggleBtn.textContent = liteLogCollapsed ? 'Show Log' : 'Hide Log';
+    } else {
+        logContainer.classList.remove('collapsed');
+        logToggleBtn.style.display = 'none';
+    }
+    logToggleBtn.setAttribute('aria-expanded', String(!logContainer.classList.contains('collapsed')));
+}
+
+function toggleLiteLogVisibility() {
+    if (!isLiteMode) return;
+    liteLogCollapsed = !liteLogCollapsed;
+    updateOperationsLogVisibility();
 }
 
 // Mode switching
@@ -360,6 +581,8 @@ function toggleMode() {
         proSection.style.display = 'block';
         log('Switched to Pro Mode', { isLiteMode: false });
     }
+
+    updateOperationsLogVisibility();
 }
 
 // Initialize Lite Mode
@@ -369,8 +592,15 @@ export function initLiteMode() {
     if (modeToggle) {
         modeToggle.addEventListener('change', toggleMode);
     }
+
+    const logToggleBtn = document.getElementById('logToggleBtn');
+    if (logToggleBtn) {
+        logToggleBtn.addEventListener('click', toggleLiteLogVisibility);
+    }
     
-    // Set up threshold calculation
+    initLiteTabs();
+    
+    // Set up threshold calculation for manual inputs
     const liteN = document.getElementById('liteN');
     const liteThreshold = document.getElementById('liteThreshold');
     if (liteN && liteThreshold) {
@@ -382,8 +612,18 @@ export function initLiteMode() {
     // Set up file input monitoring
     const liteFilesInput = document.getElementById('liteFilesInput');
     if (liteFilesInput) {
-        liteFilesInput.addEventListener('change', updateCreateShardsButton);
+        liteFilesInput.addEventListener('change', () => {
+            updateFileListDisplay();
+            updateCreateShardsButton();
+        });
         liteFilesInput.disabled = true; // Disabled until keys are ready
+    }
+    
+    // Set up shard input monitoring
+    const liteShardsInput = document.getElementById('liteShardsInput');
+    if (liteShardsInput) {
+        liteShardsInput.addEventListener('change', () => { void updateShardsStatus(); });
+        void updateShardsStatus();
     }
     
     // Set up button handlers

@@ -50,6 +50,15 @@ export function createFilenameTimestamp() {
     return new Date().toISOString().slice(0, 19).replace(/:/g, '-');
 }
 
+// Format size in bytes for UI
+export function formatFileSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 // Validate Reed–Solomon params
 export function validateRsParams(n, k) {
     if (k < 2 || n <= k) return false;
@@ -73,6 +82,18 @@ export function timingSafeEqual(a, b) {
         result |= a[i] ^ b[i];
     }
     return result === 0;
+}
+
+// Byte-wise equality for Uint8Array values
+export function bytesEqual(a, b) {
+    if (a === b) return true;
+    if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) return false;
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+        diff |= a[i] ^ b[i];
+    }
+    return diff === 0;
 }
 
 // Hex string → Uint8Array

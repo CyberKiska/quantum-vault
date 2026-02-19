@@ -3,25 +3,27 @@
 import { kmac256 } from '@noble/hashes/sha3-addons.js';
 import { sha3_256 } from '@noble/hashes/sha3.js';
 import { timingSafeEqual } from '../../utils.js';
-import { CHUNK_SIZE, DEFAULT_CUSTOMIZATION } from './constants.js';
+import { CHUNK_SIZE } from './constants.js';
 
 // Constants
 export const AES_KEY_SIZE = 32; // 256 bits
 export const AES_IV_SIZE = 12; // 96 bits for GCM
 export const AES_TAG_SIZE = 16; // 128 bits
-// CHUNK_SIZE and DEFAULT_CUSTOMIZATION are provided via constants.js
+// CHUNK_SIZE is provided via constants.js
 
 // Derive keys from shared secret using KMAC256
 export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, customization) {
+    if (typeof customization !== 'string' || customization.length === 0) {
+        throw new Error('KMAC customization domain is required');
+    }
+
     // Combine salt and metadata for KMAC input
     const kmacMessage = new Uint8Array(salt.length + metaBytes.length);
     kmacMessage.set(salt, 0);
     kmacMessage.set(metaBytes, salt.length);
-    
-    const usedCustomization = customization || DEFAULT_CUSTOMIZATION;
-    
+
     // Derive raw key material
-    const derivedKey = kmac256(sharedSecret, kmacMessage, 32, { customization: usedCustomization });
+    const derivedKey = kmac256(sharedSecret, kmacMessage, 32, { customization });
     const Kraw = derivedKey;
     
     // Derive encryption key and IV key from raw key
@@ -54,6 +56,10 @@ export function buildChunkAAD(headerBytes, chunkIndex, plainLen) {
 
 // Derive per-chunk IV via KMAC256(Kraw, containerNonce||u32(index)) → first 12 bytes
 export function deriveChunkIvFromK(Kraw, containerNonce, chunkIndex, ivCustomization) {
+    if (typeof ivCustomization !== 'string' || ivCustomization.length === 0) {
+        throw new Error('IV customization domain is required');
+    }
+
     // Encode chunk index as 4 bytes
     const idx = new Uint8Array(4);
     new DataView(idx.buffer).setUint32(0, chunkIndex, false);
@@ -63,10 +69,8 @@ export function deriveChunkIvFromK(Kraw, containerNonce, chunkIndex, ivCustomiza
     input.set(containerNonce, 0);
     input.set(idx, containerNonce.length);
     
-    const customization = ivCustomization || 'quantum-vault:chunk-iv:v1';
-    
     // Derive 16 bytes and take first 12 for AES-GCM IV
-    const full = kmac256(Kraw, input, 16, { customization });
+    const full = kmac256(Kraw, input, 16, { customization: ivCustomization });
     return full.slice(0, 12);
 }
 

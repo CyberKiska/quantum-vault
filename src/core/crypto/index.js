@@ -15,13 +15,13 @@ import {
     verifyKeyCommitment
 } from './aes.js';
 import { toUint8, toHex } from '../../utils.js';
-import { CHUNK_SIZE, DEFAULT_CUSTOMIZATION, FORMAT_VERSION } from './constants.js';
+import { CHUNK_SIZE, FORMAT_VERSION, KDF_DOMAIN_V1, IV_DOMAIN_V1 } from './constants.js';
 import { buildQencHeader, parseQencHeader } from './qenc/format.js';
 
 // Re-export utilities and sub-modules for convenience
 export { toHex, toUint8 } from '../../utils.js';
 export { generateKeyPair as generateMLKEMKeyPair } from './mlkem.js';
-export { CHUNK_SIZE, DEFAULT_CUSTOMIZATION, MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from './constants.js';
+export { CHUNK_SIZE, MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION, KDF_DOMAIN_V1, IV_DOMAIN_V1 } from './constants.js';
 
 /**
  * Generate ML-KEM key pair with enhanced entropy
@@ -83,9 +83,9 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
     const chunkCount = isPerChunk ? calculateChunkCount(payloadLength) : 1;
     
     // Step 6: Create public metadata (cleartext header — no sensitive fields)
-    const domainStrings = { 
-        kdf: 'quantum-vault:kdf:v1', 
-        iv: 'quantum-vault:chunk-iv:v1' 
+    const domainStrings = {
+        kdf: KDF_DOMAIN_V1,
+        iv: IV_DOMAIN_V1
     };
     
     const meta = {
@@ -199,9 +199,12 @@ export async function decryptFile(containerBytes, secretKey) {
     const sharedSecret = await decapsulate(encapsulatedKey, secretKey);
     
     // Step 3: Derive decryption keys (SP 800-185)
-    const ds = metadata.domainStrings || metadata.domain || {};
+    const ds = metadata.domainStrings;
+    if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
+        throw new Error('Container metadata is missing valid domainStrings');
+    }
     const { Kraw, Kenc, Kiv, aesKey } = await deriveKeyWithKmac(
-        sharedSecret, kdfSalt, metaBytes, ds.kdf || DEFAULT_CUSTOMIZATION
+        sharedSecret, kdfSalt, metaBytes, ds.kdf
     );
     
     // Step 4: Verify key commitment before decryption (prevents key-commitment attacks)
@@ -216,7 +219,7 @@ export async function decryptFile(containerBytes, secretKey) {
         let decryptedPayload;
         const effectiveLength = metadata.payloadLength || metadata.originalLength;
         
-        if (metadata.aead_mode === 'per-chunk-aead' || metadata.aead_mode === 'per-chunk') {
+        if (metadata.aead_mode === 'per-chunk-aead') {
             // Per-chunk decryption
             const totalChunks = metadata.chunkCount || calculateChunkCount(effectiveLength);
             const plains = []; 
@@ -226,12 +229,16 @@ export async function decryptFile(containerBytes, secretKey) {
                 const plainLen = Math.min(CHUNK_SIZE, effectiveLength - (i * CHUNK_SIZE));
                 const encLen = plainLen + 16; // AES-GCM tag size
                 const cipherChunk = encryptedData.subarray(encOffset, encOffset + encLen);
-                const iv = deriveChunkIvFromK(Kiv, containerNonce, i, ds.iv || 'quantum-vault:chunk-iv:v1');
+                const iv = deriveChunkIvFromK(Kiv, containerNonce, i, ds.iv);
                 const aad = buildChunkAAD(header, i, plainLen);
                 
                 const decrypted = await decryptChunk(aesKey, cipherChunk, iv, aad);
                 plains.push(decrypted); 
                 encOffset += encLen;
+            }
+
+            if (encOffset !== encryptedData.length) {
+                throw new Error('Encrypted payload has trailing or truncated chunk data');
             }
             
             // Combine all chunks
@@ -242,9 +249,11 @@ export async function decryptFile(containerBytes, secretKey) {
                 decryptedPayload.set(ch, p2); 
                 p2 += ch.length; 
             }
-        } else {
+        } else if (metadata.aead_mode === 'single-container-aead') {
             // Single container decryption
             decryptedPayload = await decryptChunk(aesKey, encryptedData, containerNonce, header);
+        } else {
+            throw new Error(`Unsupported AEAD mode: ${metadata.aead_mode ?? 'unknown'}`);
         }
         
         // Step 5: Unwrap payload (extract private metadata if wrapped-v1 format)
@@ -268,8 +277,7 @@ export async function decryptFile(containerBytes, secretKey) {
             // Merge private metadata into returned metadata for caller
             mergedMetadata = { ...metadata, ...privateMeta };
         } else {
-            // Legacy format: payload is raw file bytes
-            fileBytes = decryptedPayload;
+            throw new Error(`Unsupported payload format: ${metadata.payloadFormat ?? 'unknown'}`);
         }
         
         return { decryptedBlob: new Blob([fileBytes]), metadata: mergedMetadata };

@@ -1,16 +1,7 @@
 // --- QENC Container Format Helpers ---
 
-import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE } from '../constants.js';
-
-function bytesEqual(a, b) {
-    if (a === b) return true;
-    if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) return false;
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-        if (a[i] !== b[i]) return false;
-    }
-    return true;
-}
+import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from '../constants.js';
+import { bytesEqual } from '../../../utils.js';
 
 function writeUint16BE(value) {
     const out = new Uint8Array(2);
@@ -121,6 +112,9 @@ export function parseQencHeader(containerBytes, options = {}) {
     if (keyLen <= 0) {
         throw new Error(`Invalid encapsulated key length ${keyLen}.`);
     }
+    if (keyLen > containerBytes.length) {
+        throw new Error(`Invalid encapsulated key length ${keyLen}: exceeds container size.`);
+    }
     if (offset + keyLen > containerBytes.length) {
         throw new Error('Incomplete container: encapsulated key length exceeds file size.');
     }
@@ -150,6 +144,28 @@ export function parseQencHeader(containerBytes, options = {}) {
     }
     offset += metaLen;
 
+    if (!metadata || typeof metadata !== 'object') {
+        throw new Error('Invalid metadata JSON: expected object');
+    }
+    if (metadata.fmt !== FORMAT_VERSION) {
+        throw new Error(`Unsupported container format: expected ${FORMAT_VERSION}, got ${metadata.fmt ?? 'unknown'}`);
+    }
+    if (typeof metadata?.aead_mode !== 'string' || metadata.aead_mode.length === 0) {
+        throw new Error('Invalid metadata: missing aead_mode');
+    }
+    if (!metadata.domainStrings || typeof metadata.domainStrings.kdf !== 'string' || typeof metadata.domainStrings.iv !== 'string') {
+        throw new Error('Invalid metadata: missing domainStrings.kdf/domainStrings.iv');
+    }
+    if (metadata.payloadLength != null && (!Number.isInteger(metadata.payloadLength) || metadata.payloadLength <= 0)) {
+        throw new Error('Invalid metadata: payloadLength must be a positive integer');
+    }
+    if (metadata.chunkCount != null && (!Number.isInteger(metadata.chunkCount) || metadata.chunkCount <= 0)) {
+        throw new Error('Invalid metadata: chunkCount must be a positive integer');
+    }
+    if (metadata.chunkSize != null && (!Number.isInteger(metadata.chunkSize) || metadata.chunkSize <= 0)) {
+        throw new Error('Invalid metadata: chunkSize must be a positive integer');
+    }
+
     let storedKeyCommitment = null;
     if (metadata?.hasKeyCommitment) {
         if (offset + KEY_COMMITMENT_SIZE > containerBytes.length) {
@@ -157,6 +173,10 @@ export function parseQencHeader(containerBytes, options = {}) {
         }
         storedKeyCommitment = containerBytes.subarray(offset, offset + KEY_COMMITMENT_SIZE);
         offset += KEY_COMMITMENT_SIZE;
+    }
+
+    if (offset >= containerBytes.length) {
+        throw new Error('Invalid container: ciphertext is missing');
     }
 
     const header = containerBytes.subarray(0, offset);

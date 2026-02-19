@@ -46,32 +46,35 @@ Threat model (concise):
 
 ### Project repository structure
 ```
-index.html                     # Main HTML file
-style.css                      # Main CSS styles file
-package.json                   # Dependencies, downloadable libraries
-public/third-party/erasure.js  # ErasureCodes library
+index.html                      # Main HTML file
+style.css                       # Main CSS styles file
+package.json                    # Dependencies, downloadable libraries
+public/third-party/erasure.js   # ErasureCodes library
 src/
-├── main.js                    # Application entry point
-├── utils.js                   # Consolidated utility functions  
+├── main.js                     # Application entry point
+├── utils.js                    # Consolidated utility functions  
 ├── core/
-   ├── crypto/                 # Core cryptographic modules
-   │   ├── index.js            # Main crypto orchestration
-   │   ├── constants.js        # Storage of permanent variables
-   │   ├── mlkem.js            # ML-KEM-1024 implementation
-   │   ├── aes.js              # AES-256-GCM + KMAC256
-   │   ├── entropy.js          # Enhanced entropy collection
-   │   ├── qcont/              # .qcont format handling
-   │   │   ├── build.js        # Shard building
-   │   │   └── restore.js      # Shard restoration
-   │   ├── qenc/               # .qenc format handling
-   │   │   └── format.js       # Creating and parsing header
-   │   └── splitting/          # Secret/data splitting
-   │       └── sss.js          # Shamir Secret Sharing
-   └── features/               # Application features
-       ├── lite-mode.js        # Simplified interface
-       └── ui/                 # User interface modules
-           ├── ui.js           # Pro mode interface
-           └── logging.js      # Consistent logging
+   ├── crypto/                  # Core cryptographic modules
+   │   ├── index.js             # Main crypto orchestration
+   │   ├── constants.js         # Storage of permanent variables
+   │   ├── mlkem.js             # ML-KEM-1024 implementation
+   │   ├── aes.js               # AES-256-GCM + KMAC256
+   │   ├── entropy.js           # Enhanced entropy collection
+   │   ├── qcont/               # .qcont format handling
+   │   │   ├── build.js         # Shard building
+   │   │   ├── restore.js       # Shard restoration
+   │   │   └── preview.js       # Shard preview helper for UI
+   │   ├── qenc/                # .qenc format handling
+   │   │   └── format.js        # Creating and parsing header
+   │   └── splitting/           # Secret/data splitting
+   │       └── sss.js           # Shamir Secret Sharing
+   └── features/                # Application features
+       ├── lite-mode.js         # Simplified interface
+       ├── bundle-payload.js    # Combining multiple files
+       └── ui/                  # User interface modules
+           ├── ui.js            # Pro mode interface
+           ├── shards-status.js # Shard status helper for UI
+           └── logging.js       # Consistent logging
 ```
 
 ### Components
@@ -185,7 +188,7 @@ AAD:
 ```json
 {
   "containerId":"<SHA3-512 hex of .qenc header>",
-  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-2"},
+  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-3"},
   "aead_mode":"single-container | per-chunk",
   "iv_strategy":"single-iv | kmac-derive-v1",
   "n":5,"k":3,"m":2,"t":4,

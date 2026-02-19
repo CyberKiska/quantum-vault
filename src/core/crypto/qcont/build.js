@@ -2,8 +2,14 @@ import { CHUNK_SIZE, hashBytes } from '../index.js';
 import { log, logError } from '../../features/ui/logging.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams, toHex } from '../../../utils.js';
 import { parseQencHeader } from '../qenc/format.js';
+import { QCONT_FORMAT_VERSION } from '../constants.js';
 
-export async function buildQcontShards(qencBytes, privKeyBytes, params) {
+export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
+    const formatVersion = options.formatVersion || QCONT_FORMAT_VERSION;
+    if (formatVersion !== QCONT_FORMAT_VERSION) {
+        throw new Error(`Unsupported shard format version: ${formatVersion}`);
+    }
+
     const { n, k } = params;
     const m = n - k;
     if (k < 2 || n <= k) throw new Error('Invalid RS parameters: require 2 <= k < n');
@@ -23,7 +29,10 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
     const keyCommitment = storedKeyCommitment;
     const ciphertext = qencBytes.subarray(offset);
 
-    const ds = meta.domainStrings || meta.domain || {};
+    const ds = meta.domainStrings;
+    if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
+        throw new Error('QENC metadata is missing valid domainStrings');
+    }
     const effectiveLength = meta.payloadLength || meta.originalLength;
     const containerId = await hashBytes(header); // header hash as ID
     const containerHash = await hashBytes(qencBytes);
@@ -42,7 +51,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
     const shardBuffers = Array.from({ length: n }, () => []);
 
     const chunkSize = meta.chunkSize || CHUNK_SIZE;
-    const isPerChunk = meta.aead_mode === 'per-chunk-aead' || meta.aead_mode === 'per-chunk';
+    const isPerChunk = meta.aead_mode === 'per-chunk-aead';
     const totalChunks = isPerChunk ? (meta.chunkCount || Math.ceil(effectiveLength / chunkSize)) : 1;
 
     // RS codeword length must be <= 255 for GF(2^8) to avoid evaluation collisions
@@ -96,7 +105,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
     const timestamp = new Date().toISOString();
     const metaJSON = {
         containerId,
-        alg: { KEM: 'ML-KEM-1024', KDF: 'KMAC256', AEAD: 'AES-256-GCM', RS: 'ErasureCodes', fmt: 'QVqcont-2' },
+        alg: { KEM: 'ML-KEM-1024', KDF: 'KMAC256', AEAD: 'AES-256-GCM', RS: 'ErasureCodes', fmt: formatVersion },
         aead_mode: isPerChunk ? 'per-chunk' : 'single-container',
         iv_strategy: meta.iv_strategy,
         n, k, m, t,
@@ -109,7 +118,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params) {
         payloadLength: meta.payloadLength || null,
         originalLength: effectiveLength,
         ciphertextLength: ciphertext.length,
-        domainStrings: { kdf: ds.kdf || 'quantum-vault:kdf:v1', iv: ds.iv || 'quantum-vault:iv:v1' },
+        domainStrings: { kdf: ds.kdf, iv: ds.iv },
         fragmentFormat: 'len32-prefixed',
         perFragmentSize,
         hasKeyCommitment: !!keyCommitment,
