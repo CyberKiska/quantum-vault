@@ -273,9 +273,16 @@ npm install
 npm run dev
 ```
 
-### Build & Deploy to GitHub Pages
+### Production Build
 ```bash
-npm run deploy
+npm run build
+```
+
+### Deploy to GitHub Pages
+Deployment is handled by GitHub Actions (`.github/workflows/pages.yml`) on every push to `main`.
+For a local Pages-equivalent build, use:
+```bash
+BASE_PATH=/quantum-vault/ npm run build
 ```
 
 ------------
