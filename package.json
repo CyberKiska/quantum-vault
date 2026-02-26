@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
+    "selftest": "node scripts/selftest.mjs",
+    "check": "npm run selftest && npm run build",
     "deploy": "npm run build"
   },
   "dependencies": {

@@ -278,6 +278,11 @@ npm run dev
 npm run build
 ```
 
+### Self-test
+```bash
+npm run selftest
+```
+
 ### Deploy to GitHub Pages
 Deployment is handled by GitHub Actions (`.github/workflows/pages.yml`) on every push to `main`.
 For a local Pages-equivalent build, use:
