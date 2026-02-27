@@ -47,11 +47,20 @@ export function initUI() {
             return;
         }
         
-        filesList.innerHTML = '';
+        filesList.replaceChildren();
         for (const file of dataFileInput.files) {
             const item = document.createElement('div');
             item.className = 'file-item';
-            item.innerHTML = `<span class="file-name">📄 ${file.name}</span><span class="file-size">${formatFileSize(file.size)}</span>`;
+
+            const fileName = document.createElement('span');
+            fileName.className = 'file-name';
+            fileName.textContent = `📄 ${file.name}`;
+
+            const fileSize = document.createElement('span');
+            fileSize.className = 'file-size';
+            fileSize.textContent = formatFileSize(file.size);
+
+            item.append(fileName, fileSize);
             filesList.appendChild(item);
         }
         filesList.style.display = 'block';
@@ -103,7 +112,10 @@ export function initUI() {
         }
 
         proEncryptionWarning.className = `operation-warning ${stateClass}`;
-        proEncryptionWarning.innerHTML = `<small>${message}</small>`;
+        proEncryptionWarning.replaceChildren();
+        const warningMessage = document.createElement('small');
+        warningMessage.textContent = message;
+        proEncryptionWarning.appendChild(warningMessage);
     }
 
     function getEncryptionStrategy() {

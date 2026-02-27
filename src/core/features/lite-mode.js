@@ -227,11 +227,20 @@ function updateFileListDisplay() {
         return;
     }
     
-    filesList.innerHTML = '';
+    filesList.replaceChildren();
     for (const file of filesInput.files) {
         const item = document.createElement('div');
         item.className = 'file-item';
-        item.innerHTML = `<span class="file-name">📄 ${file.name}</span><span class="file-size">${formatFileSize(file.size)}</span>`;
+
+        const fileName = document.createElement('span');
+        fileName.className = 'file-name';
+        fileName.textContent = `📄 ${file.name}`;
+
+        const fileSize = document.createElement('span');
+        fileSize.className = 'file-size';
+        fileSize.textContent = formatFileSize(file.size);
+
+        item.append(fileName, fileSize);
         filesList.appendChild(item);
     }
     filesList.style.display = 'block';
