@@ -3,10 +3,10 @@
 export const CRYPTO_PROFILE_ID_V1 = 'QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v1';
 export const KDF_TREE_ID_V1 = 'QV-KDF-TREE-v1';
 export const NONCE_POLICY_SINGLE_CONTAINER_V1 = 'QV-GCM-RAND96-v1';
-export const NONCE_POLICY_PER_CHUNK_V1 = 'QV-GCM-RAND96-KMACCTR32-v1';
+export const NONCE_POLICY_PER_CHUNK_V1 = 'QV-GCM-KMACPFX64-CTR32-v2';
 export const AAD_POLICY_ID_V1 = 'QV-AAD-HEADER-CHUNK-v1';
 export const NONCE_MODE_RANDOM96 = 'random96';
-export const NONCE_MODE_KMAC_CTR32 = 'kmac-ctr32';
+export const NONCE_MODE_KMAC_CTR32 = 'kmac-prefix64-ctr32';
 
 export const PROFILE_REGISTRY = Object.freeze({
   [CRYPTO_PROFILE_ID_V1]: Object.freeze({

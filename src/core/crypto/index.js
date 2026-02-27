@@ -6,13 +6,16 @@ import {
     deriveKeyWithKmac, 
     buildChunkAAD, 
     deriveChunkIvFromK, 
+    assertPerChunkNonceContract,
     encryptChunk, 
     decryptChunk,
     shouldUseChunkedEncryption,
     calculateChunkCount,
     clearKeys,
     computeKeyCommitment,
-    verifyKeyCommitment
+    verifyKeyCommitment,
+    IV_STRATEGY_SINGLE_IV,
+    IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
 } from './aes.js';
 import { toUint8, toHex } from '../../utils.js';
 import { CHUNK_SIZE, FORMAT_VERSION } from './constants.js';
@@ -99,7 +102,7 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         KDF: 'KMAC256',
         AEAD: 'AES-256-GCM',
         aead_mode: aeadMode,
-        iv_strategy: isPerChunk ? 'kmac-derive-v1' : 'single-iv',
+        iv_strategy: isPerChunk ? IV_STRATEGY_KMAC_PREFIX64_CTR32_V2 : IV_STRATEGY_SINGLE_IV,
         fmt: FORMAT_VERSION,
         hasKeyCommitment: true,
         payloadFormat: 'wrapped-v1',
@@ -109,6 +112,15 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         ...policyFields,
         domainStrings,
     };
+
+    if (isPerChunk) {
+        assertPerChunkNonceContract({
+            chunkCount,
+            maxChunkCount: meta.maxChunkCount,
+            counterBits: meta.counterBits,
+            ivStrategy: meta.iv_strategy,
+        });
+    }
     
     const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
     
@@ -146,7 +158,12 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
             while (offset < payload.length) {
                 const plainLen = Math.min(CHUNK_SIZE, payload.length - offset);
                 const plain = payload.subarray(offset, offset + plainLen);
-                const iv = deriveChunkIvFromK(Kiv, containerNonce, chunkIndex, domainStrings.iv);
+                const iv = deriveChunkIvFromK(Kiv, containerNonce, chunkIndex, domainStrings.iv, {
+                    ivStrategy: meta.iv_strategy,
+                    chunkCount,
+                    maxChunkCount: meta.maxChunkCount,
+                    counterBits: meta.counterBits,
+                });
                 const aad = buildChunkAAD(header, chunkIndex, plainLen);
                 
                 const cipherBuf = await encryptChunk(aesKey, plain, iv, aad);
@@ -154,6 +171,10 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
                 
                 chunkIndex++; 
                 offset += plainLen;
+            }
+
+            if (chunkIndex !== chunkCount || offset !== payload.length) {
+                throw new Error('Chunk accounting mismatch before finalizing encrypted payload');
             }
             
             // Combine all chunks
@@ -228,6 +249,13 @@ export async function decryptFile(containerBytes, secretKey) {
             // Per-chunk decryption
             const totalChunks = metadata.chunkCount || calculateChunkCount(effectiveLength);
             assertChunkCountWithinPolicy(totalChunks, profile, metadata.aead_mode);
+            const ivStrategy = metadata.iv_strategy;
+            assertPerChunkNonceContract({
+                chunkCount: totalChunks,
+                maxChunkCount: metadata.maxChunkCount,
+                counterBits: metadata.counterBits,
+                ivStrategy,
+            });
             const plains = []; 
             let encOffset = 0;
             
@@ -235,7 +263,12 @@ export async function decryptFile(containerBytes, secretKey) {
                 const plainLen = Math.min(CHUNK_SIZE, effectiveLength - (i * CHUNK_SIZE));
                 const encLen = plainLen + 16; // AES-GCM tag size
                 const cipherChunk = encryptedData.subarray(encOffset, encOffset + encLen);
-                const iv = deriveChunkIvFromK(Kiv, containerNonce, i, ds.iv);
+                const iv = deriveChunkIvFromK(Kiv, containerNonce, i, ds.iv, {
+                    ivStrategy,
+                    chunkCount: totalChunks,
+                    maxChunkCount: metadata.maxChunkCount,
+                    counterBits: metadata.counterBits,
+                });
                 const aad = buildChunkAAD(header, i, plainLen);
                 
                 const decrypted = await decryptChunk(aesKey, cipherChunk, iv, aad);

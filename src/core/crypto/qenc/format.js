@@ -2,6 +2,12 @@
 
 import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from '../constants.js';
 import { bytesEqual } from '../../../utils.js';
+import {
+    IV_STRATEGY_SINGLE_IV,
+    IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+    NONCE_COUNTER_BITS_U32,
+    NONCE_MAX_CHUNK_COUNT_U32,
+} from '../aes.js';
 
 function writeUint16BE(value) {
     const out = new Uint8Array(2);
@@ -153,6 +159,9 @@ export function parseQencHeader(containerBytes, options = {}) {
     if (typeof metadata?.aead_mode !== 'string' || metadata.aead_mode.length === 0) {
         throw new Error('Invalid metadata: missing aead_mode');
     }
+    if (typeof metadata?.iv_strategy !== 'string' || metadata.iv_strategy.length === 0) {
+        throw new Error('Invalid metadata: missing iv_strategy');
+    }
     if (!metadata.domainStrings || typeof metadata.domainStrings.kdf !== 'string' || typeof metadata.domainStrings.iv !== 'string') {
         throw new Error('Invalid metadata: missing domainStrings.kdf/domainStrings.iv');
     }
@@ -168,6 +177,9 @@ export function parseQencHeader(containerBytes, options = {}) {
     if (!Number.isInteger(metadata?.maxChunkCount) || metadata.maxChunkCount <= 0) {
         throw new Error('Invalid metadata: maxChunkCount must be a positive integer');
     }
+    if (metadata.maxChunkCount > NONCE_MAX_CHUNK_COUNT_U32) {
+        throw new Error(`Invalid metadata: maxChunkCount exceeds uint32 counter capacity (${NONCE_MAX_CHUNK_COUNT_U32})`);
+    }
     if (metadata.payloadLength != null && (!Number.isInteger(metadata.payloadLength) || metadata.payloadLength <= 0)) {
         throw new Error('Invalid metadata: payloadLength must be a positive integer');
     }
@@ -176,6 +188,32 @@ export function parseQencHeader(containerBytes, options = {}) {
     }
     if (metadata.chunkSize != null && (!Number.isInteger(metadata.chunkSize) || metadata.chunkSize <= 0)) {
         throw new Error('Invalid metadata: chunkSize must be a positive integer');
+    }
+    if (metadata.chunkCount != null && metadata.chunkCount > metadata.maxChunkCount) {
+        throw new Error('Invalid metadata: chunkCount exceeds maxChunkCount');
+    }
+    if (metadata.aead_mode === 'single-container-aead') {
+        if (metadata.iv_strategy !== IV_STRATEGY_SINGLE_IV) {
+            throw new Error(`Invalid metadata: single-container-aead requires iv_strategy="${IV_STRATEGY_SINGLE_IV}"`);
+        }
+        if (metadata.counterBits !== 0) {
+            throw new Error('Invalid metadata: single-container-aead requires counterBits=0');
+        }
+        if (metadata.maxChunkCount !== 1) {
+            throw new Error('Invalid metadata: single-container-aead requires maxChunkCount=1');
+        }
+    } else if (metadata.aead_mode === 'per-chunk-aead') {
+        if (metadata.iv_strategy !== IV_STRATEGY_KMAC_PREFIX64_CTR32_V2) {
+            throw new Error(`Invalid metadata: per-chunk-aead requires iv_strategy="${IV_STRATEGY_KMAC_PREFIX64_CTR32_V2}"`);
+        }
+        if (metadata.counterBits !== NONCE_COUNTER_BITS_U32) {
+            throw new Error(`Invalid metadata: per-chunk-aead requires counterBits=${NONCE_COUNTER_BITS_U32}`);
+        }
+        if (metadata.chunkCount == null) {
+            throw new Error('Invalid metadata: per-chunk-aead requires chunkCount');
+        }
+    } else {
+        throw new Error(`Unsupported AEAD mode: ${metadata.aead_mode}`);
     }
 
     let storedKeyCommitment = null;

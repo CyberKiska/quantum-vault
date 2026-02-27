@@ -5,6 +5,13 @@ import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
 import {
+  assertPerChunkNonceContract,
+  deriveChunkIvFromK,
+  IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+  NONCE_COUNTER_BITS_U32,
+  NONCE_MAX_CHUNK_COUNT_U32,
+} from './aes.js';
+import {
   NONCE_MODE_KMAC_CTR32,
   NONCE_MODE_RANDOM96,
   NONCE_POLICY_PER_CHUNK_V1,
@@ -88,6 +95,10 @@ function createLargeDeterministicPayload(length) {
     payload[i] = (i * 31 + 17) & 0xff;
   }
   return payload;
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
 }
 
 async function ensureRuntimeCrypto() {
@@ -428,6 +439,92 @@ function buildCases() {
         const decrypted = await blobToBytes(decryptedBlob);
         assert(metadata.fileHash === (await hashBytes(payload)), 'chunked metadata hash mismatch');
         assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'chunked roundtrip mismatch');
+      },
+    },
+    {
+      name: 'T01: re-encrypt same plaintext keeps (Kenc,nonce) unique',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('nonce-t01-same-plaintext');
+        const seenPairs = new Set();
+
+        for (let i = 0; i < 64; i += 1) {
+          const encrypted = await encryptFile(payload, pair.publicKey, 'nonce-t01.bin');
+          const encryptedBytes = await blobToBytes(encrypted);
+          const parsed = parseQencHeader(encryptedBytes);
+          assert(parsed.storedKeyCommitment instanceof Uint8Array, 'key commitment is missing');
+          assert(parsed.containerNonce instanceof Uint8Array, 'container nonce is missing');
+          const pairId = `${bytesToHex(parsed.storedKeyCommitment)}:${bytesToHex(parsed.containerNonce)}`;
+          assert(!seenPairs.has(pairId), `detected (Kenc,nonce) reuse at iteration ${i}`);
+          seenPairs.add(pairId);
+        }
+      },
+    },
+    {
+      name: 'T02: reject chunk counter wrap near 2^32 boundary',
+      fn: async () => {
+        const contract = {
+          maxChunkCount: NONCE_MAX_CHUNK_COUNT_U32,
+          counterBits: NONCE_COUNTER_BITS_U32,
+          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+        };
+
+        assertPerChunkNonceContract({
+          chunkCount: NONCE_MAX_CHUNK_COUNT_U32,
+          ...contract,
+        });
+
+        await expectFailure(
+          async () => {
+            assertPerChunkNonceContract({
+              chunkCount: NONCE_MAX_CHUNK_COUNT_U32 + 1,
+              ...contract,
+            });
+          },
+          'nonce contract unexpectedly accepted chunkCount above uint32 policy bound'
+        );
+
+        const Kiv = createLargeDeterministicPayload(32);
+        const containerNonce = createLargeDeterministicPayload(12);
+        await expectFailure(
+          async () => {
+            deriveChunkIvFromK(Kiv, containerNonce, NONCE_MAX_CHUNK_COUNT_U32, 'quantum-vault:chunk-iv:v1', {
+              chunkCount: NONCE_MAX_CHUNK_COUNT_U32,
+              ...contract,
+            });
+          },
+          'deriveChunkIvFromK unexpectedly accepted wrapped chunk index'
+        );
+      },
+    },
+    {
+      name: 'T03: crafted per-chunk IV collision campaign is blocked',
+      fn: async () => {
+        const Kiv = createLargeDeterministicPayload(32);
+        const containerNonce = createLargeDeterministicPayload(12);
+        const chunkCount = 4096;
+        const contract = {
+          chunkCount,
+          maxChunkCount: NONCE_MAX_CHUNK_COUNT_U32,
+          counterBits: NONCE_COUNTER_BITS_U32,
+          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+        };
+        assertPerChunkNonceContract(contract);
+
+        const seenIvs = new Set();
+        for (let i = 0; i < chunkCount; i += 1) {
+          const iv = deriveChunkIvFromK(Kiv, containerNonce, i, 'quantum-vault:chunk-iv:v1', contract);
+          const ivHex = bytesToHex(iv);
+          assert(!seenIvs.has(ivHex), `unexpected IV collision at chunk index ${i}`);
+          seenIvs.add(ivHex);
+        }
+
+        await expectFailure(
+          async () => {
+            deriveChunkIvFromK(Kiv, containerNonce, 2 ** 32, 'quantum-vault:chunk-iv:v1', contract);
+          },
+          'deriveChunkIvFromK unexpectedly accepted overflowed chunk index'
+        );
       },
     },
     {

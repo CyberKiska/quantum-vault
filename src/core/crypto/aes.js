@@ -9,7 +9,45 @@ import { CHUNK_SIZE } from './constants.js';
 export const AES_KEY_SIZE = 32; // 256 bits
 export const AES_IV_SIZE = 12; // 96 bits for GCM
 export const AES_TAG_SIZE = 16; // 128 bits
+export const NONCE_COUNTER_BITS_U32 = 32;
+export const NONCE_MAX_CHUNK_COUNT_U32 = 0xffffffff;
+export const IV_STRATEGY_SINGLE_IV = 'single-iv';
+export const IV_STRATEGY_KMAC_PREFIX64_CTR32_V2 = 'kmac-prefix64-ctr32-v2';
+
+const NONCE_PREFIX_SIZE_V2 = 8;
+const NONCE_COUNTER_SIZE = 4;
+const PER_CHUNK_IV_STRATEGIES = new Set([
+    IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+]);
 // CHUNK_SIZE is provided via constants.js
+
+function assertUint32(value, field) {
+    if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+        throw new Error(`${field} must be a uint32 integer`);
+    }
+}
+
+// Hard fail-closed contract to prevent nonce-counter wrap for chunked GCM.
+export function assertPerChunkNonceContract({
+    chunkCount,
+    maxChunkCount = NONCE_MAX_CHUNK_COUNT_U32,
+    counterBits = NONCE_COUNTER_BITS_U32,
+    ivStrategy = IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+}) {
+    if (!PER_CHUNK_IV_STRATEGIES.has(ivStrategy)) {
+        throw new Error(`Unsupported per-chunk iv_strategy: ${ivStrategy}`);
+    }
+    if (!Number.isInteger(counterBits) || counterBits !== NONCE_COUNTER_BITS_U32) {
+        throw new Error(`Unsupported counterBits for per-chunk AES-GCM: ${counterBits}`);
+    }
+    assertUint32(maxChunkCount, 'maxChunkCount');
+    if (!Number.isInteger(chunkCount) || chunkCount <= 0) {
+        throw new Error('chunkCount must be a positive integer');
+    }
+    if (chunkCount > maxChunkCount) {
+        throw new Error(`chunkCount exceeds nonce policy bound (${maxChunkCount})`);
+    }
+}
 
 // Derive keys from shared secret using KMAC256
 export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, customization) {
@@ -54,24 +92,55 @@ export function buildChunkAAD(headerBytes, chunkIndex, plainLen) {
     return aad;
 }
 
-// Derive per-chunk IV via KMAC256(Kraw, containerNonce||u32(index)) → first 12 bytes
-export function deriveChunkIvFromK(Kraw, containerNonce, chunkIndex, ivCustomization) {
+// Derive per-chunk IV from Kiv + containerNonce + chunkIndex.
+// kmac-prefix64-ctr32-v2 is injective inside one container: iv = prefix64 || u32(index).
+export function deriveChunkIvFromK(Kiv, containerNonce, chunkIndex, ivCustomization, options = {}) {
+    const {
+        ivStrategy = IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+        chunkCount = null,
+        maxChunkCount = NONCE_MAX_CHUNK_COUNT_U32,
+        counterBits = NONCE_COUNTER_BITS_U32,
+    } = options;
+
     if (typeof ivCustomization !== 'string' || ivCustomization.length === 0) {
         throw new Error('IV customization domain is required');
     }
+    if (!(Kiv instanceof Uint8Array) || Kiv.length !== AES_KEY_SIZE) {
+        throw new Error(`Kiv must be ${AES_KEY_SIZE}-byte Uint8Array`);
+    }
+    if (!(containerNonce instanceof Uint8Array) || containerNonce.length !== AES_IV_SIZE) {
+        throw new Error(`containerNonce must be ${AES_IV_SIZE}-byte Uint8Array`);
+    }
+    assertUint32(chunkIndex, 'chunkIndex');
+
+    if (chunkCount != null) {
+        assertPerChunkNonceContract({
+            chunkCount,
+            maxChunkCount,
+            counterBits,
+            ivStrategy,
+        });
+        if (chunkIndex >= chunkCount) {
+            throw new Error(`chunkIndex ${chunkIndex} out of bounds for chunkCount ${chunkCount}`);
+        }
+    } else if (!PER_CHUNK_IV_STRATEGIES.has(ivStrategy)) {
+        throw new Error(`Unsupported per-chunk iv_strategy: ${ivStrategy}`);
+    }
 
     // Encode chunk index as 4 bytes
-    const idx = new Uint8Array(4);
+    const idx = new Uint8Array(NONCE_COUNTER_SIZE);
     new DataView(idx.buffer).setUint32(0, chunkIndex, false);
-    
-    // Combine container nonce and chunk index
-    const input = new Uint8Array(containerNonce.length + idx.length);
-    input.set(containerNonce, 0);
-    input.set(idx, containerNonce.length);
-    
-    // Derive 16 bytes and take first 12 for AES-GCM IV
-    const full = kmac256(Kraw, input, 16, { customization: ivCustomization });
-    return full.slice(0, 12);
+
+    if (ivStrategy === IV_STRATEGY_KMAC_PREFIX64_CTR32_V2) {
+        const prefixFull = kmac256(Kiv, containerNonce, NONCE_PREFIX_SIZE_V2, { customization: ivCustomization });
+        const prefix = prefixFull.slice(0, NONCE_PREFIX_SIZE_V2);
+        const iv = new Uint8Array(AES_IV_SIZE);
+        iv.set(prefix, 0);
+        iv.set(idx, NONCE_PREFIX_SIZE_V2);
+        return iv;
+    }
+
+    throw new Error(`Unsupported per-chunk iv_strategy: ${ivStrategy}`);
 }
 
 // Encrypt chunk with AES-256-GCM
