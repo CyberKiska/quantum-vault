@@ -5,6 +5,8 @@ import { QCONT_FORMAT_VERSION } from '../constants.js';
 
 export async function parseQcontShardPreviewFile(file) {
     const decoder = new TextDecoder();
+    const MAX_MANIFEST_LEN = 1024 * 1024;
+    const MANIFEST_DIGEST_LEN = 64;
     let bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 16384)).arrayBuffer());
     let dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
@@ -34,6 +36,15 @@ export async function parseQcontShardPreviewFile(file) {
         throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}`);
     }
     offset += metaLen;
+
+    await ensureBytes(offset + 4);
+    const manifestLen = dv.getUint32(offset, false);
+    if (manifestLen <= 0 || manifestLen > MAX_MANIFEST_LEN) {
+        throw new Error('Invalid embedded manifest length');
+    }
+    offset += 4;
+    await ensureBytes(offset + manifestLen + MANIFEST_DIGEST_LEN + 4);
+    offset += manifestLen + MANIFEST_DIGEST_LEN;
 
     await ensureBytes(offset + 4);
     const encapLen = dv.getUint32(offset, false);
@@ -82,11 +93,18 @@ export async function assessShardSelection(files) {
 
     const parsed = [];
     let parseErrors = 0;
+    let ignoredNonShard = 0;
     for (const file of files) {
+        const lowerName = String(file?.name || '').toLowerCase();
+        const explicitShardName = lowerName.endsWith('.qcont');
         try {
             parsed.push(await parseQcontShardPreviewFile(file));
         } catch {
-            parseErrors++;
+            if (explicitShardName) {
+                parseErrors++;
+            } else {
+                ignoredNonShard++;
+            }
         }
     }
 
@@ -94,7 +112,9 @@ export async function assessShardSelection(files) {
         return {
             state: 'unknown',
             ready: false,
-            message: 'Unable to read shard metadata from selected files.'
+            message: ignoredNonShard > 0
+                ? 'No valid .qcont shard files detected in the selected input.'
+                : 'Unable to read shard metadata from selected files.'
         };
     }
 
@@ -146,6 +166,9 @@ export async function assessShardSelection(files) {
     }
     if (parseErrors > 0) {
         message += ` ${parseErrors} unreadable file(s) ignored.`;
+    }
+    if (ignoredNonShard > 0) {
+        message += ` ${ignoredNonShard} non-shard attachment(s) ignored.`;
     }
 
     return {

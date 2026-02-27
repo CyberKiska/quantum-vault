@@ -156,6 +156,18 @@ export function parseQencHeader(containerBytes, options = {}) {
     if (!metadata.domainStrings || typeof metadata.domainStrings.kdf !== 'string' || typeof metadata.domainStrings.iv !== 'string') {
         throw new Error('Invalid metadata: missing domainStrings.kdf/domainStrings.iv');
     }
+    if (typeof metadata?.noncePolicyId !== 'string' || metadata.noncePolicyId.length === 0) {
+        throw new Error('Invalid metadata: missing noncePolicyId');
+    }
+    if (typeof metadata?.nonceMode !== 'string' || metadata.nonceMode.length === 0) {
+        throw new Error('Invalid metadata: missing nonceMode');
+    }
+    if (!Number.isInteger(metadata?.counterBits) || metadata.counterBits < 0) {
+        throw new Error('Invalid metadata: counterBits must be a non-negative integer');
+    }
+    if (!Number.isInteger(metadata?.maxChunkCount) || metadata.maxChunkCount <= 0) {
+        throw new Error('Invalid metadata: maxChunkCount must be a positive integer');
+    }
     if (metadata.payloadLength != null && (!Number.isInteger(metadata.payloadLength) || metadata.payloadLength <= 0)) {
         throw new Error('Invalid metadata: payloadLength must be a positive integer');
     }

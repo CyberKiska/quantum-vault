@@ -122,9 +122,18 @@
           <div class="action-card">
             <div class="dropzone-area" id="liteShardsDropzone">
               <h3>Select Shards to Restore</h3>
-              <p>Select multiple .qcont files</p>
-              <input type="file" id="liteShardsInput" accept=".qcont" multiple>
+              <p>Select restore files (.qcont, optional .qvmanifest.json, .qsig/.sig, .pqpk)</p>
+              <input type="file" id="liteShardsInput" multiple>
             </div>
+            <details class="verification-section">
+              <summary>Verification (recommended)</summary>
+              <div class="control-group verification-fields">
+                <small class="info-text">Attach all restore artifacts in the main file selector above. This section only sets trust pins and strictness.</small>
+                <label>Pinned PQ fingerprint (hex, optional) <input type="text" id="liteRestorePinnedPqFingerprint" placeholder="sha3-256 fingerprint"></label>
+                <label>Expected Ed25519 signer (optional) <input type="text" id="liteRestoreExpectedEdSigner" placeholder="G..."></label>
+                <label class="strategy-option"><input type="checkbox" id="liteRestoreRequireTrustedSig"> Require trusted signature</label>
+              </div>
+            </details>
             <div id="shardsStatus" class="shards-status" style="display: none;">
               <span id="shardsStatusText">0 shards selected</span>
             </div>
@@ -253,8 +262,17 @@
            <div class="panel">
             <h3>Reconstruct Container</h3>
             <div class="control-group">
-               <label>Input Shards <input type="file" id="qcontShardsInput" accept=".qcont" multiple></label>
+               <label>Input Restore Files <input type="file" id="qcontShardsInput" multiple></label>
             </div>
+            <details class="verification-section">
+              <summary>Verification (recommended)</summary>
+              <div class="control-group verification-fields">
+                <small class="info-text">Attach .qcont/.qvmanifest/.qsig/.sig/.pqpk in the main selector above. Parsed automatically.</small>
+                <label>Pinned PQ fingerprint (hex, optional) <input type="text" id="restorePinnedPqFingerprint" placeholder="sha3-256 fingerprint"></label>
+                <label>Expected Ed25519 signer (optional) <input type="text" id="restoreExpectedEdSigner" placeholder="G..."></label>
+                <label class="strategy-option"><input type="checkbox" id="restoreRequireTrustedSig"> Require trusted signature</label>
+              </div>
+            </details>
             <div id="proShardsStatus" class="shards-status" style="display: none;">
               <span id="proShardsStatusText">0 shards selected</span>
             </div>

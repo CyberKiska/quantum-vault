@@ -18,4 +18,4 @@ export const KEY_COMMITMENT_SIZE = 32;
 export const FORMAT_VERSION = 'QVv1-4-0';
 
 // Current shard format version
-export const QCONT_FORMAT_VERSION = 'QVqcont-3';
+export const QCONT_FORMAT_VERSION = 'QVqcont-4';

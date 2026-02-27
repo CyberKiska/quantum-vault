@@ -2,7 +2,7 @@
 
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { generateKeyPair as generateMLKEMKeyPair, encapsulate, decapsulate } from './mlkem.js';
-import { 
+import {
     deriveKeyWithKmac, 
     buildChunkAAD, 
     deriveChunkIvFromK, 
@@ -15,8 +15,14 @@ import {
     verifyKeyCommitment
 } from './aes.js';
 import { toUint8, toHex } from '../../utils.js';
-import { CHUNK_SIZE, FORMAT_VERSION, KDF_DOMAIN_V1, IV_DOMAIN_V1 } from './constants.js';
+import { CHUNK_SIZE, FORMAT_VERSION } from './constants.js';
 import { buildQencHeader, parseQencHeader } from './qenc/format.js';
+import {
+    DEFAULT_CRYPTO_PROFILE,
+    assertChunkCountWithinPolicy,
+    buildPolicyMetadataFields,
+    validateContainerPolicyMetadata,
+} from './policy.js';
 
 // Re-export utilities and sub-modules for convenience
 export { toHex, toUint8 } from '../../utils.js';
@@ -80,19 +86,19 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
     
     // Step 5: Determine encryption mode
     const isPerChunk = shouldUseChunkedEncryption(payloadLength);
+    const aeadMode = isPerChunk ? 'per-chunk-aead' : 'single-container-aead';
     const chunkCount = isPerChunk ? calculateChunkCount(payloadLength) : 1;
+    assertChunkCountWithinPolicy(chunkCount, DEFAULT_CRYPTO_PROFILE, aeadMode);
     
     // Step 6: Create public metadata (cleartext header — no sensitive fields)
-    const domainStrings = {
-        kdf: KDF_DOMAIN_V1,
-        iv: IV_DOMAIN_V1
-    };
+    const policyFields = buildPolicyMetadataFields(DEFAULT_CRYPTO_PROFILE, aeadMode);
+    const domainStrings = policyFields.domainStrings;
     
     const meta = {
         KEM: 'ML-KEM-1024',
         KDF: 'KMAC256',
         AEAD: 'AES-256-GCM',
-        aead_mode: isPerChunk ? 'per-chunk-aead' : 'single-container-aead',
+        aead_mode: aeadMode,
         iv_strategy: isPerChunk ? 'kmac-derive-v1' : 'single-iv',
         fmt: FORMAT_VERSION,
         hasKeyCommitment: true,
@@ -100,7 +106,8 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         payloadLength,
         chunkSize: CHUNK_SIZE,
         chunkCount,
-        domainStrings
+        ...policyFields,
+        domainStrings,
     };
     
     const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
@@ -199,10 +206,8 @@ export async function decryptFile(containerBytes, secretKey) {
     const sharedSecret = await decapsulate(encapsulatedKey, secretKey);
     
     // Step 3: Derive decryption keys (SP 800-185)
+    const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
     const ds = metadata.domainStrings;
-    if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
-        throw new Error('Container metadata is missing valid domainStrings');
-    }
     const { Kraw, Kenc, Kiv, aesKey } = await deriveKeyWithKmac(
         sharedSecret, kdfSalt, metaBytes, ds.kdf
     );
@@ -222,6 +227,7 @@ export async function decryptFile(containerBytes, secretKey) {
         if (metadata.aead_mode === 'per-chunk-aead') {
             // Per-chunk decryption
             const totalChunks = metadata.chunkCount || calculateChunkCount(effectiveLength);
+            assertChunkCountWithinPolicy(totalChunks, profile, metadata.aead_mode);
             const plains = []; 
             let encOffset = 0;
             

@@ -758,6 +758,10 @@ input[type=range] {
   color: var(--accent-danger);
 }
 
+#log .warning {
+  color: var(--accent-warn);
+}
+
 /* Responsive */
 /* Files list in dropzone */
 .files-list {
@@ -867,6 +871,23 @@ input[type=range] {
 .strategy-option input[type="radio"] {
   width: auto;
   margin: 0;
+}
+
+.verification-section {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: var(--space-sm);
+}
+
+.verification-section summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.verification-fields {
+  margin-top: var(--space-sm);
 }
 
 

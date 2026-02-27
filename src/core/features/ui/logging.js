@@ -30,6 +30,20 @@ export function logError(err, options = {}) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 
+// Log warning message to UI console
+export function logWarning(msg, options = {}) {
+    const { elementId = 'log' } = options;
+    const logEl = document.getElementById(elementId);
+    if (!logEl) return;
+
+    const warningSpan = document.createElement('span');
+    warningSpan.className = 'warning';
+    warningSpan.textContent = `[${formatTimestamp()}] WARNING: ${String(msg)}`;
+    logEl.appendChild(warningSpan);
+    logEl.appendChild(document.createTextNode('\n'));
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
 // Log hash with appropriate formatting based on mode
 export function logHash(label, hash, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;

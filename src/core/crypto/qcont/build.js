@@ -1,14 +1,14 @@
+import { sha3_512 } from '@noble/hashes/sha3.js';
 import { CHUNK_SIZE, hashBytes } from '../index.js';
 import { log, logError } from '../../features/ui/logging.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams, toHex } from '../../../utils.js';
 import { parseQencHeader } from '../qenc/format.js';
 import { QCONT_FORMAT_VERSION } from '../constants.js';
+import { buildArchiveManifest, canonicalizeArchiveManifest } from '../manifest/archive-manifest.js';
+import { DEFAULT_CRYPTO_PROFILE, getNonceContractForAeadMode } from '../policy.js';
 
 export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
-    const formatVersion = options.formatVersion || QCONT_FORMAT_VERSION;
-    if (formatVersion !== QCONT_FORMAT_VERSION) {
-        throw new Error(`Unsupported shard format version: ${formatVersion}`);
-    }
+    const formatVersion = QCONT_FORMAT_VERSION;
 
     const { n, k } = params;
     const m = n - k;
@@ -53,6 +53,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
     const chunkSize = meta.chunkSize || CHUNK_SIZE;
     const isPerChunk = meta.aead_mode === 'per-chunk-aead';
     const totalChunks = isPerChunk ? (meta.chunkCount || Math.ceil(effectiveLength / chunkSize)) : 1;
+    const nonceContract = getNonceContractForAeadMode(meta.aead_mode, DEFAULT_CRYPTO_PROFILE);
 
     // RS codeword length must be <= 255 for GF(2^8) to avoid evaluation collisions
     const RS_MAX_CODEWORD = 255;
@@ -103,11 +104,55 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
     }
 
     const timestamp = new Date().toISOString();
+    let manifestBytes = new Uint8Array(0);
+    let manifestDigestHex = null;
+    let manifestDigestBytes = new Uint8Array(0);
+    const acceptedAlgorithms = ['ML-DSA', 'SLH-DSA-SHAKE', 'Ed25519'];
+    const allowLegacyEd25519 = options.allowLegacyEd25519 ?? true;
+    const requireSignature = options.requireSignature ?? false;
+
+    const archiveManifest = buildArchiveManifest({
+        cryptoProfileId: meta.cryptoProfileId || DEFAULT_CRYPTO_PROFILE.cryptoProfileId,
+        qencFormat: meta.fmt,
+        aeadMode: meta.aead_mode,
+        ivStrategy: meta.iv_strategy || 'single-iv',
+        noncePolicyId: meta.noncePolicyId || nonceContract.noncePolicyId,
+        nonceMode: meta.nonceMode || nonceContract.nonceMode,
+        counterBits: meta.counterBits ?? nonceContract.counterBits,
+        maxChunkCount: meta.maxChunkCount ?? nonceContract.maxChunkCount,
+        chunkSize,
+        chunkCount: totalChunks,
+        payloadLength: meta.payloadLength || effectiveLength,
+        qencHash: containerHash,
+        containerId,
+        shamirThreshold: t,
+        shamirShareCount: n,
+        rsN: n,
+        rsK: k,
+        rsParity: m,
+        rsCodecId: 'QV-RS-ErasureCodes-v1',
+        shardBodyHashes: fragmentBodyHashes,
+        shareCommitments,
+        requireSignature,
+        acceptedAlgorithms,
+        allowLegacyEd25519,
+    });
+    const canonicalManifest = canonicalizeArchiveManifest(archiveManifest);
+    manifestBytes = canonicalManifest.bytes;
+    manifestDigestHex = canonicalManifest.digestHex;
+    manifestDigestBytes = sha3_512(manifestBytes);
+
     const metaJSON = {
         containerId,
         alg: { KEM: 'ML-KEM-1024', KDF: 'KMAC256', AEAD: 'AES-256-GCM', RS: 'ErasureCodes', fmt: formatVersion },
         aead_mode: isPerChunk ? 'per-chunk' : 'single-container',
         iv_strategy: meta.iv_strategy,
+        cryptoProfileId: meta.cryptoProfileId || DEFAULT_CRYPTO_PROFILE.cryptoProfileId,
+        noncePolicyId: meta.noncePolicyId || nonceContract.noncePolicyId,
+        nonceMode: meta.nonceMode || nonceContract.nonceMode,
+        counterBits: meta.counterBits ?? nonceContract.counterBits,
+        maxChunkCount: meta.maxChunkCount ?? nonceContract.maxChunkCount,
+        aadPolicyId: meta.aadPolicyId || DEFAULT_CRYPTO_PROFILE.aadPolicyId,
         n, k, m, t,
         rsEncodeBase: RS_MAX_CODEWORD,
         chunkSize,
@@ -123,6 +168,8 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         perFragmentSize,
         hasKeyCommitment: !!keyCommitment,
         keyCommitmentHex: keyCommitment ? toHex(keyCommitment) : null,
+        hasEmbeddedManifest: true,
+        manifestDigest: manifestDigestHex,
         shareCommitments,
         fragmentBodyHashes,
         timestamp
@@ -130,6 +177,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
 
     const metaJSONBytes = new TextEncoder().encode(JSON.stringify(metaJSON));
     const metaLenBytes = new Uint8Array(2); new DataView(metaLenBytes.buffer).setUint16(0, metaJSONBytes.length, false);
+    const manifestLenBytes = new Uint8Array(4); new DataView(manifestLenBytes.buffer).setUint32(0, manifestBytes.length, false);
     const encapLenBytes = new Uint8Array(4); new DataView(encapLenBytes.buffer).setUint32(0, encapsulatedKey.length, false);
 
     const qcontMagic = new TextEncoder().encode('QVC1');
@@ -142,12 +190,16 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         const qencMetaLenBytes = new Uint8Array(2); new DataView(qencMetaLenBytes.buffer).setUint16(0, metaBytes.length, false);
         const shardHeader = new Uint8Array(
             qcontMagic.length + 2 + metaJSONBytes.length + 4 + encapsulatedKey.length +
-            12 + 16 + 2 + metaBytes.length + 1 + keyCommitBytes.length + 2 + 2 + shares[j].length
+            12 + 16 + 2 + metaBytes.length + 1 + keyCommitBytes.length + 2 + 2 + shares[j].length +
+            4 + manifestBytes.length + manifestDigestBytes.length
         );
         let p2 = 0;
         shardHeader.set(qcontMagic, p2); p2 += qcontMagic.length;
         shardHeader.set(metaLenBytes, p2); p2 += 2;
         shardHeader.set(metaJSONBytes, p2); p2 += metaJSONBytes.length;
+        shardHeader.set(manifestLenBytes, p2); p2 += 4;
+        shardHeader.set(manifestBytes, p2); p2 += manifestBytes.length;
+        shardHeader.set(manifestDigestBytes, p2); p2 += manifestDigestBytes.length;
         shardHeader.set(encapLenBytes, p2); p2 += 4;
         shardHeader.set(encapsulatedKey, p2); p2 += encapsulatedKey.length;
         shardHeader.set(containerNonce, p2); p2 += 12;
@@ -165,7 +217,13 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         const blob = new Blob([shardHeader, bodyBytes], { type: 'application/octet-stream' });
         qconts.push({ blob, index: j });
     }
-    return qconts;
+    return {
+        shards: qconts,
+        manifest: archiveManifest,
+        manifestBytes,
+        manifestDigestHex,
+        formatVersion,
+    };
 }
 
 export function initQcontBuildUI() {
@@ -194,13 +252,18 @@ export function initQcontBuildUI() {
             }
             const t = k + ((n - k) / 2);
             log(`Building .qcont shards with n=${n}, k=${k}, m=${n - k} (t=${t}), chunkSize=8 MiB ...`);
-            const qconts = await buildQcontShards(qencBytes, privKeyBytes, { n, k });
+            const result = await buildQcontShards(qencBytes, privKeyBytes, { n, k });
+            const qconts = result.shards;
             const baseName = qencForQcontInput.files[0].name.replace(/\.qenc$/i, '');
             qconts.forEach(({ blob, index }) => {
                 const name = `${baseName}.part${index + 1}-of-${qconts.length}.qcont`;
                 download(blob, name);
                 log(`Saved ${name} (${blob.size} B)`);
             });
+            const manifestName = `${baseName}.qvmanifest.json`;
+            download(new Blob([result.manifestBytes], { type: 'application/json' }), manifestName);
+            log(`Saved ${manifestName} (${result.manifestBytes.length} B) SHA3-512=${result.manifestDigestHex}`);
+            log('Manifest can be signed in Quantum Signer / Stellar WebSigner for authenticity verification.');
             log('.qcont shards built. Distribute files across storage providers.');
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });

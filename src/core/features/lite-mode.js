@@ -4,10 +4,10 @@
 import { encryptFile, decryptFile, generateKeyPair, hashBytes } from '../crypto/index.js';
 import { buildQcontShards } from '../crypto/qcont/build.js';
 import { assessShardSelection } from '../crypto/qcont/preview.js';
-import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
+import { collectRestoreVerificationOptions, parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
-import { log, logError, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess } from './ui/logging.js';
+import { log, logError, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 
 // Global state for Lite mode
@@ -384,10 +384,11 @@ async function createLiteShards() {
         updateLitePipeline('liteViewProtect', 'step-split'); // Transition: Splitting
         
         // 2. Create shards from encrypted container + private key
-        const qconts = await buildQcontShards(encBytes, liteKeys.secretKey, {
+        const splitResult = await buildQcontShards(encBytes, liteKeys.secretKey, {
             n: params.n,
             k: params.k
         });
+        const qconts = splitResult.shards;
         
         // 3. Download shards
         const baseName = payloadName.replace(/\.[^/.]+$/, ''); // Remove extension
@@ -395,6 +396,8 @@ async function createLiteShards() {
             const shardName = `${baseName}.part${index + 1}-of-${qconts.length}.qcont`;
             download(blob, shardName);
         });
+        const manifestName = `${baseName}.qvmanifest.json`;
+        download(new Blob([splitResult.manifestBytes], { type: 'application/json' }), manifestName);
         
         // Log shard creation
         logShardCreation(qconts.length, params, payloadLabel, { isLiteMode: true });
@@ -404,6 +407,8 @@ async function createLiteShards() {
         } else {
             log('🛡️ File encrypted and split into shards', { isLiteMode: true });
         }
+        log(`Saved ${manifestName} for detached signing (recommended).`, { isLiteMode: true });
+        log('Hint: sign manifest in Quantum Signer to protect against malicious shard substitution.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
     } catch (error) {
@@ -434,20 +439,55 @@ async function restoreLiteShards() {
     updateLitePipeline('liteViewRestore', 'step-combine'); // Start: Combining
     
     try {
+        const verificationOptions = await collectRestoreVerificationOptions('liteRestore', [...shardsInput.files]);
+        if (!verificationOptions.shardFiles.length) {
+            throw new Error('No .qcont shard files were detected in selected input.');
+        }
+        if (verificationOptions.ignoredFileNames.length > 0) {
+            logWarning(`Ignored non-restore attachments: ${verificationOptions.ignoredFileNames.join(', ')}`, { isLiteMode: true });
+        }
+
         // Parse shards using shared function
-        const shardBytesArr = await Promise.all([...shardsInput.files].map(readFileAsUint8Array));
+        const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
         const shards = shardBytesArr.map((arr) => parseShard(arr, { strict: true }));
         
         // Log restoration start
         const containerId = shards[0]?.metaJSON?.containerId;
-        logRestoration(shardsInput.files.length, containerId, { isLiteMode: true });
+        logRestoration(verificationOptions.shardFiles.length, containerId, { isLiteMode: true });
         
         // Restore using shared core logic
         const result = await restoreFromShards(shards, {
             onLog: (msg) => log(msg, { isLiteMode: true }),
-            onError: (msg) => logError(msg, { isLiteMode: true })
+            onError: (msg) => logError(msg, { isLiteMode: true }),
+            onWarn: (msg) => logWarning(msg, { isLiteMode: true }),
+            verification: verificationOptions,
         });
-        
+
+        log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
+        for (const warning of result.authenticity?.warnings || []) {
+            logWarning(warning, { isLiteMode: true });
+        }
+        if (result.authenticity?.verification) {
+            const verification = result.authenticity.verification;
+            log(`Signature results: ${verification.validCount} valid, ${verification.trustedValidCount} trusted-valid`, { isLiteMode: true });
+            for (const item of verification.results || []) {
+                if (item.ok) {
+                    if (item.type === 'sig') {
+                        log(`Signature OK: ${item.name} (${item.algorithm || 'Ed25519'}, signer ${item.signer || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
+                    } else if (item.type === 'qsig') {
+                        log(`Signature OK: ${item.name} (${item.algorithm || 'PQ'}, fp ${item.signerFingerprintHex || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
+                    } else {
+                        log(`Signature OK: ${item.name}`, { isLiteMode: true });
+                    }
+                } else {
+                    logWarning(`Signature failed: ${item.name} (${item.error || 'unknown error'})`, { isLiteMode: true });
+                }
+            }
+            for (const warning of verification.warnings || []) {
+                logWarning(warning, { isLiteMode: true });
+            }
+        }
+
         const { qencBytes, privKey, containerHash, qencOk, qkeyOk } = result;
         
         if (!qencOk || !qkeyOk) {

@@ -4,6 +4,12 @@ import { buildQcontShards } from './qcont/build.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
+import {
+  NONCE_MODE_KMAC_CTR32,
+  NONCE_MODE_RANDOM96,
+  NONCE_POLICY_PER_CHUNK_V1,
+  NONCE_POLICY_SINGLE_CONTAINER_V1,
+} from './policy.js';
 
 function textBytes(value) {
   return new TextEncoder().encode(value);
@@ -48,6 +54,31 @@ function mutateTail(bytes, delta = 1) {
   const out = bytes.slice();
   const index = out.length - 1;
   out[index] ^= delta & 0xff;
+  return out;
+}
+
+function qcontManifestRegion(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  offset += 4; // magic
+  const metaLen = dv.getUint16(offset, false);
+  offset += 2 + metaLen;
+  const manifestLen = dv.getUint32(offset, false);
+  offset += 4;
+  return {
+    manifestStart: offset,
+    manifestLen,
+    manifestDigestStart: offset + manifestLen,
+  };
+}
+
+function mutateQcontManifestByte(bytes, delta = 1) {
+  const out = bytes.slice();
+  const region = qcontManifestRegion(out);
+  if (region.manifestLen <= 0) {
+    throw new Error('No embedded manifest to mutate');
+  }
+  out[region.manifestStart] ^= delta & 0xff;
   return out;
 }
 
@@ -136,6 +167,10 @@ function buildCases() {
         assert(parsedHeader.metadata.fmt === 'QVv1-4-0', `unexpected format: ${parsedHeader.metadata.fmt}`);
         assert(parsedHeader.metadata.payloadFormat === 'wrapped-v1', 'unexpected payload format');
         assert(parsedHeader.metadata.aead_mode === 'single-container-aead', 'unexpected AEAD mode');
+        assert(parsedHeader.metadata.noncePolicyId === NONCE_POLICY_SINGLE_CONTAINER_V1, 'single-container noncePolicyId mismatch');
+        assert(parsedHeader.metadata.nonceMode === NONCE_MODE_RANDOM96, 'single-container nonceMode mismatch');
+        assert(parsedHeader.metadata.counterBits === 0, 'single-container counterBits mismatch');
+        assert(parsedHeader.metadata.maxChunkCount === 1, 'single-container maxChunkCount mismatch');
 
         const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, secretKey);
         const decrypted = await blobToBytes(decryptedBlob);
@@ -176,7 +211,8 @@ function buildCases() {
         const payload = textBytes('split-check');
         const encrypted = await encryptFile(payload, publicKey, 'split.txt');
         const qencBytes = await blobToBytes(encrypted);
-        const shards = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const shards = split.shards;
 
         assert(shards.length === 5, `expected 5 shards, got ${shards.length}`);
         for (const shard of shards) {
@@ -194,7 +230,8 @@ function buildCases() {
         const payload = createLargeDeterministicPayload(256 * 1024);
         const encrypted = await encryptFile(payload, publicKey, 'restore.txt');
         const qencBytes = await blobToBytes(encrypted);
-        const builtShards = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const built = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const builtShards = built.shards;
         const shardBytes = await Promise.all(builtShards.map((shard) => blobToBytes(shard.blob)));
         const oneCorrupted = shardBytes.map((bytes, idx) => (idx === 0 ? mutateTail(bytes) : bytes.slice()));
         const parsedShards = oneCorrupted.map((bytes) => parseShard(bytes));
@@ -206,6 +243,119 @@ function buildCases() {
         const { decryptedBlob } = await decryptFile(restored.qencBytes, restored.privKey);
         const decrypted = await blobToBytes(decryptedBlob);
         assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'reconstructed payload mismatch');
+      },
+    },
+    {
+      name: 'restore rejects mixed manifest cohorts without selector',
+      fn: async () => {
+        const pairA = await generateKeyPair({ collectUserEntropy: false });
+        const pairB = await generateKeyPair({ collectUserEntropy: false });
+        const payloadA = textBytes('cohort-a');
+        const payloadB = textBytes('cohort-b');
+
+        const qencA = await blobToBytes(await encryptFile(payloadA, pairA.publicKey, 'a.bin'));
+        const qencB = await blobToBytes(await encryptFile(payloadB, pairB.publicKey, 'b.bin'));
+
+        const splitA = await buildQcontShards(qencA, pairA.secretKey, { n: 5, k: 3 });
+        const splitB = await buildQcontShards(qencB, pairB.secretKey, { n: 5, k: 3 });
+
+        const mixed = [
+          ...(await Promise.all(splitA.shards.slice(0, 3).map((item) => blobToBytes(item.blob)))),
+          ...(await Promise.all(splitB.shards.slice(0, 2).map((item) => blobToBytes(item.blob)))),
+        ];
+        const parsed = mixed.map((bytes) => parseShard(bytes));
+
+        await expectFailure(
+          () => restoreFromShards(parsed, { onLog: () => {}, onError: () => {} }),
+          'restore unexpectedly accepted mixed manifest cohorts without selector'
+        );
+      },
+    },
+    {
+      name: 'restore uses uploaded manifest to select correct cohort',
+      fn: async () => {
+        const pairA = await generateKeyPair({ collectUserEntropy: false });
+        const pairB = await generateKeyPair({ collectUserEntropy: false });
+        const payloadA = textBytes('selector-a');
+        const payloadB = textBytes('selector-b');
+
+        const qencA = await blobToBytes(await encryptFile(payloadA, pairA.publicKey, 'sa.bin'));
+        const qencB = await blobToBytes(await encryptFile(payloadB, pairB.publicKey, 'sb.bin'));
+
+        const splitA = await buildQcontShards(qencA, pairA.secretKey, { n: 5, k: 3 });
+        const splitB = await buildQcontShards(qencB, pairB.secretKey, { n: 5, k: 3 });
+
+        const selectedShardBytes = await Promise.all(splitA.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
+        const distractorShardBytes = await blobToBytes(splitB.shards[0].blob);
+        const parsed = [...selectedShardBytes, distractorShardBytes].map((bytes) => parseShard(bytes));
+
+        const restored = await restoreFromShards(parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { manifestBytes: splitA.manifestBytes },
+        });
+
+        assert(restored.qencOk, 'restore with uploaded manifest failed qenc hash check');
+        assert(restored.manifestSource === 'uploaded', `unexpected manifest source: ${restored.manifestSource}`);
+      },
+    },
+    {
+      name: 'parseShard rejects tampered embedded manifest digest',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('manifest-tamper');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'tamper.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const shardBytes = await blobToBytes(split.shards[0].blob);
+        const tampered = mutateQcontManifestByte(shardBytes);
+
+        await expectFailure(
+          async () => {
+            parseShard(tampered);
+          },
+          'parseShard unexpectedly accepted tampered embedded manifest'
+        );
+      },
+    },
+    {
+      name: 'restore strict policy requires trusted signature',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('strict-authn');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'strict.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
+        const parsed = shardBytes.map((bytes) => parseShard(bytes));
+
+        await expectFailure(
+          () => restoreFromShards(parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { requireTrustedSignature: true },
+          }),
+          'restore unexpectedly allowed strict trusted-signature mode without signatures'
+        );
+      },
+    },
+    {
+      name: 'restore rejects duplicate shard indices',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('duplicate-index');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'dup.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
+        const parsed = [
+          parseShard(shardBytes[0]),
+          parseShard(shardBytes[0]),
+          parseShard(shardBytes[1]),
+          parseShard(shardBytes[2]),
+        ];
+
+        await expectFailure(
+          () => restoreFromShards(parsed, { onLog: () => {}, onError: () => {} }),
+          'restore unexpectedly accepted duplicate shard indices'
+        );
       },
     },
     {
@@ -245,7 +395,8 @@ function buildCases() {
         const payload = textBytes('qcont-too-many-errors');
         const encrypted = await encryptFile(payload, pair.publicKey, 'qcont-fail.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const qconts = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const qconts = split.shards;
         const shardBytes = await Promise.all(qconts.map((shard) => blobToBytes(shard.blob)));
 
         const subset = shardBytes.slice(0, 4).map((bytes) => bytes.slice());
@@ -268,6 +419,10 @@ function buildCases() {
         const header = parseQencHeader(encryptedBytes);
         assert(header.metadata.aead_mode === 'per-chunk-aead', 'expected per-chunk-aead mode');
         assert(header.metadata.chunkCount >= 2, 'expected chunkCount >= 2 for chunked payload');
+        assert(header.metadata.noncePolicyId === NONCE_POLICY_PER_CHUNK_V1, 'per-chunk noncePolicyId mismatch');
+        assert(header.metadata.nonceMode === NONCE_MODE_KMAC_CTR32, 'per-chunk nonceMode mismatch');
+        assert(header.metadata.counterBits === 32, 'per-chunk counterBits mismatch');
+        assert(header.metadata.maxChunkCount === 0xffffffff, 'per-chunk maxChunkCount mismatch');
 
         const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, pair.secretKey);
         const decrypted = await blobToBytes(decryptedBlob);
