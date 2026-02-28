@@ -9,8 +9,9 @@
 * **Generate** 3168‑byte secret key (`secretKey.qkey`) & 1568-byte public key (`publicKey.qkey`) for ML-KEM-1024 post-quantum key encapsulation algorithm.
 * **Encrypt** client-side arbitrary files using hybrid cryptography. In this approach, the ML-KEM-1024 securely negotiates a symmetric key between the sides, which is then used by AES-256-GCM to directly encrypt the file data.
 * **Decrypt** `.qenc` containers created by this tool.
-* **Split** `.qenc` cryptocontainers with `.qkey` private keys into multiple `.qcont` shards. You choose total shards n and RS data k; threshold t is computed as `t = k + (n-k)/2`. With fewer than t shards, no information about the original secret can be retrieved.
-* **Restore** a `.qenc` container and the private `.qkey` from a sufficient number of `.qcont` shards (>= t).
+* **Split** `.qenc` cryptocontainers with `.qkey` private keys into multiple `.qcont` shards and export canonical `*.qvmanifest.json`. You choose total shards n and RS data k; threshold t is computed as `t = k + (n-k)/2`. With fewer than t shards, no information about the original secret can be retrieved.
+* **Restore** from a single input set of files (`.qcont` + optional `.qvmanifest.json` + optional `.qsig/.sig/.pqpk`) and reconstruct `.qenc` + private `.qkey` from a sufficient number of shards (>= t).
+* **Verify** detached manifest signatures from external signer apps (Quantum Signer `.qsig`, Stellar WebSigner `.sig`) with optional trusted identity pinning.
 * **Verifies** file integrity using SHA3-512 hash sum and provides process logs to track operations.
 * All cryptographic operations are performed directly in the client's browser, ensuring the confidentiality of user data.
 
@@ -131,8 +132,15 @@ graph TB
   "KDF":"KMAC256",
   "AEAD":"AES-256-GCM",
   "fmt":"QVv1-4-0",
+  "cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v1",
+  "kdfTreeId":"QV-KDF-TREE-v1",
   "aead_mode":"single-container-aead | per-chunk-aead",
-  "iv_strategy":"single-iv | kmac-derive-v1",
+  "iv_strategy":"single-iv | kmac-prefix64-ctr32-v2",
+  "noncePolicyId":"QV-GCM-RAND96-v1 | QV-GCM-KMACPFX64-CTR32-v2",
+  "nonceMode":"random96 | kmac-prefix64-ctr32",
+  "counterBits":0 | 32,
+  "maxChunkCount":1 | 4294967295,
+  "aadPolicyId":"QV-AAD-HEADER-CHUNK-v1",
   "hasKeyCommitment": true,
   "payloadFormat":"wrapped-v1",
   "payloadLength": 12345,
@@ -170,6 +178,9 @@ AAD:
 | MAGIC_SHARD       | 4 bytes                   | ASCII `QVC1`                                         |
 | metaLen           | 2 bytes (Uint16 BE)       |                                                      |
 | metaJSON          | metaLen bytes (UTF‑8)     | RS params, counts, hashes, etc.                      |
+| manifestLen       | 4 bytes (Uint32 BE)       | length of embedded canonical archive manifest        |
+| manifestBytes     | manifestLen bytes         | full RFC-8785 canonical `*.qvmanifest.json` bytes    |
+| manifestDigest    | 64 bytes                  | SHA3-512(manifestBytes)                               |
 | encapBlobLen      | 4 bytes (Uint32 BE)       |                                                      |
 | encapBlob         | encapBlobLen bytes        | ML‑KEM ciphertext                                    |
 | containerNonce    | 12 bytes                  | from `.qenc` header                                  |
@@ -188,9 +199,16 @@ AAD:
 ```json
 {
   "containerId":"<SHA3-512 hex of .qenc header>",
-  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-3"},
+  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-4"},
   "aead_mode":"single-container | per-chunk",
-  "iv_strategy":"single-iv | kmac-derive-v1",
+  "iv_strategy":"single-iv | kmac-prefix64-ctr32-v2",
+  "cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v1",
+  "kdfTreeId":"QV-KDF-TREE-v1",
+  "noncePolicyId":"QV-GCM-RAND96-v1 | QV-GCM-KMACPFX64-CTR32-v2",
+  "nonceMode":"random96 | kmac-prefix64-ctr32",
+  "counterBits":0 | 32,
+  "maxChunkCount":1 | 4294967295,
+  "aadPolicyId":"QV-AAD-HEADER-CHUNK-v1",
   "n":5,"k":3,"m":2,"t":4,
   "rsEncodeBase":255,
   "chunkSize":8388608,
@@ -206,6 +224,8 @@ AAD:
   "perFragmentSize":789,
   "hasKeyCommitment":true,
   "keyCommitmentHex":"<hex>",
+  "hasEmbeddedManifest":true,
+  "manifestDigest":"<SHA3-512(manifestBytes)>",
   "shareCommitments":["<hex>", "..."],
   "fragmentBodyHashes":["<hex>", "..."],
   "timestamp":"<ISO8601 time>"
@@ -213,6 +233,23 @@ AAD:
 ```
 
 *Note: for `wrapped-v1`, `payloadLength` refers to the encrypted payload size (private metadata + file bytes). The original file length is stored inside the private metadata.*
+
+### Archive manifest (`.qvmanifest.json`)
+Canonical manifest is generated at split stage and serialized as strict RFC-8785 JSON (JCS). The same canonical bytes are:
+* exported as `*.qvmanifest.json`,
+* embedded into every `.qcont` shard,
+* used as detached-signature input for `.qsig/.sig`.
+
+Key contract points:
+* Primary authenticity anchor is `qenc.qencHash` with explicit algorithm `qenc.hashAlg = "SHA3-512"` (hash over full `.qenc` bytes).
+* `qenc.containerId` is a secondary identifier (`containerIdRole = "secondary-header-id"`, `containerIdAlg = "SHA3-512(qenc-header-bytes)"`).
+* Nonce policy is mode-bound and explicit: `noncePolicyId`, `nonceMode`, `counterBits`, `maxChunkCount`.
+* Per-chunk nonce contract is fail-closed: `chunkIndex` is uint32, `0 <= chunkIndex < chunkCount <= maxChunkCount <= 4294967295`.
+* `shardBinding` is explicitly defined and non-recursive:
+  * `bodyDefinitionId = "QV-QCONT-SHARDBODY-v1"`
+  * shard body hash input includes fragment stream payload only (`len32-prefixed` RS fragment stream),
+  * excludes header, embedded manifest/digest, and external signatures,
+  * optional Shamir share commitments commit to raw share bytes.
 
 ### Encapsulation & KDF
 1. Receiver generates ML‑KEM‑1024 key pair (public `publicKey.qkey` 1568 B, private `secretKey.qkey` 3168 B).
@@ -222,7 +259,9 @@ AAD:
    - `Kraw = KMAC256(sharedSecret, (kdfSalt || metaBytes), 32, customization = domainStrings.kdf)`
    - `Kenc = KMAC256(Kraw, [1], 32, customization='quantum-vault:kenc:v1')`
    - `Kiv  = KMAC256(Kraw, [2], 32, customization='quantum-vault:kiv:v1')`
-   - Import `Kenc` as AES‑GCM key. Per‑chunk IV_i = first 12 bytes of `KMAC256(Kiv, (containerNonce || uint32_be(chunkIndex)), 16, customization=domainStrings.iv)`.
+   - Import `Kenc` as AES‑GCM key. For per-chunk mode:
+     - `prefix64 = KMAC256(Kiv, containerNonce, 8, customization=domainStrings.iv)`
+     - `IV_i = prefix64 || uint32_be(chunkIndex)` (`iv_strategy = kmac-prefix64-ctr32-v2`).
    - Key commitment: `keyCommitment = SHA3-256(Kenc)` (stored in header for QVv1-4-0+).
 
 ### Encrypt flow (sender)
@@ -232,14 +271,14 @@ AAD:
 3. Produce `.qenc` with header (including key commitment) + ciphertext.
 * Per-chunk AEAD (big files):
 1. Build payload as `wrapped-v1`.
-2. Break payload into chunks of `chunkSize`. For each chunk index i compute per‑chunk IV via Kiv as key to KMAC256 for IV derivation.
+2. Break payload into chunks of `chunkSize`. For each chunk index i compute `IV_i = prefix64 || uint32_be(i)` with `prefix64 = KMAC256(Kiv, containerNonce, 8, customization=domainStrings.iv)`.
 3. Encrypt each chunk with AES‑GCM using `AAD_i = header || uint32_be(i) || uint32_be(plainLen_i)`.
 4. Concatenate all `cipherChunk_i` to form the ciphertext stream in `.qenc`.
 
 ### Decrypt flow (recipient)
 1. Read container bytes and ensure length >= minimal header size.
 2. Parse header fields (MAGIC, keyLen, encapsulatedKey, iv, salt, metaLen, metaJson). Validate `metaLen` and `keyLen` bounds.
-3. Validate metaJson KDF and KEM.
+3. Validate strict policy metadata (`cryptoProfileId`, domain strings, nonce policy/mode/bounds, AEAD mode).
 4. `sharedSecret = ml_kem1024.decapsulate(encapsulatedKey, secretKey)`; normalize to `Uint8Array`.
 5. Derive AES key with `KMAC256(sharedSecret, salt || metaBytes, 32, { customization })`. Import key. Zeroize `derived` and `sharedSecret`.
 6. Verify `keyCommitment` if present (QVv1-4-0+) before decryption.
@@ -248,8 +287,8 @@ AAD:
 9. Validate decrypted file by computing `SHA3-512(fileBytes)` and comparing to `privateMeta.fileHash`. If equal, accept; otherwise, warn about integrity mismatch.
 
 ### Sharding (split / combine)
-* Split (.qenc → .qcont): parse the `.qenc` header, Shamir‑split the ML‑KEM private key into `n` shares with threshold `t = k + (n-k)/2`, and Reed‑Solomon split the ciphertext into `n` fragments tolerating up to `(n-k)/2` erasures. Each `.qcont` shard stores one Shamir share plus its fragment stream, along with share commitments and fragment body hashes for integrity.
-* Combine (.qcont → .qenc + .qkey): collect at least `t` valid shards, verify share commitments and fragment hashes (if present), reconstruct the private key via Shamir, reconstruct ciphertext via RS, rebuild the `.qenc` header (including key commitment if present), and verify SHA3‑512 hashes for both the container and private key.
+* Split (.qenc → .qcont): parse the `.qenc` header, Shamir‑split the ML‑KEM private key into `n` shares with threshold `t = k + (n-k)/2`, and Reed‑Solomon split the ciphertext into `n` fragments tolerating up to `(n-k)/2` erasures. Each `.qcont` shard stores one Shamir share, fragment stream, and embedded canonical archive manifest + manifest digest.
+* Combine (.qcont → .qenc + .qkey): parse all provided files, select shard cohort deterministically by verified manifest digest (no “largest cohort wins”), verify commitments/hashes, reconstruct private key via Shamir, reconstruct ciphertext via RS, rebuild `.qenc`, and verify `qencHash` from manifest before decrypt path is allowed.
 
 ------------
 
