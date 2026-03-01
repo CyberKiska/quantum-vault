@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Quantum Vault</title>
   <link rel="stylesheet" href="%BASE_PATH%style.css">
@@ -65,7 +67,7 @@
               <h3>Select files to protect</h3>
               <p>Drag & drop or click to select</p>
               <input type="file" id="liteFilesInput" multiple>
-              <div id="liteFilesList" class="files-list" style="display: none;"></div>
+              <div id="liteFilesList" class="files-list initially-hidden"></div>
             </div>
             
             <div class="config-area">
@@ -74,7 +76,7 @@
                    <span class="status-icon">🔑</span>
                    <span class="status-text">Generating keys...</span>
                  </div>
-                 <button id="liteDownloadKeysBtn" class="secondary-btn small-btn" style="display: none;">
+                 <button id="liteDownloadKeysBtn" class="secondary-btn small-btn initially-hidden">
                    📥 Backup Keys
                  </button>
               </div>
@@ -101,7 +103,7 @@
         </div>
 
         <!-- Lite View: Restore -->
-        <div id="liteViewRestore" class="view-container" style="display: none;">
+        <div id="liteViewRestore" class="view-container initially-hidden">
            <div class="visual-pipeline-container">
              <div class="pipeline-step step-split">
                <span class="icon">🧩</span>
@@ -134,7 +136,7 @@
                 <label class="strategy-option"><input type="checkbox" id="liteRestoreRequireTrustedSig"> Require trusted signature</label>
               </div>
             </details>
-            <div id="shardsStatus" class="shards-status" style="display: none;">
+            <div id="shardsStatus" class="shards-status initially-hidden">
               <span id="shardsStatusText">0 shards selected</span>
             </div>
             <button id="liteRestoreBtn" class="primary-btn big-btn" disabled>♻️ Restore Original Files</button>
@@ -143,7 +145,7 @@
       </section>
 
       <!-- PRO MODE -->
-      <section id="proMode" class="mode-section" style="display: none;">
+      <section id="proMode" class="mode-section initially-hidden">
         <div class="mode-nav">
           <button id="proTabIdentity" class="nav-tab active"><span class="step-num">1</span> Key Management</button>
           <button id="proTabEncryption" class="nav-tab"><span class="step-num">2</span> Encryption</button>
@@ -160,9 +162,9 @@
                <button id="advancedEntropyBtn" class="secondary-btn">🎲 Collect Advanced Entropy</button>
             </div>
             
-            <div id="entropyStatus" class="entropy-status" style="display: none;">
+            <div id="entropyStatus" class="entropy-status initially-hidden">
               <span id="entropyText">Collecting entropy...</span>
-              <div class="progress-bar-bg"><div id="entropyBar" class="progress-bar-fill" style="width: 0%"></div></div>
+              <div class="progress-bar-bg"><div id="entropyBar" class="progress-bar-fill"></div></div>
               <small class="entropy-info">Privacy-preserving collection: mouse/keyboard timing, window resizing. Local processing only.</small>
             </div>
           </div>
@@ -177,14 +179,14 @@
         </div>
 
         <!-- Pro View: Encryption -->
-        <div id="proViewEncryption" class="view-container" style="display: none;">
+        <div id="proViewEncryption" class="view-container initially-hidden">
           <div class="panel">
             <h3>File Operations</h3>
             <div class="control-group">
               <label>Input Files <input type="file" id="dataFileInput" multiple></label>
-              <div id="proFilesList" class="files-list" style="display: none;"></div>
+              <div id="proFilesList" class="files-list initially-hidden"></div>
             </div>
-            <div id="proEncStrategyGroup" class="strategy-group" style="display: none;">
+            <div id="proEncStrategyGroup" class="strategy-group initially-hidden">
               <span class="strategy-title">Container strategy</span>
               <label class="strategy-option">
                 <input type="radio" id="proEncStrategyPack" name="proEncStrategy" value="pack" checked>
@@ -206,7 +208,7 @@
         </div>
 
         <!-- Pro View: Distribution -->
-        <div id="proViewDistribution" class="view-container" style="display: none;">
+        <div id="proViewDistribution" class="view-container initially-hidden">
            <div class="panel">
             <h3>Sharding Configuration (SSS + RS)</h3>
             <div class="control-group">
@@ -218,7 +220,7 @@
                 <label>Total Shards (n) <input type="number" id="rsN" value="5" min="3"></label>
                 <label>Data Shards (k) <input type="number" id="rsK" value="3" min="2"></label>
             </div>
-            <div style="background: var(--bg-input); padding: var(--space-sm); border-radius: var(--radius-sm); margin-top: var(--space-sm);">
+            <div class="rs-info-box">
                 <small id="rsText" class="info-text rs-summary">Params info...</small>
                 <div id="rsConstraints" class="rs-constraints">
                   <div id="rsRuleN" class="constraint-item">n &gt;= 5</div>
@@ -258,7 +260,7 @@
         </div>
 
         <!-- Pro View: Restore (New) -->
-        <div id="proViewRestore" class="view-container" style="display: none;">
+        <div id="proViewRestore" class="view-container initially-hidden">
            <div class="panel">
             <h3>Reconstruct Container</h3>
             <div class="control-group">
@@ -273,7 +275,7 @@
                 <label class="strategy-option"><input type="checkbox" id="restoreRequireTrustedSig"> Require trusted signature</label>
               </div>
             </details>
-            <div id="proShardsStatus" class="shards-status" style="display: none;">
+            <div id="proShardsStatus" class="shards-status initially-hidden">
               <span id="proShardsStatusText">0 shards selected</span>
             </div>
             <button id="restoreQcontBtn" class="action-btn" disabled>♻️ Restore</button>
@@ -294,7 +296,8 @@
     </footer>
   </div>
 
-  <script src="%BASE_PATH%third-party/erasure.js"></script>
+  <script src="%BASE_PATH%third-party/erasure.js"
+          integrity="sha384-rKyZ/aEteEXCmx6n1CCT2nh5UiYpYAxmPIYVWMyWYIBv2WC7KyxutkxkXrEjTpa4"></script>
   <script type="module" src="%BASE_PATH%assets/main.js"></script>
 </body>
 </html>

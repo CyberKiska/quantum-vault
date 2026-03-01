@@ -69,9 +69,10 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, customiza
     const Kiv = kmac256(Kraw, new Uint8Array([2]), 32, { customization: 'quantum-vault:kiv:v1' });
     
     // Import AES key for Web Crypto API
+    // Slice the exact region: Kenc may be a view with non-zero byteOffset
     const aesKey = await crypto.subtle.importKey(
         'raw', 
-        Kenc.buffer, 
+        Kenc.buffer.slice(Kenc.byteOffset, Kenc.byteOffset + Kenc.byteLength), 
         { name: 'AES-GCM' }, 
         false, 
         ['encrypt', 'decrypt']

@@ -655,6 +655,7 @@ input[type=range] {
 
 .progress-bar-fill {
   height: 100%;
+  width: 0;
   background: var(--accent-safe);
   transition: width 0.3s;
 }
@@ -910,6 +911,17 @@ input[type=range] {
   color: white;
 }
 
+
+/* Utility: initial-hide elements without inline style (CSP compliance) */
+.initially-hidden { display: none; }
+
+/* RS config info box (replaces inline style) */
+.rs-info-box {
+  background: var(--bg-input);
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-sm);
+}
 
 @media (max-width: 600px) {
   .config-controls,

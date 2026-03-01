@@ -18,7 +18,7 @@ import {
     IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
 } from './aes.js';
 import { toUint8, toHex } from '../../utils.js';
-import { CHUNK_SIZE, FORMAT_VERSION } from './constants.js';
+import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE } from './constants.js';
 import { buildQencHeader, parseQencHeader } from './qenc/format.js';
 import {
     DEFAULT_CRYPTO_PROFILE,
@@ -30,7 +30,7 @@ import {
 // Re-export utilities and sub-modules for convenience
 export { toHex, toUint8 } from '../../utils.js';
 export { generateKeyPair as generateMLKEMKeyPair } from './mlkem.js';
-export { CHUNK_SIZE, MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION, KDF_DOMAIN_V1, IV_DOMAIN_V1 } from './constants.js';
+export { CHUNK_SIZE, MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION, KDF_DOMAIN_V1, IV_DOMAIN_V1, MAX_FILE_SIZE } from './constants.js';
 
 /**
  * Generate ML-KEM key pair with enhanced entropy
@@ -64,6 +64,13 @@ export async function hashBytes(bytes) {
  * @returns {Promise<Blob>} Encrypted container blob
  */
 export async function encryptFile(fileBytes, publicKey, originalFilename) {
+    if (!(fileBytes instanceof Uint8Array) || fileBytes.length === 0) {
+        throw new Error('fileBytes must be a non-empty Uint8Array');
+    }
+    if (fileBytes.length > MAX_FILE_SIZE) {
+        throw new Error(`File size ${fileBytes.length} exceeds maximum allowed size (${MAX_FILE_SIZE} bytes)`);
+    }
+
     // Step 1: KEM Encapsulation (FIPS 203)
     const { encapsulatedKey, sharedSecret } = await encapsulate(publicKey);
     
@@ -205,6 +212,12 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
  * @returns {Promise<{decryptedBlob: Blob, metadata: object}>} Decrypted file and metadata
  */
 export async function decryptFile(containerBytes, secretKey) {
+    const warnings = [];
+
+    if (!(containerBytes instanceof Uint8Array) || containerBytes.length === 0) {
+        throw new Error('containerBytes must be a non-empty Uint8Array');
+    }
+
     // Step 1: Parse header
     const {
         header,
@@ -239,6 +252,11 @@ export async function decryptFile(containerBytes, secretKey) {
             clearKeys(sharedSecret, Kraw, Kenc, Kiv);
             throw new Error('Key commitment verification failed. Container may be corrupted or tampered with.');
         }
+    } else if (metadata.fmt === FORMAT_VERSION) {
+        warnings.push(
+            `Container format ${FORMAT_VERSION} should include a key commitment (SHA3-256 of Kenc) ` +
+            'but none was found. Proceeding without key-commitment protection.'
+        );
     }
     
     try {
@@ -305,7 +323,7 @@ export async function decryptFile(containerBytes, secretKey) {
             );
             const privateMetaLen = payloadDv.getUint32(0, false);
             
-            if (privateMetaLen <= 0 || privateMetaLen > decryptedPayload.length - 4) {
+            if (privateMetaLen < 1 || privateMetaLen > decryptedPayload.length - 4) {
                 throw new Error('Invalid private metadata length in decrypted payload');
             }
             
@@ -313,13 +331,17 @@ export async function decryptFile(containerBytes, secretKey) {
             const privateMeta = JSON.parse(new TextDecoder().decode(privateMetaBytes));
             fileBytes = decryptedPayload.subarray(4 + privateMetaLen);
             
-            // Merge private metadata into returned metadata for caller
             mergedMetadata = { ...metadata, ...privateMeta };
         } else {
             throw new Error(`Unsupported payload format: ${metadata.payloadFormat ?? 'unknown'}`);
         }
         
-        return { decryptedBlob: new Blob([fileBytes]), metadata: mergedMetadata };
+        // Copy fileBytes before zeroizing decryptedPayload
+        const fileBytesOut = new Uint8Array(fileBytes.length);
+        fileBytesOut.set(fileBytes);
+        decryptedPayload.fill(0);
+        
+        return { decryptedBlob: new Blob([fileBytesOut]), metadata: mergedMetadata, warnings };
         
     } finally {
         // Clear sensitive material

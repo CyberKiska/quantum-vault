@@ -39,15 +39,18 @@ export async function generateKeyPair(options = {}) {
 }
 
 // Encapsulate using ML-KEM-1024 public key
+// noble-post-quantum v0.5.x API: { cipherText, sharedSecret }
 export async function encapsulate(publicKey) {
     const result = await ml_kem1024.encapsulate(publicKey);
     
-    // Normalize result (lib versions differ in field names)
-    const encapsulatedKey = result.cipherText || result.ciphertext || result.ct;
-    const sharedSecret = result.sharedSecret || result.ss;
+    const encapsulatedKey = result.cipherText;
+    const sharedSecret = result.sharedSecret;
     
-    if (!encapsulatedKey || !sharedSecret) {
-        throw new Error('KEM encapsulation failed: result is missing required fields.');
+    if (!(encapsulatedKey instanceof Uint8Array) || !(sharedSecret instanceof Uint8Array)) {
+        throw new Error(
+            'KEM encapsulation failed: unexpected API response. ' +
+            'Verify noble-post-quantum version compatibility (expected v0.5.x).'
+        );
     }
     
     return {

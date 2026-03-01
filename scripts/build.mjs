@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,21 @@ export async function buildProject({ minify = true } = {}) {
 
   await rm(distDir, { recursive: true, force: true });
   await mkdir(assetsDir, { recursive: true });
+
+  // Verify third-party erasure.js integrity before build
+  const ERASURE_JS_SHA256 = '83a5c2789808cc4f0236e3d184cc160a0e995f105094d844c0fe813bab069c3d';
+  const erasurePath = path.join(publicDir, 'third-party', 'erasure.js');
+  const erasureBytes = await readFile(erasurePath);
+  const erasureHash = createHash('sha256').update(erasureBytes).digest('hex');
+  if (erasureHash !== ERASURE_JS_SHA256) {
+    throw new Error(
+      `Third-party erasure.js integrity check failed.\n` +
+      `  Expected SHA-256: ${ERASURE_JS_SHA256}\n` +
+      `  Got:             ${erasureHash}\n` +
+      `  File: ${erasurePath}`
+    );
+  }
+  console.log(`Verified erasure.js integrity (SHA-256: ${erasureHash.slice(0, 16)}…)`);
 
   await build({
     entryPoints: [path.join(srcDir, 'main.js')],

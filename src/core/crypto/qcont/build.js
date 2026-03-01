@@ -6,8 +6,14 @@ import { parseQencHeader } from '../qenc/format.js';
 import { QCONT_FORMAT_VERSION } from '../constants.js';
 import { buildArchiveManifest, canonicalizeArchiveManifest } from '../manifest/archive-manifest.js';
 import { DEFAULT_CRYPTO_PROFILE, getNonceContractForAeadMode } from '../policy.js';
+import { decapsulate } from '../mlkem.js';
+import { deriveKeyWithKmac, verifyKeyCommitment, clearKeys } from '../aes.js';
 
 export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
+    if (typeof window === 'undefined' || !window.erasure?.split || !window.erasure?.recombine) {
+        throw new Error('Reed-Solomon runtime (window.erasure) is not available. Ensure erasure.js is loaded.');
+    }
+
     const formatVersion = QCONT_FORMAT_VERSION;
 
     const { n, k } = params;
@@ -28,6 +34,30 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
     const meta = metadata;
     const keyCommitment = storedKeyCommitment;
     const ciphertext = qencBytes.subarray(offset);
+
+    // Verify the provided private key matches this container before splitting
+    if (keyCommitment) {
+        const ds = meta.domainStrings;
+        let trialSharedSecret;
+        try {
+            trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
+            const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(
+                trialSharedSecret, kdfSalt, metaBytes, ds.kdf
+            );
+            const keyMatch = verifyKeyCommitment(Kenc, keyCommitment);
+            clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
+            if (!keyMatch) {
+                throw new Error(
+                    'Private key does not match this .qenc container (key commitment mismatch). ' +
+                    'Ensure you are using the correct secretKey.qkey for this container.'
+                );
+            }
+        } catch (e) {
+            if (trialSharedSecret instanceof Uint8Array) trialSharedSecret.fill(0);
+            if (e.message.includes('does not match')) throw e;
+            throw new Error(`Key verification failed: ${e.message}`);
+        }
+    }
 
     const ds = meta.domainStrings;
     if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
