@@ -86,6 +86,16 @@ export async function parseQcontShardPreviewFile(file) {
 
 // Assess whether selected .qcont files are ready for restore based on metadata only.
 
+function classifyNonShardFile(file) {
+    const name = String(file?.name || '').toLowerCase();
+    if (name.endsWith('.qsig')) return 'signature';
+    if (name.endsWith('.pqpk')) return 'pubkey';
+    if (name.endsWith('.qvmanifest.json')) return 'manifest';
+    if (name.endsWith('.sig')) return 'signature';
+    if (name.endsWith('.json')) return 'signature';
+    return 'other';
+}
+
 export async function assessShardSelection(files) {
     if (!files.length) {
         return { state: 'empty', ready: false };
@@ -93,7 +103,7 @@ export async function assessShardSelection(files) {
 
     const parsed = [];
     let parseErrors = 0;
-    let ignoredNonShard = 0;
+    const attachments = { signature: 0, manifest: 0, pubkey: 0, other: 0 };
     for (const file of files) {
         const lowerName = String(file?.name || '').toLowerCase();
         const explicitShardName = lowerName.endsWith('.qcont');
@@ -103,16 +113,18 @@ export async function assessShardSelection(files) {
             if (explicitShardName) {
                 parseErrors++;
             } else {
-                ignoredNonShard++;
+                attachments[classifyNonShardFile(file)]++;
             }
         }
     }
+
+    const totalAttachments = attachments.signature + attachments.manifest + attachments.pubkey;
 
     if (!parsed.length) {
         return {
             state: 'unknown',
             ready: false,
-            message: ignoredNonShard > 0
+            message: totalAttachments > 0
                 ? 'No valid .qcont shard files detected in the selected input.'
                 : 'Unable to read shard metadata from selected files.'
         };
@@ -162,13 +174,21 @@ export async function assessShardSelection(files) {
         : `Insufficient: ${uniqueCount}/${base.n} unique shards selected (need >=${base.t}).`;
 
     if (duplicateCount > 0) {
-        message += ` ${duplicateCount} duplicate shard(s) ignored.`;
+        message += ` ${duplicateCount} duplicate shard(s) skipped.`;
     }
     if (parseErrors > 0) {
-        message += ` ${parseErrors} unreadable file(s) ignored.`;
+        message += ` ${parseErrors} unreadable shard file(s).`;
     }
-    if (ignoredNonShard > 0) {
-        message += ` ${ignoredNonShard} non-shard attachment(s) ignored.`;
+
+    const verificationParts = [];
+    if (attachments.signature > 0) verificationParts.push(`${attachments.signature} signature(s)`);
+    if (attachments.manifest > 0) verificationParts.push(`${attachments.manifest} manifest`);
+    if (attachments.pubkey > 0) verificationParts.push(`${attachments.pubkey} public key(s)`);
+    if (verificationParts.length > 0) {
+        message += ` Verification: ${verificationParts.join(', ')}.`;
+    }
+    if (attachments.other > 0) {
+        message += ` ${attachments.other} unrecognized file(s) skipped.`;
     }
 
     return {

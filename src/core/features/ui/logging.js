@@ -15,6 +15,20 @@ export function log(msg, options = {}) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 
+// Log success message to UI console (green)
+export function logSuccess(msg, options = {}) {
+    const { elementId = 'log' } = options;
+    const logEl = document.getElementById(elementId);
+    if (!logEl) return;
+
+    const span = document.createElement('span');
+    span.className = 'success';
+    span.textContent = `[${formatTimestamp()}] ${msg}`;
+    logEl.appendChild(span);
+    logEl.appendChild(document.createTextNode('\n'));
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
 // Log error message to UI console
 export function logError(err, options = {}) {
     const { elementId = 'log', isLiteMode = true } = options;
@@ -145,19 +159,19 @@ export function logRestorationSuccess(filename, fileSize, encryptionTime, integr
             const displayName = isMeaningfulFilename(filename) ? filename :
                 (filename.includes('.') ?
                     `${shortenHash(filename.split('.')[0])}.${filename.split('.').pop()}` : filename);
-            log(`✅ Restoration complete - files have been decrypted and restored. Original file: ${displayName} (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
+            logSuccess(`Restoration complete - files have been decrypted and restored. Original file: ${displayName} (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
         } else {
-            logError('⚠️ File integrity check failed - hashes do not match', { elementId, isLiteMode });
+            logError('File integrity check failed - hashes do not match', { elementId, isLiteMode });
         }
     } else {
         if (integrityOk) {
-            log('✅ Container restoration completed successfully', { elementId, isLiteMode });
+            logSuccess('Container restoration completed successfully', { elementId, isLiteMode });
             log(`Restored file: ${filename}`, { elementId, isLiteMode });
             log(`File size: ${fileSize.toLocaleString()} bytes`, { elementId, isLiteMode });
             log(`Original encryption time: ${encryptionTime}`, { elementId, isLiteMode });
-            log('✅ File integrity verification passed', { elementId, isLiteMode });
+            logSuccess('File integrity verification passed', { elementId, isLiteMode });
         } else {
-            logError('❌ File integrity verification failed', { elementId, isLiteMode });
+            logError('File integrity verification failed', { elementId, isLiteMode });
             log('The restored file may be corrupted or tampered with', { elementId, isLiteMode });
         }
     }
@@ -189,10 +203,10 @@ export function logOperation(operation, details, status, options = {}) {
             log(`⏳ ${operation}: ${details.message}`, { elementId, isLiteMode });
             break;
         case 'completed':
-            log(`✅ ${operation} completed successfully`, { elementId, isLiteMode });
+            logSuccess(`${operation} completed successfully`, { elementId, isLiteMode });
             break;
         case 'failed':
-            logError(`❌ ${operation} failed: ${details.error}`, { elementId, isLiteMode });
+            logError(`${operation} failed: ${details.error}`, { elementId, isLiteMode });
             break;
         default:
             log(`${operation}: ${details.message || ''}`, { elementId, isLiteMode });

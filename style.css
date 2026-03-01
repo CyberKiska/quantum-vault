@@ -763,6 +763,10 @@ input[type=range] {
   color: var(--accent-warn);
 }
 
+#log .success {
+  color: var(--accent-safe);
+}
+
 /* Responsive */
 /* Files list in dropzone */
 .files-list {
@@ -821,6 +825,37 @@ input[type=range] {
   color: var(--accent-danger);
   border: 1px solid var(--accent-danger);
 }
+
+/* Restore result panel */
+.restore-result-panel {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+.restore-result-panel h4 {
+  margin: 0 0 var(--space-sm);
+  font-size: 0.95rem;
+  font-family: var(--font-main);
+}
+.restore-result-panel.ok {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid var(--accent-safe);
+}
+.restore-result-panel.ok h4 { color: var(--accent-safe); }
+.restore-result-panel.fail {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--accent-danger);
+}
+.restore-result-panel.fail h4 { color: var(--accent-danger); }
+
+.restore-result-item {
+  padding: 2px 0;
+}
+.restore-result-item.ok { color: var(--accent-safe); }
+.restore-result-item.fail { color: var(--accent-danger); }
+.restore-result-item.warn { color: var(--accent-warn); }
 
 /* Operation warning/hint */
 .operation-warning {

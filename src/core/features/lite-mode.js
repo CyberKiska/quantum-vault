@@ -8,7 +8,7 @@ import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
 import { collectRestoreVerificationOptions } from '../crypto/qcont/restore-ui.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
-import { log, logError, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
+import { log, logError, logSuccess, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 
 // Global state for Lite mode
@@ -430,7 +430,51 @@ async function createLiteShards() {
     }
 }
 
-// Restore from shards (simplified) - uses shared core logic from qcont/restore.js
+function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
+    const panel = document.getElementById('liteRestoreResult');
+    if (!panel) return;
+
+    panel.replaceChildren();
+    panel.style.display = 'block';
+
+    const allOk = containerOk && decryptOk;
+
+    const header = document.createElement('h4');
+    header.textContent = 'Restore Result';
+    panel.appendChild(header);
+
+    const addItem = (ok, text, warn) => {
+        const item = document.createElement('div');
+        item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
+        item.textContent = `${warn ? '⚠' : (ok ? '✓' : '✗')} ${text}`;
+        panel.appendChild(item);
+    };
+
+    addItem(result.qencOk, `Container integrity${result.qencOk ? ' verified' : ' FAILED'}`);
+    addItem(result.qkeyOk, `Private key integrity${result.qkeyOk ? ' verified' : ' FAILED'}`);
+    if (containerOk) {
+        addItem(decryptOk, `Decryption & file integrity${decryptOk ? ' verified' : ' FAILED'}`);
+    }
+
+    const verification = result.authenticity?.verification;
+    if (verification) {
+        for (const item of verification.results || []) {
+            if (item.ok) {
+                const label = item.type === 'qsig'
+                    ? `${item.algorithm || 'PQ'} signature${item.trusted ? ' (trusted)' : ''}`
+                    : `${item.algorithm || 'Ed25519'} signature${item.trusted ? ' (trusted)' : ''}`;
+                addItem(true, label);
+            } else {
+                addItem(false, `Signature: ${item.error || 'verification failed'}`);
+            }
+        }
+    } else if ((result.authenticity?.warnings?.length || 0) > 0) {
+        addItem(false, 'No signatures verified (unsigned restore)', true);
+    }
+
+    panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
+}
+
 async function restoreLiteShards() {
     const shardsInput = document.getElementById('liteShardsInput');
     
@@ -446,7 +490,13 @@ async function restoreLiteShards() {
     }
     
     setButtonsDisabled(true);
-    updateLitePipeline('liteViewRestore', 'step-combine'); // Start: Combining
+    updateLitePipeline('liteViewRestore', 'step-combine');
+
+    const liteResultPanel = document.getElementById('liteRestoreResult');
+    if (liteResultPanel) {
+        liteResultPanel.style.display = 'none';
+        liteResultPanel.replaceChildren();
+    }
     
     try {
         const verificationOptions = await collectRestoreVerificationOptions('liteRestore', [...shardsInput.files]);
@@ -483,11 +533,11 @@ async function restoreLiteShards() {
             for (const item of verification.results || []) {
                 if (item.ok) {
                     if (item.type === 'sig') {
-                        log(`Signature OK: ${item.name} (${item.algorithm || 'Ed25519'}, signer ${item.signer || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
+                        logSuccess(`Signature OK: ${item.name} (${item.algorithm || 'Ed25519'}, signer ${item.signer || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
                     } else if (item.type === 'qsig') {
-                        log(`Signature OK: ${item.name} (${item.algorithm || 'PQ'}, fp ${item.signerFingerprintHex || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
+                        logSuccess(`Signature OK: ${item.name} (${item.algorithm || 'PQ'}, fp ${item.signerFingerprintHex || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
                     } else {
-                        log(`Signature OK: ${item.name}`, { isLiteMode: true });
+                        logSuccess(`Signature OK: ${item.name}`, { isLiteMode: true });
                     }
                 } else {
                     logWarning(`Signature failed: ${item.name} (${item.error || 'unknown error'})`, { isLiteMode: true });
@@ -502,6 +552,7 @@ async function restoreLiteShards() {
         
         if (!qencOk || !qkeyOk) {
             logError('Hash verification failed for container', { isLiteMode: true });
+            buildLiteRestoreResultPanel(result, false, false);
             return;
         }
         
@@ -513,6 +564,7 @@ async function restoreLiteShards() {
 
         if (!integrityOk) {
             logError('File integrity check failed - hashes do not match', { isLiteMode: true });
+            buildLiteRestoreResultPanel(result, true, false);
             return;
         }
 
@@ -546,7 +598,8 @@ async function restoreLiteShards() {
         const encryptionTime = metadata.timestamp || 'Unknown';
         logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
-        log('🎉 Container restored successfully', { isLiteMode: true });
+        logSuccess('Container restored successfully', { isLiteMode: true });
+        buildLiteRestoreResultPanel(result, true, true);
         
     } catch (error) {
         logError(`Restoration failed: ${error?.message ?? error}`, { isLiteMode: true });
