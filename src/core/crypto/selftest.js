@@ -615,6 +615,129 @@ function buildCases() {
       },
     },
     {
+      name: 'ADV: parseShard rejects empty input',
+      fn: async () => {
+        await expectFailure(
+          () => parseShard(new Uint8Array(0), { strict: true }),
+          'parseShard unexpectedly accepted empty Uint8Array'
+        );
+        await expectFailure(
+          () => parseShard(new Uint8Array(4), { strict: true }),
+          'parseShard unexpectedly accepted 4-byte Uint8Array'
+        );
+      },
+    },
+    {
+      name: 'ADV: parseShard rejects invalid magic bytes',
+      fn: async () => {
+        const garbage = createLargeDeterministicPayload(512);
+        await expectFailure(
+          () => parseShard(garbage, { strict: true }),
+          'parseShard unexpectedly accepted garbage bytes'
+        );
+      },
+    },
+    {
+      name: 'ADV: validatePublicKey rejects wrong-size keys',
+      fn: async () => {
+        const { validatePublicKey: vpk, validateSecretKey: vsk } = await import('./mlkem.js');
+        await expectFailure(
+          () => vpk(new Uint8Array(100)),
+          'validatePublicKey accepted wrong-size key'
+        );
+        await expectFailure(
+          () => vpk('not-a-uint8array'),
+          'validatePublicKey accepted non-Uint8Array'
+        );
+        await expectFailure(
+          () => vsk(new Uint8Array(100)),
+          'validateSecretKey accepted wrong-size key'
+        );
+      },
+    },
+    {
+      name: 'ADV: encryptFile rejects payload exceeding MAX_FILE_SIZE',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const fakeLargePayload = { length: MAX_FILE_SIZE + 1, [Symbol.iterator]: function*(){} };
+        await expectFailure(
+          () => encryptFile(fakeLargePayload, pair.publicKey, 'too-big.bin'),
+          'encryptFile unexpectedly accepted payload exceeding MAX_FILE_SIZE'
+        );
+      },
+    },
+    {
+      name: 'ADV: buildQcontShards rejects invalid RS params',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('bad-rs-params');
+        const qenc = await blobToBytes(await encryptFile(payload, pair.publicKey, 'rs.bin'));
+
+        await expectFailure(
+          () => buildQcontShards(qenc, pair.secretKey, { n: 1, k: 1 }),
+          'buildQcontShards accepted n=1, k=1'
+        );
+        await expectFailure(
+          () => buildQcontShards(qenc, pair.secretKey, { n: 3, k: 5 }),
+          'buildQcontShards accepted k > n'
+        );
+      },
+    },
+    {
+      name: 'ADV: qenc decrypt fails on truncated container',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('truncated-container-check');
+        const encrypted = await encryptFile(payload, pair.publicKey, 'trunc.bin');
+        const encryptedBytes = await blobToBytes(encrypted);
+        const truncated = encryptedBytes.slice(0, 64);
+
+        await expectFailure(
+          () => decryptFile(truncated, pair.secretKey),
+          'decryptFile unexpectedly succeeded on truncated container'
+        );
+      },
+    },
+    {
+      name: 'ADV: qenc chunked decrypt fails on swapped chunks',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
+        const encrypted = await encryptFile(payload, pair.publicKey, 'swap.bin');
+        const encBytes = await blobToBytes(encrypted);
+        const header = parseQencHeader(encBytes);
+        assert(header.metadata.chunkCount >= 2, 'need at least 2 chunks for swap test');
+
+        const headerEnd = header.headerLength;
+        const tagLen = 16;
+        const chunkCipherLen = CHUNK_SIZE + tagLen;
+        const chunk0 = encBytes.slice(headerEnd, headerEnd + chunkCipherLen);
+        const chunk1Start = headerEnd + chunkCipherLen;
+        const chunk1 = encBytes.slice(chunk1Start, chunk1Start + chunkCipherLen);
+
+        if (chunk0.length === chunkCipherLen && chunk1.length > 0) {
+          const swapped = encBytes.slice();
+          swapped.set(chunk1.slice(0, Math.min(chunk1.length, chunkCipherLen)), headerEnd);
+          swapped.set(chunk0, chunk1Start);
+
+          await expectFailure(
+            () => decryptFile(swapped, pair.secretKey),
+            'decryptFile unexpectedly succeeded with swapped chunks'
+          );
+        }
+      },
+    },
+    {
+      name: 'ADV: parseShard non-strict returns diagnostics instead of throw',
+      fn: async () => {
+        const garbage = createLargeDeterministicPayload(512);
+        const result = parseShard(garbage, { strict: false });
+        assert(Array.isArray(result.diagnostics?.errors), 'non-strict parseShard must return diagnostics.errors');
+        assert(result.diagnostics.errors.length > 0, 'non-strict parseShard must report errors for garbage input');
+        assert(!result.metaJSON, 'non-strict parseShard must not have metaJSON for garbage input');
+      },
+    },
+    {
       name: 'chunked split + restore end-to-end (per-chunk-aead)',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
