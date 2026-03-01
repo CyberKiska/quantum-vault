@@ -2,8 +2,8 @@
 
 // UI Components and Features
 import { initUI } from './core/features/ui/ui.js';
-import { initQcontBuildUI } from './core/crypto/qcont/build.js';
-import { initQcontRestoreUI } from './core/crypto/qcont/restore.js';
+import { initQcontBuildUI } from './core/crypto/qcont/build-ui.js';
+import { initQcontRestoreUI } from './core/crypto/qcont/restore-ui.js';
 import { initLiteMode } from './core/features/lite-mode.js';
 
 // Initialize the application

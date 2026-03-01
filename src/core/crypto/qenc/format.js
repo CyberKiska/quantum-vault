@@ -1,13 +1,13 @@
 // --- QENC Container Format Helpers ---
 
 import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from '../constants.js';
-import { bytesEqual } from '../../../utils.js';
+import { bytesEqual } from '../bytes.js';
 import {
     IV_STRATEGY_SINGLE_IV,
     IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
     NONCE_COUNTER_BITS_U32,
     NONCE_MAX_CHUNK_COUNT_U32,
-} from '../aes.js';
+} from '../aead.js';
 
 function writeUint16BE(value) {
     const out = new Uint8Array(2);

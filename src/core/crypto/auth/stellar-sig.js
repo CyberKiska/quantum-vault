@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { base64ToBytes, bytesEqual, bytesToHex, utf8ToBytes } from './bytes.js';
+import { base64ToBytes, bytesEqual, bytesToHex, utf8ToBytes } from '../bytes.js';
 
 const SIGNATURE_SCHEMA = 'stellar-file-signature/v1';
 const MODE_SEP53 = 'sep53';

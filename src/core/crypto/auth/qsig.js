@@ -5,7 +5,7 @@ import {
   slh_dsa_shake_192s,
   slh_dsa_shake_256s,
 } from '@noble/post-quantum/slh-dsa.js';
-import { asciiBytes, bytesEqual, bytesToHex, concatBytes } from './bytes.js';
+import { asciiBytes, bytesEqual, bytesToHex, concatBytes } from '../bytes.js';
 
 const MAGIC_SIG = asciiBytes('PQSG');
 const MAGIC_TBS = asciiBytes('QSTB');

@@ -1,4 +1,4 @@
-import { asciiBytes, bytesEqual } from './bytes.js';
+import { asciiBytes, bytesEqual } from '../bytes.js';
 import { verifyQsigAgainstBytes } from './qsig.js';
 import { verifyStellarSigAgainstBytes } from './stellar-sig.js';
 

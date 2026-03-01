@@ -1,5 +1,5 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { toHex } from '../../../utils.js';
+import { toHex } from '../bytes.js';
 import {
   AAD_POLICY_ID_V1,
   CRYPTO_PROFILE_ID_V1,

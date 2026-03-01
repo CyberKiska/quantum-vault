@@ -2,7 +2,7 @@
 
 import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import { generateEnhancedSeed, validateSeed } from './entropy.js';
-import { toUint8 } from '../../utils.js';
+import { toUint8 } from './bytes.js';
 
 // Generate ML-KEM-1024 key pair (optionally mixing user entropy)
 export async function generateKeyPair(options = {}) {

@@ -1,4 +1,5 @@
-import { CHUNK_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
+import { CHUNK_SIZE, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
+import { timingSafeEqual, fromHex } from './bytes.js';
 import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
@@ -10,7 +11,8 @@ import {
   IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
   NONCE_COUNTER_BITS_U32,
   NONCE_MAX_CHUNK_COUNT_U32,
-} from './aes.js';
+} from './aead.js';
+import { toHex } from './bytes.js';
 import {
   NONCE_MODE_KMAC_CTR32,
   NONCE_MODE_RANDOM96,
@@ -97,9 +99,7 @@ function createLargeDeterministicPayload(length) {
   return payload;
 }
 
-function bytesToHex(bytes) {
-  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
-}
+const bytesToHex = toHex;
 
 async function ensureRuntimeCrypto() {
   if (globalThis.crypto?.subtle) return;
@@ -543,6 +543,100 @@ function buildCases() {
           },
           'parseQencHeader unexpectedly accepted invalid magic'
         );
+      },
+    },
+    {
+      name: 'F10: buildQcontShards rejects mismatched private key',
+      fn: async () => {
+        const pairA = await generateKeyPair({ collectUserEntropy: false });
+        const pairB = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('wrong-key-at-build');
+        const encrypted = await encryptFile(payload, pairA.publicKey, 'f10.bin');
+        const qencBytes = await blobToBytes(encrypted);
+
+        await expectFailure(
+          () => buildQcontShards(qencBytes, pairB.secretKey, { n: 5, k: 3 }),
+          'buildQcontShards unexpectedly accepted mismatched private key'
+        );
+      },
+    },
+    {
+      name: 'F11: decryptFile returns warning when key commitment is absent',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('key-commitment-warning');
+        const encrypted = await encryptFile(payload, pair.publicKey, 'f11.bin');
+        const encBytes = await blobToBytes(encrypted);
+
+        const result = await decryptFile(encBytes, pair.secretKey);
+        assert(result.warnings instanceof Array, 'decryptFile must return a warnings array');
+
+        const header = parseQencHeader(encBytes);
+        assert(header.storedKeyCommitment instanceof Uint8Array, 'QVv1-4-0 must include key commitment');
+        assert(result.warnings.length === 0, 'no warnings expected when commitment is present');
+      },
+    },
+    {
+      name: 'F12: encryptFile rejects empty payload',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        await expectFailure(
+          () => encryptFile(new Uint8Array(0), pair.publicKey, 'empty.bin'),
+          'encryptFile unexpectedly accepted empty payload'
+        );
+      },
+    },
+    {
+      name: 'bytes.js: toHex/fromHex roundtrip',
+      fn: async () => {
+        const original = createLargeDeterministicPayload(64);
+        const hex = toHex(original);
+        assert(hex.length === 128, 'hex length mismatch');
+        const roundtripped = fromHex(hex);
+        assert(roundtripped.length === 64, 'fromHex length mismatch');
+        assert(timingSafeEqual(original, roundtripped), 'toHex/fromHex roundtrip mismatch');
+      },
+    },
+    {
+      name: 'bytes.js: timingSafeEqual rejects length mismatch and bitflip',
+      fn: async () => {
+        const a = createLargeDeterministicPayload(32);
+        const b = a.slice();
+        assert(timingSafeEqual(a, b), 'identical arrays must be equal');
+
+        const shorter = a.slice(0, 16);
+        assert(!timingSafeEqual(a, shorter), 'different lengths must not be equal');
+
+        const flipped = a.slice();
+        flipped[15] ^= 1;
+        assert(!timingSafeEqual(a, flipped), 'bitflipped array must not be equal');
+
+        assert(!timingSafeEqual(a, 'not-uint8array'), 'non-Uint8Array must return false');
+      },
+    },
+    {
+      name: 'chunked split + restore end-to-end (per-chunk-aead)',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 50000);
+        const encrypted = await encryptFile(payload, pair.publicKey, 'chunked-e2e.bin');
+        const qencBytes = await blobToBytes(encrypted);
+
+        const header = parseQencHeader(qencBytes);
+        assert(header.metadata.aead_mode === 'per-chunk-aead', 'expected per-chunk-aead');
+
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 7, k: 5 });
+        assert(split.shards.length === 7, 'expected 7 shards');
+
+        const shardBytes = await Promise.all(split.shards.map(s => blobToBytes(s.blob)));
+        const subset = shardBytes.slice(0, 6).map(b => parseShard(b));
+
+        const restored = await restoreFromShards(subset, { onLog: () => {}, onError: () => {} });
+        assert(restored.qencOk, 'chunked e2e: qenc hash mismatch');
+
+        const { decryptedBlob } = await decryptFile(restored.qencBytes, restored.privKey);
+        const decrypted = await blobToBytes(decryptedBlob);
+        assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'chunked e2e: payload mismatch');
       },
     },
   ];

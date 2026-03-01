@@ -2,8 +2,8 @@
 
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { generateKeyPair as generateMLKEMKeyPair, encapsulate, decapsulate } from './mlkem.js';
+import { deriveKeyWithKmac, clearKeys, computeKeyCommitment, verifyKeyCommitment } from './kdf.js';
 import {
-    deriveKeyWithKmac, 
     buildChunkAAD, 
     deriveChunkIvFromK, 
     assertPerChunkNonceContract,
@@ -11,13 +11,10 @@ import {
     decryptChunk,
     shouldUseChunkedEncryption,
     calculateChunkCount,
-    clearKeys,
-    computeKeyCommitment,
-    verifyKeyCommitment,
     IV_STRATEGY_SINGLE_IV,
     IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
-} from './aes.js';
-import { toUint8, toHex } from '../../utils.js';
+} from './aead.js';
+import { toUint8, toHex } from './bytes.js';
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE } from './constants.js';
 import { buildQencHeader, parseQencHeader } from './qenc/format.js';
 import {
@@ -28,7 +25,7 @@ import {
 } from './policy.js';
 
 // Re-export utilities and sub-modules for convenience
-export { toHex, toUint8 } from '../../utils.js';
+export { toHex, toUint8 } from './bytes.js';
 export { generateKeyPair as generateMLKEMKeyPair } from './mlkem.js';
 export { CHUNK_SIZE, MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION, KDF_DOMAIN_V1, IV_DOMAIN_V1, MAX_FILE_SIZE } from './constants.js';
 

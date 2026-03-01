@@ -4,7 +4,8 @@
 import { encryptFile, decryptFile, generateKeyPair, hashBytes } from '../crypto/index.js';
 import { buildQcontShards } from '../crypto/qcont/build.js';
 import { assessShardSelection } from '../crypto/qcont/preview.js';
-import { collectRestoreVerificationOptions, parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
+import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
+import { collectRestoreVerificationOptions } from '../crypto/qcont/restore-ui.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import { log, logError, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
