@@ -68,85 +68,96 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         throw new Error(`File size ${fileBytes.length} exceeds maximum allowed size (${MAX_FILE_SIZE} bytes)`);
     }
 
-    // Step 1: KEM Encapsulation (FIPS 203)
-    const { encapsulatedKey, sharedSecret } = await encapsulate(publicKey);
-    
-    // Step 2: Generate random values
-    const containerNonce = crypto.getRandomValues(new Uint8Array(12));
-    const kdfSalt = crypto.getRandomValues(new Uint8Array(16));
-    
-    // Step 3: Build private metadata (encrypted inside payload — no cleartext leakage)
-    const privateMeta = {
-        originalFilename: originalFilename || null,
-        timestamp: new Date().toISOString(),
-        fileHash: await hashBytes(fileBytes),
-        originalLength: fileBytes.length
-    };
-    const privateMetaBytes = new TextEncoder().encode(JSON.stringify(privateMeta));
-    
-    // Step 4: Wrap payload = [uint32be privateMetaLen][privateMetaJSON][fileBytes]
-    const payloadLength = 4 + privateMetaBytes.length + fileBytes.length;
-    const payload = new Uint8Array(payloadLength);
-    new DataView(payload.buffer).setUint32(0, privateMetaBytes.length, false);
-    payload.set(privateMetaBytes, 4);
-    payload.set(fileBytes, 4 + privateMetaBytes.length);
-    
-    // Step 5: Determine encryption mode
-    const isPerChunk = shouldUseChunkedEncryption(payloadLength);
-    const aeadMode = isPerChunk ? 'per-chunk-aead' : 'single-container-aead';
-    const chunkCount = isPerChunk ? calculateChunkCount(payloadLength) : 1;
-    assertChunkCountWithinPolicy(chunkCount, DEFAULT_CRYPTO_PROFILE, aeadMode);
-    
-    // Step 6: Create public metadata (cleartext header — no sensitive fields)
-    const policyFields = buildPolicyMetadataFields(DEFAULT_CRYPTO_PROFILE, aeadMode);
-    const domainStrings = policyFields.domainStrings;
-    
-    const meta = {
-        KEM: 'ML-KEM-1024',
-        KDF: 'KMAC256',
-        AEAD: 'AES-256-GCM',
-        aead_mode: aeadMode,
-        iv_strategy: isPerChunk ? IV_STRATEGY_KMAC_PREFIX64_CTR32_V2 : IV_STRATEGY_SINGLE_IV,
-        fmt: FORMAT_VERSION,
-        hasKeyCommitment: true,
-        payloadFormat: 'wrapped-v1',
-        payloadLength,
-        chunkSize: CHUNK_SIZE,
-        chunkCount,
-        ...policyFields,
-        domainStrings,
-    };
+    let sharedSecret = null;
+    let Kraw = null;
+    let Kenc = null;
+    let Kiv = null;
+    let privateMetaBytes = null;
+    let metaBytes = null;
+    let payload = null;
 
-    if (isPerChunk) {
-        assertPerChunkNonceContract({
-            chunkCount,
-            maxChunkCount: meta.maxChunkCount,
-            counterBits: meta.counterBits,
-            ivStrategy: meta.iv_strategy,
-        });
-    }
-    
-    const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
-    
-    // Step 7: Derive encryption keys (SP 800-185 KMAC256)
-    const { Kraw, Kenc, Kiv, aesKey } = await deriveKeyWithKmac(
-        sharedSecret, kdfSalt, metaBytes, domainStrings.kdf
-    );
-    
-    // Step 8: Compute key commitment — SHA3-256(Kenc)
-    // Prevents key-commitment attacks on AES-GCM (Albertini et al., USENIX 2020)
-    const keyCommitment = computeKeyCommitment(Kenc);
-    
-    // Step 9: Build full header including key commitment
-    const header = buildQencHeader({
-        encapsulatedKey,
-        containerNonce,
-        kdfSalt,
-        metaBytes,
-        keyCommitment
-    });
-    
     try {
+        // Step 1: KEM Encapsulation (FIPS 203)
+        const { encapsulatedKey, sharedSecret: encapsulatedSharedSecret } = await encapsulate(publicKey);
+        sharedSecret = encapsulatedSharedSecret;
+
+        // Step 2: Generate random values
+        const containerNonce = crypto.getRandomValues(new Uint8Array(12));
+        const kdfSalt = crypto.getRandomValues(new Uint8Array(16));
+
+        // Step 3: Build private metadata (encrypted inside payload — no cleartext leakage)
+        const privateMeta = {
+            originalFilename: originalFilename || null,
+            timestamp: new Date().toISOString(),
+            fileHash: await hashBytes(fileBytes),
+            originalLength: fileBytes.length
+        };
+        privateMetaBytes = new TextEncoder().encode(JSON.stringify(privateMeta));
+
+        // Step 4: Wrap payload = [uint32be privateMetaLen][privateMetaJSON][fileBytes]
+        const payloadLength = 4 + privateMetaBytes.length + fileBytes.length;
+        payload = new Uint8Array(payloadLength);
+        new DataView(payload.buffer).setUint32(0, privateMetaBytes.length, false);
+        payload.set(privateMetaBytes, 4);
+        payload.set(fileBytes, 4 + privateMetaBytes.length);
+
+        // Step 5: Determine encryption mode
+        const isPerChunk = shouldUseChunkedEncryption(payloadLength);
+        const aeadMode = isPerChunk ? 'per-chunk-aead' : 'single-container-aead';
+        const chunkCount = isPerChunk ? calculateChunkCount(payloadLength) : 1;
+        assertChunkCountWithinPolicy(chunkCount, DEFAULT_CRYPTO_PROFILE, aeadMode);
+
+        // Step 6: Create public metadata (cleartext header — no sensitive fields)
+        const policyFields = buildPolicyMetadataFields(DEFAULT_CRYPTO_PROFILE, aeadMode);
+        const domainStrings = policyFields.domainStrings;
+
+        const meta = {
+            KEM: 'ML-KEM-1024',
+            KDF: 'KMAC256',
+            AEAD: 'AES-256-GCM',
+            aead_mode: aeadMode,
+            iv_strategy: isPerChunk ? IV_STRATEGY_KMAC_PREFIX64_CTR32_V2 : IV_STRATEGY_SINGLE_IV,
+            fmt: FORMAT_VERSION,
+            hasKeyCommitment: true,
+            payloadFormat: 'wrapped-v1',
+            payloadLength,
+            chunkSize: CHUNK_SIZE,
+            chunkCount,
+            ...policyFields,
+            domainStrings,
+        };
+
+        if (isPerChunk) {
+            assertPerChunkNonceContract({
+                chunkCount,
+                maxChunkCount: meta.maxChunkCount,
+                counterBits: meta.counterBits,
+                ivStrategy: meta.iv_strategy,
+            });
+        }
+
+        metaBytes = new TextEncoder().encode(JSON.stringify(meta));
+
+        // Step 7: Derive encryption keys (SP 800-185 KMAC256)
+        const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, domainStrings.kdf);
+        Kraw = derived.Kraw;
+        Kenc = derived.Kenc;
+        Kiv = derived.Kiv;
+        const aesKey = derived.aesKey;
+
+        // Step 8: Compute key commitment — SHA3-256(Kenc)
+        // Prevents key-commitment attacks on AES-GCM (Albertini et al., USENIX 2020)
+        const keyCommitment = computeKeyCommitment(Kenc);
+
+        // Step 9: Build full header including key commitment
+        const header = buildQencHeader({
+            encapsulatedKey,
+            containerNonce,
+            kdfSalt,
+            metaBytes,
+            keyCommitment
+        });
+
         let resultBlob;
         
         if (!isPerChunk) {
@@ -196,8 +207,10 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         return resultBlob;
         
     } finally {
-        // Clear sensitive material
-        payload.fill(0);
+        // Clear sensitive material and derived byte buffers across all failure paths.
+        if (payload instanceof Uint8Array) payload.fill(0);
+        if (privateMetaBytes instanceof Uint8Array) privateMetaBytes.fill(0);
+        if (metaBytes instanceof Uint8Array) metaBytes.fill(0);
         clearKeys(sharedSecret, Kraw, Kenc, Kiv);
     }
 }
@@ -233,30 +246,36 @@ export async function decryptFile(containerBytes, secretKey) {
     
     const encryptedData = containerBytes.subarray(offset);
     
-    // Step 2: KEM Decapsulation (FIPS 203)
-    const sharedSecret = await decapsulate(encapsulatedKey, secretKey);
-    
-    // Step 3: Derive decryption keys (SP 800-185)
-    const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
-    const ds = metadata.domainStrings;
-    const { Kraw, Kenc, Kiv, aesKey } = await deriveKeyWithKmac(
-        sharedSecret, kdfSalt, metaBytes, ds.kdf
-    );
-    
-    // Step 4: Verify key commitment before decryption (prevents key-commitment attacks)
-    if (storedKeyCommitment) {
-        if (!verifyKeyCommitment(Kenc, storedKeyCommitment)) {
-            clearKeys(sharedSecret, Kraw, Kenc, Kiv);
-            throw new Error('Key commitment verification failed. Container may be corrupted or tampered with.');
-        }
-    } else if (metadata.fmt === FORMAT_VERSION) {
-        warnings.push(
-            `Container format ${FORMAT_VERSION} should include a key commitment (SHA3-256 of Kenc) ` +
-            'but none was found. Proceeding without key-commitment protection.'
-        );
-    }
-    
+    let sharedSecret = null;
+    let Kraw = null;
+    let Kenc = null;
+    let Kiv = null;
+
     try {
+        // Step 2: KEM Decapsulation (FIPS 203)
+        sharedSecret = await decapsulate(encapsulatedKey, secretKey);
+        
+        // Step 3: Derive decryption keys (SP 800-185)
+        const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
+        const ds = metadata.domainStrings;
+        const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, ds.kdf);
+        Kraw = derived.Kraw;
+        Kenc = derived.Kenc;
+        Kiv = derived.Kiv;
+        const aesKey = derived.aesKey;
+        
+        // Step 4: Verify key commitment before decryption (prevents key-commitment attacks)
+        if (storedKeyCommitment) {
+            if (!verifyKeyCommitment(Kenc, storedKeyCommitment)) {
+                throw new Error('Key commitment verification failed. Container may be corrupted or tampered with.');
+            }
+        } else if (metadata.fmt === FORMAT_VERSION) {
+            warnings.push(
+                `Container format ${FORMAT_VERSION} should include a key commitment (SHA3-256 of Kenc) ` +
+                'but none was found. Proceeding without key-commitment protection.'
+            );
+        }
+
         let decryptedPayload;
         const effectiveLength = metadata.payloadLength || metadata.originalLength;
         

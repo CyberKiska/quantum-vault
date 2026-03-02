@@ -15,24 +15,33 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, customiza
     const kmacMessage = new Uint8Array(salt.length + metaBytes.length);
     kmacMessage.set(salt, 0);
     kmacMessage.set(metaBytes, salt.length);
+    let Kraw = null;
+    let Kenc = null;
+    let Kiv = null;
+    let completed = false;
+    try {
+        Kraw = kmac256(sharedSecret, kmacMessage, 32, { customization });
 
-    const Kraw = kmac256(sharedSecret, kmacMessage, 32, { customization });
+        Kenc = kmac256(Kraw, new Uint8Array([1]), 32, { customization: 'quantum-vault:kenc:v1' });
+        Kiv = kmac256(Kraw, new Uint8Array([2]), 32, { customization: 'quantum-vault:kiv:v1' });
 
-    const Kenc = kmac256(Kraw, new Uint8Array([1]), 32, { customization: 'quantum-vault:kenc:v1' });
-    const Kiv = kmac256(Kraw, new Uint8Array([2]), 32, { customization: 'quantum-vault:kiv:v1' });
+        // Slice the exact region: Kenc may be a view with non-zero byteOffset
+        const aesKey = await crypto.subtle.importKey(
+            'raw',
+            Kenc.buffer.slice(Kenc.byteOffset, Kenc.byteOffset + Kenc.byteLength),
+            { name: 'AES-GCM' },
+            false,
+            ['encrypt', 'decrypt']
+        );
 
-    // Slice the exact region: Kenc may be a view with non-zero byteOffset
-    const aesKey = await crypto.subtle.importKey(
-        'raw',
-        Kenc.buffer.slice(Kenc.byteOffset, Kenc.byteOffset + Kenc.byteLength),
-        { name: 'AES-GCM' },
-        false,
-        ['encrypt', 'decrypt']
-    );
-
-    kmacMessage.fill(0);
-
-    return { Kraw, Kenc, Kiv, aesKey };
+        completed = true;
+        return { Kraw, Kenc, Kiv, aesKey };
+    } finally {
+        kmacMessage.fill(0);
+        if (!completed) {
+            clearKeys(Kraw, Kenc, Kiv);
+        }
+    }
 }
 
 // Zeroize sensitive key material
