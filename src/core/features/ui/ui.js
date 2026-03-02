@@ -1,14 +1,73 @@
 import { encryptFile, decryptFile, hashBytes, generateKeyPair } from '../../crypto/index.js';
 import { UserEntropyCollector } from '../../crypto/entropy.js';
+import { runSelfTest } from '../../crypto/selftest.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
-import { log, logError } from './logging.js';
+import { log, logError, logSuccess, logWarning } from './logging.js';
 import { updateShardSelectionStatus } from './shards-status.js';
+
+import { showToast } from './toast.js';
 
 // Pro mode state
 let userEntropyCollected = false;
 let entropyCollector = null;
 let proShardsStatusSeq = 0;
+
+function shortFingerprint(value) {
+    if (typeof value !== 'string') return 'Loaded';
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return 'Loaded';
+    if (normalized === 'loaded') return 'Loaded';
+    return normalized.length <= 8 ? normalized : `${normalized.slice(0, 8)}...`;
+}
+
+export function updateSidebarStatus(pubHash, secHash) {
+    const sysDot = document.getElementById('sys-status-dot');
+    const sysText = document.getElementById('sys-status-text');
+    const pubFp = document.getElementById('ctx-pub-fp');
+    const secFp = document.getElementById('ctx-sec-fp');
+
+    const hasPub = !!pubHash;
+    const hasSec = !!secHash;
+
+    if (pubFp) {
+        if (hasPub) {
+            pubFp.textContent = shortFingerprint(pubHash);
+            pubFp.className = 'context-val status-success';
+        } else {
+            pubFp.textContent = 'Not Loaded';
+            pubFp.className = 'context-val status-muted';
+        }
+    }
+
+    if (secFp) {
+        if (hasSec) {
+            secFp.textContent = shortFingerprint(secHash);
+            secFp.className = 'context-val status-warning';
+        } else {
+            secFp.textContent = 'Not Loaded';
+            secFp.className = 'context-val status-muted';
+        }
+    }
+
+    if (sysDot && sysText) {
+        sysDot.className = 'status-indicator';
+        let statusLabel = 'Ready';
+        if (hasSec) {
+            sysDot.classList.add('armed');
+            sysText.textContent = 'Armed';
+            statusLabel = 'Armed';
+        } else if (hasPub) {
+            sysDot.classList.add('verify-ready');
+            sysText.textContent = 'Verify-Ready';
+            statusLabel = 'Verify-Ready';
+        } else {
+            sysDot.classList.add('ready');
+            sysText.textContent = 'Ready';
+        }
+        sysDot.setAttribute('aria-label', `System status: ${statusLabel}`);
+    }
+}
 
 export function initUI() {
     const el = (id) => document.getElementById(id);
@@ -33,6 +92,7 @@ export function initUI() {
     const genKeyBtn = el('genKeyBtn');
     const encBtn = el('encBtn');
     const decBtn = el('decBtn');
+    const sidebarSelftestBtn = el('sidebar-selftest');
     const proEncStrategyGroup = el('proEncStrategyGroup');
     const proEncStrategyPerFile = el('proEncStrategyPerFile');
     const proEncryptionWarning = el('proEncryptionWarning');
@@ -85,12 +145,33 @@ export function initUI() {
         });
     }
 
+    async function updateSidebarFingerprintsFromInputs() {
+        let pubHash = null;
+        let secHash = null;
+        try {
+            if (pubKeyInput?.files?.[0]) {
+                const pubBytes = await readFileAsUint8Array(pubKeyInput.files[0]);
+                pubHash = await hashBytes(pubBytes);
+            }
+            if (privKeyInput?.files?.[0]) {
+                const secBytes = await readFileAsUint8Array(privKeyInput.files[0]);
+                secHash = await hashBytes(secBytes);
+            }
+        } catch {
+            // Fall back to loaded/not-loaded state when fingerprint hashing fails.
+            pubHash = pubKeyInput?.files?.[0] ? 'Loaded' : null;
+            secHash = privKeyInput?.files?.[0] ? 'Loaded' : null;
+        }
+        updateSidebarStatus(pubHash, secHash);
+    }
+
     function updateProEncryptionControls() {
         const hasPublicKey = Boolean(pubKeyInput?.files?.[0]);
         const hasPrivateKey = Boolean(privKeyInput?.files?.[0]);
 
         if (encBtn) encBtn.disabled = !hasPublicKey;
         if (decBtn) decBtn.disabled = !hasPrivateKey;
+        void updateSidebarFingerprintsFromInputs();
 
         if (!proEncryptionWarning) return;
 
@@ -98,13 +179,13 @@ export function initUI() {
         let stateClass;
 
         if (!hasPublicKey && !hasPrivateKey) {
-            message = 'Load keys in tab "1. Key Management": public key for encryption and private key for decryption.';
+            message = 'Load keys in tab "1. Key Management": public key for encryption and secret key for decryption.';
             stateClass = 'warning';
         } else if (!hasPublicKey) {
             message = 'Encryption is blocked: load a public key in tab "1. Key Management".';
             stateClass = 'warning';
         } else if (!hasPrivateKey) {
-            message = 'Decryption is blocked: load a private key in tab "1. Key Management".';
+            message = 'Decryption is blocked: load a secret key in tab "1. Key Management".';
             stateClass = 'warning';
         } else {
             message = 'Keys are loaded. Encryption and decryption are available.';
@@ -264,11 +345,64 @@ export function initUI() {
 
     advancedEntropyBtn?.addEventListener('click', collectAdvancedEntropy);
 
+    let selfTestRunning = false;
+    async function runSidebarSelfTest() {
+        if (selfTestRunning) return;
+        selfTestRunning = true;
+
+        if (sidebarSelftestBtn) {
+            sidebarSelftestBtn.disabled = true;
+            sidebarSelftestBtn.textContent = 'Self-test...';
+        }
+
+        try {
+            log('Running cryptographic self-test suite...');
+            showToast('Running self-test...', 'info', 2200);
+
+            const report = await runSelfTest({
+                onProgress: (done, total, currentCase) => {
+                    if (done === 0 || done === total || (done % 10) === 0) {
+                        log(`Self-test ${done}/${total}: ${currentCase}`);
+                    }
+                }
+            });
+
+            if (report.ok) {
+                logSuccess(`Self-test PASS (${report.passed}/${report.total})`);
+                showToast(`Self-test PASS (${report.passed}/${report.total})`, 'success', 4500);
+            } else {
+                logError(`Self-test FAIL (${report.passed}/${report.total})`, { skipToast: true });
+                for (const failure of report.results.filter((item) => !item.ok)) {
+                    logError(`Self-test case failed: ${failure.name} :: ${failure.error}`, { skipToast: true });
+                }
+                showToast(`Self-test FAIL (${report.passed}/${report.total})`, 'error', 6500);
+            }
+        } catch (error) {
+            logError(`Self-test failed to run: ${error?.message ?? error}`);
+        } finally {
+            selfTestRunning = false;
+            if (sidebarSelftestBtn) {
+                sidebarSelftestBtn.disabled = false;
+                sidebarSelftestBtn.textContent = 'Run Self-test';
+            }
+        }
+    }
+
+    sidebarSelftestBtn?.addEventListener('click', () => {
+        void runSidebarSelfTest();
+    });
+
     // --- Event Handlers ---
     genKeyBtn?.addEventListener('click', async () => {
+        if (privKeyInput?.files?.length || pubKeyInput?.files?.length) {
+            if (!confirm("A secret key or public key is already loaded. Generating a new one will overwrite it. Continue?")) {
+                return;
+            }
+        }
+        
         setButtonsDisabled(true);
         try {
-            log('Generating ML-KEM-1024 key pair...');
+            log('Generating ML-KEM-1024 keypair...');
             
             if (userEntropyCollected) {
                 log('Using crypto.getRandomValues() + collected user entropy for enhanced security');
@@ -285,12 +419,18 @@ export function initUI() {
             const pkHash = await hashBytes(publicKey);
             
             log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (enhanced with user entropy)' : ''}`);
-            log(`Private Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
+            log(`Secret Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
             log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
             
             download(new Blob([secretKey]), 'secretKey.qkey');
             download(new Blob([publicKey]), 'publicKey.qkey');
-            log('✅ Keys generated and downloaded successfully.');
+            logSuccess('Keys generated and downloaded successfully.');
+            showToast('New keypair generated in memory.', 'success');
+            
+            // Clear inputs if they had files
+            if (privKeyInput) privKeyInput.value = '';
+            if (pubKeyInput) pubKeyInput.value = '';
+            updateSidebarStatus(pkHash, skHash);
             
             // Reset entropy collection state
             userEntropyCollected = false;
@@ -312,8 +452,8 @@ export function initUI() {
     });
 
     encBtn?.addEventListener('click', async () => {
-        if (!pubKeyInput?.files?.[0]) { logError('Please select a public key (.qkey).'); return; }
-        if (!dataFileInput?.files?.length) { logError('Please select file(s) to encrypt.'); return; }
+        if (!pubKeyInput?.files?.[0]) { showToast('Load a public key in Key Management.', 'warning'); return; }
+        if (!dataFileInput?.files?.length) { showToast('Please select file(s) to encrypt.', 'warning'); return; }
         setButtonsDisabled(true);
         try {
             const publicKey = await readFileAsUint8Array(pubKeyInput.files[0]);
@@ -357,8 +497,8 @@ export function initUI() {
     });
 
     decBtn?.addEventListener('click', async () => {
-        if (!privKeyInput?.files?.[0]) { logError('Please select a private key (.qkey).'); return; }
-        if (!dataFileInput?.files?.length) { logError('Please select file(s) to decrypt (.qenc).'); return; }
+        if (!privKeyInput?.files?.[0]) { showToast('Load a secret key in Key Management.', 'warning'); return; }
+        if (!dataFileInput?.files?.length) { showToast('Please select file(s) to decrypt (.qenc).', 'warning'); return; }
         setButtonsDisabled(true);
         try {
             const secretKey = await readFileAsUint8Array(privKeyInput.files[0]);
@@ -390,7 +530,11 @@ export function initUI() {
                 }
                 log(`Original file hash (from metadata): ${metadata.fileHash}`);
                 log(`Hash of decrypted content: ${decHash}`);
-                if (metadata.fileHash === decHash) log('Hashes match! File integrity verified.'); else logError('WARNING: Hashes do NOT match! File may have been corrupted.');
+                if (metadata.fileHash === decHash) {
+                    log('Hashes match. File integrity verified.');
+                } else {
+                    logWarning('Hashes do NOT match. File may be corrupted.');
+                }
                 log(`Encrypted on (UTC): ${metadata.timestamp}`);
             }
         } catch (e) { logError(e); } finally {
@@ -405,45 +549,42 @@ export function initUI() {
 
     function initProTabs() {
         const tabs = {
-            'proTabIdentity': 'proViewIdentity',
-            'proTabEncryption': 'proViewEncryption',
-            'proTabDistribution': 'proViewDistribution',
-            'proTabRestore': 'proViewRestore'
+            proTabIdentity: 'proViewIdentity',
+            proTabEncryption: 'proViewEncryption',
+            proTabDistribution: 'proViewDistribution',
+            proTabRestore: 'proViewRestore'
         };
-        
-        Object.keys(tabs).forEach(tabId => {
-            const tab = document.getElementById(tabId);
-            if (!tab) return;
-            
-            tab.addEventListener('click', () => {
-                // Deactivate all
-                Object.keys(tabs).forEach(t => {
-                     const el = document.getElementById(t);
-                     if (el) el.classList.remove('active');
-                });
-                Object.values(tabs).forEach(v => {
-                    const view = document.getElementById(v);
-                    if (view) {
-                        view.style.display = 'none';
-                        view.classList.remove('active');
-                    }
-                });
-                
-                // Activate current
-                tab.classList.add('active');
-                const targetView = document.getElementById(tabs[tabId]);
-                if (targetView) {
-                    targetView.style.display = 'block';
-                    targetView.classList.add('active');
+        const tabIds = Object.keys(tabs);
+
+        function activateProTab(tabId, { focus = false } = {}) {
+            tabIds.forEach((currentTabId) => {
+                const tabEl = document.getElementById(currentTabId);
+                const panelEl = document.getElementById(tabs[currentTabId]);
+                const active = currentTabId === tabId;
+                if (tabEl) {
+                    tabEl.classList.toggle('active', active);
+                    tabEl.setAttribute('aria-selected', String(active));
+                    tabEl.tabIndex = active ? 0 : -1;
+                    if (active && focus) tabEl.focus();
                 }
-                
-                // Force layout update if switching to distribution
-                if (tabId === 'proTabDistribution') {
-                    setTimeout(() => {
-                        // Trigger input event to refresh RS hints
-                        rsNInput?.dispatchEvent(new Event('input'));
-                    }, 10);
+                if (panelEl) {
+                    panelEl.classList.toggle('active', active);
+                    panelEl.style.display = active ? 'block' : 'none';
                 }
+            });
+
+            if (tabId === 'proTabDistribution') {
+                setTimeout(() => {
+                    rsNInput?.dispatchEvent(new Event('input'));
+                }, 10);
+            }
+        }
+
+        tabIds.forEach((tabId) => {
+            const tabEl = document.getElementById(tabId);
+            if (!tabEl) return;
+            tabEl.addEventListener('click', () => {
+                activateProTab(tabId);
             });
         });
     }

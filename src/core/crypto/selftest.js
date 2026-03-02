@@ -107,7 +107,9 @@ async function ensureRuntimeCrypto() {
   if (!isNode) {
     throw new Error('Web Crypto API is not available in current runtime');
   }
-  const { webcrypto } = await import('node:crypto');
+  // Keep specifier non-literal so browser bundles do not try to resolve node built-ins.
+  const nodeCryptoSpecifier = ['node', 'crypto'].join(':');
+  const { webcrypto } = await import(nodeCryptoSpecifier);
   globalThis.crypto = webcrypto;
 }
 

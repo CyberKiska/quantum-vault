@@ -1,6 +1,7 @@
 // --- Logging Utilities for Consistent UI ---
 
 import { shortenHash, formatTimestamp } from '../../../utils.js';
+import { showToast } from './toast.js';
 
 // Log message to UI console
 export function log(msg, options = {}) {
@@ -9,6 +10,7 @@ export function log(msg, options = {}) {
     if (!logEl) return;
     
     const line = document.createElement('span');
+    line.className = 'log-info';
     line.textContent = `[${formatTimestamp()}] ${msg}`;
     logEl.appendChild(line);
     logEl.appendChild(document.createTextNode('\n'));
@@ -29,16 +31,23 @@ export function logSuccess(msg, options = {}) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 
-// Log error message to UI console
+// Log error message to UI console AND trigger a toast
 export function logError(err, options = {}) {
-    const { elementId = 'log', isLiteMode = true } = options;
-    const logEl = document.getElementById(elementId);
-    if (!logEl) return;
+    const { elementId = 'log', isLiteMode = true, skipToast = false } = options;
     
     const text = (err && err.message) ? err.message : (typeof err === 'string' ? err : String(err));
+    
+    // Show toast for errors
+    if (!skipToast) {
+        showToast(text, 'error');
+    }
+
+    const logEl = document.getElementById(elementId);
+    if (!logEl) return;
+
     const errorSpan = document.createElement('span');
     errorSpan.className = 'error';
-    errorSpan.textContent = `[${formatTimestamp()}] ERROR: ${text}`;
+    errorSpan.textContent = `[${formatTimestamp()}] ${text}`;
     logEl.appendChild(errorSpan);
     logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
@@ -47,12 +56,13 @@ export function logError(err, options = {}) {
 // Log warning message to UI console
 export function logWarning(msg, options = {}) {
     const { elementId = 'log' } = options;
+    
     const logEl = document.getElementById(elementId);
     if (!logEl) return;
 
     const warningSpan = document.createElement('span');
     warningSpan.className = 'warning';
-    warningSpan.textContent = `[${formatTimestamp()}] WARNING: ${String(msg)}`;
+    warningSpan.textContent = `[${formatTimestamp()}] ${String(msg)}`;
     logEl.appendChild(warningSpan);
     logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
@@ -70,16 +80,16 @@ export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, option
     const { isLiteMode = true, elementId = 'log' } = options;
     
     if (isLiteMode) {
-        log('Lite Mode: ML-KEM keys generated automatically', { elementId, isLiteMode });
-        logHash('Private Key', privateKeyHash, { isLiteMode, elementId });
+        log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
+        logHash('Secret Key', privateKeyHash, { isLiteMode, elementId });
         logHash('Public Key', publicKeyHash, { isLiteMode, elementId });
     } else {
-        log('Pro Mode: ML-KEM-1024 key pair generated', { elementId, isLiteMode });
+        log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
         log(`Entropy source: ${seedInfo.source}`, { elementId, isLiteMode });
         if (seedInfo.hasUserEntropy) {
-            log('✅ User entropy successfully collected and mixed', { elementId, isLiteMode });
+            log('User entropy successfully collected and mixed.', { elementId, isLiteMode });
         }
-        logHash('Private Key Hash', privateKeyHash, { isLiteMode, elementId });
+        logHash('Secret Key Hash', privateKeyHash, { isLiteMode, elementId });
         logHash('Public Key Hash', publicKeyHash, { isLiteMode, elementId });
     }
 }
@@ -89,13 +99,12 @@ export function logFileEncryption(filename, fileSize, fileHash, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;
     
     if (isLiteMode) {
-        log(`⏳ Processing: ${filename} (${fileSize} bytes)`, { elementId, isLiteMode });
-        logHash(`✅ Encrypted: ${filename} (hash)`, fileHash, { isLiteMode, elementId });
+        log(`Encrypting: ${filename} (${fileSize} bytes)`, { elementId, isLiteMode });
+        logHash(`Encrypted container hash`, fileHash, { isLiteMode, elementId });
     } else {
-        log(`⏳ Encrypting file: ${filename}`, { elementId, isLiteMode });
-        log(`File size: ${fileSize.toLocaleString()} bytes`, { elementId, isLiteMode });
-        logHash('File hash (SHA3-512)', fileHash, { isLiteMode, elementId });
-        log('✅ File encryption completed', { elementId, isLiteMode });
+        log(`Encrypting file: ${filename} (${fileSize.toLocaleString()} bytes)`, { elementId, isLiteMode });
+        logHash('Output SHA3-512', fileHash, { isLiteMode, elementId });
+        logSuccess('File encryption completed.', { elementId, isLiteMode });
     }
 }
 
@@ -104,17 +113,11 @@ export function logShardCreation(shardCount, params, filename, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;
     
     if (isLiteMode) {
-        log(`Creating shards with n=${params.n}, k=${params.k}, m=${params.m}, t=${params.t}`, { elementId, isLiteMode });
-        log(`Effective threshold: ${params.t} shards (${Math.round((params.t / params.n) * 100)}%)`, { elementId, isLiteMode });
-        log(`✅ Created ${shardCount} shards for ${filename}`, { elementId, isLiteMode });
+        log(`Creating shards: n=${params.n}, k=${params.k}, m=${params.m}, t=${params.t}`, { elementId, isLiteMode });
+        log(`Created ${shardCount} shards for ${filename}`, { elementId, isLiteMode });
     } else {
-        log(`Reed-Solomon Configuration:`, { elementId, isLiteMode });
-        log(`  Total shards (n): ${params.n}`, { elementId, isLiteMode });
-        log(`  Data shards (k): ${params.k}`, { elementId, isLiteMode });
-        log(`  Parity shards (m): ${params.m}`, { elementId, isLiteMode });
-        log(`  Shamir threshold (t): ${params.t}`, { elementId, isLiteMode });
-        log(`Shards created: ${shardCount} for file "${filename}"`, { elementId, isLiteMode });
-        log('✅ Shard creation completed successfully', { elementId, isLiteMode });
+        log(`Creating shards: n=${params.n}, k=${params.k}, m=${params.m}, t=${params.t}`, { elementId, isLiteMode });
+        logSuccess(`Created ${shardCount} shards for ${filename}`, { elementId, isLiteMode });
     }
 }
 
@@ -123,30 +126,22 @@ export function logRestoration(shardCount, containerId, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;
 
     if (isLiteMode) {
-        log(`Restoring ${shortenHash(containerId)} container from ${shardCount} shard files...`, { elementId, isLiteMode });
+        log(`Restoring container from ${shardCount} shard files...`, { elementId, isLiteMode });
     } else {
-        log(`Restoration Process Started`, { elementId, isLiteMode });
-        log(`Input shards: ${shardCount}`, { elementId, isLiteMode });
+        log(`Restoration started. Input shards: ${shardCount}`, { elementId, isLiteMode });
         logHash('Container ID', containerId, { isLiteMode, elementId });
     }
 }
 
 // Determine if a filename is meaningful (not a hash)
 export function isMeaningfulFilename(filename) {
-    // If no extension, check if it's a hash-like string (hex characters only)
     if (!filename.includes('.')) {
         return !/^[a-f0-9]+$/i.test(filename);
     }
-
     const namePart = filename.split('.')[0];
-
-    // Check if name part looks like a hash (hex characters only)
     if (/^[a-f0-9]+$/i.test(namePart)) {
         return false;
     }
-
-    // Check for common meaningful patterns
-    // Contains letters, spaces, or common file naming patterns
     return /[a-zA-Z]/.test(namePart) || /\s/.test(namePart) || /[-_]/.test(namePart);
 }
 
@@ -159,20 +154,18 @@ export function logRestorationSuccess(filename, fileSize, encryptionTime, integr
             const displayName = isMeaningfulFilename(filename) ? filename :
                 (filename.includes('.') ?
                     `${shortenHash(filename.split('.')[0])}.${filename.split('.').pop()}` : filename);
-            logSuccess(`Restoration complete - files have been decrypted and restored. Original file: ${displayName} (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
+            logSuccess(`Restored: ${displayName} (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
         } else {
-            logError('File integrity check failed - hashes do not match', { elementId, isLiteMode });
+            logError('Hashes do NOT match. File integrity verification failed.', { elementId, isLiteMode, skipToast: true });
         }
     } else {
         if (integrityOk) {
-            logSuccess('Container restoration completed successfully', { elementId, isLiteMode });
-            log(`Restored file: ${filename}`, { elementId, isLiteMode });
-            log(`File size: ${fileSize.toLocaleString()} bytes`, { elementId, isLiteMode });
+            logSuccess('Container restored successfully.', { elementId, isLiteMode });
+            log(`Restored file: ${filename} (${fileSize.toLocaleString()} bytes)`, { elementId, isLiteMode });
             log(`Original encryption time: ${encryptionTime}`, { elementId, isLiteMode });
-            logSuccess('File integrity verification passed', { elementId, isLiteMode });
+            logSuccess('Hashes match. File integrity verified.', { elementId, isLiteMode });
         } else {
-            logError('File integrity verification failed', { elementId, isLiteMode });
-            log('The restored file may be corrupted or tampered with', { elementId, isLiteMode });
+            logError('Hashes do NOT match. File integrity verification failed.', { elementId, isLiteMode, skipToast: true });
         }
     }
 }
@@ -197,13 +190,13 @@ export function logOperation(operation, details, status, options = {}) {
     
     switch (status) {
         case 'started':
-            log(`🚀 ${operation} started`, { elementId, isLiteMode });
+            log(`Started: ${operation}`, { elementId, isLiteMode });
             break;
         case 'progress':
-            log(`⏳ ${operation}: ${details.message}`, { elementId, isLiteMode });
+            log(`Progress: ${operation} - ${details.message}`, { elementId, isLiteMode });
             break;
         case 'completed':
-            logSuccess(`${operation} completed successfully`, { elementId, isLiteMode });
+            logSuccess(`${operation} completed.`, { elementId, isLiteMode });
             break;
         case 'failed':
             logError(`${operation} failed: ${details.error}`, { elementId, isLiteMode });

@@ -2,6 +2,7 @@
 
 import { buildQcontShards } from './build.js';
 import { log, logError } from '../../features/ui/logging.js';
+import { showToast } from '../../features/ui/toast.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams } from '../../../utils.js';
 
 export function initQcontBuildUI() {
@@ -12,10 +13,10 @@ export function initQcontBuildUI() {
     const buildQcontBtn = document.getElementById('buildQcontBtn');
 
     buildQcontBtn?.addEventListener('click', async () => {
-        if (!qencForQcontInput?.files?.[0]) { logError('Select .qenc'); return; }
-        if (!privKeyForQcontInput?.files?.[0]) { logError('Select private .qkey to split'); return; }
+        if (!qencForQcontInput?.files?.[0]) { showToast('Select a .qenc container to split.', 'warning'); return; }
+        if (!privKeyForQcontInput?.files?.[0]) { showToast('Select a secret .qkey to split.', 'warning'); return; }
         const privKeyFile = privKeyForQcontInput.files[0];
-        if (privKeyFile.size !== 3168) { logError(`Private .qkey must be exactly 3168 bytes (got ${privKeyFile.size} B)`); return; }
+        if (privKeyFile.size !== 3168) { showToast(`Secret .qkey must be exactly 3168 bytes (got ${privKeyFile.size} B).`, 'warning'); return; }
         setButtonsDisabled(true);
         try {
             const qencBytes = await readFileAsUint8Array(qencForQcontInput.files[0]);

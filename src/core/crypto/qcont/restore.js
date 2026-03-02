@@ -775,7 +775,7 @@ export async function restoreFromShards(shards, options = {}) {
     const privateKeyHash = normalizeHexString(base.metaJSON?.privateKeyHash || '');
     const qkeyOk = privateKeyHash ? (privateKeyHash === recoveredPrivHash) : true;
     if (!qkeyOk) {
-        onWarn('Recovered private key hash does not match shard metadata.');
+        onWarn('Recovered secret key hash does not match shard metadata.');
     }
 
     return {
@@ -905,4 +905,3 @@ export async function classifyRestoreInputFiles(files) {
         ignoredFileNames,
     };
 }
-

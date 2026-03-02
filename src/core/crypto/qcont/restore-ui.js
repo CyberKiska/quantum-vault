@@ -2,6 +2,7 @@
 
 import { parseShard, restoreFromShards, classifyRestoreInputFiles } from './restore.js';
 import { log, logError, logWarning, logSuccess } from '../../features/ui/logging.js';
+import { showToast } from '../../features/ui/toast.js';
 import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
 
 async function readVerificationOptionsFromDom({
@@ -79,7 +80,7 @@ function buildRestoreResultSummary(result, resultPanelId) {
     };
 
     addItem(qencOk, `Container integrity${qencOk ? ' verified' : ' FAILED'}`);
-    addItem(qkeyOk, `Private key integrity${qkeyOk ? ' verified' : ' FAILED'}`);
+    addItem(qkeyOk, `Secret key integrity${qkeyOk ? ' verified' : ' FAILED'}`);
 
     const verification = authenticity?.verification;
     if (verification) {
@@ -120,7 +121,7 @@ export function initQcontRestoreUI() {
     restoreQcontBtn?.addEventListener('click', async () => {
         const files = qcontShardsInput?.files;
         if (!files?.length) {
-            logError('Select .qcont shards');
+            showToast('Select .qcont shards to restore.', 'warning');
             return;
         }
 

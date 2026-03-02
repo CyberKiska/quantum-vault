@@ -47,7 +47,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
             clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
             if (!keyMatch) {
                 throw new Error(
-                    'Private key does not match this .qenc container (key commitment mismatch). ' +
+                    'Secret key does not match this .qenc container (key commitment mismatch). ' +
                     'Ensure you are using the correct secretKey.qkey for this container.'
                 );
             }
@@ -254,4 +254,3 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         formatVersion,
     };
 }
-

@@ -10,6 +10,8 @@ import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, downl
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import { log, logError, logSuccess, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
 import { updateShardSelectionStatus } from './ui/shards-status.js';
+import { showToast } from './ui/toast.js';
+import { updateSidebarStatus } from './ui/ui.js';
 
 // Global state for Lite mode
 let liteKeys = null;
@@ -193,6 +195,7 @@ async function generateLiteKeys() {
         
         // Log with Lite mode formatting
         logKeyGeneration(skHash, pkHash, keyPair.seedInfo, { isLiteMode: true });
+        updateSidebarStatus(pkHash, skHash);
         
         if (statusText) statusText.textContent = 'Keys ready ✓';
         if (statusIcon) statusIcon.textContent = '🔑';
@@ -296,7 +299,7 @@ function updateCreateShardsButton() {
 // Download keys backup
 function downloadLiteKeys() {
     if (!liteKeys) {
-        logError('No keys available to download', { isLiteMode: true });
+        showToast('No keys available to download.', 'warning');
         return;
     }
     
@@ -335,12 +338,12 @@ async function createLiteShards() {
     const thresholdInput = document.getElementById('liteThreshold');
     
     if (!filesInput?.files?.length) {
-        logError('Please select files to encrypt', { isLiteMode: true });
+        showToast('Please select files to encrypt', 'warning');
         return;
     }
     
     if (!liteKeys) {
-        logError('Keys not ready', { isLiteMode: true });
+        showToast('Keys not ready', 'warning');
         return;
     }
     
@@ -348,7 +351,7 @@ async function createLiteShards() {
     const thresholdPercent = parseInt(thresholdInput.value, 10);
     
     if (isNaN(n) || isNaN(thresholdPercent)) {
-        logError('Invalid parameters', { isLiteMode: true });
+        showToast('Invalid parameters', 'warning');
         return;
     }
     
@@ -451,7 +454,7 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
     };
 
     addItem(result.qencOk, `Container integrity${result.qencOk ? ' verified' : ' FAILED'}`);
-    addItem(result.qkeyOk, `Private key integrity${result.qkeyOk ? ' verified' : ' FAILED'}`);
+    addItem(result.qkeyOk, `Secret key integrity${result.qkeyOk ? ' verified' : ' FAILED'}`);
     if (containerOk) {
         addItem(decryptOk, `Decryption & file integrity${decryptOk ? ' verified' : ' FAILED'}`);
     }
@@ -479,13 +482,13 @@ async function restoreLiteShards() {
     const shardsInput = document.getElementById('liteShardsInput');
     
     if (!shardsInput?.files?.length) {
-        logError('Please select shard files to restore', { isLiteMode: true });
+        showToast('Please select shard files to restore', 'warning');
         return;
     }
 
     const assessment = await assessShardSelection([...(shardsInput.files || [])]);
     if (!assessment.ready) {
-        logError(assessment.message || 'Selected shards do not meet the recovery threshold', { isLiteMode: true });
+        showToast(assessment.message || 'Selected shards do not meet the recovery threshold', 'warning');
         return;
     }
     
@@ -556,7 +559,6 @@ async function restoreLiteShards() {
             return;
         }
         
-        // Lite mode extra step: decrypt the container to get the original file
         const { decryptedBlob, metadata } = await decryptFile(qencBytes, privKey);
         const decBytes = await readFileAsUint8Array(decryptedBlob);
         const decHash = await hashBytes(decBytes);
@@ -577,17 +579,14 @@ async function restoreLiteShards() {
             restoredLabel = `${entries.length} files bundle`;
             log(`📦 Restored ${entries.length} files from encrypted bundle`, { isLiteMode: true });
         } else {
-            // Try to restore original filename
             const qencHash = await hashBytes(qencBytes);
             let originalName = originalFileNames.get(qencHash);
             
             if (!originalName) {
-                // Fallback: try with containerHash
                 originalName = originalFileNames.get(containerHash);
             }
             
             if (!originalName) {
-                // Use metadata filename if available, otherwise use container ID
                 originalName = metadata.originalFilename || `restored-${result.containerId.slice(0, 8)}.file`;
             }
 
@@ -615,24 +614,39 @@ function initLiteTabs() {
     const tabRestore = document.getElementById('liteTabRestore');
     const viewProtect = document.getElementById('liteViewProtect');
     const viewRestore = document.getElementById('liteViewRestore');
+    const tabIds = ['liteTabProtect', 'liteTabRestore'];
+    const panelByTabId = {
+        liteTabProtect: viewProtect,
+        liteTabRestore: viewRestore,
+    };
+
+    function activateLiteTab(tabId, { focus = false } = {}) {
+        tabIds.forEach((currentTabId) => {
+            const tabEl = document.getElementById(currentTabId);
+            const panelEl = panelByTabId[currentTabId];
+            const active = currentTabId === tabId;
+
+            if (tabEl) {
+                tabEl.classList.toggle('active', active);
+                tabEl.setAttribute('aria-selected', String(active));
+                tabEl.tabIndex = active ? 0 : -1;
+                if (active && focus) tabEl.focus();
+            }
+
+            if (panelEl) {
+                panelEl.style.display = active ? 'block' : 'none';
+                panelEl.classList.toggle('active', active);
+            }
+        });
+    }
 
     if (tabProtect && tabRestore && viewProtect && viewRestore) {
         tabProtect.addEventListener('click', () => {
-            tabProtect.classList.add('active');
-            tabRestore.classList.remove('active');
-            viewProtect.style.display = 'block';
-            viewRestore.style.display = 'none';
-            viewProtect.classList.add('active');
-            viewRestore.classList.remove('active');
+            activateLiteTab('liteTabProtect');
         });
 
         tabRestore.addEventListener('click', () => {
-            tabProtect.classList.remove('active');
-            tabRestore.classList.add('active');
-            viewProtect.style.display = 'none';
-            viewRestore.style.display = 'block';
-            viewProtect.classList.remove('active');
-            viewRestore.classList.add('active');
+            activateLiteTab('liteTabRestore');
         });
     }
 }
@@ -664,6 +678,8 @@ function toggleMode() {
     const modeToggle = document.getElementById('modeToggle');
     const liteSection = document.getElementById('liteMode');
     const proSection = document.getElementById('proMode');
+    const liteNav = document.getElementById('liteNav');
+    const proNav = document.getElementById('proNav');
     
     if (!modeToggle || !liteSection || !proSection) return;
     
@@ -673,16 +689,47 @@ function toggleMode() {
     if (isLiteMode) {
         liteSection.style.display = 'block';
         proSection.style.display = 'none';
+        if (liteNav) liteNav.classList.remove('initially-hidden');
+        if (proNav) proNav.classList.add('initially-hidden');
         log('Switched to Lite Mode', { isLiteMode: true });
         
         // Generate keys automatically if not already done
         if (!liteKeys) {
             generateLiteKeys();
+        } else {
+            // Restore lite keys status to sidebar if previously generated
+            hashBytes(liteKeys.publicKey).then(pk => {
+                hashBytes(liteKeys.secretKey).then(sk => updateSidebarStatus(pk, sk));
+            });
         }
     } else {
         liteSection.style.display = 'none';
         proSection.style.display = 'block';
+        if (liteNav) liteNav.classList.add('initially-hidden');
+        if (proNav) proNav.classList.remove('initially-hidden');
         log('Switched to Pro Mode', { isLiteMode: false });
+        
+        // Restore sidebar context from currently selected Pro keys if present.
+        void (async () => {
+            const pubFile = document.getElementById('pubKeyInput')?.files?.[0];
+            const secFile = document.getElementById('privKeyInput')?.files?.[0];
+            let pubHash = null;
+            let secHash = null;
+            try {
+                if (pubFile) {
+                    const pubBytes = await readFileAsUint8Array(pubFile);
+                    pubHash = await hashBytes(pubBytes);
+                }
+                if (secFile) {
+                    const secBytes = await readFileAsUint8Array(secFile);
+                    secHash = await hashBytes(secBytes);
+                }
+            } catch {
+                pubHash = pubFile ? 'Loaded' : null;
+                secHash = secFile ? 'Loaded' : null;
+            }
+            updateSidebarStatus(pubHash, secHash);
+        })();
     }
 
     updateOperationsLogVisibility();

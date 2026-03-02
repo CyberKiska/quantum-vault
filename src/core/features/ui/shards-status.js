@@ -4,23 +4,27 @@ function applyAssessment(statusDiv, statusText, actionButton, assessment) {
     if (assessment.state === 'sufficient') {
         statusDiv.className = 'shards-status sufficient';
         statusText.textContent = assessment.message;
+        statusDiv.setAttribute('aria-label', assessment.message);
         if (actionButton) actionButton.disabled = false;
         return;
     }
     if (assessment.state === 'insufficient') {
         statusDiv.className = 'shards-status insufficient';
         statusText.textContent = assessment.message;
+        statusDiv.setAttribute('aria-label', assessment.message);
         if (actionButton) actionButton.disabled = true;
         return;
     }
     if (assessment.state === 'invalid') {
         statusDiv.className = 'shards-status invalid';
         statusText.textContent = assessment.message;
+        statusDiv.setAttribute('aria-label', assessment.message);
         if (actionButton) actionButton.disabled = true;
         return;
     }
     statusDiv.className = 'shards-status unknown';
     statusText.textContent = assessment.message || 'Cannot determine restore threshold from selected files.';
+    statusDiv.setAttribute('aria-label', statusText.textContent);
     if (actionButton) actionButton.disabled = true;
 }
 
@@ -41,6 +45,7 @@ export async function updateShardSelectionStatus({ files, statusDiv, statusText,
     statusDiv.style.display = 'block';
     statusDiv.className = 'shards-status unknown';
     statusText.textContent = 'Analyzing shard metadata...';
+    statusDiv.setAttribute('aria-label', 'Analyzing shard metadata...');
     if (actionButton) actionButton.disabled = true;
 
     const assessment = await assessShardSelection(files);
