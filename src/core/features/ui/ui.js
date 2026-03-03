@@ -1,5 +1,6 @@
 import { encryptFile, decryptFile, hashBytes, generateKeyPair } from '../../crypto/index.js';
 import { UserEntropyCollector } from '../../crypto/entropy.js';
+import { registerSessionWipeHandler } from '../../crypto/session-wipe.js';
 import { runSelfTest } from '../../crypto/selftest.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
@@ -12,6 +13,15 @@ import { showToast } from './toast.js';
 let userEntropyCollected = false;
 let entropyCollector = null;
 let proShardsStatusSeq = 0;
+let unregisterUiSessionWipe = null;
+
+function wipeProSessionSecrets() {
+    userEntropyCollected = false;
+    if (entropyCollector && typeof entropyCollector.dispose === 'function') {
+        entropyCollector.dispose();
+    }
+    entropyCollector = null;
+}
 
 function shortFingerprint(value) {
     if (typeof value !== 'string') return 'Loaded';
@@ -70,6 +80,12 @@ export function updateSidebarStatus(pubHash, secHash) {
 }
 
 export function initUI() {
+    if (!unregisterUiSessionWipe) {
+        unregisterUiSessionWipe = registerSessionWipeHandler(() => {
+            wipeProSessionSecrets();
+        });
+    }
+
     const el = (id) => document.getElementById(id);
 
     const privKeyInput = el('privKeyInput');
@@ -324,10 +340,16 @@ export function initUI() {
                 entropyText.textContent = `Events: ${progress.collected}/${progress.required} (${progress.percentage}%) | Queue: ${progress.queueSize} | Est. Entropy: ${Math.round(progress.estimatedEntropyBits)} bits`;
             }, 200);
 
-            await entropyCollector.startCollection();
+            const collectedSeed = await entropyCollector.startCollection();
+            if (collectedSeed instanceof Uint8Array) {
+                collectedSeed.fill(0);
+            }
 
             clearInterval(progressInterval);
             userEntropyCollected = true;
+            if (entropyCollector && typeof entropyCollector.wipeSensitiveState === 'function') {
+                entropyCollector.wipeSensitiveState();
+            }
             entropyCollector = null;
 
             entropyText.textContent = '✅ Advanced entropy collected successfully! 64-byte seed ready.';
@@ -340,6 +362,10 @@ export function initUI() {
             entropyText.textContent = '❌ Entropy collection failed - will use secure random only';
             advancedEntropyBtn.disabled = false;
             advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+            if (entropyCollector && typeof entropyCollector.dispose === 'function') {
+                entropyCollector.dispose();
+            }
+            entropyCollector = null;
         }
     }
 

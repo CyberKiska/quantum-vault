@@ -303,6 +303,26 @@ export class UserEntropyCollector {
         this.listeners = [];
     }
 
+    wipeSensitiveState() {
+        if (this.entropyBuffer instanceof Uint8Array) {
+            this.entropyBuffer.fill(0);
+        }
+        if (this.entropyState instanceof Uint8Array) {
+            this.entropyState.fill(0);
+        }
+        for (const summary of this.processingQueue) {
+            if (summary instanceof Uint8Array) {
+                summary.fill(0);
+            }
+        }
+        this.processingQueue = [];
+    }
+
+    dispose() {
+        this.stopCollection();
+        this.wipeSensitiveState();
+    }
+
     processEventAsync(summary) {
         this.processingQueue.push(summary);
 

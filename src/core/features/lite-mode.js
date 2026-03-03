@@ -6,6 +6,7 @@ import { buildQcontShards } from '../crypto/qcont/build.js';
 import { assessShardSelection } from '../crypto/qcont/preview.js';
 import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
 import { collectRestoreVerificationOptions } from '../crypto/qcont/restore-ui.js';
+import { registerSessionWipeHandler } from '../crypto/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import { log, logError, logSuccess, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
@@ -19,6 +20,26 @@ let isLiteMode = true; // Default to Lite mode
 let originalFileNames = new Map(); // Track original file names for restoration
 let liteShardsStatusSeq = 0;
 let liteLogCollapsed = true;
+let unregisterLiteSessionWipe = null;
+
+function wipeLiteKeyPair(keyPair) {
+    if (keyPair?.secretKey instanceof Uint8Array) {
+        keyPair.secretKey.fill(0);
+    }
+    if (keyPair?.publicKey instanceof Uint8Array) {
+        keyPair.publicKey.fill(0);
+    }
+}
+
+function wipeLiteKeys() {
+    wipeLiteKeyPair(liteKeys);
+    liteKeys = null;
+}
+
+function wipeLiteModeSessionSecrets() {
+    wipeLiteKeys();
+    originalFileNames.clear();
+}
 
 // Compute RS/SSS params from desired threshold percent
 function calculateParametersFromThreshold(n, thresholdPercent) {
@@ -179,6 +200,8 @@ function updateThresholdDisplay() {
 // Generate keys automatically for Lite mode
 async function generateLiteKeys() {
     try {
+        const previousKeys = liteKeys;
+
         const keyStatus = document.getElementById('keyStatus');
         const statusText = keyStatus?.querySelector('.status-text');
         const statusIcon = keyStatus?.querySelector('.status-icon');
@@ -189,6 +212,9 @@ async function generateLiteKeys() {
         // Generate keys with default entropy (no user collection in Lite mode)
         const keyPair = await generateKeyPair({ collectUserEntropy: false });
         liteKeys = keyPair;
+        if (previousKeys && previousKeys !== keyPair) {
+            wipeLiteKeyPair(previousKeys);
+        }
         
         const skHash = await hashBytes(liteKeys.secretKey);
         const pkHash = await hashBytes(liteKeys.publicKey);
@@ -737,6 +763,12 @@ function toggleMode() {
 
 // Initialize Lite Mode
 export function initLiteMode() {
+    if (!unregisterLiteSessionWipe) {
+        unregisterLiteSessionWipe = registerSessionWipeHandler(() => {
+            wipeLiteModeSessionSecrets();
+        });
+    }
+
     // Set up mode toggle
     const modeToggle = document.getElementById('modeToggle');
     if (modeToggle) {
