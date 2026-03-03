@@ -28,7 +28,7 @@ function writeUint32BE(value) {
  * @param {Uint8Array} params.containerNonce - 12 bytes
  * @param {Uint8Array} params.kdfSalt - 16 bytes
  * @param {Uint8Array} params.metaBytes - UTF-8 JSON
- * @param {Uint8Array|null} [params.keyCommitment] - 32 bytes (optional)
+ * @param {Uint8Array} params.keyCommitment - 32-byte SHA3-256 commitment of Kenc (required)
  * @returns {Uint8Array}
  */
 export function buildQencHeader({
@@ -36,7 +36,7 @@ export function buildQencHeader({
     containerNonce,
     kdfSalt,
     metaBytes,
-    keyCommitment = null
+    keyCommitment
 }) {
     if (!(encapsulatedKey instanceof Uint8Array)) {
         throw new Error('encapsulatedKey must be Uint8Array');
@@ -53,18 +53,16 @@ export function buildQencHeader({
     if (metaBytes.length <= 0 || metaBytes.length > 0xffff) {
         throw new Error(`Invalid metaBytes length: ${metaBytes.length}`);
     }
-    if (keyCommitment !== null) {
-        if (!(keyCommitment instanceof Uint8Array)) {
-            throw new Error('keyCommitment must be Uint8Array or null');
-        }
-        if (keyCommitment.length !== KEY_COMMITMENT_SIZE) {
-            throw new Error(`keyCommitment must be ${KEY_COMMITMENT_SIZE} bytes`);
-        }
+    if (!(keyCommitment instanceof Uint8Array)) {
+        throw new Error('keyCommitment must be Uint8Array');
+    }
+    if (keyCommitment.length !== KEY_COMMITMENT_SIZE) {
+        throw new Error(`keyCommitment must be ${KEY_COMMITMENT_SIZE} bytes`);
     }
 
     const keyLenBytes = writeUint32BE(encapsulatedKey.length);
     const metaLenBytes = writeUint16BE(metaBytes.length);
-    const keyCommitBytes = keyCommitment || new Uint8Array(0);
+    const keyCommitBytes = keyCommitment;
 
     const header = new Uint8Array(
         MAGIC.length + keyLenBytes.length + encapsulatedKey.length +
@@ -81,9 +79,7 @@ export function buildQencHeader({
     header.set(kdfSalt, p); p += kdfSalt.length;
     header.set(metaLenBytes, p); p += metaLenBytes.length;
     header.set(metaBytes, p); p += metaBytes.length;
-    if (keyCommitBytes.length > 0) {
-        header.set(keyCommitBytes, p);
-    }
+    header.set(keyCommitBytes, p);
 
     return header;
 }
@@ -216,14 +212,15 @@ export function parseQencHeader(containerBytes, options = {}) {
         throw new Error(`Unsupported AEAD mode: ${metadata.aead_mode}`);
     }
 
-    let storedKeyCommitment = null;
-    if (metadata?.hasKeyCommitment) {
-        if (offset + KEY_COMMITMENT_SIZE > containerBytes.length) {
-            throw new Error('Incomplete container: key commitment missing.');
-        }
-        storedKeyCommitment = containerBytes.subarray(offset, offset + KEY_COMMITMENT_SIZE);
-        offset += KEY_COMMITMENT_SIZE;
+    if (metadata?.hasKeyCommitment !== true) {
+        throw new Error('Invalid metadata: hasKeyCommitment must be true');
     }
+
+    if (offset + KEY_COMMITMENT_SIZE > containerBytes.length) {
+        throw new Error('Incomplete container: key commitment missing.');
+    }
+    const storedKeyCommitment = containerBytes.subarray(offset, offset + KEY_COMMITMENT_SIZE);
+    offset += KEY_COMMITMENT_SIZE;
 
     if (offset >= containerBytes.length) {
         throw new Error('Invalid container: ciphertext is missing');

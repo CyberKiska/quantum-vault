@@ -35,6 +35,9 @@ export async function parseQcontShardPreviewFile(file) {
     if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION) {
         throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}`);
     }
+    if (metaJSON?.hasKeyCommitment !== true) {
+        throw new Error('Shard metadata must indicate hasKeyCommitment=true');
+    }
     offset += metaLen;
 
     await ensureBytes(offset + 4);
@@ -63,8 +66,8 @@ export async function parseQcontShardPreviewFile(file) {
     await ensureBytes(offset + 1);
     const keyCommitLen = bytes[offset];
     offset += 1;
-    if (keyCommitLen > 32) {
-        throw new Error(`Invalid key commitment length ${keyCommitLen}`);
+    if (keyCommitLen !== 32) {
+        throw new Error(`Invalid key commitment length ${keyCommitLen}; expected 32`);
     }
     await ensureBytes(offset + keyCommitLen + 2);
     offset += keyCommitLen;

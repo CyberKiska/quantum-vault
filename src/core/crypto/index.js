@@ -264,16 +264,12 @@ export async function decryptFile(containerBytes, secretKey) {
         Kiv = derived.Kiv;
         const aesKey = derived.aesKey;
         
-        // Step 4: Verify key commitment before decryption (prevents key-commitment attacks)
-        if (storedKeyCommitment) {
-            if (!verifyKeyCommitment(Kenc, storedKeyCommitment)) {
-                throw new Error('Key commitment verification failed. Container may be corrupted or tampered with.');
-            }
-        } else if (metadata.fmt === FORMAT_VERSION) {
-            warnings.push(
-                `Container format ${FORMAT_VERSION} should include a key commitment (SHA3-256 of Kenc) ` +
-                'but none was found. Proceeding without key-commitment protection.'
-            );
+        // Step 4: Verify required key commitment before decryption
+        if (!(storedKeyCommitment instanceof Uint8Array) || storedKeyCommitment.length !== 32) {
+            throw new Error('Container is missing required key commitment.');
+        }
+        if (!verifyKeyCommitment(Kenc, storedKeyCommitment)) {
+            throw new Error('Key commitment verification failed. Container may be corrupted or tampered with.');
         }
 
         let decryptedPayload;

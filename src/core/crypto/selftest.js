@@ -66,6 +66,20 @@ function mutateTail(bytes, delta = 1) {
   return out;
 }
 
+function removeQencKeyCommitmentBytes(containerBytes) {
+  const parsed = parseQencHeader(containerBytes);
+  const keyCommitmentLen = parsed.storedKeyCommitment?.length || 0;
+  if (keyCommitmentLen <= 0) {
+    throw new Error('No key commitment present in source container');
+  }
+
+  const headerWithoutCommitLen = parsed.offset - keyCommitmentLen;
+  const out = new Uint8Array(headerWithoutCommitLen + (containerBytes.length - parsed.offset));
+  out.set(containerBytes.subarray(0, headerWithoutCommitLen), 0);
+  out.set(containerBytes.subarray(parsed.offset), headerWithoutCommitLen);
+  return out;
+}
+
 function qcontManifestRegion(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let offset = 0;
@@ -563,19 +577,18 @@ function buildCases() {
       },
     },
     {
-      name: 'F11: decryptFile returns warning when key commitment is absent',
+      name: 'F11: decryptFile fails closed when key commitment is missing',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('key-commitment-warning');
+        const payload = textBytes('key-commitment-required');
         const encrypted = await encryptFile(payload, pair.publicKey, 'f11.bin');
         const encBytes = await blobToBytes(encrypted);
+        const malformed = removeQencKeyCommitmentBytes(encBytes);
 
-        const result = await decryptFile(encBytes, pair.secretKey);
-        assert(result.warnings instanceof Array, 'decryptFile must return a warnings array');
-
-        const header = parseQencHeader(encBytes);
-        assert(header.storedKeyCommitment instanceof Uint8Array, 'QVv1-4-0 must include key commitment');
-        assert(result.warnings.length === 0, 'no warnings expected when commitment is present');
+        await expectFailure(
+          () => decryptFile(malformed, pair.secretKey),
+          'decryptFile unexpectedly accepted missing key commitment'
+        );
       },
     },
     {

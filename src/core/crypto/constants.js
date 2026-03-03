@@ -3,8 +3,8 @@
 // Magic bytes for .qenc containers
 export const MAGIC = new TextEncoder().encode('QVv1');
 
-// Minimal header size sanity check
-export const MINIMAL_CONTAINER_SIZE = 38; // MAGIC(4) + keyLen(4) + iv(12) + salt(16) + metaLen(2)
+// Minimal valid container size sanity check (current format requires key commitment)
+export const MINIMAL_CONTAINER_SIZE = 73; // MAGIC(4)+keyLen(4)+encap(1)+iv(12)+salt(16)+metaLen(2)+meta(1)+keyCommit(32)+ciphertext(1)
 
 // AES/Chunking defaults
 export const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB

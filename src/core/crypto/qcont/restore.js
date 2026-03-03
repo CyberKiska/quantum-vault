@@ -360,11 +360,22 @@ function parseShardUnsafe(arr) {
     const qencMetaBytes = readBytes(qencMetaLen, 'qenc metadata');
     const qencMetaJSON = decodeJsonBytes(qencMetaBytes, 'qenc metadata JSON');
 
-    const kcLen = readU8('key commitment length');
-    if (kcLen > KEY_COMMITMENT_MAX_LEN) {
-        throw new Error(`Invalid key commitment length: ${kcLen}`);
+    if (metaJSON?.hasKeyCommitment !== true) {
+        throw new Error('Shard metadata must indicate hasKeyCommitment=true');
     }
-    const keyCommit = kcLen > 0 ? readBytes(kcLen, 'key commitment') : null;
+
+    const kcLen = readU8('key commitment length');
+    if (kcLen !== KEY_COMMITMENT_MAX_LEN) {
+        throw new Error(`Invalid key commitment length: expected ${KEY_COMMITMENT_MAX_LEN}, got ${kcLen}`);
+    }
+    const keyCommit = readBytes(kcLen, 'key commitment');
+
+    if (typeof metaJSON?.keyCommitmentHex !== 'string' || metaJSON.keyCommitmentHex.length === 0) {
+        throw new Error('Shard metadata is missing keyCommitmentHex');
+    }
+    if (normalizeHexString(metaJSON.keyCommitmentHex) !== normalizeHexString(toHex(keyCommit))) {
+        throw new Error('Shard metadata keyCommitmentHex mismatch');
+    }
 
     const shardIndex = readU16('shard index');
     const shareLen = readU16('share length');
@@ -526,7 +537,10 @@ export async function restoreFromShards(shards, options = {}) {
     }
 
     const base = group[0];
-    const baseKeyCommit = base.keyCommit || new Uint8Array(0);
+    if (!(base.keyCommit instanceof Uint8Array) || base.keyCommit.length !== KEY_COMMITMENT_MAX_LEN) {
+        throw new Error('Shard is missing required key commitment');
+    }
+    const baseKeyCommit = base.keyCommit;
     const shardByIndex = new Map();
 
     for (const shard of group) {
@@ -560,8 +574,10 @@ export async function restoreFromShards(shards, options = {}) {
         if (!bytesEqual(shard.qencMetaBytes, base.qencMetaBytes)) {
             throw new Error(`Shard header mismatch: qenc metadata differs for shard ${shard.shardIndex}`);
         }
-        const shardKeyCommit = shard.keyCommit || new Uint8Array(0);
-        if (!bytesEqual(shardKeyCommit, baseKeyCommit)) {
+        if (!(shard.keyCommit instanceof Uint8Array) || shard.keyCommit.length !== KEY_COMMITMENT_MAX_LEN) {
+            throw new Error(`Shard ${shard.shardIndex} is missing required key commitment`);
+        }
+        if (!bytesEqual(shard.keyCommit, baseKeyCommit)) {
             throw new Error(`Shard header mismatch: key commitment differs for shard ${shard.shardIndex}`);
         }
     }
@@ -758,7 +774,7 @@ export async function restoreFromShards(shards, options = {}) {
         containerNonce: base.iv,
         kdfSalt: base.salt,
         metaBytes: base.qencMetaBytes,
-        keyCommitment: (base.keyCommit && base.keyCommit.length > 0) ? base.keyCommit : null,
+        keyCommitment: base.keyCommit,
     });
 
     const qencBytes = new Uint8Array(header.length + ciphertext.length);

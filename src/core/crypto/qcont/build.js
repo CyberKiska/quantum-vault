@@ -34,31 +34,32 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
     const keyCommitment = storedKeyCommitment;
     const ciphertext = qencBytes.subarray(offset);
 
-    // Verify the provided private key matches this container before splitting
-    if (keyCommitment) {
-        const ds = meta.domainStrings;
-        let trialSharedSecret;
-        try {
-            trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
-            const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(
-                trialSharedSecret, kdfSalt, metaBytes, ds.kdf
-            );
-            const keyMatch = verifyKeyCommitment(Kenc, keyCommitment);
-            clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
-            if (!keyMatch) {
-                throw new Error(
-                    'Secret key does not match this .qenc container (key commitment mismatch). ' +
-                    'Ensure you are using the correct secretKey.qkey for this container.'
-                );
-            }
-        } catch (e) {
-            if (trialSharedSecret instanceof Uint8Array) trialSharedSecret.fill(0);
-            if (e.message.includes('does not match')) throw e;
-            throw new Error(`Key verification failed: ${e.message}`);
-        }
+    if (!(keyCommitment instanceof Uint8Array) || keyCommitment.length !== 32) {
+        throw new Error('QENC container is missing required 32-byte key commitment.');
     }
 
+    // Verify the provided private key matches this container before splitting
     const ds = meta.domainStrings;
+    let trialSharedSecret;
+    try {
+        trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
+        const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(
+            trialSharedSecret, kdfSalt, metaBytes, ds.kdf
+        );
+        const keyMatch = verifyKeyCommitment(Kenc, keyCommitment);
+        clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
+        if (!keyMatch) {
+            throw new Error(
+                'Secret key does not match this .qenc container (key commitment mismatch). ' +
+                'Ensure you are using the correct secretKey.qkey for this container.'
+            );
+        }
+    } catch (e) {
+        if (trialSharedSecret instanceof Uint8Array) trialSharedSecret.fill(0);
+        if (e.message.includes('does not match')) throw e;
+        throw new Error(`Key verification failed: ${e.message}`);
+    }
+
     if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
         throw new Error('QENC metadata is missing valid domainStrings');
     }
@@ -195,8 +196,8 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         domainStrings: { kdf: ds.kdf, iv: ds.iv },
         fragmentFormat: 'len32-prefixed',
         perFragmentSize,
-        hasKeyCommitment: !!keyCommitment,
-        keyCommitmentHex: keyCommitment ? toHex(keyCommitment) : null,
+        hasKeyCommitment: true,
+        keyCommitmentHex: toHex(keyCommitment),
         hasEmbeddedManifest: true,
         manifestDigest: manifestDigestHex,
         shareCommitments,
@@ -210,7 +211,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
     const encapLenBytes = new Uint8Array(4); new DataView(encapLenBytes.buffer).setUint32(0, encapsulatedKey.length, false);
 
     const qcontMagic = new TextEncoder().encode('QVC1');
-    const keyCommitBytes = keyCommitment || new Uint8Array(0);
+    const keyCommitBytes = keyCommitment;
     const keyCommitLenByte = new Uint8Array([keyCommitBytes.length]);
 
     const qconts = [];
