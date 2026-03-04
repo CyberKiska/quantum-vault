@@ -7,11 +7,10 @@ import { buildArchiveManifest, canonicalizeArchiveManifest } from '../manifest/a
 import { DEFAULT_CRYPTO_PROFILE, getNonceContractForAeadMode } from '../policy.js';
 import { decapsulate } from '../mlkem.js';
 import { deriveKeyWithKmac, verifyKeyCommitment, clearKeys } from '../kdf.js';
+import { resolveErasureRuntime } from '../erasure-runtime.js';
 
 export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
-    if (typeof window === 'undefined' || !window.erasure?.split || !window.erasure?.recombine) {
-        throw new Error('Reed-Solomon runtime (window.erasure) is not available. Ensure erasure.js is loaded.');
-    }
+    const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
 
     const formatVersion = QCONT_FORMAT_VERSION;
 
@@ -113,7 +112,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
             chunkForRS = padded;
         }
 
-        const fragments = window.erasure.split(chunkForRS, k, m/2, RS_MAX_CODEWORD);
+        const fragments = erasureRuntime.split(chunkForRS, k, m/2, RS_MAX_CODEWORD);
         if (fragments.length !== n) throw new Error('RS split returned unexpected number of fragments');
         if (i === 0) perFragmentSize = fragments[0].length;
         for (let j = 0; j < fragments.length; j++) {

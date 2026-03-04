@@ -6,18 +6,17 @@ import { toUint8 } from './bytes.js';
 
 // Generate ML-KEM-1024 key pair (optionally mixing user entropy)
 export async function generateKeyPair(options = {}) {
-    const { collectUserEntropy = false, customSeed = null } = options;
+    const { userEntropyBytes = null, customSeed = null } = options;
 
     let seed, seedInfo;
     
     if (customSeed) {
-        // Use provided seed (e.g., for testing)
+        // Use provided seed (e.g., deterministic testing) without mutating caller input.
         validateSeed(customSeed);
-        seed = customSeed;
+        seed = customSeed.slice();
         seedInfo = { hasUserEntropy: false, source: 'custom' };
     } else {
-        // Generate enhanced seed
-        const result = await generateEnhancedSeed(collectUserEntropy);
+        const result = await generateEnhancedSeed({ userEntropyBytes });
         seed = result.seed;
         seedInfo = { 
             hasUserEntropy: result.hasUserEntropy, 
@@ -25,17 +24,19 @@ export async function generateKeyPair(options = {}) {
         };
     }
 
-    // Generate key pair using seeded generation
-    const keyPair = ml_kem1024.keygen(seed);
-    
-    // Clear seed from memory for security
-    seed.fill(0);
-
-    return {
-        publicKey: toUint8(keyPair.publicKey),
-        secretKey: toUint8(keyPair.secretKey),
-        seedInfo
-    };
+    try {
+        // Generate key pair using seeded generation
+        const keyPair = ml_kem1024.keygen(seed);
+        return {
+            publicKey: toUint8(keyPair.publicKey),
+            secretKey: toUint8(keyPair.secretKey),
+            seedInfo
+        };
+    } finally {
+        if (seed instanceof Uint8Array) {
+            seed.fill(0);
+        }
+    }
 }
 
 // Encapsulate using ML-KEM-1024 public key

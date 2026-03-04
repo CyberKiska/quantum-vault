@@ -1,7 +1,7 @@
-// --- QCONT shard preview helpers (UI-facing, non-crypto) ---
-// Parse only the header portion of a .qcont shard file.
+// UI-layer shard preview helpers.
+// Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
-import { QCONT_FORMAT_VERSION } from '../constants.js';
+import { QCONT_FORMAT_VERSION } from '../core/crypto/constants.js';
 
 export async function parseQcontShardPreviewFile(file) {
     const decoder = new TextDecoder();

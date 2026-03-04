@@ -1,4 +1,4 @@
-import { assessShardSelection } from '../../crypto/qcont/preview.js';
+import { assessShardSelection } from '../../../app/crypto-service.js';
 
 function applyAssessment(statusDiv, statusText, actionButton, assessment) {
     if (assessment.state === 'sufficient') {

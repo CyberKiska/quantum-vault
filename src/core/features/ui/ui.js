@@ -1,7 +1,6 @@
-import { encryptFile, decryptFile, hashBytes, generateKeyPair } from '../../crypto/index.js';
-import { UserEntropyCollector } from '../../crypto/entropy.js';
-import { registerSessionWipeHandler } from '../../crypto/session-wipe.js';
-import { runSelfTest } from '../../crypto/selftest.js';
+import { BrowserEntropyCollector } from '../../../app/browser-entropy-collector.js';
+import { encryptFile, decryptFile, hashBytes, generateKeyPair, runSelfTest } from '../../../app/crypto-service.js';
+import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
@@ -10,13 +9,20 @@ import { updateShardSelectionStatus } from './shards-status.js';
 import { showToast } from './toast.js';
 
 // Pro mode state
-let userEntropyCollected = false;
+let collectedUserEntropy = null;
 let entropyCollector = null;
 let proShardsStatusSeq = 0;
 let unregisterUiSessionWipe = null;
 
+function wipeCollectedUserEntropy() {
+    if (collectedUserEntropy instanceof Uint8Array) {
+        collectedUserEntropy.fill(0);
+    }
+    collectedUserEntropy = null;
+}
+
 function wipeProSessionSecrets() {
-    userEntropyCollected = false;
+    wipeCollectedUserEntropy();
     if (entropyCollector && typeof entropyCollector.dispose === 'function') {
         entropyCollector.dispose();
     }
@@ -327,7 +333,7 @@ export function initUI() {
             advancedEntropyBtn.disabled = true;
             advancedEntropyBtn.textContent = '🎲 Collecting...';
 
-            entropyCollector = new UserEntropyCollector();
+            entropyCollector = new BrowserEntropyCollector();
 
             // Update progress with enhanced information including entropy estimation
             const progressInterval = setInterval(() => {
@@ -341,12 +347,13 @@ export function initUI() {
             }, 200);
 
             const collectedSeed = await entropyCollector.startCollection();
-            if (collectedSeed instanceof Uint8Array) {
-                collectedSeed.fill(0);
+            if (!(collectedSeed instanceof Uint8Array) || collectedSeed.length === 0) {
+                throw new Error('Advanced entropy collector returned no seed');
             }
+            wipeCollectedUserEntropy();
+            collectedUserEntropy = collectedSeed;
 
             clearInterval(progressInterval);
-            userEntropyCollected = true;
             if (entropyCollector && typeof entropyCollector.wipeSensitiveState === 'function') {
                 entropyCollector.wipeSensitiveState();
             }
@@ -430,7 +437,8 @@ export function initUI() {
         try {
             log('Generating ML-KEM-1024 keypair...');
             
-            if (userEntropyCollected) {
+            const hasCollectedEntropy = collectedUserEntropy instanceof Uint8Array && collectedUserEntropy.length > 0;
+            if (hasCollectedEntropy) {
                 log('Using crypto.getRandomValues() + collected user entropy for enhanced security');
             } else {
                 log('Using crypto.getRandomValues() with 64-byte seed (secure default)');
@@ -438,8 +446,9 @@ export function initUI() {
             
             // Generate keys with collected entropy if available
             const { secretKey, publicKey, seedInfo } = await generateKeyPair({ 
-                collectUserEntropy: userEntropyCollected 
+                userEntropyBytes: hasCollectedEntropy ? collectedUserEntropy : null
             });
+            wipeCollectedUserEntropy();
             
             const skHash = await hashBytes(secretKey);
             const pkHash = await hashBytes(publicKey);
@@ -458,8 +467,7 @@ export function initUI() {
             if (pubKeyInput) pubKeyInput.value = '';
             updateSidebarStatus(pkHash, skHash);
             
-            // Reset entropy collection state
-            userEntropyCollected = false;
+            // Reset entropy collection UI state
             if (advancedEntropyBtn) {
                 advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
                 advancedEntropyBtn.style.backgroundColor = '';

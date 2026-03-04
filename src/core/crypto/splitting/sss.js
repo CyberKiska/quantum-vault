@@ -1,6 +1,16 @@
 // --- Shamir Secret Sharing ---
 
-import { validateRsParams, calculateShamirThreshold } from '../../../utils.js';
+function validateRsParams(n, k) {
+    if (!Number.isInteger(n) || !Number.isInteger(k)) return false;
+    if (k < 2 || n <= k) return false;
+    if ((n - k) % 2 !== 0) return false;
+    if (n < 5) return false;
+    return true;
+}
+
+function calculateShamirThreshold(n, k) {
+    return k + ((n - k) / 2);
+}
 
 // Split secret into n shares with threshold t
 export async function splitSecret(secret, n, t) {

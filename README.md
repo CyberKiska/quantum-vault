@@ -47,35 +47,56 @@ Threat model (concise):
 
 ### Project repository structure
 ```
-index.html                      # Main HTML file
-style.css                       # Main CSS styles file
-package.json                    # Dependencies, downloadable libraries
-public/third-party/erasure.js   # ErasureCodes library
+index.html                           # Main HTML file
+style.css                            # Main CSS styles file
+package.json                         # Dependencies, downloadable libraries
+public/third-party/erasure.js        # ErasureCodes library
 src/
-├── main.js                     # Application entry point
-├── utils.js                    # Consolidated utility functions  
-├── core/
-   ├── crypto/                  # Core cryptographic modules
-   │   ├── index.js             # Main crypto orchestration
-   │   ├── constants.js         # Storage of permanent variables
-   │   ├── mlkem.js             # ML-KEM-1024 implementation
-   │   ├── aes.js               # AES-256-GCM + KMAC256
-   │   ├── entropy.js           # Enhanced entropy collection
-   │   ├── qcont/               # .qcont format handling
-   │   │   ├── build.js         # Shard building
-   │   │   ├── restore.js       # Shard restoration
-   │   │   └── preview.js       # Shard preview helper for UI
-   │   ├── qenc/                # .qenc format handling
-   │   │   └── format.js        # Creating and parsing header
-   │   └── splitting/           # Secret/data splitting
-   │       └── sss.js           # Shamir Secret Sharing
-   └── features/                # Application features
-       ├── lite-mode.js         # Simplified interface
-       ├── bundle-payload.js    # Combining multiple files
-       └── ui/                  # User interface modules
-           ├── ui.js            # Pro mode interface
-           ├── shards-status.js # Shard status helper for UI
-           └── logging.js       # Consistent logging
+├── main.js                          # Application entry point
+├── utils.js                         # Shared browser utilities
+├── app/                             # App-layer adapters (browser/runtime boundary)
+│   ├── crypto-service.js            # UI-facing facade for core crypto operations
+│   ├── session-wipe.js              # beforeunload/pagehide secret wipe registry
+│   ├── browser-entropy-collector.js # Browser entropy collection (DOM events)
+│   ├── restore-inputs.js            # Restore input classification from File objects
+│   └── shard-preview.js             # Lightweight .qcont preview for UI status
+└── core/
+    ├── crypto/                      # Core crypto + format logic (UI-agnostic)
+    │   ├── index.js                 # Main encryption/decryption orchestration
+    │   ├── aead.js                  # AES-GCM nonce/IV policy helpers
+    │   ├── kdf.js                   # KMAC derivation and key commitment helpers
+    │   ├── mlkem.js                 # ML-KEM-1024 implementation
+    │   ├── entropy.js               # CSPRNG + entropy mixing primitives
+    │   ├── erasure-runtime.js       # RS runtime resolver (globalThis/injected)
+    │   ├── constants.js             # Format/profile constants
+    │   ├── policy.js                # Crypto policy validation
+    │   ├── bytes.js                 # Byte/hex/constant-time helpers
+    │   ├── qenc/
+    │   │   └── format.js            # .qenc header build/parse
+    │   ├── qcont/
+    │   │   ├── build.js             # Shard construction
+    │   │   └── restore.js           # Shard restore/reconstruction
+    │   ├── manifest/
+    │   │   ├── archive-manifest.js
+    │   │   └── jcs.js
+    │   ├── auth/
+    │   │   ├── qsig.js
+    │   │   ├── stellar-sig.js
+    │   │   └── verify-signatures.js
+    │   ├── splitting/
+    │   │   └── sss.js               # Shamir Secret Sharing
+    │   └── selftest.js              # Headless/browser self-test suite
+    └── features/                    # UI workflows and rendering
+        ├── lite-mode.js             # Simplified interface
+        ├── bundle-payload.js        # Multi-file bundle payload helpers
+        ├── qcont/
+        │   ├── build-ui.js          # Pro split UI handlers
+        │   └── restore-ui.js        # Pro restore UI handlers
+        └── ui/
+            ├── ui.js
+            ├── shards-status.js
+            ├── logging.js
+            └── toast.js
 ```
 
 ### Components

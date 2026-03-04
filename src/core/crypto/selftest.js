@@ -19,6 +19,7 @@ import {
   NONCE_POLICY_PER_CHUNK_V1,
   NONCE_POLICY_SINGLE_CONTAINER_V1,
 } from './policy.js';
+import { resolveErasureRuntime } from './erasure-runtime.js';
 
 function textBytes(value) {
   return new TextEncoder().encode(value);
@@ -128,19 +129,38 @@ async function ensureRuntimeCrypto() {
 }
 
 async function ensureErasureRuntime() {
-  const existing = globalThis.window?.erasure;
-  if (existing?.split && existing?.recombine) return;
-
-  if (!globalThis.window) {
-    globalThis.window = globalThis;
+  try {
+    resolveErasureRuntime();
+    return;
+  } catch {
+    // Continue with runtime bootstrap.
   }
 
-  await import('../../../public/third-party/erasure.js');
-
-  const erasure = globalThis.window?.erasure;
-  if (!erasure?.split || !erasure?.recombine) {
-    throw new Error('Reed-Solomon runtime (window.erasure) is unavailable');
+  const isNode = typeof process !== 'undefined' && Boolean(process.versions?.node);
+  if (!isNode) {
+    throw new Error('Reed-Solomon runtime (globalThis.erasure) is unavailable');
   }
+
+  const fsSpecifier = ['node', 'fs/promises'].join(':');
+  const pathSpecifier = ['node', 'path'].join(':');
+  const urlSpecifier = ['node', 'url'].join(':');
+
+  const [{ readFile }, { dirname, resolve }, { fileURLToPath }] = await Promise.all([
+    import(fsSpecifier),
+    import(pathSpecifier),
+    import(urlSpecifier),
+  ]);
+
+  const thisFile = fileURLToPath(import.meta.url);
+  const erasurePath = resolve(dirname(thisFile), '../../../public/third-party/erasure.js');
+  const erasureSource = await readFile(erasurePath, 'utf8');
+
+  const cjsShim = { exports: {} };
+  const evaluateErasure = new Function('module', 'exports', erasureSource);
+  evaluateErasure(cjsShim, cjsShim.exports);
+  globalThis.erasure = cjsShim.exports;
+
+  resolveErasureRuntime();
 }
 
 async function runCase(name, fn) {

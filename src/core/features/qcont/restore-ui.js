@@ -1,8 +1,9 @@
 // UI event handlers for .qcont shard restoration (Pro mode)
 
-import { parseShard, restoreFromShards, classifyRestoreInputFiles } from './restore.js';
-import { log, logError, logWarning, logSuccess } from '../../features/ui/logging.js';
-import { showToast } from '../../features/ui/toast.js';
+import { parseShard, restoreFromShards } from '../../../app/crypto-service.js';
+import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
+import { log, logError, logWarning, logSuccess } from '../ui/logging.js';
+import { showToast } from '../ui/toast.js';
 import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
 
 async function readVerificationOptionsFromDom({

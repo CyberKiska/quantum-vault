@@ -1,12 +1,12 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { hashBytes } from '../index.js';
 import { bytesEqual, toHex } from '../bytes.js';
-import { readFileAsUint8Array } from '../../../utils.js';
 import { buildQencHeader } from '../qenc/format.js';
 import { QCONT_FORMAT_VERSION } from '../constants.js';
 import { parseArchiveManifestBytes } from '../manifest/archive-manifest.js';
 import { verifyManifestSignatures } from '../auth/verify-signatures.js';
 import { validateContainerPolicyMetadata } from '../policy.js';
+import { resolveErasureRuntime } from '../erasure-runtime.js';
 
 const QCONT_MAGIC = 'QVC1';
 const KEY_COMMITMENT_MAX_LEN = 32;
@@ -465,6 +465,7 @@ export async function restoreFromShards(shards, options = {}) {
     const onError = options.onError || (() => {});
     const onWarn = options.onWarn || onError;
     const strict = options.strict ?? true;
+    const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
 
     if (!Array.isArray(shards) || shards.length === 0) {
         throw new Error('No shards provided');
@@ -734,7 +735,7 @@ export async function restoreFromShards(shards, options = {}) {
 
         let recombined;
         try {
-            recombined = window.erasure.recombine(encoded, thisLen, k, m / 2, rsEncodeBase);
+            recombined = erasureRuntime.recombine(encoded, thisLen, k, m / 2, rsEncodeBase);
         } catch (error) {
             throw new Error(`RS recombination failed on chunk ${i}: ${error?.message ?? error}`);
         }
@@ -813,111 +814,5 @@ export async function restoreFromShards(shards, options = {}) {
             warnings: manifestContext.warnings,
             verification: manifestContext.verification,
         },
-    };
-}
-
-function startsWithAscii(bytes, ascii) {
-    if (!(bytes instanceof Uint8Array)) return false;
-    if (bytes.length < ascii.length) return false;
-    for (let i = 0; i < ascii.length; i += 1) {
-        if (bytes[i] !== ascii.charCodeAt(i)) return false;
-    }
-    return true;
-}
-
-function tryParseJsonBytes(bytes) {
-    try {
-        return JSON.parse(new TextDecoder().decode(bytes));
-    } catch {
-        return null;
-    }
-}
-
-export async function classifyRestoreInputFiles(files) {
-    const shardFiles = [];
-    const signatures = [];
-    const ignoredFileNames = [];
-    const manifestCandidates = [];
-    let trustedPqPublicKeyFileBytes = null;
-
-    for (const file of files) {
-        const name = String(file?.name || 'unnamed');
-        const lowerName = name.toLowerCase();
-
-        if (lowerName.endsWith('.qcont')) {
-            shardFiles.push(file);
-            continue;
-        }
-
-        const bytes = await readFileAsUint8Array(file);
-
-        if (startsWithAscii(bytes, QCONT_MAGIC)) {
-            shardFiles.push(file);
-            continue;
-        }
-
-        if (startsWithAscii(bytes, 'PQPK') || lowerName.endsWith('.pqpk')) {
-            if (!trustedPqPublicKeyFileBytes) {
-                trustedPqPublicKeyFileBytes = bytes;
-            } else if (!bytesEqual(trustedPqPublicKeyFileBytes, bytes)) {
-                throw new Error('Multiple different .pqpk files were provided. Keep only one trusted PQ key.');
-            }
-            continue;
-        }
-
-        if (startsWithAscii(bytes, 'PQSG') || lowerName.endsWith('.qsig')) {
-            signatures.push({ name, bytes });
-            continue;
-        }
-
-        const parsedJson = tryParseJsonBytes(bytes);
-        if (parsedJson?.schema === 'stellar-file-signature/v1') {
-            signatures.push({ name, bytes });
-            continue;
-        }
-
-        let parsedManifest = null;
-        try {
-            parsedManifest = parseArchiveManifestBytes(bytes);
-        } catch {
-            // not a canonical archive manifest
-        }
-
-        if (parsedManifest) {
-            manifestCandidates.push({
-                name,
-                bytes: parsedManifest.bytes,
-                digestHex: parsedManifest.digestHex,
-            });
-            continue;
-        }
-
-        if (lowerName.endsWith('.qvmanifest.json')) {
-            throw new Error(`Invalid canonical manifest file: ${name}`);
-        }
-
-        if (lowerName.endsWith('.sig') || lowerName.endsWith('.json')) {
-            signatures.push({ name, bytes });
-            continue;
-        }
-
-        ignoredFileNames.push(name);
-    }
-
-    let manifestBytes = null;
-    if (manifestCandidates.length > 0) {
-        const uniqueDigests = new Set(manifestCandidates.map((item) => item.digestHex));
-        if (uniqueDigests.size > 1) {
-            throw new Error('Multiple different manifest files were provided. Keep only one canonical manifest.');
-        }
-        manifestBytes = manifestCandidates[0].bytes;
-    }
-
-    return {
-        shardFiles,
-        manifestBytes,
-        signatures,
-        trustedPqPublicKeyFileBytes,
-        ignoredFileNames,
     };
 }

@@ -1,8 +1,8 @@
 // UI event handler for .qcont shard building (Pro mode)
 
-import { buildQcontShards } from './build.js';
-import { log, logError } from '../../features/ui/logging.js';
-import { showToast } from '../../features/ui/toast.js';
+import { buildQcontShards } from '../../../app/crypto-service.js';
+import { log, logError } from '../ui/logging.js';
+import { showToast } from '../ui/toast.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams } from '../../../utils.js';
 
 export function initQcontBuildUI() {

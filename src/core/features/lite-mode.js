@@ -1,12 +1,18 @@
 // --- Lite Mode - Simplified Interface ---
 // Lite mode is a thin UI wrapper over the same cryptographic operations as Pro mode
 
-import { encryptFile, decryptFile, generateKeyPair, hashBytes } from '../crypto/index.js';
-import { buildQcontShards } from '../crypto/qcont/build.js';
-import { assessShardSelection } from '../crypto/qcont/preview.js';
-import { parseShard, restoreFromShards } from '../crypto/qcont/restore.js';
-import { collectRestoreVerificationOptions } from '../crypto/qcont/restore-ui.js';
-import { registerSessionWipeHandler } from '../crypto/session-wipe.js';
+import {
+    encryptFile,
+    decryptFile,
+    generateKeyPair,
+    hashBytes,
+    buildQcontShards,
+    parseShard,
+    restoreFromShards,
+    assessShardSelection,
+} from '../../app/crypto-service.js';
+import { collectRestoreVerificationOptions } from './qcont/restore-ui.js';
+import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import { log, logError, logSuccess, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
