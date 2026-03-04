@@ -609,7 +609,6 @@ async function restoreLiteShards() {
                 download(new Blob([entry.bytes]), entry.name);
             }
             restoredLabel = `${entries.length} files bundle`;
-            log(`📦 Restored ${entries.length} files from encrypted bundle`, { isLiteMode: true });
         } else {
             const qencHash = await hashBytes(qencBytes);
             let originalName = originalFileNames.get(qencHash);

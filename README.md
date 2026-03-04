@@ -47,10 +47,19 @@ Threat model (concise):
 
 ### Project repository structure
 ```
+LICENSE                              # License text (GPLv3)
+README.md                            # Project overview, architecture, format docs
 index.html                           # Main HTML file
 style.css                            # Main CSS styles file
-package.json                         # Dependencies, downloadable libraries
-public/third-party/erasure.js        # ErasureCodes library
+package.json                         # Dependencies and npm scripts
+package-lock.json                    # Locked dependency graph
+scripts/
+├── dev.mjs                          # Local static dev server
+├── build.mjs                        # Deterministic build + integrity checks
+└── selftest.mjs                     # Headless self-test runner entrypoint
+public/
+└── third-party/
+    └── erasure.js                   # Reed-Solomon runtime library
 src/
 ├── main.js                          # Application entry point
 ├── utils.js                         # Shared browser utilities
@@ -77,12 +86,12 @@ src/
     │   │   ├── build.js             # Shard construction
     │   │   └── restore.js           # Shard restore/reconstruction
     │   ├── manifest/
-    │   │   ├── archive-manifest.js
-    │   │   └── jcs.js
+    │   │   ├── archive-manifest.js  # Canonical archive manifest schema/validation
+    │   │   └── jcs.js               # RFC-8785 canonicalization helpers
     │   ├── auth/
-    │   │   ├── qsig.js
-    │   │   ├── stellar-sig.js
-    │   │   └── verify-signatures.js
+    │   │   ├── qsig.js              # Quantum Signer detached signature parsing/verify
+    │   │   ├── stellar-sig.js       # Stellar WebSigner detached signature verify
+    │   │   └── verify-signatures.js # Unified verification policy orchestration
     │   ├── splitting/
     │   │   └── sss.js               # Shamir Secret Sharing
     │   └── selftest.js              # Headless/browser self-test suite
@@ -93,10 +102,11 @@ src/
         │   ├── build-ui.js          # Pro split UI handlers
         │   └── restore-ui.js        # Pro restore UI handlers
         └── ui/
-            ├── ui.js
-            ├── shards-status.js
-            ├── logging.js
-            └── toast.js
+            ├── ui.js                # Pro UI orchestration
+            ├── shards-status.js     # Shard threshold/readiness status UI
+            ├── logging.js           # Unified structured logs for Lite/Pro
+            └── toast.js             # Toast notification UI helpers
+dist/                                # Generated build artifacts
 ```
 
 ### Components

@@ -1,7 +1,7 @@
 import { BrowserEntropyCollector } from '../../../app/browser-entropy-collector.js';
 import { encryptFile, decryptFile, hashBytes, generateKeyPair, runSelfTest } from '../../../app/crypto-service.js';
 import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
-import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize } from '../../../utils.js';
+import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
 import { updateShardSelectionStatus } from './shards-status.js';
@@ -34,7 +34,7 @@ function shortFingerprint(value) {
     const normalized = value.trim().toLowerCase();
     if (!normalized) return 'Loaded';
     if (normalized === 'loaded') return 'Loaded';
-    return normalized.length <= 8 ? normalized : `${normalized.slice(0, 8)}...`;
+    return shortenHash(normalized);
 }
 
 export function updateSidebarStatus(pubHash, secHash) {
