@@ -2,10 +2,10 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../bytes.js';
 import {
   AAD_POLICY_ID_V1,
-  CRYPTO_PROFILE_ID_V1,
+  CRYPTO_PROFILE_ID_V2,
   DEFAULT_CRYPTO_PROFILE,
-  KDF_TREE_ID_V1,
-  NONCE_POLICY_PER_CHUNK_V1,
+  KDF_TREE_ID_V2,
+  NONCE_POLICY_PER_CHUNK_V3,
   assertChunkCountWithinPolicy,
   getNonceContractForAeadMode,
   getCryptoProfile,
@@ -43,7 +43,7 @@ function ensureHashList(values, field) {
 }
 
 export function buildArchiveManifest(params) {
-  const profile = getCryptoProfile(params.cryptoProfileId || CRYPTO_PROFILE_ID_V1);
+  const profile = getCryptoProfile(params.cryptoProfileId || CRYPTO_PROFILE_ID_V2);
   const aeadMode = ensureString(params.aeadMode, 'aeadMode');
   const nonceContract = getNonceContractForAeadMode(aeadMode, profile);
 
@@ -278,9 +278,9 @@ export function parseArchiveManifestBytes(manifestBytes, options = {}) {
 export const ARCHIVE_MANIFEST_SCHEMA = MANIFEST_SCHEMA;
 export const ARCHIVE_MANIFEST_VERSION = MANIFEST_VERSION;
 export const ARCHIVE_MANIFEST_DEFAULTS = {
-  cryptoProfileId: CRYPTO_PROFILE_ID_V1,
-  kdfTreeId: KDF_TREE_ID_V1,
-  noncePolicyId: NONCE_POLICY_PER_CHUNK_V1,
+  cryptoProfileId: CRYPTO_PROFILE_ID_V2,
+  kdfTreeId: KDF_TREE_ID_V2,
+  noncePolicyId: NONCE_POLICY_PER_CHUNK_V3,
   aadPolicyId: AAD_POLICY_ID_V1,
 };
 

@@ -8,17 +8,19 @@ export const MINIMAL_CONTAINER_SIZE = 73; // MAGIC(4)+keyLen(4)+encap(1)+iv(12)+
 
 // AES/Chunking defaults
 export const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB
-export const KDF_DOMAIN_V1 = 'quantum-vault:kdf:v1';
-export const IV_DOMAIN_V1 = 'quantum-vault:chunk-iv:v1';
+export const KDF_DOMAIN_V2 = 'quantum-vault:kdf:v2';
+export const IV_DOMAIN_V2 = 'quantum-vault:chunk-iv:v2';
+export const KENC_DOMAIN_V2 = 'quantum-vault:kenc:v2';
+export const KIV_DOMAIN_V2 = 'quantum-vault:kiv:v2';
 
 // Key commitment (SHA3-256 of Kenc) size in bytes
 export const KEY_COMMITMENT_SIZE = 32;
 
 // Current container format version
-export const FORMAT_VERSION = 'QVv1-4-0';
+export const FORMAT_VERSION = 'QVv1-5-0';
 
 // Current shard format version
-export const QCONT_FORMAT_VERSION = 'QVqcont-4';
+export const QCONT_FORMAT_VERSION = 'QVqcont-5';
 
 // Maximum plaintext file size before allocation (1 GiB)
 export const MAX_FILE_SIZE = 1024 * 1024 * 1024;

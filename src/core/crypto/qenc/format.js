@@ -4,7 +4,7 @@ import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } fr
 import { bytesEqual } from '../bytes.js';
 import {
     IV_STRATEGY_SINGLE_IV,
-    IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+    IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
     NONCE_COUNTER_BITS_U32,
     NONCE_MAX_CHUNK_COUNT_U32,
 } from '../aead.js';
@@ -158,8 +158,14 @@ export function parseQencHeader(containerBytes, options = {}) {
     if (typeof metadata?.iv_strategy !== 'string' || metadata.iv_strategy.length === 0) {
         throw new Error('Invalid metadata: missing iv_strategy');
     }
-    if (!metadata.domainStrings || typeof metadata.domainStrings.kdf !== 'string' || typeof metadata.domainStrings.iv !== 'string') {
-        throw new Error('Invalid metadata: missing domainStrings.kdf/domainStrings.iv');
+    if (
+        !metadata.domainStrings ||
+        typeof metadata.domainStrings.kdf !== 'string' ||
+        typeof metadata.domainStrings.iv !== 'string' ||
+        typeof metadata.domainStrings.kenc !== 'string' ||
+        typeof metadata.domainStrings.kiv !== 'string'
+    ) {
+        throw new Error('Invalid metadata: missing domainStrings.kdf/domainStrings.iv/domainStrings.kenc/domainStrings.kiv');
     }
     if (typeof metadata?.noncePolicyId !== 'string' || metadata.noncePolicyId.length === 0) {
         throw new Error('Invalid metadata: missing noncePolicyId');
@@ -199,8 +205,8 @@ export function parseQencHeader(containerBytes, options = {}) {
             throw new Error('Invalid metadata: single-container-aead requires maxChunkCount=1');
         }
     } else if (metadata.aead_mode === 'per-chunk-aead') {
-        if (metadata.iv_strategy !== IV_STRATEGY_KMAC_PREFIX64_CTR32_V2) {
-            throw new Error(`Invalid metadata: per-chunk-aead requires iv_strategy="${IV_STRATEGY_KMAC_PREFIX64_CTR32_V2}"`);
+        if (metadata.iv_strategy !== IV_STRATEGY_KMAC_PREFIX64_CTR32_V3) {
+            throw new Error(`Invalid metadata: per-chunk-aead requires iv_strategy="${IV_STRATEGY_KMAC_PREFIX64_CTR32_V3}"`);
         }
         if (metadata.counterBits !== NONCE_COUNTER_BITS_U32) {
             throw new Error(`Invalid metadata: per-chunk-aead requires counterBits=${NONCE_COUNTER_BITS_U32}`);

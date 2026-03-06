@@ -1,23 +1,29 @@
 // Crypto policy registry and validators
+import {
+  KDF_DOMAIN_V2,
+  IV_DOMAIN_V2,
+  KENC_DOMAIN_V2,
+  KIV_DOMAIN_V2,
+} from './constants.js';
 
-export const CRYPTO_PROFILE_ID_V1 = 'QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v1';
-export const KDF_TREE_ID_V1 = 'QV-KDF-TREE-v1';
+export const CRYPTO_PROFILE_ID_V2 = 'QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2';
+export const KDF_TREE_ID_V2 = 'QV-KDF-TREE-v2';
 export const NONCE_POLICY_SINGLE_CONTAINER_V1 = 'QV-GCM-RAND96-v1';
-export const NONCE_POLICY_PER_CHUNK_V1 = 'QV-GCM-KMACPFX64-CTR32-v2';
+export const NONCE_POLICY_PER_CHUNK_V3 = 'QV-GCM-KMACPFX64-CTR32-v3';
 export const AAD_POLICY_ID_V1 = 'QV-AAD-HEADER-CHUNK-v1';
 export const NONCE_MODE_RANDOM96 = 'random96';
 export const NONCE_MODE_KMAC_CTR32 = 'kmac-prefix64-ctr32';
 
 export const PROFILE_REGISTRY = Object.freeze({
-  [CRYPTO_PROFILE_ID_V1]: Object.freeze({
-    cryptoProfileId: CRYPTO_PROFILE_ID_V1,
-    kdfTreeId: KDF_TREE_ID_V1,
+  [CRYPTO_PROFILE_ID_V2]: Object.freeze({
+    cryptoProfileId: CRYPTO_PROFILE_ID_V2,
+    kdfTreeId: KDF_TREE_ID_V2,
     aadPolicyId: AAD_POLICY_ID_V1,
     domainStrings: Object.freeze({
-      kdf: 'quantum-vault:kdf:v1',
-      iv: 'quantum-vault:chunk-iv:v1',
-      kenc: 'quantum-vault:kenc:v1',
-      kiv: 'quantum-vault:kiv:v1',
+      kdf: KDF_DOMAIN_V2,
+      iv: IV_DOMAIN_V2,
+      kenc: KENC_DOMAIN_V2,
+      kiv: KIV_DOMAIN_V2,
     }),
     noncePolicies: Object.freeze({
       'single-container-aead': Object.freeze({
@@ -27,7 +33,7 @@ export const PROFILE_REGISTRY = Object.freeze({
         maxChunkCount: 1,
       }),
       'per-chunk-aead': Object.freeze({
-        noncePolicyId: NONCE_POLICY_PER_CHUNK_V1,
+        noncePolicyId: NONCE_POLICY_PER_CHUNK_V3,
         nonceMode: NONCE_MODE_KMAC_CTR32,
         counterBits: 32,
         maxChunkCount: 0xffffffff,
@@ -36,9 +42,9 @@ export const PROFILE_REGISTRY = Object.freeze({
   }),
 });
 
-export const DEFAULT_CRYPTO_PROFILE = PROFILE_REGISTRY[CRYPTO_PROFILE_ID_V1];
+export const DEFAULT_CRYPTO_PROFILE = PROFILE_REGISTRY[CRYPTO_PROFILE_ID_V2];
 
-export function getCryptoProfile(profileId = CRYPTO_PROFILE_ID_V1) {
+export function getCryptoProfile(profileId = CRYPTO_PROFILE_ID_V2) {
   const profile = PROFILE_REGISTRY[profileId];
   if (!profile) {
     throw new Error(`Unsupported cryptoProfileId: ${profileId}`);
@@ -110,11 +116,22 @@ export function validateContainerPolicyMetadata(metadata, options = {}) {
   }
 
   const ds = metadata?.domainStrings;
-  if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
+  if (
+    !ds ||
+    typeof ds.kdf !== 'string' ||
+    typeof ds.iv !== 'string' ||
+    typeof ds.kenc !== 'string' ||
+    typeof ds.kiv !== 'string'
+  ) {
     throw new Error('Container metadata is missing valid domainStrings');
   }
 
-  if (ds.kdf !== profile.domainStrings.kdf || ds.iv !== profile.domainStrings.iv) {
+  if (
+    ds.kdf !== profile.domainStrings.kdf ||
+    ds.iv !== profile.domainStrings.iv ||
+    ds.kenc !== profile.domainStrings.kenc ||
+    ds.kiv !== profile.domainStrings.kiv
+  ) {
     throw new Error('Container domainStrings do not match allowed crypto profile');
   }
 
@@ -144,6 +161,8 @@ export function buildPolicyMetadataFields(
     domainStrings: {
       kdf: profile.domainStrings.kdf,
       iv: profile.domainStrings.iv,
+      kenc: profile.domainStrings.kenc,
+      kiv: profile.domainStrings.kiv,
     },
   };
 }

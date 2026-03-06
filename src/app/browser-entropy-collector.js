@@ -1,5 +1,5 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { kmac256 } from '@noble/hashes/sha3-addons.js';
+import { kmac256 } from '../core/crypto/kmac.js';
 
 const CONFIG = {
     minEvents: 100,
@@ -292,13 +292,13 @@ export class BrowserEntropyCollector {
 
         const counter = new Uint8Array(4);
         counter[0] = 0;
-        const firstBlock = kmac256(this.entropyState, counter, undefined, {
-            customization: 'quantum-vault:final-seed:v1',
+        const firstBlock = kmac256(this.entropyState, counter, {
+            customization: 'quantum-vault:final-seed:v2',
         });
 
         counter[0] = 1;
-        const secondBlock = kmac256(this.entropyState, counter, undefined, {
-            customization: 'quantum-vault:final-seed:v1',
+        const secondBlock = kmac256(this.entropyState, counter, {
+            customization: 'quantum-vault:final-seed:v2',
         });
 
         const finalSeed = new Uint8Array(CONFIG.seedLength);
@@ -377,4 +377,3 @@ export class BrowserEntropyCollector {
         return timingEntropy;
     }
 }
-

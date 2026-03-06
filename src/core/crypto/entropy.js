@@ -1,4 +1,4 @@
-import { kmac256 } from '@noble/hashes/sha3-addons.js';
+import { kmac256 } from './kmac.js';
 
 const CONFIG = {
     seedLength: 64,
@@ -37,8 +37,8 @@ export function mixEntropy(baseSeed, userEntropy = new Uint8Array(0)) {
         return baseSeed;
     }
 
-    const kmacMixed = kmac256(baseSeed, userEntropy, undefined, {
-        customization: 'quantum-vault:entropy-mix:v1',
+    const kmacMixed = kmac256(baseSeed, userEntropy, {
+        customization: 'quantum-vault:entropy-mix:v2',
     });
 
     const rawMixed = new Uint8Array(SEED_LENGTH);
@@ -70,4 +70,3 @@ export function validateSeed(seed) {
 
 export { CONFIG, SEED_LENGTH };
 export const MIN_ENTROPY_EVENTS = 100;
-

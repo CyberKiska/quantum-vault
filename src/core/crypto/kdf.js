@@ -1,15 +1,26 @@
 // Key derivation (KMAC256) and key commitment (SHA3-256)
 
-import { kmac256 } from '@noble/hashes/sha3-addons.js';
 import { sha3_256 } from '@noble/hashes/sha3.js';
 import { timingSafeEqual } from './bytes.js';
+import { kmac256, KMAC256_DEFAULT_DKLEN } from './kmac.js';
 
 export const AES_KEY_SIZE = 32;
+const KENC_LABEL = new Uint8Array([1]);
+const KIV_LABEL = new Uint8Array([2]);
 
-// Derive keys from shared secret using KMAC256
-export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, customization) {
-    if (typeof customization !== 'string' || customization.length === 0) {
-        throw new Error('KMAC customization domain is required');
+// Derive keys from shared secret using KMAC256 per SP 800-185.
+export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStrings) {
+    if (!domainStrings || typeof domainStrings !== 'object') {
+        throw new Error('KMAC domainStrings are required');
+    }
+    if (typeof domainStrings.kdf !== 'string' || domainStrings.kdf.length === 0) {
+        throw new Error('KMAC KDF customization domain is required');
+    }
+    if (typeof domainStrings.kenc !== 'string' || domainStrings.kenc.length === 0) {
+        throw new Error('KMAC Kenc customization domain is required');
+    }
+    if (typeof domainStrings.kiv !== 'string' || domainStrings.kiv.length === 0) {
+        throw new Error('KMAC Kiv customization domain is required');
     }
 
     const kmacMessage = new Uint8Array(salt.length + metaBytes.length);
@@ -20,10 +31,19 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, customiza
     let Kiv = null;
     let completed = false;
     try {
-        Kraw = kmac256(sharedSecret, kmacMessage, 32, { customization });
+        Kraw = kmac256(sharedSecret, kmacMessage, {
+            dkLen: KMAC256_DEFAULT_DKLEN,
+            customization: domainStrings.kdf,
+        });
 
-        Kenc = kmac256(Kraw, new Uint8Array([1]), 32, { customization: 'quantum-vault:kenc:v1' });
-        Kiv = kmac256(Kraw, new Uint8Array([2]), 32, { customization: 'quantum-vault:kiv:v1' });
+        Kenc = kmac256(Kraw, KENC_LABEL, {
+            dkLen: AES_KEY_SIZE,
+            customization: domainStrings.kenc,
+        });
+        Kiv = kmac256(Kraw, KIV_LABEL, {
+            dkLen: AES_KEY_SIZE,
+            customization: domainStrings.kiv,
+        });
 
         // Slice the exact region: Kenc may be a view with non-zero byteOffset
         const aesKey = await crypto.subtle.importKey(

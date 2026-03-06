@@ -1,4 +1,4 @@
-import { CHUNK_SIZE, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
+import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
 import { timingSafeEqual, fromHex } from './bytes.js';
 import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
@@ -8,17 +8,19 @@ import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } fro
 import {
   assertPerChunkNonceContract,
   deriveChunkIvFromK,
-  IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+  IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
   NONCE_COUNTER_BITS_U32,
   NONCE_MAX_CHUNK_COUNT_U32,
 } from './aead.js';
 import { toHex } from './bytes.js';
 import {
+  DEFAULT_CRYPTO_PROFILE,
   NONCE_MODE_KMAC_CTR32,
   NONCE_MODE_RANDOM96,
-  NONCE_POLICY_PER_CHUNK_V1,
+  NONCE_POLICY_PER_CHUNK_V3,
   NONCE_POLICY_SINGLE_CONTAINER_V1,
 } from './policy.js';
+import { kmac256 } from './kmac.js';
 import { resolveErasureRuntime } from './erasure-runtime.js';
 
 function textBytes(value) {
@@ -211,13 +213,19 @@ function buildCases() {
         const encryptedBytes = await blobToBytes(encrypted);
         const parsedHeader = parseQencHeader(encryptedBytes);
 
-        assert(parsedHeader.metadata.fmt === 'QVv1-4-0', `unexpected format: ${parsedHeader.metadata.fmt}`);
+        assert(parsedHeader.metadata.fmt === FORMAT_VERSION, `unexpected format: ${parsedHeader.metadata.fmt}`);
         assert(parsedHeader.metadata.payloadFormat === 'wrapped-v1', 'unexpected payload format');
         assert(parsedHeader.metadata.aead_mode === 'single-container-aead', 'unexpected AEAD mode');
         assert(parsedHeader.metadata.noncePolicyId === NONCE_POLICY_SINGLE_CONTAINER_V1, 'single-container noncePolicyId mismatch');
         assert(parsedHeader.metadata.nonceMode === NONCE_MODE_RANDOM96, 'single-container nonceMode mismatch');
         assert(parsedHeader.metadata.counterBits === 0, 'single-container counterBits mismatch');
         assert(parsedHeader.metadata.maxChunkCount === 1, 'single-container maxChunkCount mismatch');
+        assert(parsedHeader.metadata.cryptoProfileId === DEFAULT_CRYPTO_PROFILE.cryptoProfileId, 'cryptoProfileId mismatch');
+        assert(parsedHeader.metadata.kdfTreeId === DEFAULT_CRYPTO_PROFILE.kdfTreeId, 'kdfTreeId mismatch');
+        assert(parsedHeader.metadata.domainStrings.kdf === DEFAULT_CRYPTO_PROFILE.domainStrings.kdf, 'domainStrings.kdf mismatch');
+        assert(parsedHeader.metadata.domainStrings.iv === DEFAULT_CRYPTO_PROFILE.domainStrings.iv, 'domainStrings.iv mismatch');
+        assert(parsedHeader.metadata.domainStrings.kenc === DEFAULT_CRYPTO_PROFILE.domainStrings.kenc, 'domainStrings.kenc mismatch');
+        assert(parsedHeader.metadata.domainStrings.kiv === DEFAULT_CRYPTO_PROFILE.domainStrings.kiv, 'domainStrings.kiv mismatch');
 
         const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, secretKey);
         const decrypted = await blobToBytes(decryptedBlob);
@@ -466,15 +474,70 @@ function buildCases() {
         const header = parseQencHeader(encryptedBytes);
         assert(header.metadata.aead_mode === 'per-chunk-aead', 'expected per-chunk-aead mode');
         assert(header.metadata.chunkCount >= 2, 'expected chunkCount >= 2 for chunked payload');
-        assert(header.metadata.noncePolicyId === NONCE_POLICY_PER_CHUNK_V1, 'per-chunk noncePolicyId mismatch');
+        assert(header.metadata.noncePolicyId === NONCE_POLICY_PER_CHUNK_V3, 'per-chunk noncePolicyId mismatch');
         assert(header.metadata.nonceMode === NONCE_MODE_KMAC_CTR32, 'per-chunk nonceMode mismatch');
         assert(header.metadata.counterBits === 32, 'per-chunk counterBits mismatch');
         assert(header.metadata.maxChunkCount === 0xffffffff, 'per-chunk maxChunkCount mismatch');
+        assert(header.metadata.iv_strategy === IV_STRATEGY_KMAC_PREFIX64_CTR32_V3, 'per-chunk iv_strategy mismatch');
 
         const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, pair.secretKey);
         const decrypted = await blobToBytes(decryptedBlob);
         assert(metadata.fileHash === (await hashBytes(payload)), 'chunked metadata hash mismatch');
         assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'chunked roundtrip mismatch');
+      },
+    },
+    {
+      name: 'KMAC wrapper applies SP 800-185 customization and dkLen semantics',
+      fn: async () => {
+        const key = Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        const message = textBytes('Quantum Vault KMAC regression test');
+        const out32 = kmac256(key, message, {
+          customization: 'quantum-vault:test:v2',
+          dkLen: 32,
+        });
+        const out8 = kmac256(key, message, {
+          customization: 'quantum-vault:test:v2',
+          dkLen: 8,
+        });
+        const out32Alt = kmac256(key, message, {
+          customization: 'quantum-vault:test:alt:v2',
+          dkLen: 32,
+        });
+
+        assert(
+          bytesToHex(out32) === 'e4c32540bbeba9c4ada8e0b74df68e0dd9280181d1ee95cabe61a7f290a7253d',
+          'KMAC 32-byte regression vector mismatch'
+        );
+        assert(
+          bytesToHex(out8) === '166add657780655a',
+          'KMAC 8-byte regression vector mismatch'
+        );
+        assert(
+          bytesToHex(out32Alt) === 'e691cf1c1df8c2a55415532c0b1076e1891f11dc0af86c9cab46cc98485bbf88',
+          'KMAC alternate customization vector mismatch'
+        );
+        assert(
+          bytesToHex(out8) !== bytesToHex(out32.subarray(0, 8)),
+          'KMAC dkLen=8 must not equal truncation of the 32-byte output'
+        );
+      },
+    },
+    {
+      name: 'deriveChunkIvFromK uses SP 800-185 KMAC prefix derivation',
+      fn: async () => {
+        const Kiv = Uint8Array.from(Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff));
+        const containerNonce = Uint8Array.from(Array.from({ length: 12 }, (_, i) => (i * 5 + 11) & 0xff));
+        const iv = deriveChunkIvFromK(Kiv, containerNonce, 7, DEFAULT_CRYPTO_PROFILE.domainStrings.iv, {
+          chunkCount: 16,
+          maxChunkCount: NONCE_MAX_CHUNK_COUNT_U32,
+          counterBits: NONCE_COUNTER_BITS_U32,
+          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
+        });
+
+        assert(
+          bytesToHex(iv) === '1a0f9d63bb6bf37300000007',
+          'deriveChunkIvFromK regression vector mismatch'
+        );
       },
     },
     {
@@ -502,7 +565,7 @@ function buildCases() {
         const contract = {
           maxChunkCount: NONCE_MAX_CHUNK_COUNT_U32,
           counterBits: NONCE_COUNTER_BITS_U32,
-          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
         };
 
         assertPerChunkNonceContract({
@@ -524,7 +587,7 @@ function buildCases() {
         const containerNonce = createLargeDeterministicPayload(12);
         await expectFailure(
           async () => {
-            deriveChunkIvFromK(Kiv, containerNonce, NONCE_MAX_CHUNK_COUNT_U32, 'quantum-vault:chunk-iv:v1', {
+            deriveChunkIvFromK(Kiv, containerNonce, NONCE_MAX_CHUNK_COUNT_U32, DEFAULT_CRYPTO_PROFILE.domainStrings.iv, {
               chunkCount: NONCE_MAX_CHUNK_COUNT_U32,
               ...contract,
             });
@@ -543,13 +606,13 @@ function buildCases() {
           chunkCount,
           maxChunkCount: NONCE_MAX_CHUNK_COUNT_U32,
           counterBits: NONCE_COUNTER_BITS_U32,
-          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+          ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
         };
         assertPerChunkNonceContract(contract);
 
         const seenIvs = new Set();
         for (let i = 0; i < chunkCount; i += 1) {
-          const iv = deriveChunkIvFromK(Kiv, containerNonce, i, 'quantum-vault:chunk-iv:v1', contract);
+          const iv = deriveChunkIvFromK(Kiv, containerNonce, i, DEFAULT_CRYPTO_PROFILE.domainStrings.iv, contract);
           const ivHex = bytesToHex(iv);
           assert(!seenIvs.has(ivHex), `unexpected IV collision at chunk index ${i}`);
           seenIvs.add(ivHex);
@@ -557,7 +620,7 @@ function buildCases() {
 
         await expectFailure(
           async () => {
-            deriveChunkIvFromK(Kiv, containerNonce, 2 ** 32, 'quantum-vault:chunk-iv:v1', contract);
+            deriveChunkIvFromK(Kiv, containerNonce, 2 ** 32, DEFAULT_CRYPTO_PROFILE.domainStrings.iv, contract);
           },
           'deriveChunkIvFromK unexpectedly accepted overflowed chunk index'
         );

@@ -37,13 +37,23 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         throw new Error('QENC container is missing required 32-byte key commitment.');
     }
 
-    // Verify the provided private key matches this container before splitting
     const ds = meta.domainStrings;
+    if (
+        !ds ||
+        typeof ds.kdf !== 'string' ||
+        typeof ds.iv !== 'string' ||
+        typeof ds.kenc !== 'string' ||
+        typeof ds.kiv !== 'string'
+    ) {
+        throw new Error('QENC metadata is missing valid domainStrings');
+    }
+
+    // Verify the provided private key matches this container before splitting
     let trialSharedSecret;
     try {
         trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
         const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(
-            trialSharedSecret, kdfSalt, metaBytes, ds.kdf
+            trialSharedSecret, kdfSalt, metaBytes, ds
         );
         const keyMatch = verifyKeyCommitment(Kenc, keyCommitment);
         clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
@@ -57,10 +67,6 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         if (trialSharedSecret instanceof Uint8Array) trialSharedSecret.fill(0);
         if (e.message.includes('does not match')) throw e;
         throw new Error(`Key verification failed: ${e.message}`);
-    }
-
-    if (!ds || typeof ds.kdf !== 'string' || typeof ds.iv !== 'string') {
-        throw new Error('QENC metadata is missing valid domainStrings');
     }
     const effectiveLength = meta.payloadLength || meta.originalLength;
     const containerId = await hashBytes(header); // header hash as ID
@@ -192,7 +198,7 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
         payloadLength: meta.payloadLength || null,
         originalLength: effectiveLength,
         ciphertextLength: ciphertext.length,
-        domainStrings: { kdf: ds.kdf, iv: ds.iv },
+        domainStrings: { kdf: ds.kdf, iv: ds.iv, kenc: ds.kenc, kiv: ds.kiv },
         fragmentFormat: 'len32-prefixed',
         perFragmentSize,
         hasKeyCommitment: true,

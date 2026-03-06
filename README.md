@@ -74,6 +74,7 @@ src/
     │   ├── index.js                 # Main encryption/decryption orchestration
     │   ├── aead.js                  # AES-GCM nonce/IV policy helpers
     │   ├── kdf.js                   # KMAC derivation and key commitment helpers
+    │   ├── kmac.js                  # Local SP 800-185 KMAC adapter over noble
     │   ├── mlkem.js                 # ML-KEM-1024 implementation
     │   ├── entropy.js               # CSPRNG + entropy mixing primitives
     │   ├── erasure-runtime.js       # RS runtime resolver (globalThis/injected)
@@ -153,7 +154,7 @@ graph TB
 | kdfSalt         | 16 bytes            | random salt for KMAC                         |
 | metaLen         | 2 bytes (Uint16 BE) | length of `metaJSON`                         |
 | metaJSON        | metaLen bytes UTF‑8 | JSON metadata                                |
-| keyCommitment   | 32 bytes            | SHA3‑256(Kenc) key commitment (QVv1-4-0+)    |
+| keyCommitment   | 32 bytes            | SHA3‑256(Kenc) key commitment (QVv1-5-0+)    |
 | ciphertext      | remaining bytes     | AES‑GCM ciphertext (single or concatenation) |
 
 `.qenc` metaJSON (indicative):
@@ -162,12 +163,12 @@ graph TB
   "KEM":"ML-KEM-1024",
   "KDF":"KMAC256",
   "AEAD":"AES-256-GCM",
-  "fmt":"QVv1-4-0",
-  "cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v1",
-  "kdfTreeId":"QV-KDF-TREE-v1",
+  "fmt":"QVv1-5-0",
+  "cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2",
+  "kdfTreeId":"QV-KDF-TREE-v2",
   "aead_mode":"single-container-aead | per-chunk-aead",
-  "iv_strategy":"single-iv | kmac-prefix64-ctr32-v2",
-  "noncePolicyId":"QV-GCM-RAND96-v1 | QV-GCM-KMACPFX64-CTR32-v2",
+  "iv_strategy":"single-iv | kmac-prefix64-ctr32-v3",
+  "noncePolicyId":"QV-GCM-RAND96-v1 | QV-GCM-KMACPFX64-CTR32-v3",
   "nonceMode":"random96 | kmac-prefix64-ctr32",
   "counterBits":0 | 32,
   "maxChunkCount":1 | 4294967295,
@@ -177,7 +178,12 @@ graph TB
   "payloadLength": 12345,
   "chunkSize": 8388608,
   "chunkCount": 1,
-  "domainStrings": { "kdf":"quantum-vault:kdf:v1", "iv":"quantum-vault:chunk-iv:v1" }
+  "domainStrings": {
+    "kdf":"quantum-vault:kdf:v2",
+    "iv":"quantum-vault:chunk-iv:v2",
+    "kenc":"quantum-vault:kenc:v2",
+    "kiv":"quantum-vault:kiv:v2"
+  }
 }
 ```
 
@@ -230,12 +236,12 @@ AAD:
 ```json
 {
   "containerId":"<SHA3-512 hex of .qenc header>",
-  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-4"},
+  "alg":{"KEM":"ML-KEM-1024","KDF":"KMAC256","AEAD":"AES-256-GCM","RS":"ErasureCodes","fmt":"QVqcont-5"},
   "aead_mode":"single-container | per-chunk",
-  "iv_strategy":"single-iv | kmac-prefix64-ctr32-v2",
-  "cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v1",
-  "kdfTreeId":"QV-KDF-TREE-v1",
-  "noncePolicyId":"QV-GCM-RAND96-v1 | QV-GCM-KMACPFX64-CTR32-v2",
+  "iv_strategy":"single-iv | kmac-prefix64-ctr32-v3",
+  "cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2",
+  "kdfTreeId":"QV-KDF-TREE-v2",
+  "noncePolicyId":"QV-GCM-RAND96-v1 | QV-GCM-KMACPFX64-CTR32-v3",
   "nonceMode":"random96 | kmac-prefix64-ctr32",
   "counterBits":0 | 32,
   "maxChunkCount":1 | 4294967295,
@@ -250,7 +256,12 @@ AAD:
   "payloadLength":12345,
   "originalLength":123,
   "ciphertextLength":456,
-  "domainStrings":{"kdf":"quantum-vault:kdf:v1","iv":"quantum-vault:chunk-iv:v1"},
+  "domainStrings":{
+    "kdf":"quantum-vault:kdf:v2",
+    "iv":"quantum-vault:chunk-iv:v2",
+    "kenc":"quantum-vault:kenc:v2",
+    "kiv":"quantum-vault:kiv:v2"
+  },
   "fragmentFormat":"len32-prefixed",
   "perFragmentSize":789,
   "hasKeyCommitment":true,
@@ -287,13 +298,13 @@ Key contract points:
 2. Sender: `{encapsulatedKey, sharedSecret} = ml_kem1024.encapsulate(publicKey)`.
 3. Generate `kdfSalt` (16 B) and `containerNonce` (12 B).
 4. Derive keys with KMAC256:
-   - `Kraw = KMAC256(sharedSecret, (kdfSalt || metaBytes), 32, customization = domainStrings.kdf)`
-   - `Kenc = KMAC256(Kraw, [1], 32, customization='quantum-vault:kenc:v1')`
-   - `Kiv  = KMAC256(Kraw, [2], 32, customization='quantum-vault:kiv:v1')`
+   - `Kraw = KMAC256(sharedSecret, (kdfSalt || metaBytes), { dkLen: 32, customization: domainStrings.kdf })`
+   - `Kenc = KMAC256(Kraw, [1], { dkLen: 32, customization: domainStrings.kenc })`
+   - `Kiv  = KMAC256(Kraw, [2], { dkLen: 32, customization: domainStrings.kiv })`
    - Import `Kenc` as AES‑GCM key. For per-chunk mode:
-     - `prefix64 = KMAC256(Kiv, containerNonce, 8, customization=domainStrings.iv)`
-     - `IV_i = prefix64 || uint32_be(chunkIndex)` (`iv_strategy = kmac-prefix64-ctr32-v2`).
-   - Key commitment: `keyCommitment = SHA3-256(Kenc)` (stored in header for QVv1-4-0+).
+     - `prefix64 = KMAC256(Kiv, containerNonce, { dkLen: 8, customization: domainStrings.iv })`
+     - `IV_i = prefix64 || uint32_be(chunkIndex)` (`iv_strategy = kmac-prefix64-ctr32-v3`).
+   - Key commitment: `keyCommitment = SHA3-256(Kenc)` (stored in header for QVv1-5-0+).
 
 ### Encrypt flow (sender)
 * Single-container AEAD (small files):
@@ -302,7 +313,7 @@ Key contract points:
 3. Produce `.qenc` with header (including key commitment) + ciphertext.
 * Per-chunk AEAD (big files):
 1. Build payload as `wrapped-v1`.
-2. Break payload into chunks of `chunkSize`. For each chunk index i compute `IV_i = prefix64 || uint32_be(i)` with `prefix64 = KMAC256(Kiv, containerNonce, 8, customization=domainStrings.iv)`.
+2. Break payload into chunks of `chunkSize`. For each chunk index i compute `IV_i = prefix64 || uint32_be(i)` with `prefix64 = KMAC256(Kiv, containerNonce, { dkLen: 8, customization: domainStrings.iv })`.
 3. Encrypt each chunk with AES‑GCM using `AAD_i = header || uint32_be(i) || uint32_be(plainLen_i)`.
 4. Concatenate all `cipherChunk_i` to form the ciphertext stream in `.qenc`.
 
@@ -311,8 +322,8 @@ Key contract points:
 2. Parse header fields (MAGIC, keyLen, encapsulatedKey, iv, salt, metaLen, metaJson). Validate `metaLen` and `keyLen` bounds.
 3. Validate strict policy metadata (`cryptoProfileId`, domain strings, nonce policy/mode/bounds, AEAD mode).
 4. `sharedSecret = ml_kem1024.decapsulate(encapsulatedKey, secretKey)`; normalize to `Uint8Array`.
-5. Derive AES key with `KMAC256(sharedSecret, salt || metaBytes, 32, { customization })`. Import key. Zeroize `derived` and `sharedSecret`.
-6. Verify `keyCommitment` if present (QVv1-4-0+) before decryption.
+5. Derive AES key with `KMAC256(sharedSecret, salt || metaBytes, { dkLen: 32, customization: domainStrings.kdf })`, then derive `Kenc`/`Kiv` with their dedicated domain strings. Import key. Zeroize derived bytes and `sharedSecret`.
+6. Verify `keyCommitment` if present (QVv1-5-0+) before decryption.
 7. Decrypt with AES-GCM providing `additionalData = header`. If auth fails, raise an error (tampered container or wrong key).
 8. If `payloadFormat` is `wrapped-v1`, unpack private metadata and recover original file bytes.
 9. Validate decrypted file by computing `SHA3-512(fileBytes)` and comparing to `privateMeta.fileHash`. If equal, accept; otherwise, warn about integrity mismatch.

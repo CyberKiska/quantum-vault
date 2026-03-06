@@ -1,7 +1,7 @@
 // AES-256-GCM AEAD operations and nonce management
 
-import { kmac256 } from '@noble/hashes/sha3-addons.js';
 import { CHUNK_SIZE } from './constants.js';
+import { kmac256 } from './kmac.js';
 
 export { AES_KEY_SIZE } from './kdf.js';
 export const AES_IV_SIZE = 12;
@@ -9,12 +9,12 @@ export const AES_TAG_SIZE = 16;
 export const NONCE_COUNTER_BITS_U32 = 32;
 export const NONCE_MAX_CHUNK_COUNT_U32 = 0xffffffff;
 export const IV_STRATEGY_SINGLE_IV = 'single-iv';
-export const IV_STRATEGY_KMAC_PREFIX64_CTR32_V2 = 'kmac-prefix64-ctr32-v2';
+export const IV_STRATEGY_KMAC_PREFIX64_CTR32_V3 = 'kmac-prefix64-ctr32-v3';
 
-const NONCE_PREFIX_SIZE_V2 = 8;
+const NONCE_PREFIX_SIZE_V3 = 8;
 const NONCE_COUNTER_SIZE = 4;
 const PER_CHUNK_IV_STRATEGIES = new Set([
-    IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+    IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
 ]);
 
 function assertUint32(value, field) {
@@ -27,7 +27,7 @@ export function assertPerChunkNonceContract({
     chunkCount,
     maxChunkCount = NONCE_MAX_CHUNK_COUNT_U32,
     counterBits = NONCE_COUNTER_BITS_U32,
-    ivStrategy = IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+    ivStrategy = IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
 }) {
     if (!PER_CHUNK_IV_STRATEGIES.has(ivStrategy)) {
         throw new Error(`Unsupported per-chunk iv_strategy: ${ivStrategy}`);
@@ -55,7 +55,7 @@ export function buildChunkAAD(headerBytes, chunkIndex, plainLen) {
 
 export function deriveChunkIvFromK(Kiv, containerNonce, chunkIndex, ivCustomization, options = {}) {
     const {
-        ivStrategy = IV_STRATEGY_KMAC_PREFIX64_CTR32_V2,
+        ivStrategy = IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
         chunkCount = null,
         maxChunkCount = NONCE_MAX_CHUNK_COUNT_U32,
         counterBits = NONCE_COUNTER_BITS_U32,
@@ -84,12 +84,14 @@ export function deriveChunkIvFromK(Kiv, containerNonce, chunkIndex, ivCustomizat
     const idx = new Uint8Array(NONCE_COUNTER_SIZE);
     new DataView(idx.buffer).setUint32(0, chunkIndex, false);
 
-    if (ivStrategy === IV_STRATEGY_KMAC_PREFIX64_CTR32_V2) {
-        const prefixFull = kmac256(Kiv, containerNonce, NONCE_PREFIX_SIZE_V2, { customization: ivCustomization });
-        const prefix = prefixFull.slice(0, NONCE_PREFIX_SIZE_V2);
+    if (ivStrategy === IV_STRATEGY_KMAC_PREFIX64_CTR32_V3) {
+        const prefix = kmac256(Kiv, containerNonce, {
+            dkLen: NONCE_PREFIX_SIZE_V3,
+            customization: ivCustomization,
+        });
         const iv = new Uint8Array(AES_IV_SIZE);
         iv.set(prefix, 0);
-        iv.set(idx, NONCE_PREFIX_SIZE_V2);
+        iv.set(idx, NONCE_PREFIX_SIZE_V3);
         return iv;
     }
 
