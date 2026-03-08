@@ -7,3 +7,13 @@ yarn-error.log*
 debug.log
 /dist
 /node_modules
+
+# Test files
+*.qkey
+*.qenc
+*.qcont
+examples/
+
+# Notes
+*.md
+!README.md
