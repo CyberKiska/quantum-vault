@@ -3,6 +3,7 @@
 // UI Components and Features
 import { initUI } from './core/features/ui/ui.js';
 import { initQcontBuildUI } from './core/features/qcont/build-ui.js';
+import { initQcontAttachUI } from './core/features/qcont/attach-ui.js';
 import { initQcontRestoreUI } from './core/features/qcont/restore-ui.js';
 import { initLiteMode } from './core/features/lite-mode.js';
 import { installSessionWipeGuards } from './app/session-wipe.js';
@@ -14,6 +15,7 @@ export function initializeApplication() {
     // Initialize all UI components
     initUI();
     initQcontBuildUI();
+    initQcontAttachUI();
     initQcontRestoreUI();
     initLiteMode();
 

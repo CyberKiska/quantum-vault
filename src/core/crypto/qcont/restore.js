@@ -2,817 +2,860 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { hashBytes } from '../index.js';
 import { bytesEqual, toHex } from '../bytes.js';
 import { buildQencHeader } from '../qenc/format.js';
-import { QCONT_FORMAT_VERSION } from '../constants.js';
+import { LEGACY_QCONT_FORMAT_VERSION, QCONT_FORMAT_VERSION } from '../constants.js';
 import { parseArchiveManifestBytes } from '../manifest/archive-manifest.js';
+import {
+  assertAuthPolicyCommitment,
+  parseManifestBundleBytes,
+} from '../manifest/manifest-bundle.js';
+import { assertManifestBundleTimestamps, inspectTimestampEvidence } from '../auth/opentimestamps.js';
 import { verifyManifestSignatures } from '../auth/verify-signatures.js';
 import { validateContainerPolicyMetadata } from '../policy.js';
 import { resolveErasureRuntime } from '../erasure-runtime.js';
 
 const QCONT_MAGIC = 'QVC1';
 const KEY_COMMITMENT_MAX_LEN = 32;
-const MANIFEST_DIGEST_LEN = 64;
+const DIGEST_LEN = 64;
 const MAX_META_LEN = 16 * 1024;
 const MAX_MANIFEST_LEN = 1024 * 1024;
+const MAX_BUNDLE_LEN = 4 * 1024 * 1024;
 
 function ensurePositiveInteger(value, field, min = 1) {
-    if (!Number.isInteger(value) || value < min) {
-        throw new Error(`Invalid ${field}`);
-    }
-    return value;
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`Invalid ${field}`);
+  }
+  return value;
 }
 
 function ensureEqual(actual, expected, field) {
-    if (actual !== expected) {
-        throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
-    }
+  if (actual !== expected) {
+    throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
+  }
 }
 
 function normalizeHexString(value) {
-    return String(value || '').trim().toLowerCase();
+  return String(value || '').trim().toLowerCase();
 }
 
-function normalizeAcceptedAlgorithms(manifest) {
-    const values = manifest?.signingPolicy?.acceptedAlgorithms;
-    const defaults = ['ML-DSA', 'SLH-DSA-SHAKE', 'Ed25519'];
-    const source = Array.isArray(values) && values.length > 0 ? values : defaults;
-    return new Set(source.map((item) => String(item || '').trim()));
-}
+function evaluateArchivePolicy(authPolicy, verification) {
+  const counts = verification?.counts || {
+    validTotal: 0,
+    validStrongPq: 0,
+  };
+  const minValidSignatures = ensurePositiveInteger(
+    Number(authPolicy.minValidSignatures),
+    'authPolicy.minValidSignatures',
+    1
+  );
+  const level = String(authPolicy.level || '');
 
-function isResultAcceptedByPolicy(result, acceptedAlgorithms) {
-    if (!result?.ok) return false;
-    if (result.type === 'qsig') {
-        const family = String(result.algorithmFamily || '');
-        const algorithm = String(result.algorithm || '');
-        return acceptedAlgorithms.has(family) || acceptedAlgorithms.has(algorithm);
-    }
-    if (result.type === 'sig') {
-        return acceptedAlgorithms.has('Ed25519');
-    }
-    return false;
-}
-
-function evaluateVerificationSummary(verification, manifest) {
-    const acceptedAlgorithms = normalizeAcceptedAlgorithms(manifest);
-    let acceptedValidCount = 0;
-    let acceptedTrustedCount = 0;
-
-    for (const result of verification.results || []) {
-        if (!isResultAcceptedByPolicy(result, acceptedAlgorithms)) continue;
-        acceptedValidCount += 1;
-        if (result.trusted) acceptedTrustedCount += 1;
-    }
-
+  if (level === 'integrity-only') {
     return {
-        acceptedValidCount,
-        acceptedTrustedCount,
-        acceptedAlgorithms: [...acceptedAlgorithms],
+      level,
+      minValidSignatures,
+      satisfied: true,
+      reason: 'integrity-only policy does not require signatures',
     };
-}
+  }
 
-function collectManifestCandidates(shards) {
-    const byDigest = new Map();
-    for (const shard of shards) {
-        const digestHex = shard.manifestDigestHex;
-        if (!byDigest.has(digestHex)) {
-            byDigest.set(digestHex, {
-                digestHex,
-                manifestBytes: shard.manifestBytes,
-                shards: [],
-            });
-        }
-        const entry = byDigest.get(digestHex);
-        if (!bytesEqual(entry.manifestBytes, shard.manifestBytes)) {
-            throw new Error(`Manifest bytes mismatch inside digest cohort ${digestHex}`);
-        }
-        entry.shards.push(shard);
-    }
-    return [...byDigest.values()];
-}
-
-async function verifyManifestCandidate({
-    manifestBytes,
-    manifest,
-    signatures,
-    trustedPqPublicKeyFileBytes,
-    pinnedPqFingerprintHex,
-    expectedEd25519Signer,
-}) {
-    if (!Array.isArray(signatures) || signatures.length === 0) {
-        return null;
-    }
-
-    const allowLegacyByManifest = manifest?.signingPolicy?.allowLegacyEd25519 ?? true;
-    const verification = await verifyManifestSignatures({
-        manifestBytes,
-        signatures,
-        trustedPqPublicKeyFileBytes,
-        pinnedPqFingerprintHex,
-        expectedEd25519Signer,
-        allowLegacyEd25519: allowLegacyByManifest,
-    });
-
+  if (level === 'any-signature') {
+    const satisfied = counts.validTotal >= minValidSignatures;
     return {
-        ...verification,
-        evaluation: evaluateVerificationSummary(verification, manifest),
+      level,
+      minValidSignatures,
+      satisfied,
+      reason: satisfied
+        ? 'required signature count satisfied'
+        : 'no valid signature satisfies archive policy',
     };
+  }
+
+  if (level === 'strong-pq-signature') {
+    const satisfied = counts.validTotal >= minValidSignatures && counts.validStrongPq >= 1;
+    return {
+      level,
+      minValidSignatures,
+      satisfied,
+      reason: satisfied
+        ? 'required strong PQ signature present'
+        : 'no valid strong PQ signature satisfies archive policy',
+    };
+  }
+
+  throw new Error(`Unsupported authPolicy.level: ${authPolicy.level}`);
 }
 
-async function resolveManifestContext(shards, verification = {}) {
-    const warnings = [];
-    const signatures = Array.isArray(verification.signatures) ? verification.signatures : [];
-    const requireTrustedSignature = verification.requireTrustedSignature === true;
-
-    const candidates = collectManifestCandidates(shards).map((candidate) => {
-        const parsed = parseArchiveManifestBytes(candidate.manifestBytes);
-        if (parsed.digestHex !== candidate.digestHex) {
-            throw new Error('Embedded manifest digest mismatch');
-        }
-        return {
-            ...candidate,
-            ...parsed,
-        };
-    });
-
-    if (candidates.length === 0) {
-        throw new Error('No embedded manifests found in shard set');
+function collectCandidateCohorts(shards) {
+  const byDigest = new Map();
+  for (const shard of shards) {
+    const key = `${shard.manifestDigestHex}:${shard.bundleDigestHex}`;
+    if (!byDigest.has(key)) {
+      byDigest.set(key, {
+        key,
+        manifestDigestHex: shard.manifestDigestHex,
+        bundleDigestHex: shard.bundleDigestHex,
+        manifestBytes: shard.manifestBytes,
+        bundleBytes: shard.bundleBytes,
+        shards: [],
+      });
     }
-
-    const uploadedManifestBytes = verification.manifestBytes instanceof Uint8Array
-        ? verification.manifestBytes
-        : null;
-
-    if (uploadedManifestBytes) {
-        const parsedUploaded = parseArchiveManifestBytes(uploadedManifestBytes);
-        const selected = candidates.find((item) => item.digestHex === parsedUploaded.digestHex);
-        if (!selected) {
-            throw new Error('Uploaded manifest does not match any provided shard cohort');
-        }
-
-        const verificationSummary = await verifyManifestCandidate({
-            manifestBytes: parsedUploaded.bytes,
-            manifest: parsedUploaded.manifest,
-            signatures,
-            trustedPqPublicKeyFileBytes: verification.trustedPqPublicKeyFileBytes,
-            pinnedPqFingerprintHex: verification.pinnedPqFingerprintHex,
-            expectedEd25519Signer: verification.expectedEd25519Signer,
-        });
-
-        if (verificationSummary) {
-            if (verificationSummary.evaluation.acceptedValidCount <= 0) {
-                throw new Error('Provided signatures do not validate this manifest under signing policy');
-            }
-            if (requireTrustedSignature && verificationSummary.evaluation.acceptedTrustedCount <= 0) {
-                throw new Error('Trusted signature required but no trusted-valid signature was found');
-            }
-            if (verificationSummary.evaluation.acceptedTrustedCount <= 0) {
-                warnings.push('Manifest signatures validated, but no trusted signer identity is pinned.');
-            }
-        } else {
-            if (requireTrustedSignature) {
-                throw new Error('Trusted signature is required by restore policy');
-            }
-            warnings.push('The content is correct, but may not be authentic.');
-        }
-
-        return {
-            manifest: parsedUploaded.manifest,
-            manifestBytes: parsedUploaded.bytes,
-            manifestDigestHex: parsedUploaded.digestHex,
-            source: 'uploaded',
-            verification: verificationSummary,
-            warnings,
-            candidateDigests: candidates.map((item) => item.digestHex),
-        };
+    const entry = byDigest.get(key);
+    if (!bytesEqual(entry.manifestBytes, shard.manifestBytes)) {
+      throw new Error(`Manifest bytes mismatch inside cohort ${key}`);
     }
-
-    if (signatures.length > 0) {
-        const evaluations = [];
-        for (const candidate of candidates) {
-            const verificationSummary = await verifyManifestCandidate({
-                manifestBytes: candidate.bytes,
-                manifest: candidate.manifest,
-                signatures,
-                trustedPqPublicKeyFileBytes: verification.trustedPqPublicKeyFileBytes,
-                pinnedPqFingerprintHex: verification.pinnedPqFingerprintHex,
-                expectedEd25519Signer: verification.expectedEd25519Signer,
-            });
-            evaluations.push({ candidate, verification: verificationSummary });
-        }
-
-        const valid = evaluations.filter((item) => item.verification?.evaluation?.acceptedValidCount > 0);
-        if (valid.length === 0) {
-            throw new Error('No embedded manifest candidate validates against provided signatures');
-        }
-
-        let acceptable = valid;
-        if (requireTrustedSignature) {
-            acceptable = valid.filter((item) => item.verification?.evaluation?.acceptedTrustedCount > 0);
-            if (acceptable.length === 0) {
-                throw new Error('Trusted signature required but no trusted-valid manifest candidate found');
-            }
-        }
-
-        const trustedPreferred = acceptable.filter((item) => item.verification?.evaluation?.acceptedTrustedCount > 0);
-        if (trustedPreferred.length === 1) {
-            const chosen = trustedPreferred[0];
-            return {
-                manifest: chosen.candidate.manifest,
-                manifestBytes: chosen.candidate.bytes,
-                manifestDigestHex: chosen.candidate.digestHex,
-                source: 'embedded',
-                verification: chosen.verification,
-                warnings,
-                candidateDigests: candidates.map((item) => item.digestHex),
-            };
-        }
-
-        if (acceptable.length !== 1) {
-            throw new Error('Multiple manifest candidates satisfy signatures. Pin signer identity or provide manifest file.');
-        }
-
-        warnings.push('Manifest signatures validated, but no trusted signer identity is pinned.');
-        const chosen = acceptable[0];
-        return {
-            manifest: chosen.candidate.manifest,
-            manifestBytes: chosen.candidate.bytes,
-            manifestDigestHex: chosen.candidate.digestHex,
-            source: 'embedded',
-            verification: chosen.verification,
-            warnings,
-            candidateDigests: candidates.map((item) => item.digestHex),
-        };
+    if (!bytesEqual(entry.bundleBytes, shard.bundleBytes)) {
+      throw new Error(`Bundle bytes mismatch inside cohort ${key}`);
     }
+    entry.shards.push(shard);
+  }
+  return [...byDigest.values()];
+}
 
-    if (requireTrustedSignature) {
-        throw new Error('Trusted signature is required by restore policy');
+async function enrichCandidate(candidate, bundleBytesOverride = null) {
+  const parsedManifest = parseArchiveManifestBytes(candidate.manifestBytes);
+  if (parsedManifest.digestHex !== candidate.manifestDigestHex) {
+    throw new Error('Embedded manifest digest mismatch');
+  }
+  const selectedBundleBytes = bundleBytesOverride instanceof Uint8Array ? bundleBytesOverride : candidate.bundleBytes;
+  const parsedBundle = parseManifestBundleBytes(selectedBundleBytes);
+  if (!(bundleBytesOverride instanceof Uint8Array) && parsedBundle.digestHex !== candidate.bundleDigestHex) {
+    throw new Error('Embedded bundle digest mismatch');
+  }
+  if (!bytesEqual(parsedBundle.manifestBytes, parsedManifest.bytes)) {
+    throw new Error('Embedded bundle manifest does not match embedded manifest bytes');
+  }
+  if (parsedBundle.manifestDigestHex !== parsedManifest.digestHex) {
+    throw new Error('Embedded bundle manifestDigest does not match embedded manifest digest');
+  }
+  assertAuthPolicyCommitment(parsedManifest.manifest.authPolicyCommitment, parsedBundle.bundle.authPolicy);
+  await assertManifestBundleTimestamps(parsedBundle.bundle);
+  return {
+    ...candidate,
+    embeddedBundleDigestHex: candidate.bundleDigestHex,
+    embeddedBundleBytes: candidate.bundleBytes,
+    manifest: parsedManifest.manifest,
+    manifestBytes: parsedManifest.bytes,
+    bundle: parsedBundle.bundle,
+    bundleBytes: parsedBundle.bytes,
+    bundleDigestHex: parsedBundle.digestHex,
+  };
+}
+
+async function evaluateCandidateAuthenticity(candidate, verificationOptions = {}) {
+  const verification = await verifyManifestSignatures({
+    manifestBytes: candidate.manifestBytes,
+    bundleSignatures: candidate.bundle.attachments.signatures,
+    bundlePublicKeys: candidate.bundle.attachments.publicKeys,
+    externalSignatures: Array.isArray(verificationOptions.signatures) ? verificationOptions.signatures : [],
+    pinnedPqPublicKeyFileBytes: verificationOptions.pinnedPqPublicKeyFileBytes ?? verificationOptions.pqPublicKeyFileBytes,
+    expectedEd25519Signer: verificationOptions.expectedEd25519Signer,
+  });
+  const policy = evaluateArchivePolicy(candidate.bundle.authPolicy, verification);
+  const timestampEvidence = await inspectTimestampEvidence({
+    bundle: candidate.bundle,
+    externalTimestamps: Array.isArray(verificationOptions.timestamps) ? verificationOptions.timestamps : [],
+    signatureArtifacts: verification.signatureArtifacts,
+  });
+  const warnings = [];
+  if (policy.level === 'integrity-only') {
+    warnings.push('Archive policy is integrity-only; provenance is not bound to a verified signer.');
+  }
+  const invalidSignatureCount = verification.results.filter((item) => !item.ok).length;
+  if (invalidSignatureCount > 0) {
+    warnings.push(`${invalidSignatureCount} attached signature(s) did not verify and were ignored for policy evaluation.`);
+  }
+  return {
+    verification,
+    policy,
+    timestampEvidence,
+    warnings,
+  };
+}
+
+function selectExplicitCandidate(candidates, verificationOptions) {
+  if (verificationOptions.manifestBytes instanceof Uint8Array) {
+    const parsedManifest = parseArchiveManifestBytes(verificationOptions.manifestBytes);
+    const matching = candidates.filter((item) => item.manifestDigestHex === parsedManifest.digestHex);
+    if (matching.length === 0) {
+      throw new Error('Provided canonical manifest does not match any shard cohort');
     }
-    warnings.push('The content is correct, but may not be authentic.');
-
-    if (candidates.length !== 1) {
-        throw new Error('Multiple manifest cohorts detected. Provide signed manifest or detached signature to select a trusted cohort.');
+    if (matching.length > 1) {
+      throw new Error('Canonical manifest matches multiple bundle cohorts. Provide the bundle file or pinned signatures to disambiguate.');
     }
+    return matching[0];
+  }
 
-    const chosen = candidates[0];
+  return null;
+}
+
+async function resolveArchiveContext(shards, verificationOptions = {}) {
+  const rawCandidates = collectCandidateCohorts(shards);
+  if (rawCandidates.length === 0) {
+    throw new Error('No valid shard cohorts found');
+  }
+
+  if (verificationOptions.bundleBytes instanceof Uint8Array) {
+    const parsedBundle = parseManifestBundleBytes(verificationOptions.bundleBytes);
+    const matching = rawCandidates.filter((candidate) => (
+      candidate.manifestDigestHex === parsedBundle.manifestDigestHex &&
+      bytesEqual(candidate.manifestBytes, parsedBundle.manifestBytes)
+    ));
+    if (matching.length === 0) {
+      throw new Error('Provided manifest bundle does not match any shard manifest');
+    }
+    const explicitCandidate = await enrichCandidate(matching[0], parsedBundle.bytes);
+    const authenticity = await evaluateCandidateAuthenticity(explicitCandidate, verificationOptions);
+    if (!authenticity.policy.satisfied) {
+      throw new Error(authenticity.policy.reason);
+    }
     return {
-        manifest: chosen.manifest,
-        manifestBytes: chosen.bytes,
-        manifestDigestHex: chosen.digestHex,
-        source: 'embedded',
-        verification: null,
-        warnings,
-        candidateDigests: candidates.map((item) => item.digestHex),
+      candidate: explicitCandidate,
+      authenticity,
+      source: 'uploaded-bundle',
+      candidateDigests: rawCandidates.map((item) => item.bundleDigestHex),
+      useManifestWideShardSelection: true,
     };
+  }
+
+  const candidates = await Promise.all(rawCandidates.map((candidate) => enrichCandidate(candidate)));
+  if (candidates.length === 0) {
+    throw new Error('No valid shard cohorts found');
+  }
+
+  const explicit = selectExplicitCandidate(candidates, verificationOptions);
+  if (explicit) {
+    const authenticity = await evaluateCandidateAuthenticity(explicit, verificationOptions);
+    if (!authenticity.policy.satisfied) {
+      throw new Error(authenticity.policy.reason);
+    }
+    return {
+      candidate: explicit,
+      authenticity,
+      source: 'uploaded-manifest',
+      candidateDigests: candidates.map((item) => item.bundleDigestHex),
+      useManifestWideShardSelection: false,
+    };
+  }
+
+  const evaluated = [];
+  for (const candidate of candidates) {
+    try {
+      evaluated.push({
+        candidate,
+        authenticity: await evaluateCandidateAuthenticity(candidate, verificationOptions),
+        evaluationError: null,
+      });
+    } catch (error) {
+      evaluated.push({
+        candidate,
+        authenticity: {
+          verification: {
+            status: {
+              signatureVerified: false,
+              strongPqSignatureVerified: false,
+              signerPinned: false,
+              signerIdentityPinned: false,
+              bundlePinned: false,
+              userPinned: false,
+              userPinProvided: false,
+            },
+            counts: {
+              validTotal: 0,
+              validStrongPq: 0,
+              pinnedValidTotal: 0,
+              bundlePinnedValidTotal: 0,
+              userPinnedValidTotal: 0,
+            },
+            results: [],
+            warnings: [],
+          },
+          policy: {
+            level: candidate.bundle.authPolicy.level,
+            minValidSignatures: candidate.bundle.authPolicy.minValidSignatures,
+            satisfied: false,
+            reason: error?.message || String(error),
+          },
+          timestampEvidence: [],
+          warnings: [],
+        },
+        evaluationError: error,
+      });
+    }
+  }
+
+  const satisfying = evaluated.filter((item) => item.authenticity.policy.satisfied);
+  if (satisfying.length === 1) {
+    return {
+      candidate: satisfying[0].candidate,
+      authenticity: satisfying[0].authenticity,
+      source: 'embedded',
+      candidateDigests: candidates.map((item) => item.bundleDigestHex),
+      useManifestWideShardSelection: false,
+    };
+  }
+  if (satisfying.length > 1) {
+    throw new Error('Multiple shard cohorts satisfy archive policy. Provide the manifest bundle, canonical manifest, or signer pins to disambiguate.');
+  }
+
+  const firstEvaluationError = evaluated.find((item) => item.evaluationError)?.evaluationError;
+  if (firstEvaluationError && evaluated.every((item) => item.evaluationError)) {
+    throw firstEvaluationError;
+  }
+  if (candidates.length === 1) {
+    throw new Error(evaluated[0].authenticity.policy.reason);
+  }
+  throw new Error('No shard cohort satisfies archive policy.');
 }
 
 function parseShardUnsafe(arr) {
-    if (!(arr instanceof Uint8Array)) {
-        throw new Error('Shard must be a Uint8Array');
+  if (!(arr instanceof Uint8Array)) {
+    throw new Error('Shard must be a Uint8Array');
+  }
+
+  const minHeader = 4 + 2 + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + 12 + 16 + 2 + 1 + 2 + 2;
+  if (arr.length < minHeader) {
+    throw new Error('Shard is too small to contain a valid header');
+  }
+
+  const dv = new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+  let off = 0;
+
+  const ensure = (need, reason) => {
+    if (off + need > arr.length) {
+      throw new Error(`Shard is truncated: ${reason}`);
     }
+  };
 
-    const minHeader = 4 + 2 + 4 + MANIFEST_DIGEST_LEN + 4 + 12 + 16 + 2 + 1 + 2 + 2;
-    if (arr.length < minHeader) {
-        throw new Error('Shard is too small to contain a valid header');
+  const readU8 = (reason) => {
+    ensure(1, reason);
+    const v = dv.getUint8(off);
+    off += 1;
+    return v;
+  };
+
+  const readU16 = (reason) => {
+    ensure(2, reason);
+    const v = dv.getUint16(off, false);
+    off += 2;
+    return v;
+  };
+
+  const readU32 = (reason) => {
+    ensure(4, reason);
+    const v = dv.getUint32(off, false);
+    off += 4;
+    return v;
+  };
+
+  const readBytes = (len, reason) => {
+    ensure(len, reason);
+    const out = arr.subarray(off, off + len);
+    off += len;
+    return out;
+  };
+
+  const decodeJsonBytes = (bytes, reason) => {
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch (error) {
+      throw new Error(`Invalid ${reason}: ${error?.message || error}`);
     }
+  };
 
-    const dv = new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
-    let off = 0;
+  const magic = new TextDecoder().decode(readBytes(4, 'magic'));
+  if (magic !== QCONT_MAGIC) {
+    throw new Error('Invalid .qcont magic');
+  }
 
-    const ensure = (need, reason) => {
-        if (off + need > arr.length) {
-            throw new Error(`Shard is truncated: ${reason}`);
-        }
-    };
+  const metaLen = readU16('metaLen');
+  if (metaLen <= 0 || metaLen > MAX_META_LEN) {
+    throw new Error('Invalid shard metadata length');
+  }
+  const metaBytes = readBytes(metaLen, 'metaJSON');
+  const metaJSON = decodeJsonBytes(metaBytes, 'shard metadata JSON');
+  if (metaJSON?.alg?.fmt === LEGACY_QCONT_FORMAT_VERSION) {
+    throw new Error('Legacy .qcont format is not supported. Rebuild the archive with the new manifest bundle format.');
+  }
+  if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION) {
+    throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}, got ${metaJSON?.alg?.fmt ?? 'unknown'}`);
+  }
 
-    const readU8 = (reason) => {
-        ensure(1, reason);
-        const v = dv.getUint8(off);
-        off += 1;
-        return v;
-    };
+  const manifestLen = readU32('manifest length');
+  if (manifestLen <= 0 || manifestLen > MAX_MANIFEST_LEN) {
+    throw new Error('Invalid embedded manifest length');
+  }
+  const manifestBytes = readBytes(manifestLen, 'manifest bytes');
+  const manifestDigestBytes = readBytes(DIGEST_LEN, 'manifest digest');
+  const computedManifestDigestBytes = sha3_512(manifestBytes);
+  if (!bytesEqual(manifestDigestBytes, computedManifestDigestBytes)) {
+    throw new Error('Embedded manifest digest mismatch');
+  }
+  const manifestDigestHex = toHex(manifestDigestBytes);
 
-    const readU16 = (reason) => {
-        ensure(2, reason);
-        const v = dv.getUint16(off, false);
-        off += 2;
-        return v;
-    };
+  const bundleLen = readU32('bundle length');
+  if (bundleLen <= 0 || bundleLen > MAX_BUNDLE_LEN) {
+    throw new Error('Invalid embedded bundle length');
+  }
+  const bundleBytes = readBytes(bundleLen, 'bundle bytes');
+  const bundleDigestBytes = readBytes(DIGEST_LEN, 'bundle digest');
+  const computedBundleDigestBytes = sha3_512(bundleBytes);
+  if (!bytesEqual(bundleDigestBytes, computedBundleDigestBytes)) {
+    throw new Error('Embedded bundle digest mismatch');
+  }
+  const bundleDigestHex = toHex(bundleDigestBytes);
 
-    const readU32 = (reason) => {
-        ensure(4, reason);
-        const v = dv.getUint32(off, false);
-        off += 4;
-        return v;
-    };
+  const encapLen = readU32('encapsulatedKey length');
+  if (encapLen <= 0) throw new Error('Invalid encapsulated key length');
+  const encapsulatedKey = readBytes(encapLen, 'encapsulatedKey');
 
-    const readBytes = (len, reason) => {
-        ensure(len, reason);
-        const out = arr.subarray(off, off + len);
-        off += len;
-        return out;
-    };
+  const iv = readBytes(12, 'container nonce');
+  const salt = readBytes(16, 'kdf salt');
 
-    const decodeJsonBytes = (bytes, reason) => {
-        try {
-            return JSON.parse(new TextDecoder().decode(bytes));
-        } catch (error) {
-            throw new Error(`Invalid ${reason}: ${error?.message || error}`);
-        }
-    };
+  const qencMetaLen = readU16('qenc metadata length');
+  if (qencMetaLen <= 0 || qencMetaLen > MAX_META_LEN) {
+    throw new Error('Invalid qenc metadata length');
+  }
+  const qencMetaBytes = readBytes(qencMetaLen, 'qenc metadata');
+  const qencMetaJSON = decodeJsonBytes(qencMetaBytes, 'qenc metadata JSON');
 
-    const magic = new TextDecoder().decode(readBytes(4, 'magic'));
-    if (magic !== QCONT_MAGIC) {
-        throw new Error('Invalid .qcont magic');
-    }
+  if (metaJSON?.hasKeyCommitment !== true) {
+    throw new Error('Shard metadata must indicate hasKeyCommitment=true');
+  }
 
-    const metaLen = readU16('metaLen');
-    if (metaLen <= 0 || metaLen > MAX_META_LEN) {
-        throw new Error('Invalid shard metadata length');
-    }
-    const metaBytes = readBytes(metaLen, 'metaJSON');
-    const metaJSON = decodeJsonBytes(metaBytes, 'shard metadata JSON');
-    if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION) {
-        throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}, got ${metaJSON?.alg?.fmt ?? 'unknown'}`);
-    }
+  const kcLen = readU8('key commitment length');
+  if (kcLen !== KEY_COMMITMENT_MAX_LEN) {
+    throw new Error(`Invalid key commitment length: expected ${KEY_COMMITMENT_MAX_LEN}, got ${kcLen}`);
+  }
+  const keyCommit = readBytes(kcLen, 'key commitment');
+  if (normalizeHexString(metaJSON?.keyCommitmentHex) !== normalizeHexString(toHex(keyCommit))) {
+    throw new Error('Shard metadata keyCommitmentHex mismatch');
+  }
 
-    const manifestLen = readU32('manifest length');
-    if (manifestLen <= 0 || manifestLen > MAX_MANIFEST_LEN) {
-        throw new Error('Invalid embedded manifest length');
-    }
-    const manifestBytes = readBytes(manifestLen, 'manifest bytes');
-    const manifestDigestBytes = readBytes(MANIFEST_DIGEST_LEN, 'manifest digest');
-    const computedManifestDigestBytes = sha3_512(manifestBytes);
-    if (!bytesEqual(manifestDigestBytes, computedManifestDigestBytes)) {
-        throw new Error('Embedded manifest digest mismatch');
-    }
-    const manifestDigestHex = toHex(manifestDigestBytes);
+  const shardIndex = readU16('shard index');
+  const shareLen = readU16('share length');
+  if (shareLen <= 0) throw new Error('Invalid Shamir share length');
+  const share = readBytes(shareLen, 'Shamir share');
+  const fragments = arr.subarray(off);
+  if (fragments.length === 0) {
+    throw new Error('Shard fragment payload is empty');
+  }
 
-    const encapLen = readU32('encapsulatedKey length');
-    if (encapLen <= 0) throw new Error('Invalid encapsulated key length');
-    const encapsulatedKey = readBytes(encapLen, 'encapsulatedKey');
-
-    const iv = readBytes(12, 'container nonce');
-    const salt = readBytes(16, 'kdf salt');
-
-    const qencMetaLen = readU16('qenc metadata length');
-    if (qencMetaLen <= 0 || qencMetaLen > MAX_META_LEN) {
-        throw new Error('Invalid qenc metadata length');
-    }
-    const qencMetaBytes = readBytes(qencMetaLen, 'qenc metadata');
-    const qencMetaJSON = decodeJsonBytes(qencMetaBytes, 'qenc metadata JSON');
-
-    if (metaJSON?.hasKeyCommitment !== true) {
-        throw new Error('Shard metadata must indicate hasKeyCommitment=true');
-    }
-
-    const kcLen = readU8('key commitment length');
-    if (kcLen !== KEY_COMMITMENT_MAX_LEN) {
-        throw new Error(`Invalid key commitment length: expected ${KEY_COMMITMENT_MAX_LEN}, got ${kcLen}`);
-    }
-    const keyCommit = readBytes(kcLen, 'key commitment');
-
-    if (typeof metaJSON?.keyCommitmentHex !== 'string' || metaJSON.keyCommitmentHex.length === 0) {
-        throw new Error('Shard metadata is missing keyCommitmentHex');
-    }
-    if (normalizeHexString(metaJSON.keyCommitmentHex) !== normalizeHexString(toHex(keyCommit))) {
-        throw new Error('Shard metadata keyCommitmentHex mismatch');
-    }
-
-    const shardIndex = readU16('shard index');
-    const shareLen = readU16('share length');
-    if (shareLen <= 0) throw new Error('Invalid Shamir share length');
-    const share = readBytes(shareLen, 'Shamir share');
-    const fragments = arr.subarray(off);
-    if (fragments.length === 0) {
-        throw new Error('Shard fragment payload is empty');
-    }
-
-    return {
-        metaJSON,
-        metaBytes,
-        manifestBytes,
-        manifestDigestHex,
-        encapsulatedKey,
-        iv,
-        salt,
-        qencMetaBytes,
-        qencMetaJSON,
-        keyCommit,
-        shardIndex,
-        share,
-        fragments,
-        diagnostics: { errors: [], warnings: [] },
-    };
+  return {
+    metaJSON,
+    metaBytes,
+    manifestBytes,
+    manifestDigestHex,
+    bundleBytes,
+    bundleDigestHex,
+    encapsulatedKey,
+    iv,
+    salt,
+    qencMetaBytes,
+    qencMetaJSON,
+    keyCommit,
+    shardIndex,
+    share,
+    fragments,
+    diagnostics: { errors: [], warnings: [] },
+  };
 }
 
-/**
- * Parse a single .qcont shard from raw bytes
- * @param {Uint8Array} arr - Raw shard bytes
- * @param {object} [options]
- * @param {boolean} [options.strict=true]
- * @returns {object} Parsed shard structure with diagnostics
- */
 export function parseShard(arr, options = {}) {
-    const { strict = true } = options;
-    try {
-        return parseShardUnsafe(arr);
-    } catch (error) {
-        if (strict) throw error;
-        return {
-            diagnostics: { errors: [error?.message || String(error)], warnings: [] }
-        };
-    }
+  const { strict = true } = options;
+  try {
+    return parseShardUnsafe(arr);
+  } catch (error) {
+    if (strict) throw error;
+    return {
+      diagnostics: { errors: [error?.message || String(error)], warnings: [] },
+    };
+  }
 }
 
 function assertManifestMatchesQencMetadata(manifest, qencMetaJSON) {
-    const qenc = manifest.qenc || {};
+  const qenc = manifest.qenc || {};
 
-    ensureEqual(qenc.hashAlg, 'SHA3-512', 'qenc.hashAlg');
-    ensureEqual(qenc.primaryAnchor, 'qencHash', 'qenc.primaryAnchor');
-    ensureEqual(qenc.containerIdRole, 'secondary-header-id', 'qenc.containerIdRole');
-    ensureEqual(qenc.containerIdAlg, 'SHA3-512(qenc-header-bytes)', 'qenc.containerIdAlg');
+  ensureEqual(qenc.hashAlg, 'SHA3-512', 'qenc.hashAlg');
+  ensureEqual(qenc.primaryAnchor, 'qencHash', 'qenc.primaryAnchor');
+  ensureEqual(qenc.containerIdRole, 'secondary-header-id', 'qenc.containerIdRole');
+  ensureEqual(qenc.containerIdAlg, 'SHA3-512(qenc-header-bytes)', 'qenc.containerIdAlg');
 
-    ensureEqual(qencMetaJSON.fmt, qenc.format, 'qenc.format');
-    ensureEqual(qencMetaJSON.aead_mode, qenc.aeadMode, 'qenc.aeadMode');
-    ensureEqual(qencMetaJSON.iv_strategy, qenc.ivStrategy, 'qenc.ivStrategy');
+  ensureEqual(qencMetaJSON.fmt, qenc.format, 'qenc.format');
+  ensureEqual(qencMetaJSON.aead_mode, qenc.aeadMode, 'qenc.aeadMode');
+  ensureEqual(qencMetaJSON.iv_strategy, qenc.ivStrategy, 'qenc.ivStrategy');
+  ensureEqual(Number(qencMetaJSON.chunkSize), Number(qenc.chunkSize), 'qenc.chunkSize');
+  ensureEqual(Number(qencMetaJSON.chunkCount), Number(qenc.chunkCount), 'qenc.chunkCount');
+  ensureEqual(Number(qencMetaJSON.payloadLength), Number(qenc.payloadLength), 'qenc.payloadLength');
 
-    ensureEqual(Number(qencMetaJSON.chunkSize), Number(qenc.chunkSize), 'qenc.chunkSize');
-    ensureEqual(Number(qencMetaJSON.chunkCount), Number(qenc.chunkCount), 'qenc.chunkCount');
-    ensureEqual(Number(qencMetaJSON.payloadLength), Number(qenc.payloadLength), 'qenc.payloadLength');
-
-    ensureEqual(qencMetaJSON.cryptoProfileId, manifest.cryptoProfileId, 'cryptoProfileId');
-    ensureEqual(qencMetaJSON.kdfTreeId, manifest.kdfTreeId, 'kdfTreeId');
-    ensureEqual(qencMetaJSON.noncePolicyId, manifest.noncePolicyId, 'noncePolicyId');
-    ensureEqual(qencMetaJSON.nonceMode, manifest.nonceMode, 'nonceMode');
-    ensureEqual(Number(qencMetaJSON.counterBits), Number(manifest.counterBits), 'counterBits');
-    ensureEqual(Number(qencMetaJSON.maxChunkCount), Number(manifest.maxChunkCount), 'maxChunkCount');
-    ensureEqual(qencMetaJSON.aadPolicyId, manifest.aadPolicyId, 'aadPolicyId');
+  ensureEqual(qencMetaJSON.cryptoProfileId, manifest.cryptoProfileId, 'cryptoProfileId');
+  ensureEqual(qencMetaJSON.kdfTreeId, manifest.kdfTreeId, 'kdfTreeId');
+  ensureEqual(qencMetaJSON.noncePolicyId, manifest.noncePolicyId, 'noncePolicyId');
+  ensureEqual(qencMetaJSON.nonceMode, manifest.nonceMode, 'nonceMode');
+  ensureEqual(Number(qencMetaJSON.counterBits), Number(manifest.counterBits), 'counterBits');
+  ensureEqual(Number(qencMetaJSON.maxChunkCount), Number(manifest.maxChunkCount), 'maxChunkCount');
+  ensureEqual(qencMetaJSON.aadPolicyId, manifest.aadPolicyId, 'aadPolicyId');
 }
 
-/**
- * Restore .qenc container and private key from parsed shards
- * Core logic without UI dependencies — can be used by both Pro and Lite modes
- *
- * @param {object[]} shards - Array of parsed shard objects (from parseShard)
- * @param {object} options - Optional callbacks and verification options
- * @param {function} [options.onLog] - Log callback (msg) => void
- * @param {function} [options.onError] - Error log callback (msg) => void
- * @param {boolean} [options.strict=true]
- * @param {object} [options.verification]
- * @returns {Promise<object>}
- */
 export async function restoreFromShards(shards, options = {}) {
-    const onLog = options.onLog || (() => {});
-    const onError = options.onError || (() => {});
-    const onWarn = options.onWarn || onError;
-    const strict = options.strict ?? true;
-    const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
+  const onLog = options.onLog || (() => {});
+  const onWarn = options.onWarn || options.onError || (() => {});
+  const strict = options.strict ?? true;
+  const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
 
-    if (!Array.isArray(shards) || shards.length === 0) {
-        throw new Error('No shards provided');
+  if (!Array.isArray(shards) || shards.length === 0) {
+    throw new Error('No shards provided');
+  }
+
+  const prepared = [];
+  for (let i = 0; i < shards.length; i += 1) {
+    const shard = shards[i];
+    if (shard?.diagnostics?.errors?.length) {
+      if (strict) {
+        throw new Error(`Shard parse failed at input index ${i}: ${shard.diagnostics.errors.join('; ')}`);
+      }
+      continue;
     }
-
-    const prepared = [];
-    for (let i = 0; i < shards.length; i += 1) {
-        const shard = shards[i];
-        if (shard?.diagnostics?.errors?.length) {
-            if (strict) {
-                throw new Error(`Shard parse failed at input index ${i}: ${shard.diagnostics.errors.join('; ')}`);
-            }
-            continue;
-        }
-        prepared.push({
-            ...shard,
-            inputOrder: i,
-            inputShardIndex: Number.isInteger(shard?.shardIndex) ? shard.shardIndex : i,
-        });
-    }
-
-    if (prepared.length === 0) {
-        throw new Error('No valid shards after parsing');
-    }
-
-    const verification = options.verification || {};
-    const manifestContext = await resolveManifestContext(prepared, verification);
-
-    const manifest = manifestContext.manifest;
-    const manifestDigestHex = manifestContext.manifestDigestHex;
-    const group = prepared.filter((shard) => shard.manifestDigestHex === manifestDigestHex);
-    const rejectedShardIndices = prepared
-        .filter((shard) => shard.manifestDigestHex !== manifestDigestHex)
-        .map((shard) => shard.inputShardIndex);
-
-    if (group.length === 0) {
-        throw new Error('No shard matches selected manifest digest');
-    }
-
-    const n = ensurePositiveInteger(Number(manifest?.sharding?.reedSolomon?.n), 'manifest.sharding.reedSolomon.n', 2);
-    const k = ensurePositiveInteger(Number(manifest?.sharding?.reedSolomon?.k), 'manifest.sharding.reedSolomon.k', 2);
-    const m = ensurePositiveInteger(Number(manifest?.sharding?.reedSolomon?.parity), 'manifest.sharding.reedSolomon.parity', 0);
-    const t = ensurePositiveInteger(Number(manifest?.sharding?.shamir?.threshold), 'manifest.sharding.shamir.threshold', 2);
-    const shareCount = ensurePositiveInteger(Number(manifest?.sharding?.shamir?.shareCount), 'manifest.sharding.shamir.shareCount', 2);
-
-    if (shareCount !== n) {
-        throw new Error(`Invalid manifest sharding: Shamir shareCount ${shareCount} must equal RS n ${n}`);
-    }
-    if ((m % 2) !== 0) {
-        throw new Error('Invalid manifest sharding: RS parity must be even');
-    }
-    if (k >= n) {
-        throw new Error('Invalid manifest sharding: expected k < n');
-    }
-
-    const allowedFailures = m / 2;
-    const expectedThreshold = k + allowedFailures;
-    if (t !== expectedThreshold) {
-        throw new Error(`Invalid manifest threshold: expected ${expectedThreshold}, got ${t}`);
-    }
-
-    const qenc = manifest.qenc || {};
-    const chunkSize = ensurePositiveInteger(Number(qenc.chunkSize), 'manifest.qenc.chunkSize', 1);
-    const chunkCount = ensurePositiveInteger(Number(qenc.chunkCount), 'manifest.qenc.chunkCount', 1);
-    const payloadLength = ensurePositiveInteger(Number(qenc.payloadLength), 'manifest.qenc.payloadLength', 1);
-
-    const containerId = String(qenc.containerId || '');
-    if (containerId.length === 0) {
-        throw new Error('Manifest is missing qenc.containerId');
-    }
-
-    const base = group[0];
-    if (!(base.keyCommit instanceof Uint8Array) || base.keyCommit.length !== KEY_COMMITMENT_MAX_LEN) {
-        throw new Error('Shard is missing required key commitment');
-    }
-    const baseKeyCommit = base.keyCommit;
-    const shardByIndex = new Map();
-
-    for (const shard of group) {
-        if (!Number.isInteger(shard.shardIndex) || shard.shardIndex < 0 || shard.shardIndex >= n) {
-            throw new Error(`Invalid shardIndex ${shard.shardIndex}`);
-        }
-        if (shardByIndex.has(shard.shardIndex)) {
-            throw new Error(`Duplicate shardIndex ${shard.shardIndex} detected`);
-        }
-        shardByIndex.set(shard.shardIndex, shard);
-
-        ensureEqual(shard.metaJSON?.containerId, containerId, 'containerId');
-        ensureEqual(Number(shard.metaJSON?.n), n, 'n');
-        ensureEqual(Number(shard.metaJSON?.k), k, 'k');
-        ensureEqual(Number(shard.metaJSON?.m), m, 'm');
-        ensureEqual(Number(shard.metaJSON?.t), t, 't');
-
-        if (shard.metaJSON?.manifestDigest) {
-            ensureEqual(normalizeHexString(shard.metaJSON.manifestDigest), manifestDigestHex, 'manifestDigest');
-        }
-
-        if (!bytesEqual(shard.encapsulatedKey, base.encapsulatedKey)) {
-            throw new Error(`Shard header mismatch: encapsulatedKey differs for shard ${shard.shardIndex}`);
-        }
-        if (!bytesEqual(shard.iv, base.iv)) {
-            throw new Error(`Shard header mismatch: iv differs for shard ${shard.shardIndex}`);
-        }
-        if (!bytesEqual(shard.salt, base.salt)) {
-            throw new Error(`Shard header mismatch: salt differs for shard ${shard.shardIndex}`);
-        }
-        if (!bytesEqual(shard.qencMetaBytes, base.qencMetaBytes)) {
-            throw new Error(`Shard header mismatch: qenc metadata differs for shard ${shard.shardIndex}`);
-        }
-        if (!(shard.keyCommit instanceof Uint8Array) || shard.keyCommit.length !== KEY_COMMITMENT_MAX_LEN) {
-            throw new Error(`Shard ${shard.shardIndex} is missing required key commitment`);
-        }
-        if (!bytesEqual(shard.keyCommit, baseKeyCommit)) {
-            throw new Error(`Shard header mismatch: key commitment differs for shard ${shard.shardIndex}`);
-        }
-    }
-
-    const missingIndices = new Set();
-    for (let i = 0; i < n; i += 1) {
-        if (!shardByIndex.has(i)) missingIndices.add(i);
-    }
-
-    const qencMetaJSON = base.qencMetaJSON;
-    validateContainerPolicyMetadata(qencMetaJSON, { allowLegacyWithoutProfile: false });
-    assertManifestMatchesQencMetadata(manifest, qencMetaJSON);
-
-    const ciphertextLength = ensurePositiveInteger(Number(base.metaJSON?.ciphertextLength), 'ciphertextLength', 1);
-    for (const shard of group) {
-        ensureEqual(Number(shard.metaJSON?.ciphertextLength), ciphertextLength, 'ciphertextLength');
-        ensureEqual(Number(shard.metaJSON?.chunkCount), chunkCount, 'chunkCount');
-        ensureEqual(Number(shard.metaJSON?.chunkSize), chunkSize, 'chunkSize');
-    }
-
-    const isPerChunkMode = qencMetaJSON.aead_mode === 'per-chunk-aead';
-    if (!isPerChunkMode && qencMetaJSON.aead_mode !== 'single-container-aead') {
-        throw new Error(`Unsupported AEAD mode: ${qencMetaJSON.aead_mode ?? 'unknown'}`);
-    }
-
-    const expectedCiphertextLength = isPerChunkMode
-        ? (payloadLength + (16 * chunkCount))
-        : ciphertextLength;
-    if (isPerChunkMode && ciphertextLength !== expectedCiphertextLength) {
-        throw new Error(`Ciphertext length mismatch for per-chunk mode (expected ${expectedCiphertextLength}, got ${ciphertextLength})`);
-    }
-
-    const encapHash = await hashBytes(base.encapsulatedKey);
-    if (base.metaJSON?.encapBlobHash && normalizeHexString(base.metaJSON.encapBlobHash) !== normalizeHexString(encapHash)) {
-        throw new Error('encapBlobHash mismatch');
-    }
-
-    if (group.length < t) {
-        throw new Error(`Need at least ${t} matching shards for selected manifest, got ${group.length}`);
-    }
-
-    const shareCommitments = manifest?.shardBinding?.shareCommitments || base.metaJSON?.shareCommitments || null;
-    const fragmentBodyHashes = manifest?.shardBinding?.shardBodyHashes || base.metaJSON?.fragmentBodyHashes || null;
-
-    let validShareShards = group;
-    if (Array.isArray(shareCommitments)) {
-        if (shareCommitments.length !== n) {
-            throw new Error('Invalid shareCommitments length');
-        }
-        validShareShards = [];
-        const invalidShareIndices = new Set();
-        for (const shard of group) {
-            const expected = normalizeHexString(shareCommitments[shard.shardIndex]);
-            if (!expected) {
-                invalidShareIndices.add(shard.shardIndex);
-                continue;
-            }
-            const actual = normalizeHexString(await hashBytes(shard.share));
-            if (actual !== expected) {
-                onWarn(`Share commitment verification failed for shard ${shard.shardIndex}. Share will be skipped.`);
-                invalidShareIndices.add(shard.shardIndex);
-                continue;
-            }
-            validShareShards.push(shard);
-        }
-        if (validShareShards.length < t) {
-            throw new Error(`Not enough valid shards for Shamir reconstruction: need ${t}, have ${validShareShards.length}`);
-        }
-        if (invalidShareIndices.size > 0) {
-            onWarn(`Share commitment failures: ${invalidShareIndices.size} shard(s) rejected.`);
-        } else {
-            onLog('Share commitments verified.');
-        }
-    }
-
-    const corruptedShardIndices = new Set();
-    if (Array.isArray(fragmentBodyHashes)) {
-        if (fragmentBodyHashes.length !== n) {
-            throw new Error('Invalid shardBodyHashes length');
-        }
-        for (const shard of group) {
-            const expected = normalizeHexString(fragmentBodyHashes[shard.shardIndex]);
-            if (!expected) continue;
-            const actual = normalizeHexString(await hashBytes(shard.fragments));
-            if (actual !== expected) {
-                onWarn(`Fragment integrity check failed for shard ${shard.shardIndex}. Treating as erasure.`);
-                corruptedShardIndices.add(shard.shardIndex);
-            }
-        }
-        if (corruptedShardIndices.size === 0) {
-            onLog('Shard body hashes verified.');
-        }
-    }
-
-    const totalBad = missingIndices.size + corruptedShardIndices.size;
-    if (totalBad > allowedFailures) {
-        throw new Error(`Too many missing/corrupted shards for RS reconstruction: allowed ${allowedFailures}, got ${totalBad}`);
-    }
-
-    const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-    const selectedShares = sortedShares.slice(0, t).map((item) => item.share);
-    const { combineShares } = await import('../splitting/sss.js');
-    const privKey = await combineShares(selectedShares);
-
-    const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
-    const cipherChunks = [];
-    const shardOffsets = new Array(n).fill(0);
-
-    for (let i = 0; i < chunkCount; i += 1) {
-        const plainLen = Math.min(chunkSize, payloadLength - (i * chunkSize));
-        const thisLen = isPerChunkMode ? (plainLen + 16) : ciphertextLength;
-
-        const encodeSize = Math.floor(rsEncodeBase / n) * n;
-        if (encodeSize === 0) throw new Error('RS parameters too large');
-        const inputSize = (encodeSize * k) / n;
-        const symbolSize = inputSize / k;
-        const blocks = Math.ceil(thisLen / inputSize);
-        const expectedFragLen = blocks * symbolSize;
-
-        const encoded = new Array(n);
-        for (let j = 0; j < n; j += 1) {
-            const shard = shardByIndex.get(j);
-            const fragStream = (shard && !corruptedShardIndices.has(j)) ? shard.fragments : null;
-            if (!fragStream) {
-                encoded[j] = new Uint8Array(expectedFragLen);
-                continue;
-            }
-
-            const streamOffset = shardOffsets[j];
-            if (streamOffset + 4 > fragStream.length) {
-                throw new Error('Fragment stream underflow');
-            }
-
-            const dvFrag = new DataView(fragStream.buffer, fragStream.byteOffset + streamOffset);
-            const fragLen = dvFrag.getUint32(0, false);
-            const fragStart = streamOffset + 4;
-            const fragEnd = fragStart + fragLen;
-            if (fragEnd > fragStream.length) {
-                throw new Error('Fragment length overflow');
-            }
-
-            let fragment = fragStream.subarray(fragStart, fragEnd);
-            if (fragment.length < expectedFragLen) {
-                const padded = new Uint8Array(expectedFragLen);
-                padded.set(fragment);
-                fragment = padded;
-            } else if (fragment.length > expectedFragLen) {
-                fragment = fragment.subarray(0, expectedFragLen);
-            }
-
-            encoded[j] = fragment;
-            shardOffsets[j] = fragEnd;
-        }
-
-        let recombined;
-        try {
-            recombined = erasureRuntime.recombine(encoded, thisLen, k, m / 2, rsEncodeBase);
-        } catch (error) {
-            throw new Error(`RS recombination failed on chunk ${i}: ${error?.message ?? error}`);
-        }
-
-        cipherChunks.push(recombined);
-        if (!isPerChunkMode) break;
-    }
-
-    for (let j = 0; j < n; j += 1) {
-        if (corruptedShardIndices.has(j)) continue;
-        const shard = shardByIndex.get(j);
-        if (!shard) continue;
-        if (shardOffsets[j] !== shard.fragments.length) {
-            throw new Error(`Fragment stream has trailing or missing data in shard ${j}`);
-        }
-    }
-
-    const ciphertext = isPerChunkMode
-        ? (() => {
-            const total = cipherChunks.reduce((sum, item) => sum + item.length, 0);
-            const out = new Uint8Array(total);
-            let offset = 0;
-            for (const chunk of cipherChunks) {
-                out.set(chunk, offset);
-                offset += chunk.length;
-            }
-            return out;
-        })()
-        : cipherChunks[0];
-
-    if (!(ciphertext instanceof Uint8Array) || ciphertext.length !== ciphertextLength) {
-        throw new Error('Reconstructed ciphertext length mismatch');
-    }
-
-    const header = buildQencHeader({
-        encapsulatedKey: base.encapsulatedKey,
-        containerNonce: base.iv,
-        kdfSalt: base.salt,
-        metaBytes: base.qencMetaBytes,
-        keyCommitment: base.keyCommit,
+    prepared.push({
+      ...shard,
+      inputOrder: i,
+      inputShardIndex: Number.isInteger(shard?.shardIndex) ? shard.shardIndex : i,
     });
+  }
+  if (prepared.length === 0) {
+    throw new Error('No valid shards after parsing');
+  }
 
-    const qencBytes = new Uint8Array(header.length + ciphertext.length);
-    qencBytes.set(header, 0);
-    qencBytes.set(ciphertext, header.length);
+  const verificationOptions = options.verification || {};
+  const archiveContext = await resolveArchiveContext(prepared, verificationOptions);
+  const candidate = archiveContext.candidate;
+  const manifest = candidate.manifest;
+  const bundle = candidate.bundle;
+  const manifestDigestHex = candidate.manifestDigestHex;
+  const bundleDigestHex = candidate.bundleDigestHex;
+  const useManifestWideShardSelection = archiveContext.useManifestWideShardSelection === true;
+  const selectedEmbeddedBundleDigestHex = candidate.embeddedBundleDigestHex || candidate.bundleDigestHex;
 
-    const recoveredQencHash = normalizeHexString(await hashBytes(qencBytes));
-    const expectedQencHash = normalizeHexString(qenc.qencHash);
-    if (recoveredQencHash !== expectedQencHash) {
-        throw new Error('Reconstructed .qenc hash does not match signed manifest');
+  const group = prepared.filter((shard) => (
+    shard.manifestDigestHex === manifestDigestHex &&
+    (useManifestWideShardSelection || shard.bundleDigestHex === selectedEmbeddedBundleDigestHex)
+  ));
+  const rejectedShardIndices = prepared
+    .filter((shard) => (
+      shard.manifestDigestHex !== manifestDigestHex ||
+      (!useManifestWideShardSelection && shard.bundleDigestHex !== selectedEmbeddedBundleDigestHex)
+    ))
+    .map((shard) => shard.inputShardIndex);
+
+  const n = ensurePositiveInteger(Number(manifest?.sharding?.reedSolomon?.n), 'manifest.sharding.reedSolomon.n', 2);
+  const k = ensurePositiveInteger(Number(manifest?.sharding?.reedSolomon?.k), 'manifest.sharding.reedSolomon.k', 2);
+  const m = ensurePositiveInteger(Number(manifest?.sharding?.reedSolomon?.parity), 'manifest.sharding.reedSolomon.parity', 0);
+  const t = ensurePositiveInteger(Number(manifest?.sharding?.shamir?.threshold), 'manifest.sharding.shamir.threshold', 2);
+  const shareCount = ensurePositiveInteger(Number(manifest?.sharding?.shamir?.shareCount), 'manifest.sharding.shamir.shareCount', 2);
+  if (shareCount !== n) {
+    throw new Error(`Invalid manifest sharding: Shamir shareCount ${shareCount} must equal RS n ${n}`);
+  }
+  if ((m % 2) !== 0) {
+    throw new Error('Invalid manifest sharding: RS parity must be even');
+  }
+  if (k >= n) {
+    throw new Error('Invalid manifest sharding: expected k < n');
+  }
+
+  const allowedFailures = m / 2;
+  const expectedThreshold = k + allowedFailures;
+  if (t !== expectedThreshold) {
+    throw new Error(`Invalid manifest threshold: expected ${expectedThreshold}, got ${t}`);
+  }
+
+  const qenc = manifest.qenc || {};
+  const chunkSize = ensurePositiveInteger(Number(qenc.chunkSize), 'manifest.qenc.chunkSize', 1);
+  const chunkCount = ensurePositiveInteger(Number(qenc.chunkCount), 'manifest.qenc.chunkCount', 1);
+  const payloadLength = ensurePositiveInteger(Number(qenc.payloadLength), 'manifest.qenc.payloadLength', 1);
+
+  const containerId = String(qenc.containerId || '');
+  if (containerId.length === 0) {
+    throw new Error('Manifest is missing qenc.containerId');
+  }
+
+  const base = group[0];
+  if (!(base.keyCommit instanceof Uint8Array) || base.keyCommit.length !== KEY_COMMITMENT_MAX_LEN) {
+    throw new Error('Shard is missing required key commitment');
+  }
+  const shardByIndex = new Map();
+
+  for (const shard of group) {
+    if (!Number.isInteger(shard.shardIndex) || shard.shardIndex < 0 || shard.shardIndex >= n) {
+      throw new Error(`Invalid shardIndex ${shard.shardIndex}`);
+    }
+    if (shardByIndex.has(shard.shardIndex)) {
+      throw new Error(`Duplicate shardIndex ${shard.shardIndex} detected`);
+    }
+    shardByIndex.set(shard.shardIndex, shard);
+
+    ensureEqual(shard.metaJSON?.containerId, containerId, 'containerId');
+    ensureEqual(Number(shard.metaJSON?.n), n, 'n');
+    ensureEqual(Number(shard.metaJSON?.k), k, 'k');
+    ensureEqual(Number(shard.metaJSON?.m), m, 'm');
+    ensureEqual(Number(shard.metaJSON?.t), t, 't');
+    ensureEqual(normalizeHexString(shard.metaJSON?.manifestDigest), manifestDigestHex, 'manifestDigest');
+    if (!useManifestWideShardSelection) {
+      ensureEqual(normalizeHexString(shard.metaJSON?.bundleDigest), selectedEmbeddedBundleDigestHex, 'bundleDigest');
     }
 
-    const recoveredPrivHash = normalizeHexString(await hashBytes(privKey));
-    const privateKeyHash = normalizeHexString(base.metaJSON?.privateKeyHash || '');
-    const qkeyOk = privateKeyHash ? (privateKeyHash === recoveredPrivHash) : true;
-    if (!qkeyOk) {
-        onWarn('Recovered secret key hash does not match shard metadata.');
+    if (!bytesEqual(shard.encapsulatedKey, base.encapsulatedKey)) {
+      throw new Error(`Shard header mismatch: encapsulatedKey differs for shard ${shard.shardIndex}`);
+    }
+    if (!bytesEqual(shard.iv, base.iv)) {
+      throw new Error(`Shard header mismatch: iv differs for shard ${shard.shardIndex}`);
+    }
+    if (!bytesEqual(shard.salt, base.salt)) {
+      throw new Error(`Shard header mismatch: salt differs for shard ${shard.shardIndex}`);
+    }
+    if (!bytesEqual(shard.qencMetaBytes, base.qencMetaBytes)) {
+      throw new Error(`Shard header mismatch: qenc metadata differs for shard ${shard.shardIndex}`);
+    }
+    if (!bytesEqual(shard.keyCommit, base.keyCommit)) {
+      throw new Error(`Shard header mismatch: key commitment differs for shard ${shard.shardIndex}`);
+    }
+  }
+
+  const missingIndices = new Set();
+  for (let i = 0; i < n; i += 1) {
+    if (!shardByIndex.has(i)) missingIndices.add(i);
+  }
+
+  const qencMetaJSON = base.qencMetaJSON;
+  validateContainerPolicyMetadata(qencMetaJSON, { allowLegacyWithoutProfile: false });
+  assertManifestMatchesQencMetadata(manifest, qencMetaJSON);
+
+  const ciphertextLength = ensurePositiveInteger(Number(base.metaJSON?.ciphertextLength), 'ciphertextLength', 1);
+  for (const shard of group) {
+    ensureEqual(Number(shard.metaJSON?.ciphertextLength), ciphertextLength, 'ciphertextLength');
+    ensureEqual(Number(shard.metaJSON?.chunkCount), chunkCount, 'chunkCount');
+    ensureEqual(Number(shard.metaJSON?.chunkSize), chunkSize, 'chunkSize');
+  }
+
+  const isPerChunkMode = qencMetaJSON.aead_mode === 'per-chunk-aead';
+  if (!isPerChunkMode && qencMetaJSON.aead_mode !== 'single-container-aead') {
+    throw new Error(`Unsupported AEAD mode: ${qencMetaJSON.aead_mode ?? 'unknown'}`);
+  }
+
+  const expectedCiphertextLength = isPerChunkMode
+    ? (payloadLength + (16 * chunkCount))
+    : ciphertextLength;
+  if (isPerChunkMode && ciphertextLength !== expectedCiphertextLength) {
+    throw new Error(`Ciphertext length mismatch for per-chunk mode (expected ${expectedCiphertextLength}, got ${ciphertextLength})`);
+  }
+
+  const encapHash = await hashBytes(base.encapsulatedKey);
+  if (normalizeHexString(base.metaJSON?.encapBlobHash) !== normalizeHexString(encapHash)) {
+    throw new Error('encapBlobHash mismatch');
+  }
+  if (group.length < t) {
+    throw new Error(`Need at least ${t} matching shards for selected archive cohort, got ${group.length}`);
+  }
+
+  const shareCommitments = manifest?.shardBinding?.shareCommitments || base.metaJSON?.shareCommitments || null;
+  const fragmentBodyHashes = manifest?.shardBinding?.shardBodyHashes || base.metaJSON?.fragmentBodyHashes || null;
+
+  let validShareShards = group;
+  if (Array.isArray(shareCommitments)) {
+    if (shareCommitments.length !== n) {
+      throw new Error('Invalid shareCommitments length');
+    }
+    validShareShards = [];
+    const invalidShareIndices = new Set();
+    for (const shard of group) {
+      const expected = normalizeHexString(shareCommitments[shard.shardIndex]);
+      const actual = normalizeHexString(await hashBytes(shard.share));
+      if (!expected || actual !== expected) {
+        onWarn(`Share commitment verification failed for shard ${shard.shardIndex}. Share will be skipped.`);
+        invalidShareIndices.add(shard.shardIndex);
+        continue;
+      }
+      validShareShards.push(shard);
+    }
+    if (validShareShards.length < t) {
+      throw new Error(`Not enough valid shards for Shamir reconstruction: need ${t}, have ${validShareShards.length}`);
+    }
+    onLog(invalidShareIndices.size > 0 ? `Share commitment failures: ${invalidShareIndices.size} shard(s) rejected.` : 'Share commitments verified.');
+  }
+
+  const corruptedShardIndices = new Set();
+  if (Array.isArray(fragmentBodyHashes)) {
+    if (fragmentBodyHashes.length !== n) {
+      throw new Error('Invalid shardBodyHashes length');
+    }
+    for (const shard of group) {
+      const expected = normalizeHexString(fragmentBodyHashes[shard.shardIndex]);
+      const actual = normalizeHexString(await hashBytes(shard.fragments));
+      if (expected && actual !== expected) {
+        onWarn(`Fragment integrity check failed for shard ${shard.shardIndex}. Treating as erasure.`);
+        corruptedShardIndices.add(shard.shardIndex);
+      }
+    }
+    if (corruptedShardIndices.size === 0) {
+      onLog('Shard body hashes verified.');
+    }
+  }
+
+  const totalBad = missingIndices.size + corruptedShardIndices.size;
+  if (totalBad > allowedFailures) {
+    throw new Error(`Too many missing/corrupted shards for RS reconstruction: allowed ${allowedFailures}, got ${totalBad}`);
+  }
+
+  const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
+  const selectedShares = sortedShares.slice(0, t).map((item) => item.share);
+  const { combineShares } = await import('../splitting/sss.js');
+  const privKey = await combineShares(selectedShares);
+
+  const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
+  const cipherChunks = [];
+  const shardOffsets = new Array(n).fill(0);
+
+  for (let i = 0; i < chunkCount; i += 1) {
+    const plainLen = Math.min(chunkSize, payloadLength - (i * chunkSize));
+    const thisLen = isPerChunkMode ? (plainLen + 16) : ciphertextLength;
+
+    const encodeSize = Math.floor(rsEncodeBase / n) * n;
+    if (encodeSize === 0) throw new Error('RS parameters too large');
+    const inputSize = (encodeSize * k) / n;
+    const symbolSize = inputSize / k;
+    const blocks = Math.ceil(thisLen / inputSize);
+    const expectedFragLen = blocks * symbolSize;
+
+    const encoded = new Array(n);
+    for (let j = 0; j < n; j += 1) {
+      const shard = shardByIndex.get(j);
+      const fragStream = (shard && !corruptedShardIndices.has(j)) ? shard.fragments : null;
+      if (!fragStream) {
+        encoded[j] = new Uint8Array(expectedFragLen);
+        continue;
+      }
+
+      const streamOffset = shardOffsets[j];
+      if (streamOffset + 4 > fragStream.length) {
+        throw new Error('Fragment stream underflow');
+      }
+
+      const dvFrag = new DataView(fragStream.buffer, fragStream.byteOffset + streamOffset);
+      const fragLen = dvFrag.getUint32(0, false);
+      const fragStart = streamOffset + 4;
+      const fragEnd = fragStart + fragLen;
+      if (fragEnd > fragStream.length) {
+        throw new Error('Fragment length overflow');
+      }
+
+      let fragment = fragStream.subarray(fragStart, fragEnd);
+      if (fragment.length < expectedFragLen) {
+        const padded = new Uint8Array(expectedFragLen);
+        padded.set(fragment);
+        fragment = padded;
+      } else if (fragment.length > expectedFragLen) {
+        fragment = fragment.subarray(0, expectedFragLen);
+      }
+
+      encoded[j] = fragment;
+      shardOffsets[j] = fragEnd;
     }
 
-    return {
-        qencBytes,
-        privKey,
-        containerId,
-        containerHash: expectedQencHash,
-        privateKeyHash: privateKeyHash || null,
-        recoveredQencHash,
-        recoveredPrivHash,
-        rejectedShardIndices,
-        qencOk: true,
-        qkeyOk,
-        manifest,
-        manifestBytes: manifestContext.manifestBytes,
-        manifestDigestHex,
-        manifestSource: manifestContext.source,
-        authenticity: {
-            warnings: manifestContext.warnings,
-            verification: manifestContext.verification,
-        },
-    };
+    let recombined;
+    try {
+      recombined = erasureRuntime.recombine(encoded, thisLen, k, m / 2, rsEncodeBase);
+    } catch (error) {
+      throw new Error(`RS recombination failed on chunk ${i}: ${error?.message ?? error}`);
+    }
+
+    cipherChunks.push(recombined);
+    if (!isPerChunkMode) break;
+  }
+
+  for (let j = 0; j < n; j += 1) {
+    if (corruptedShardIndices.has(j)) continue;
+    const shard = shardByIndex.get(j);
+    if (!shard) continue;
+    if (shardOffsets[j] !== shard.fragments.length) {
+      throw new Error(`Fragment stream has trailing or missing data in shard ${j}`);
+    }
+  }
+
+  const ciphertext = isPerChunkMode
+    ? (() => {
+        const total = cipherChunks.reduce((sum, item) => sum + item.length, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of cipherChunks) {
+          out.set(chunk, offset);
+          offset += chunk.length;
+        }
+        return out;
+      })()
+    : cipherChunks[0];
+
+  if (!(ciphertext instanceof Uint8Array) || ciphertext.length !== ciphertextLength) {
+    throw new Error('Reconstructed ciphertext length mismatch');
+  }
+
+  const header = buildQencHeader({
+    encapsulatedKey: base.encapsulatedKey,
+    containerNonce: base.iv,
+    kdfSalt: base.salt,
+    metaBytes: base.qencMetaBytes,
+    keyCommitment: base.keyCommit,
+  });
+
+  const qencBytes = new Uint8Array(header.length + ciphertext.length);
+  qencBytes.set(header, 0);
+  qencBytes.set(ciphertext, header.length);
+
+  const recoveredQencHash = normalizeHexString(await hashBytes(qencBytes));
+  const expectedQencHash = normalizeHexString(qenc.qencHash);
+  if (recoveredQencHash !== expectedQencHash) {
+    throw new Error('Reconstructed .qenc hash does not match archive manifest');
+  }
+
+  const recoveredPrivHash = normalizeHexString(await hashBytes(privKey));
+  const privateKeyHash = normalizeHexString(base.metaJSON?.privateKeyHash || '');
+  const qkeyOk = privateKeyHash ? (privateKeyHash === recoveredPrivHash) : true;
+  if (!qkeyOk) {
+    onWarn('Recovered secret key hash does not match shard metadata.');
+  }
+
+  return {
+    qencBytes,
+    privKey,
+    containerId,
+    containerHash: expectedQencHash,
+    privateKeyHash: privateKeyHash || null,
+    recoveredQencHash,
+    recoveredPrivHash,
+    rejectedShardIndices,
+    qencOk: true,
+    qkeyOk,
+    manifest,
+    manifestBytes: candidate.manifestBytes,
+    manifestDigestHex,
+    bundle,
+    bundleBytes: candidate.bundleBytes,
+    bundleDigestHex,
+    manifestSource: archiveContext.source,
+    authenticity: {
+      policy: archiveContext.authenticity.policy,
+      verification: archiveContext.authenticity.verification,
+      warnings: archiveContext.authenticity.warnings,
+      status: {
+        integrityVerified: true,
+        signatureVerified: archiveContext.authenticity.verification.status.signatureVerified,
+        strongPqSignatureVerified: archiveContext.authenticity.verification.status.strongPqSignatureVerified,
+        signerPinned: archiveContext.authenticity.verification.status.signerPinned,
+        signerIdentityPinned: archiveContext.authenticity.verification.status.signerIdentityPinned,
+        bundlePinned: archiveContext.authenticity.verification.status.bundlePinned,
+        userPinned: archiveContext.authenticity.verification.status.userPinned,
+        userPinProvided: archiveContext.authenticity.verification.status.userPinProvided,
+        policySatisfied: archiveContext.authenticity.policy.satisfied,
+        archivePolicySatisfied: archiveContext.authenticity.policy.satisfied,
+      },
+      timestampEvidence: archiveContext.authenticity.timestampEvidence,
+    },
+  };
 }

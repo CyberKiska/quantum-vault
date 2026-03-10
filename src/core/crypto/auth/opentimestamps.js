@@ -1,0 +1,174 @@
+import { asciiBytes, base64ToBytes, concatBytes, digestSha256, toHex } from '../bytes.js';
+
+const OTS_PREFIX = concatBytes([
+  asciiBytes('\x00OpenTimestamps\x00\x00Proof\x00'),
+  Uint8Array.of(0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94, 0x01),
+]);
+const OTS_HASH_OP_SHA256 = 0x08;
+
+function startsWithBytes(bytes, prefix) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (bytes[i] !== prefix[i]) return false;
+  }
+  return true;
+}
+
+function inferCompleteProof(bytes, name = '') {
+  const lowerName = String(name || '').toLowerCase();
+  if (/(^|[^a-z])(initial|pending|incomplete)([^a-z]|$)/.test(lowerName)) {
+    return false;
+  }
+  if (/(^|[^a-z])(complete|completed|confirmed|upgraded)([^a-z]|$)/.test(lowerName)) {
+    return true;
+  }
+  return bytes.length >= 1024;
+}
+
+export function parseOpenTimestampProof(bytes, { name = '' } = {}) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < (OTS_PREFIX.length + 1 + 32)) {
+    throw new Error(`Invalid OpenTimestamps proof: ${name || 'proof'} is too short`);
+  }
+  if (!startsWithBytes(bytes, OTS_PREFIX)) {
+    throw new Error(`Invalid OpenTimestamps proof header: ${name || 'proof'}`);
+  }
+
+  const hashOp = bytes[OTS_PREFIX.length];
+  if (hashOp !== OTS_HASH_OP_SHA256) {
+    throw new Error(`Unsupported OpenTimestamps digest algorithm in ${name || 'proof'}: expected SHA-256`);
+  }
+
+  const stampedDigestBytes = bytes.subarray(OTS_PREFIX.length + 1, OTS_PREFIX.length + 33);
+  const appearsComplete = inferCompleteProof(bytes, name);
+  return {
+    stampedDigestHex: toHex(stampedDigestBytes),
+    appearsComplete,
+    completeProof: appearsComplete,
+  };
+}
+
+export function decodeBundleSignatureBytes(signature) {
+  if (signature?.signatureEncoding !== 'base64') {
+    throw new Error(`Unsupported bundle signature encoding: ${signature?.signatureEncoding ?? 'unknown'}`);
+  }
+  return base64ToBytes(signature.signature);
+}
+
+export async function resolveOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
+  const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
+  const uniqueSignatures = [];
+  const seenSignatures = new Set();
+  for (const signature of signatures) {
+    if (!(signature?.bytes instanceof Uint8Array)) continue;
+    const dedupeKey = String(
+      signature?.signatureContentDigestHex ||
+      signature?.otsStampedDigestHex ||
+      signature?.id ||
+      signature?.name ||
+      ''
+    );
+    if (dedupeKey && seenSignatures.has(dedupeKey)) continue;
+    if (dedupeKey) seenSignatures.add(dedupeKey);
+    uniqueSignatures.push(signature);
+  }
+
+  const matchedSignatures = await Promise.all(uniqueSignatures.map(async (signature) => {
+    if (typeof signature?.otsStampedDigestHex === 'string' && signature.otsStampedDigestHex.length > 0) {
+      return signature.otsStampedDigestHex === parsedProof.stampedDigestHex;
+    }
+    return toHex(await digestSha256(signature.bytes)) === parsedProof.stampedDigestHex;
+  }));
+  const matches = uniqueSignatures.filter((_, index) => matchedSignatures[index]);
+
+  if (matches.length === 0) {
+    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} does not match any detached signature`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} matches multiple detached signatures`);
+  }
+
+  return {
+    targetRef: matches[0].id,
+    targetName: matches[0].name || matches[0].id,
+    targetSource: matches[0].source || 'bundle',
+    targetVerified: matches[0].ok === true,
+    linked: true,
+    apparentlyComplete: parsedProof.appearsComplete,
+    completeProof: parsedProof.completeProof,
+    stampedDigestHex: parsedProof.stampedDigestHex,
+  };
+}
+
+export async function inspectManifestBundleTimestamps(bundle) {
+  const signatures = Array.isArray(bundle?.attachments?.signatures)
+    ? bundle.attachments.signatures.map((signature) => ({
+        id: signature.id,
+        bytes: decodeBundleSignatureBytes(signature),
+      }))
+    : [];
+  const signaturesById = new Map(signatures.map((signature) => [signature.id, signature]));
+  const timestamps = Array.isArray(bundle?.attachments?.timestamps) ? bundle.attachments.timestamps : [];
+
+  return Promise.all(timestamps.map(async (timestamp) => {
+    if (timestamp?.proofEncoding !== 'base64') {
+      throw new Error(`Unsupported OpenTimestamps proof encoding: ${timestamp?.proofEncoding ?? 'unknown'}`);
+    }
+    const targetSignature = signaturesById.get(timestamp.targetRef);
+    if (!targetSignature) {
+      throw new Error(`OpenTimestamps targetRef is unknown: ${timestamp?.targetRef ?? 'unknown'}`);
+    }
+    const resolved = await resolveOpenTimestampTarget({
+      timestampBytes: base64ToBytes(timestamp.proof),
+      timestampName: timestamp.id,
+      signatures: [targetSignature],
+    });
+    return {
+      id: timestamp.id,
+      targetRef: resolved.targetRef,
+      targetName: resolved.targetName,
+      targetSource: resolved.targetSource,
+      targetVerified: resolved.targetVerified,
+      linked: true,
+      apparentlyComplete: resolved.apparentlyComplete,
+      completeProof: resolved.completeProof,
+      linkLabel: 'OTS evidence linked to signature',
+      completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
+    };
+  }));
+}
+
+export async function assertManifestBundleTimestamps(bundle) {
+  await inspectManifestBundleTimestamps(bundle);
+}
+
+export async function inspectTimestampEvidence({
+  bundle,
+  externalTimestamps = [],
+  signatureArtifacts = [],
+}) {
+  const embeddedEvidence = await inspectManifestBundleTimestamps(bundle);
+  const externalEvidence = await Promise.all(externalTimestamps.map(async (timestamp, index) => {
+    if (!(timestamp?.bytes instanceof Uint8Array) || timestamp.bytes.length === 0) {
+      throw new Error(`Invalid OpenTimestamps proof: ${timestamp?.name || `timestamp-${index + 1}`}`);
+    }
+    const resolved = await resolveOpenTimestampTarget({
+      timestampBytes: timestamp.bytes,
+      timestampName: timestamp.name || `timestamp-${index + 1}`,
+      signatures: signatureArtifacts,
+    });
+    return {
+      id: timestamp.name || `timestamp-${index + 1}`,
+      targetRef: resolved.targetRef,
+      targetName: resolved.targetName,
+      targetSource: resolved.targetSource,
+      targetVerified: resolved.targetVerified,
+      linked: true,
+      apparentlyComplete: resolved.apparentlyComplete,
+      completeProof: resolved.completeProof,
+      linkLabel: 'External OTS evidence linked to signature',
+      completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
+    };
+  }));
+
+  return [...embeddedEvidence, ...externalEvidence];
+}

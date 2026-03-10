@@ -586,6 +586,7 @@ export function initUI() {
             proTabIdentity: 'proViewIdentity',
             proTabEncryption: 'proViewEncryption',
             proTabDistribution: 'proViewDistribution',
+            proTabAttach: 'proViewAttach',
             proTabRestore: 'proViewRestore'
         };
         const tabIds = Object.keys(tabs);

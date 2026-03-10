@@ -73,8 +73,32 @@ export function base64ToBytes(value) {
     throw new Error('No base64 decoder available');
 }
 
+export function bytesToBase64(bytes) {
+    if (!(bytes instanceof Uint8Array)) throw new Error('bytes must be Uint8Array');
+    if (typeof btoa === 'function') {
+        let raw = '';
+        for (let i = 0; i < bytes.length; i += 1) raw += String.fromCharCode(bytes[i]);
+        return btoa(raw);
+    }
+    if (typeof Buffer !== 'undefined') {
+        return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
+    }
+    throw new Error('No base64 encoder available');
+}
+
 export function asciiBytes(text) {
     const out = new Uint8Array(text.length);
     for (let i = 0; i < text.length; i += 1) out[i] = text.charCodeAt(i) & 0xff;
     return out;
+}
+
+export async function digestSha256(bytes) {
+    if (!(bytes instanceof Uint8Array)) {
+        throw new Error('SHA-256 input must be Uint8Array');
+    }
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) {
+        throw new Error('Web Crypto API is not available in current runtime');
+    }
+    return new Uint8Array(await subtle.digest('SHA-256', bytes));
 }

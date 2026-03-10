@@ -1,6 +1,5 @@
-import { sha256 } from '@noble/hashes/sha2.js';
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { base64ToBytes, bytesEqual, bytesToHex, utf8ToBytes } from '../bytes.js';
+import { base64ToBytes, bytesEqual, bytesToHex, digestSha256, utf8ToBytes } from '../bytes.js';
 
 const SIGNATURE_SCHEMA = 'stellar-file-signature/v1';
 const MODE_SEP53 = 'sep53';
@@ -124,8 +123,8 @@ async function verifyEd25519(publicBytes, messageBytes, signatureBytes) {
 export async function verifyStellarSigAgainstBytes({
   messageBytes,
   sigJsonBytes,
+  bundleSigner = '',
   expectedSigner = '',
-  allowLegacyEd25519 = true,
 }) {
   const warnings = [];
 
@@ -135,8 +134,11 @@ export async function verifyStellarSigAgainstBytes({
   } catch (error) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: `Invalid JSON signature document: ${error?.message || error}`,
       warnings,
     };
@@ -145,8 +147,11 @@ export async function verifyStellarSigAgainstBytes({
   if (doc?.schema !== SIGNATURE_SCHEMA) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: `Unsupported signature schema: ${String(doc?.schema || '(missing)')}`,
       warnings,
     };
@@ -155,19 +160,12 @@ export async function verifyStellarSigAgainstBytes({
   if (String(doc.mode || '').trim() !== MODE_SEP53) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: `Unsupported .sig mode for Quantum Vault: ${String(doc.mode || '(missing)')}`,
-      warnings,
-    };
-  }
-
-  if (!allowLegacyEd25519) {
-    return {
-      ok: false,
-      trusted: false,
-      type: 'sig',
-      error: 'Legacy Ed25519 signatures are disabled by policy',
       warnings,
     };
   }
@@ -180,15 +178,18 @@ export async function verifyStellarSigAgainstBytes({
   } catch (error) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: error?.message || String(error),
       warnings,
     };
   }
 
   const digests = {
-    [HASH_ALG.SHA256]: bytesToHex(sha256(messageBytes)),
+    [HASH_ALG.SHA256]: bytesToHex(await digestSha256(messageBytes)),
     [HASH_ALG.SHA3_512]: bytesToHex(sha3_512(messageBytes)),
   };
 
@@ -196,8 +197,11 @@ export async function verifyStellarSigAgainstBytes({
     if (digests[entry.alg] !== entry.hex) {
       return {
         ok: false,
-        trusted: false,
+        bundlePinned: false,
+        userPinned: false,
+        signerPinned: false,
         type: 'sig',
+        format: 'stellar-sig',
         error: `Digest mismatch for ${entry.alg}`,
         warnings,
       };
@@ -209,8 +213,11 @@ export async function verifyStellarSigAgainstBytes({
   if (String(doc.message || '') !== expectedMessage) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: 'Deterministic message mismatch',
       warnings,
     };
@@ -223,28 +230,38 @@ export async function verifyStellarSigAgainstBytes({
   } catch (error) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: `Invalid signer address: ${error?.message || error}`,
       warnings,
     };
   }
 
-  let trusted = false;
+  const declaredSigner = String(bundleSigner || '').trim();
+  if (declaredSigner && declaredSigner !== signer) {
+    return {
+      ok: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
+      type: 'sig',
+      format: 'stellar-sig',
+      error: `Bundled signer identifier does not match signature document signer (expected ${declaredSigner}, got ${signer})`,
+      warnings,
+    };
+  }
+
+  let userPinned = false;
   const expected = String(expectedSigner || '').trim();
   if (expected) {
     if (expected !== signer) {
-      return {
-        ok: false,
-        trusted: false,
-        type: 'sig',
-        error: `Wrong signer: expected ${expected}, got ${signer}`,
-        warnings,
-      };
+      warnings.push(`Pinned Ed25519 signer did not match this verified signature (expected ${expected}, got ${signer}).`);
+    } else {
+      userPinned = true;
     }
-    trusted = true;
-  } else {
-    warnings.push('No expected signer address pinned; identity assurance is weak.');
   }
 
   let signatureBytes;
@@ -253,8 +270,11 @@ export async function verifyStellarSigAgainstBytes({
   } catch (error) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: `Malformed signatureB64: ${error?.message || error}`,
       warnings,
     };
@@ -263,20 +283,26 @@ export async function verifyStellarSigAgainstBytes({
   if (signatureBytes.length !== 64) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: `Expected 64-byte Ed25519 signature, got ${signatureBytes.length}`,
       warnings,
     };
   }
 
-  const payload = sha256(utf8ToBytes(SEP53_PREFIX + expectedMessage));
+  const payload = await digestSha256(utf8ToBytes(SEP53_PREFIX + expectedMessage));
   const sigOk = await verifyEd25519(signerPublic, payload, signatureBytes);
   if (!sigOk) {
     return {
       ok: false,
-      trusted: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
       type: 'sig',
+      format: 'stellar-sig',
       error: 'Ed25519 signature verification failed',
       warnings,
     };
@@ -284,10 +310,17 @@ export async function verifyStellarSigAgainstBytes({
 
   return {
     ok: true,
-    trusted,
+    bundlePinned: declaredSigner.length > 0,
+    userPinned,
+    signerPinned: declaredSigner.length > 0 || userPinned,
     type: 'sig',
-    algorithm: 'Ed25519',
+    format: 'stellar-sig',
+    suite: 'ed25519',
+    suiteDisplay: 'Ed25519',
+    strongPq: false,
     signer,
+    signerLabel: signer,
+    keySource: 'signature-document',
     warnings,
   };
 }

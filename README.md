@@ -9,9 +9,10 @@
 * **Generate** 3168‑byte secret key (`secretKey.qkey`) & 1568-byte public key (`publicKey.qkey`) for ML-KEM-1024 post-quantum key encapsulation algorithm.
 * **Encrypt** client-side arbitrary files using hybrid cryptography. In this approach, the ML-KEM-1024 securely negotiates a symmetric key between the sides, which is then used by AES-256-GCM to directly encrypt the file data.
 * **Decrypt** `.qenc` containers created by this tool.
-* **Split** `.qenc` cryptocontainers with `.qkey` private keys into multiple `.qcont` shards and export canonical `*.qvmanifest.json`. You choose total shards n and RS data k; threshold t is computed as `t = k + (n-k)/2`. With fewer than t shards, no information about the original secret can be retrieved.
-* **Restore** from a single input set of files (`.qcont` + optional `.qvmanifest.json` + optional `.qsig/.sig/.pqpk`) and reconstruct `.qenc` + private `.qkey` from a sufficient number of shards (>= t).
-* **Verify** detached manifest signatures from external signer apps (Quantum Signer `.qsig`, Stellar WebSigner `.sig`) with optional trusted identity pinning.
+* **Split** `.qenc` cryptocontainers with `.qkey` private keys into multiple `.qcont` shards, export canonical signable `*.qvmanifest.json`, and embed both the canonical manifest and an initial manifest bundle into every shard. You choose total shards n and RS data k; threshold t is computed as `t = k + (n-k)/2`. With fewer than t shards, no information about the original secret can be retrieved.
+* **Attach** detached authenticity material (`.qsig`, Stellar `.sig`, `.pqpk`, `.ots`) to a canonical manifest or existing manifest bundle, producing a self-contained `*.extended.qvmanifest.json` bundle and optionally rewriting a full shard cohort in place.
+* **Restore** from a single input set of files (`.qcont` + optional canonical `*.qvmanifest.json` or bundled `*.extended.qvmanifest.json` + optional `.qsig/.sig/.pqpk/.ots`) and reconstruct `.qenc` + private `.qkey` from a sufficient number of shards (>= t), but only if the archive authenticity policy is satisfied.
+* **Verify** detached manifest signatures from external signer apps ([Quantum Signer](https://github.com/CyberKiska/quantum-signer) `.qsig`, [Stellar WebSigner](https://github.com/CyberKiska/stellar-websigner) `.sig`) with explicit archive policy evaluation, unique-signature counting, and separate bundle-pinned vs user-pinned signer identity reporting.
 * **Verifies** file integrity using SHA3-512 hash sum and provides process logs to track operations.
 * All cryptographic operations are performed directly in the client's browser, ensuring the confidentiality of user data.
 
@@ -84,14 +85,18 @@ src/
     │   ├── qenc/
     │   │   └── format.js            # .qenc header build/parse
     │   ├── qcont/
-    │   │   ├── build.js             # Shard construction
-    │   │   └── restore.js           # Shard restore/reconstruction
+    │   │   ├── build.js             # Shard construction + initial manifest bundle
+    │   │   ├── attach.js            # Manifest bundle attach/merge workflow
+    │   │   └── restore.js           # Shard restore/reconstruction + authenticity gating
     │   ├── manifest/
     │   │   ├── archive-manifest.js  # Canonical archive manifest schema/validation
-    │   │   └── jcs.js               # RFC-8785 canonicalization helpers
+    │   │   ├── manifest-bundle.js   # Self-contained manifest bundle schema/validation
+    │   │   └── jcs.js               # Project-defined canonicalization helpers (QV-C14N-v1)
     │   ├── auth/
     │   │   ├── qsig.js              # Quantum Signer detached signature parsing/verify
     │   │   ├── stellar-sig.js       # Stellar WebSigner detached signature verify
+    │   │   ├── opentimestamps.js    # OpenTimestamps parsing/linking
+    │   │   ├── signature-suites.js  # Normalized signature suite registry
     │   │   └── verify-signatures.js # Unified verification policy orchestration
     │   ├── splitting/
     │   │   └── sss.js               # Shamir Secret Sharing
@@ -101,6 +106,7 @@ src/
         ├── bundle-payload.js        # Multi-file bundle payload helpers
         ├── qcont/
         │   ├── build-ui.js          # Pro split UI handlers
+        │   ├── attach-ui.js         # Pro attach UI handlers
         │   └── restore-ui.js        # Pro restore UI handlers
         └── ui/
             ├── ui.js                # Pro UI orchestration
@@ -216,8 +222,11 @@ AAD:
 | metaLen           | 2 bytes (Uint16 BE)       |                                                      |
 | metaJSON          | metaLen bytes (UTF‑8)     | RS params, counts, hashes, etc.                      |
 | manifestLen       | 4 bytes (Uint32 BE)       | length of embedded canonical archive manifest        |
-| manifestBytes     | manifestLen bytes         | full RFC-8785 canonical `*.qvmanifest.json` bytes    |
-| manifestDigest    | 64 bytes                  | SHA3-512(manifestBytes)                               |
+| manifestBytes     | manifestLen bytes         | full canonical signable `*.qvmanifest.json` bytes    |
+| manifestDigest    | 64 bytes                  | SHA3-512(manifestBytes)                              |
+| bundleLen         | 4 bytes (Uint32 BE)       | length of embedded manifest bundle                   |
+| bundleBytes       | bundleLen bytes           | full canonical `QV-Manifest-Bundle` JSON bytes       |
+| bundleDigest      | 64 bytes                  | SHA3-512(bundleBytes)                                |
 | encapBlobLen      | 4 bytes (Uint32 BE)       |                                                      |
 | encapBlob         | encapBlobLen bytes        | ML‑KEM ciphertext                                    |
 | containerNonce    | 12 bytes                  | from `.qenc` header                                  |
@@ -268,6 +277,9 @@ AAD:
   "keyCommitmentHex":"<hex>",
   "hasEmbeddedManifest":true,
   "manifestDigest":"<SHA3-512(manifestBytes)>",
+  "hasEmbeddedBundle":true,
+  "bundleDigest":"<SHA3-512(bundleBytes)>",
+  "authPolicyLevel":"integrity-only | any-signature | strong-pq-signature",
   "shareCommitments":["<hex>", "..."],
   "fragmentBodyHashes":["<hex>", "..."],
   "timestamp":"<ISO8601 time>"
@@ -276,10 +288,11 @@ AAD:
 
 *Note: for `wrapped-v1`, `payloadLength` refers to the encrypted payload size (private metadata + file bytes). The original file length is stored inside the private metadata.*
 
-### Archive manifest (`.qvmanifest.json`)
-Canonical manifest is generated at split stage and serialized as strict RFC-8785 JSON (JCS). The same canonical bytes are:
-* exported as `*.qvmanifest.json`,
+### Canonical archive manifest (`*.qvmanifest.json`)
+Canonical manifest is generated at split stage and serialized as project-defined canonical JSON `QV-C14N-v1` (not full RFC 8785). The same canonical bytes are:
+* exported as the signable `*.qvmanifest.json`,
 * embedded into every `.qcont` shard,
+* embedded inside every manifest bundle,
 * used as detached-signature input for `.qsig/.sig`.
 
 Key contract points:
@@ -290,8 +303,52 @@ Key contract points:
 * `shardBinding` is explicitly defined and non-recursive:
   * `bodyDefinitionId = "QV-QCONT-SHARDBODY-v1"`
   * shard body hash input includes fragment stream payload only (`len32-prefixed` RS fragment stream),
-  * excludes header, embedded manifest/digest, and external signatures,
+  * excludes header, embedded manifest/digest, embedded bundle/digest, and external signatures,
   * optional Shamir share commitments commit to raw share bytes.
+* archive authenticity policy is committed inside the canonical manifest as `authPolicyCommitment`; the concrete `authPolicy` object lives in the manifest bundle.
+
+### Manifest bundle (`*.extended.qvmanifest.json`)
+Manifest bundle is a self-contained mutable JSON object with:
+* embedded canonical `manifest`,
+* `manifestDigest = SHA3-512(canonical manifest bytes)`,
+* explicit `authPolicy` (`integrity-only | any-signature | strong-pq-signature` plus `minValidSignatures`),
+* attached `publicKeys[]`, `signatures[]`, and `timestamps[]`.
+
+Changing bundle attachments does not mutate the canonical manifest bytes and does not change detached-signature payload semantics.
+
+Typical naming:
+* split exports canonical signable manifest as `*.qvmanifest.json`,
+* attach exports self-contained bundle as `*.extended.qvmanifest.json`,
+* exporting a signable manifest from an existing bundle uses `*.signable.qvmanifest.json`.
+
+### Detached signatures, pinning and timestamps
+Supported detached signature formats:
+* Quantum Signer `.qsig`
+* Stellar WebSigner `.sig`
+
+Supported signer pin sources:
+* `bundlePinned`: signer identity comes from material embedded in the manifest bundle (for example attached `.pqpk` or bundled Stellar signer address),
+* `userPinned`: signer identity comes from restore-time user input (`.pqpk` or expected Stellar signer),
+* `signerPinned = bundlePinned || userPinned`.
+
+Archive authenticity status distinguishes:
+* `signatureVerified`
+* `strongPqSignatureVerified`
+* `policySatisfied`
+* `bundlePinned`
+* `userPinned`
+
+Policy counting rules:
+* `minValidSignatures` counts unique detached signatures only, not repeated verification results of the same detached bytes,
+* `strong-pq-signature` requires at least one valid strong PQ detached signature,
+* invalid extra signatures are reported but ignored for policy counting.
+
+OpenTimestamps rules:
+* timestamps are attached to detached signature bytes, not to the manifest bundle itself,
+* OTS may be embedded inside the bundle or supplied externally as `.ots`,
+* restore links OTS by stamped `SHA-256(detachedSignatureBytes)`,
+* unrelated or ambiguous `.ots` files fail closed,
+* OTS evidence never satisfies archive signature policy by itself.
 
 ### Encapsulation & KDF
 1. Receiver generates ML‑KEM‑1024 key pair (public `publicKey.qkey` 1568 B, private `secretKey.qkey` 3168 B).
@@ -329,8 +386,9 @@ Key contract points:
 9. Validate decrypted file by computing `SHA3-512(fileBytes)` and comparing to `privateMeta.fileHash`. If equal, accept; otherwise, warn about integrity mismatch.
 
 ### Sharding (split / combine)
-* Split (.qenc → .qcont): parse the `.qenc` header, Shamir‑split the ML‑KEM private key into `n` shares with threshold `t = k + (n-k)/2`, and Reed‑Solomon split the ciphertext into `n` fragments tolerating up to `(n-k)/2` erasures. Each `.qcont` shard stores one Shamir share, fragment stream, and embedded canonical archive manifest + manifest digest.
-* Combine (.qcont → .qenc + .qkey): parse all provided files, select shard cohort deterministically by verified manifest digest (no “largest cohort wins”), verify commitments/hashes, reconstruct private key via Shamir, reconstruct ciphertext via RS, rebuild `.qenc`, and verify `qencHash` from manifest before decrypt path is allowed.
+* Split (.qenc → .qcont): parse the `.qenc` header, Shamir‑split the ML‑KEM private key into `n` shares with threshold `t = k + (n-k)/2`, Reed‑Solomon split the ciphertext into `n` fragments tolerating up to `(n-k)/2` erasures, and embed both the canonical archive manifest and the initial manifest bundle into every `.qcont` shard.
+* Attach (manifest/bundle + detached artifacts): verify external `.qsig/.sig`, optionally bind exact signer identity with `.pqpk` or expected Stellar signer, attach `.ots`, and emit a self-contained manifest bundle. If a full shard cohort is loaded, the embedded bundle inside every shard can be rewritten in place without mutating canonical manifest bytes.
+* Combine (.qcont → .qenc + .qkey): parse all provided files, classify optional external manifest/bundle/signature/timestamp inputs, select shard cohort deterministically by manifest digest + bundle digest + authenticity policy (no “largest cohort wins”), verify commitments/hashes, evaluate signature policy, reconstruct private key via Shamir, reconstruct ciphertext via RS, rebuild `.qenc`, and verify `qencHash` from manifest before decrypt path is allowed.
 
 ------------
 

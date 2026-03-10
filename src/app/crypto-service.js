@@ -8,6 +8,7 @@ import {
     hashBytes as computeHashHex,
 } from '../core/crypto/index.js';
 import { buildQcontShards as buildShardSet } from '../core/crypto/qcont/build.js';
+import { attachManifestBundleToShards as attachShardBundle } from '../core/crypto/qcont/attach.js';
 import { parseShard as parseQcontShardBytes, restoreFromShards as restoreShardSet } from '../core/crypto/qcont/restore.js';
 import { runSelfTest as runCoreSelfTest } from '../core/crypto/selftest.js';
 import {
@@ -42,6 +43,10 @@ export async function hashBytes(bytes) {
 export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
     const erasureRuntime = requireErasureRuntime();
     return buildShardSet(qencBytes, privKeyBytes, params, { ...options, erasureRuntime });
+}
+
+export async function attachManifestBundleToShards(shards, options = {}) {
+    return attachShardBundle(shards, options);
 }
 
 export function parseShard(bytes, options = {}) {

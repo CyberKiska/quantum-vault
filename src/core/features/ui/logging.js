@@ -3,6 +3,11 @@
 import { shortenHash, formatTimestamp } from '../../../utils.js';
 import { showToast } from './toast.js';
 
+function rememberLastLogSignature(logEl, signature) {
+    if (!logEl) return;
+    logEl.dataset.lastLogSignature = signature;
+}
+
 // Log message to UI console
 export function log(msg, options = {}) {
     const { elementId = 'log', isLiteMode = true } = options;
@@ -15,6 +20,7 @@ export function log(msg, options = {}) {
     logEl.appendChild(line);
     logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
+    rememberLastLogSignature(logEl, `info:${String(msg)}`);
 }
 
 // Log success message to UI console (green)
@@ -29,6 +35,7 @@ export function logSuccess(msg, options = {}) {
     logEl.appendChild(span);
     logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
+    rememberLastLogSignature(logEl, `success:${String(msg)}`);
 }
 
 // Log error message to UI console AND trigger a toast
@@ -44,6 +51,10 @@ export function logError(err, options = {}) {
 
     const logEl = document.getElementById(elementId);
     if (!logEl) return;
+    const signature = `error:${text}`;
+    if (logEl.dataset.lastLogSignature === signature) {
+        return;
+    }
 
     const errorSpan = document.createElement('span');
     errorSpan.className = 'error';
@@ -51,6 +62,7 @@ export function logError(err, options = {}) {
     logEl.appendChild(errorSpan);
     logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
+    rememberLastLogSignature(logEl, signature);
 }
 
 // Log warning message to UI console
@@ -66,6 +78,64 @@ export function logWarning(msg, options = {}) {
     logEl.appendChild(warningSpan);
     logEl.appendChild(document.createTextNode('\n'));
     logEl.scrollTop = logEl.scrollHeight;
+    rememberLastLogSignature(logEl, `warning:${String(msg)}`);
+}
+
+function shortenSignerReference(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return '';
+    if (/^[0-9a-f]{24,}$/i.test(text)) return shortenHash(text);
+    if (/^G[A-Z2-7]{24,}$/i.test(text)) return `${text.slice(0, 6)}...${text.slice(-6)}`;
+    return text;
+}
+
+function looksLikeAttachmentId(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    return /^(sig|key|ots)-[0-9a-f]{8,}$/i.test(text);
+}
+
+export function formatSignatureResultSummary(result) {
+    const suite = result?.suiteDisplay || result?.suite || result?.format || result?.type || 'signature';
+    const signer = shortenSignerReference(
+        result?.signerLabel ||
+        result?.signer ||
+        result?.signerFingerprintHex ||
+        ''
+    );
+    const detailParts = [suite];
+    if (signer) detailParts.push(`signer ${signer}`);
+    if (result?.bundlePinned) detailParts.push('bundle-pinned');
+    if (result?.userPinned) detailParts.push('user-pinned');
+    if (!result?.bundlePinned && !result?.userPinned && result?.signerPinned) detailParts.push('pinned');
+    const detail = detailParts.join(', ');
+
+    const referenceName = typeof result?.name === 'string' ? result.name.trim() : '';
+    if (!referenceName || looksLikeAttachmentId(referenceName)) {
+        return detail;
+    }
+    return `${referenceName} (${detail})`;
+}
+
+export function formatAuthenticityStatusMessage(status = {}) {
+    if (status?.signatureVerified !== true) {
+        return '';
+    }
+    const details = [];
+    if (status?.strongPqSignatureVerified === true) {
+        details.push('strong PQ');
+    }
+    if (status?.bundlePinned === true) {
+        details.push('bundle-pinned');
+    }
+    if (status?.userPinned === true) {
+        details.push('user-pinned');
+    }
+    if (status?.signerPinned === true && details.length === 0) {
+        details.push('signer pinned');
+    }
+    return details.length > 0
+        ? `Signature verified (${details.join(', ')}).`
+        : 'Signature verified.';
 }
 
 // Log hash with appropriate formatting based on mode
@@ -181,6 +251,7 @@ export function clearLog(elementId = 'log') {
     const logEl = document.getElementById(elementId);
     if (logEl) {
         logEl.innerHTML = '';
+        delete logEl.dataset.lastLogSignature;
     }
 }
 

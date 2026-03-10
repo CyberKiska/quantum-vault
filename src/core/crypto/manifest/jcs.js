@@ -1,4 +1,7 @@
-// RFC 8785 (JCS) canonical JSON serializer (subset for deterministic manifests)
+// Project-defined canonical JSON serializer for Quantum Vault manifests/bundles.
+// This is not a full RFC 8785 implementation.
+
+export const QV_CANONICALIZATION_LABEL = 'QV-C14N-v1';
 
 const encoder = new TextEncoder();
 

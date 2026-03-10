@@ -1,5 +1,6 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../bytes.js';
+import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL } from '../constants.js';
 import {
   AAD_POLICY_ID_V1,
   CRYPTO_PROFILE_ID_V2,
@@ -10,10 +11,13 @@ import {
   getNonceContractForAeadMode,
   getCryptoProfile,
 } from '../policy.js';
-import { canonicalizeJson, canonicalizeJsonToBytes } from './jcs.js';
+import { QV_CANONICALIZATION_LABEL, canonicalizeJson, canonicalizeJsonToBytes } from './jcs.js';
+import { computeAuthPolicyCommitment, validateAuthPolicyCommitmentShape } from './manifest-bundle.js';
 
-const MANIFEST_SCHEMA = 'quantum-vault-archive-manifest/v1';
-const MANIFEST_VERSION = 1;
+const MANIFEST_SCHEMA = 'quantum-vault-archive-manifest/v2';
+const MANIFEST_VERSION = 2;
+const LEGACY_MANIFEST_SCHEMA = 'quantum-vault-archive-manifest/v1';
+const LEGACY_MANIFEST_VERSION = 1;
 
 function ensureString(value, field) {
   if (typeof value !== 'string' || value.length === 0) {
@@ -42,7 +46,19 @@ function ensureHashList(values, field) {
   });
 }
 
+function ensureCanonicalBytes(inputBytes, canonicalBytes) {
+  if (inputBytes.length !== canonicalBytes.length) return false;
+  for (let i = 0; i < inputBytes.length; i += 1) {
+    if (inputBytes[i] !== canonicalBytes[i]) return false;
+  }
+  return true;
+}
+
 export function buildArchiveManifest(params) {
+  const authPolicy = {
+    level: params.authPolicyLevel || DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL,
+    minValidSignatures: params.minValidSignatures ?? 1,
+  };
   const profile = getCryptoProfile(params.cryptoProfileId || CRYPTO_PROFILE_ID_V2);
   const aeadMode = ensureString(params.aeadMode, 'aeadMode');
   const nonceContract = getNonceContractForAeadMode(aeadMode, profile);
@@ -86,6 +102,7 @@ export function buildArchiveManifest(params) {
     schema: MANIFEST_SCHEMA,
     version: MANIFEST_VERSION,
     manifestType: 'archive',
+    canonicalization: QV_CANONICALIZATION_LABEL,
     cryptoProfileId: profile.cryptoProfileId,
     kdfTreeId: profile.kdfTreeId,
     noncePolicyId,
@@ -119,13 +136,7 @@ export function buildArchiveManifest(params) {
         codecId: ensureString(params.rsCodecId || 'QV-RS-ErasureCodes-v1', 'rsCodecId'),
       },
     },
-    signingPolicy: {
-      requireSignature: !!params.requireSignature,
-      acceptedAlgorithms: Array.isArray(params.acceptedAlgorithms)
-        ? params.acceptedAlgorithms.slice()
-        : ['ML-DSA', 'SLH-DSA-SHAKE', 'Ed25519'],
-      allowLegacyEd25519: !!params.allowLegacyEd25519,
-    },
+    authPolicyCommitment: computeAuthPolicyCommitment(authPolicy),
   };
 
   if (
@@ -140,6 +151,8 @@ export function buildArchiveManifest(params) {
           'qcont-header',
           'embedded-manifest',
           'embedded-manifest-digest',
+          'embedded-bundle',
+          'embedded-bundle-digest',
           'external-signatures',
         ],
       },
@@ -168,7 +181,7 @@ export function canonicalizeArchiveManifest(manifest) {
   return { canonical, bytes, digestHex };
 }
 
-export function parseArchiveManifestBytes(manifestBytes, options = {}) {
+export function parseArchiveManifestBytes(manifestBytes) {
   if (!(manifestBytes instanceof Uint8Array)) {
     throw new Error('manifestBytes must be Uint8Array');
   }
@@ -183,13 +196,19 @@ export function parseArchiveManifestBytes(manifestBytes, options = {}) {
 
   const canonical = canonicalizeJson(parsed);
   const canonicalBytes = new TextEncoder().encode(canonical);
-  const isCanonical = manifestBytes.length === canonicalBytes.length && manifestBytes.every((b, i) => b === canonicalBytes[i]);
-  if (!isCanonical) {
-    throw new Error('Manifest is not RFC-8785 canonical JSON');
+  if (!ensureCanonicalBytes(manifestBytes, canonicalBytes)) {
+    throw new Error(`Manifest is not ${QV_CANONICALIZATION_LABEL} canonical JSON`);
+  }
+
+  if (parsed?.schema === LEGACY_MANIFEST_SCHEMA && parsed?.version === LEGACY_MANIFEST_VERSION) {
+    throw new Error('Legacy archive manifest format is not supported. Rebuild the archive with the new manifest bundle format.');
   }
 
   if (parsed?.schema !== MANIFEST_SCHEMA || parsed?.version !== MANIFEST_VERSION || parsed?.manifestType !== 'archive') {
     throw new Error('Unsupported archive manifest schema/version');
+  }
+  if (parsed.canonicalization !== QV_CANONICALIZATION_LABEL) {
+    throw new Error('Unsupported manifest canonicalization');
   }
 
   const profileId = ensureString(parsed.cryptoProfileId, 'cryptoProfileId');
@@ -234,6 +253,8 @@ export function parseArchiveManifestBytes(manifestBytes, options = {}) {
     throw new Error('Unsupported qenc.containerIdAlg');
   }
 
+  validateAuthPolicyCommitmentShape(parsed.authPolicyCommitment);
+
   if (parsed.shardBinding != null) {
     const shardBinding = parsed.shardBinding;
     ensureString(shardBinding.bodyDefinitionId, 'shardBinding.bodyDefinitionId');
@@ -255,7 +276,11 @@ export function parseArchiveManifestBytes(manifestBytes, options = {}) {
     }
     if (shardBinding.shareCommitments != null) {
       ensureHashList(shardBinding.shareCommitments, 'shardBinding.shareCommitments');
-      if (!shardBinding.shareCommitment || shardBinding.shareCommitment.hashAlg !== 'SHA3-512' || shardBinding.shareCommitment.input !== 'raw-shamir-share-bytes') {
+      if (
+        !shardBinding.shareCommitment ||
+        shardBinding.shareCommitment.hashAlg !== 'SHA3-512' ||
+        shardBinding.shareCommitment.input !== 'raw-shamir-share-bytes'
+      ) {
         throw new Error('Invalid shardBinding.shareCommitment descriptor');
       }
     }

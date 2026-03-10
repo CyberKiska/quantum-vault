@@ -11,11 +11,24 @@ import {
     restoreFromShards,
     assessShardSelection,
 } from '../../app/crypto-service.js';
+import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
 import { collectRestoreVerificationOptions } from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
-import { log, logError, logSuccess, logKeyGeneration, logFileEncryption, logShardCreation, logRestoration, logRestorationSuccess, logWarning } from './ui/logging.js';
+import {
+    formatAuthenticityStatusMessage,
+    formatSignatureResultSummary,
+    log,
+    logError,
+    logSuccess,
+    logKeyGeneration,
+    logFileEncryption,
+    logShardCreation,
+    logRestoration,
+    logRestorationSuccess,
+    logWarning,
+} from './ui/logging.js';
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
 import { updateSidebarStatus } from './ui/ui.js';
@@ -27,6 +40,13 @@ let originalFileNames = new Map(); // Track original file names for restoration
 let liteShardsStatusSeq = 0;
 let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
+
+function describeAuthPolicyHelp(authPolicyLevel) {
+    if (authPolicyLevel === 'integrity-only') {
+        return 'Without an external signature, restore will verify integrity only, not archive authenticity.';
+    }
+    return 'Without an external detached signature attached later, restore will block and the file will not be decrypted.';
+}
 
 function wipeLiteKeyPair(keyPair) {
     if (keyPair?.secretKey instanceof Uint8Array) {
@@ -368,6 +388,7 @@ async function createLiteShards() {
     const filesInput = document.getElementById('liteFilesInput');
     const nInput = document.getElementById('liteN');
     const thresholdInput = document.getElementById('liteThreshold');
+    const authPolicyInput = document.getElementById('liteAuthPolicy');
     
     if (!filesInput?.files?.length) {
         showToast('Please select files to encrypt', 'warning');
@@ -429,10 +450,11 @@ async function createLiteShards() {
         updateLitePipeline('liteViewProtect', 'step-split'); // Transition: Splitting
         
         // 2. Create shards from encrypted container + private key
+        const authPolicyLevel = String(authPolicyInput?.value || LITE_DEFAULT_AUTH_POLICY_LEVEL);
         const splitResult = await buildQcontShards(encBytes, liteKeys.secretKey, {
             n: params.n,
             k: params.k
-        });
+        }, { authPolicyLevel });
         const qconts = splitResult.shards;
         
         // 3. Download shards
@@ -452,8 +474,12 @@ async function createLiteShards() {
         } else {
             log('🛡️ File encrypted and split into shards', { isLiteMode: true });
         }
-        log(`Saved ${manifestName} for detached signing (recommended).`, { isLiteMode: true });
-        log('Hint: sign manifest in Quantum Signer to protect against malicious shard substitution.', { isLiteMode: true });
+        log(`Archive policy: ${authPolicyLevel}`, { isLiteMode: true });
+        if (authPolicyLevel === 'integrity-only') {
+            log(`Saved ${manifestName}. This archive can be restored without signatures, but provenance will remain inauthentic unless you sign and attach the manifest bundle.`, { isLiteMode: true });
+        } else {
+            log(`Saved ${manifestName}. Sign this file, then use Attach in Pro mode to emit an .extended.qvmanifest.json bundle and optionally rewrite the shards.`, { isLiteMode: true });
+        }
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
     } catch (error) {
@@ -472,7 +498,7 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
     panel.replaceChildren();
     panel.style.display = 'block';
 
-    const allOk = containerOk && decryptOk;
+    const allOk = containerOk && decryptOk && result.authenticity?.status?.policySatisfied;
 
     const header = document.createElement('h4');
     header.textContent = 'Restore Result';
@@ -491,20 +517,26 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
         addItem(decryptOk, `Decryption & file integrity${decryptOk ? ' verified' : ' FAILED'}`);
     }
 
-    const verification = result.authenticity?.verification;
-    if (verification) {
-        for (const item of verification.results || []) {
-            if (item.ok) {
-                const label = item.type === 'qsig'
-                    ? `${item.algorithm || 'PQ'} signature${item.trusted ? ' (trusted)' : ''}`
-                    : `${item.algorithm || 'Ed25519'} signature${item.trusted ? ' (trusted)' : ''}`;
-                addItem(true, label);
-            } else {
-                addItem(false, `Signature: ${item.error || 'verification failed'}`);
-            }
+    const status = result.authenticity?.status || {};
+    addItem(status.signatureVerified === true, 'Signature verified', status.signatureVerified !== true);
+    addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', status.signatureVerified === true && status.strongPqSignatureVerified !== true);
+    addItem(status.bundlePinned === true, 'Bundle signer pinned', status.signatureVerified === true && status.bundlePinned !== true);
+    if (status.userPinProvided === true || status.userPinned === true) {
+        addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
+    }
+    addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
+
+    const timestampEvidence = Array.isArray(result.authenticity?.timestampEvidence) ? result.authenticity.timestampEvidence : [];
+    if (timestampEvidence.length > 0) {
+        const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
+        const incompleteCount = timestampEvidence.length - completeCount;
+        addItem(true, `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`);
+        if (completeCount > 0) {
+            addItem(true, `OTS proof appears complete (${completeCount})`);
         }
-    } else if ((result.authenticity?.warnings?.length || 0) > 0) {
-        addItem(false, 'No signatures verified (unsigned restore)', true);
+        if (incompleteCount > 0) {
+            addItem(false, `OTS proof appears incomplete (${incompleteCount})`, true);
+        }
     }
 
     panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
@@ -559,21 +591,30 @@ async function restoreLiteShards() {
         });
 
         log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
+        log(`Selected bundle digest: ${result.bundleDigestHex}`, { isLiteMode: true });
+        if (result.authenticity?.policy) {
+            log(`Archive policy: ${result.authenticity.policy.level}`, { isLiteMode: true });
+        }
         for (const warning of result.authenticity?.warnings || []) {
             logWarning(warning, { isLiteMode: true });
         }
+        for (const evidence of result.authenticity?.timestampEvidence || []) {
+            log(`${evidence.linkLabel}: ${evidence.targetRef}. ${evidence.completionLabel}.`, { isLiteMode: true });
+        }
         if (result.authenticity?.verification) {
             const verification = result.authenticity.verification;
-            log(`Signature results: ${verification.validCount} valid, ${verification.trustedValidCount} trusted-valid`, { isLiteMode: true });
+            const signatureStatus = formatAuthenticityStatusMessage(result.authenticity.status);
+            if (signatureStatus) {
+                if (result.authenticity.status?.signerPinned) {
+                    logSuccess(signatureStatus, { isLiteMode: true });
+                } else {
+                    logWarning(`${signatureStatus.slice(0, -1)}; no signer pin is active.`, { isLiteMode: true });
+                }
+            }
+            log(`Signature counts: valid=${verification.counts.validTotal}, strong-pq=${verification.counts.validStrongPq}, pinned=${verification.counts.pinnedValidTotal}, bundle-pinned=${verification.counts.bundlePinnedValidTotal}, user-pinned=${verification.counts.userPinnedValidTotal}`, { isLiteMode: true });
             for (const item of verification.results || []) {
                 if (item.ok) {
-                    if (item.type === 'sig') {
-                        logSuccess(`Signature OK: ${item.name} (${item.algorithm || 'Ed25519'}, signer ${item.signer || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
-                    } else if (item.type === 'qsig') {
-                        logSuccess(`Signature OK: ${item.name} (${item.algorithm || 'PQ'}, fp ${item.signerFingerprintHex || 'unknown'}${item.trusted ? ', trusted' : ''})`, { isLiteMode: true });
-                    } else {
-                        logSuccess(`Signature OK: ${item.name}`, { isLiteMode: true });
-                    }
+                    logSuccess(`Signature OK: ${formatSignatureResultSummary(item)}`, { isLiteMode: true });
                 } else {
                     logWarning(`Signature failed: ${item.name} (${item.error || 'unknown error'})`, { isLiteMode: true });
                 }
@@ -628,11 +669,11 @@ async function restoreLiteShards() {
         const encryptionTime = metadata.timestamp || 'Unknown';
         logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
-        logSuccess('Container restored successfully', { isLiteMode: true });
+        logSuccess('Container restored successfully from a policy-satisfying archive cohort', { isLiteMode: true });
         buildLiteRestoreResultPanel(result, true, true);
         
     } catch (error) {
-        logError(`Restoration failed: ${error?.message ?? error}`, { isLiteMode: true });
+        logError(error, { isLiteMode: true });
     } finally {
         setButtonsDisabled(false);
         void updateShardsStatus();
@@ -790,10 +831,19 @@ export function initLiteMode() {
     // Set up threshold calculation for manual inputs
     const liteN = document.getElementById('liteN');
     const liteThreshold = document.getElementById('liteThreshold');
+    const liteAuthPolicy = document.getElementById('liteAuthPolicy');
+    const liteAuthPolicyHelp = document.getElementById('liteAuthPolicyHelp');
     if (liteN && liteThreshold) {
         liteN.addEventListener('input', updateThresholdDisplay);
         liteThreshold.addEventListener('input', updateThresholdDisplay);
         updateThresholdDisplay(); // Initial calculation
+    }
+    if (liteAuthPolicy && liteAuthPolicyHelp) {
+        const syncLiteAuthPolicyHelp = () => {
+            liteAuthPolicyHelp.textContent = describeAuthPolicyHelp(String(liteAuthPolicy.value || LITE_DEFAULT_AUTH_POLICY_LEVEL));
+        };
+        liteAuthPolicy.addEventListener('change', syncLiteAuthPolicyHelp);
+        syncLiteAuthPolicyHelp();
     }
     
     // Set up file input monitoring
