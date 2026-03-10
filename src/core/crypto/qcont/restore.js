@@ -37,6 +37,10 @@ function normalizeHexString(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function bytesMatch(a, b) {
+  return a instanceof Uint8Array && b instanceof Uint8Array && bytesEqual(a, b);
+}
+
 function evaluateArchivePolicy(authPolicy, verification) {
   const counts = verification?.counts || {
     validTotal: 0,
@@ -148,6 +152,7 @@ async function evaluateCandidateAuthenticity(candidate, verificationOptions = {}
     bundlePublicKeys: candidate.bundle.attachments.publicKeys,
     externalSignatures: Array.isArray(verificationOptions.signatures) ? verificationOptions.signatures : [],
     pinnedPqPublicKeyFileBytes: verificationOptions.pinnedPqPublicKeyFileBytes ?? verificationOptions.pqPublicKeyFileBytes,
+    pinnedPqPublicKeyFileBytesList: verificationOptions.pinnedPqPublicKeyFileBytesList,
     expectedEd25519Signer: verificationOptions.expectedEd25519Signer,
   });
   const policy = evaluateArchivePolicy(candidate.bundle.authPolicy, verification);
@@ -170,6 +175,61 @@ async function evaluateCandidateAuthenticity(candidate, verificationOptions = {}
     timestampEvidence,
     warnings,
   };
+}
+
+function preferredBundleScore(item) {
+  const verificationCounts = item?.authenticity?.verification?.counts || {};
+  const attachments = item?.candidate?.bundle?.attachments || {};
+  return [
+    Number(verificationCounts.validTotal) || 0,
+    Number(verificationCounts.validStrongPq) || 0,
+    Array.isArray(attachments.signatures) ? attachments.signatures.length : 0,
+    Array.isArray(attachments.publicKeys) ? attachments.publicKeys.length : 0,
+    Array.isArray(attachments.timestamps) ? attachments.timestamps.length : 0,
+  ];
+}
+
+function compareScoreDesc(aScore, bScore) {
+  for (let i = 0; i < Math.max(aScore.length, bScore.length); i += 1) {
+    const diff = (Number(aScore[i]) || 0) - (Number(bScore[i]) || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function selectPreferredSatisfyingCandidate(satisfying) {
+  if (!Array.isArray(satisfying) || satisfying.length <= 1) return null;
+  const firstManifestDigest = satisfying[0]?.candidate?.manifestDigestHex;
+  const firstManifestBytes = satisfying[0]?.candidate?.manifestBytes;
+  if (!firstManifestDigest || !(firstManifestBytes instanceof Uint8Array)) return null;
+
+  for (const item of satisfying) {
+    if (item?.candidate?.manifestDigestHex !== firstManifestDigest) return null;
+    if (!bytesMatch(item?.candidate?.manifestBytes, firstManifestBytes)) return null;
+  }
+
+  const ranked = [...satisfying].sort((left, right) => {
+    const diff = compareScoreDesc(preferredBundleScore(right), preferredBundleScore(left));
+    if (diff !== 0) return diff;
+    return String(right?.candidate?.bundleDigestHex || '').localeCompare(String(left?.candidate?.bundleDigestHex || ''));
+  });
+  if (ranked.length < 2) return ranked[0] || null;
+  if (compareScoreDesc(preferredBundleScore(ranked[0]), preferredBundleScore(ranked[1])) === 0) {
+    return null;
+  }
+  return ranked[0];
+}
+
+function hasManifestEquivalentSibling(candidates, selectedCandidate) {
+  if (!Array.isArray(candidates) || !selectedCandidate) return false;
+  for (const candidate of candidates) {
+    if (!candidate || candidate.bundleDigestHex === selectedCandidate.bundleDigestHex) continue;
+    if (candidate.manifestDigestHex !== selectedCandidate.manifestDigestHex) continue;
+    if (bytesMatch(candidate.manifestBytes, selectedCandidate.manifestBytes)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function selectExplicitCandidate(candidates, verificationOptions) {
@@ -285,15 +345,26 @@ async function resolveArchiveContext(shards, verificationOptions = {}) {
 
   const satisfying = evaluated.filter((item) => item.authenticity.policy.satisfied);
   if (satisfying.length === 1) {
+    const widenSelection = hasManifestEquivalentSibling(candidates, satisfying[0].candidate);
     return {
       candidate: satisfying[0].candidate,
       authenticity: satisfying[0].authenticity,
-      source: 'embedded',
+      source: widenSelection ? 'embedded-preferred-bundle' : 'embedded',
       candidateDigests: candidates.map((item) => item.bundleDigestHex),
-      useManifestWideShardSelection: false,
+      useManifestWideShardSelection: widenSelection,
     };
   }
   if (satisfying.length > 1) {
+    const preferred = selectPreferredSatisfyingCandidate(satisfying);
+    if (preferred) {
+      return {
+        candidate: preferred.candidate,
+        authenticity: preferred.authenticity,
+        source: 'embedded-preferred-bundle',
+        candidateDigests: candidates.map((item) => item.bundleDigestHex),
+        useManifestWideShardSelection: true,
+      };
+    }
     throw new Error('Multiple shard cohorts satisfy archive policy. Provide the manifest bundle, canonical manifest, or signer pins to disambiguate.');
   }
 

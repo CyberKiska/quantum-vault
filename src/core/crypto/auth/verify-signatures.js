@@ -4,6 +4,7 @@ import { verifyQsigAgainstBytes } from './qsig.js';
 import { verifyStellarSigAgainstBytes } from './stellar-sig.js';
 
 const MAGIC_QSIG = asciiBytes('PQSG');
+const PIN_MISMATCH_WARNING_PREFIX = 'Pinned PQ signer key did not match';
 
 function decodeJsonBytes(bytes) {
   try {
@@ -45,11 +46,139 @@ function loadBundleSignerIdentifier(publicKeyEntry) {
   return '';
 }
 
+function dedupeWarnings(warnings) {
+  return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))];
+}
+
+function normalizePinnedPqPublicKeyFileBytesList({
+  pinnedPqPublicKeyFileBytes = null,
+  pinnedPqPublicKeyFileBytesList = [],
+}) {
+  const out = [];
+  const seen = new Set();
+  const add = (bytes) => {
+    if (!(bytes instanceof Uint8Array)) return;
+    const dedupeKey = toHex(sha3_512(bytes));
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    out.push(bytes);
+  };
+  add(pinnedPqPublicKeyFileBytes);
+  if (Array.isArray(pinnedPqPublicKeyFileBytesList)) {
+    for (const bytes of pinnedPqPublicKeyFileBytesList) add(bytes);
+  }
+  return out;
+}
+
+function verifyQsigWithPinnedKeys({
+  messageBytes,
+  qsigBytes,
+  bundlePqPublicKeyFileBytes = null,
+  pinnedPqPublicKeyFileBytes = null,
+  pinnedPqPublicKeyFileBytesList = [],
+}) {
+  const normalizedPins = normalizePinnedPqPublicKeyFileBytesList({
+    pinnedPqPublicKeyFileBytes,
+    pinnedPqPublicKeyFileBytesList,
+  });
+  if (normalizedPins.length === 0) {
+    return verifyQsigAgainstBytes({
+      messageBytes,
+      qsigBytes,
+      bundlePqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytes: null,
+    });
+  }
+  if (normalizedPins.length === 1) {
+    return verifyQsigAgainstBytes({
+      messageBytes,
+      qsigBytes,
+      bundlePqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytes: normalizedPins[0],
+    });
+  }
+
+  let baseline = null;
+  let firstOk = null;
+  const matches = [];
+  const retainedWarnings = [];
+
+  for (const candidatePin of normalizedPins) {
+    const result = verifyQsigAgainstBytes({
+      messageBytes,
+      qsigBytes,
+      bundlePqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytes: candidatePin,
+    });
+    if (!baseline) baseline = result;
+    if (!firstOk && result.ok) firstOk = result;
+    for (const warning of result.warnings || []) {
+      if (!String(warning).startsWith(PIN_MISMATCH_WARNING_PREFIX)) {
+        retainedWarnings.push(warning);
+      }
+    }
+    if (result.ok && result.userPinned === true) {
+      matches.push(result);
+    }
+  }
+
+  if (matches.length > 1) {
+    return {
+      ...(firstOk || baseline || {}),
+      ok: false,
+      bundlePinned: false,
+      userPinned: false,
+      signerPinned: false,
+      type: 'qsig',
+      format: 'qsig',
+      error: 'Multiple provided .pqpk files match this detached PQ signature. Keep only one exact PQ pin per signer.',
+      warnings: dedupeWarnings(retainedWarnings),
+    };
+  }
+
+  if (matches.length === 1) {
+    return {
+      ...matches[0],
+      warnings: dedupeWarnings(matches[0].warnings || []),
+    };
+  }
+
+  const verified = firstOk || verifyQsigAgainstBytes({
+    messageBytes,
+    qsigBytes,
+    bundlePqPublicKeyFileBytes,
+    pinnedPqPublicKeyFileBytes: null,
+  });
+
+  if (!verified.ok) {
+    return {
+      ...verified,
+      warnings: dedupeWarnings([...retainedWarnings, ...(verified.warnings || [])]),
+    };
+  }
+
+  const mismatchWarning = bundlePqPublicKeyFileBytes instanceof Uint8Array
+    ? 'Provided PQ signer keys did not match the bundled signer key.'
+    : 'Provided PQ signer keys did not match this verified signature.';
+
+  return {
+    ...verified,
+    userPinned: false,
+    signerPinned: verified.bundlePinned === true,
+    warnings: dedupeWarnings([
+      ...retainedWarnings,
+      ...(verified.warnings || []).filter((warning) => !String(warning).startsWith(PIN_MISMATCH_WARNING_PREFIX)),
+      mismatchWarning,
+    ]),
+  };
+}
+
 async function verifyBundleSignature({
   manifestBytes,
   signature,
   publicKeysById,
   pinnedPqPublicKeyFileBytes,
+  pinnedPqPublicKeyFileBytesList,
   expectedEd25519Signer,
 }) {
   const name = signature.id || 'bundle-signature';
@@ -62,11 +191,12 @@ async function verifyBundleSignature({
           throw new Error(`Unsupported bundle signature encoding: ${signature.signatureEncoding}`);
         })();
     const bundleVerificationKeyBytes = loadBundlePublicKey(bundlePublicKeyEntry);
-    const result = verifyQsigAgainstBytes({
+    const result = verifyQsigWithPinnedKeys({
       messageBytes: manifestBytes,
       qsigBytes,
       bundlePqPublicKeyFileBytes: bundleVerificationKeyBytes,
       pinnedPqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytesList,
     });
     return { ...result, name, source: 'bundle', signatureBytes: qsigBytes, artifactId: signature.id || name };
   }
@@ -105,6 +235,7 @@ async function verifyExternalSignature({
   manifestBytes,
   signature,
   pinnedPqPublicKeyFileBytes,
+  pinnedPqPublicKeyFileBytesList,
   expectedEd25519Signer,
 }) {
   const sigType = detectExternalSignatureType(signature);
@@ -125,11 +256,12 @@ async function verifyExternalSignature({
   }
 
   if (sigType === 'qsig') {
-    const result = verifyQsigAgainstBytes({
+    const result = verifyQsigWithPinnedKeys({
       messageBytes: manifestBytes,
       qsigBytes: signature.bytes,
       bundlePqPublicKeyFileBytes: null,
       pinnedPqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytesList,
     });
     return {
       ...result,
@@ -225,6 +357,7 @@ export async function verifyManifestSignatures({
   bundlePublicKeys = [],
   externalSignatures = [],
   pinnedPqPublicKeyFileBytes = null,
+  pinnedPqPublicKeyFileBytesList = [],
   expectedEd25519Signer = '',
 }) {
   if (!(manifestBytes instanceof Uint8Array)) {
@@ -235,11 +368,15 @@ export async function verifyManifestSignatures({
     throw new Error('signatures/publicKeys must be arrays');
   }
 
+  const normalizedPinnedPqPublicKeyFileBytesList = normalizePinnedPqPublicKeyFileBytesList({
+    pinnedPqPublicKeyFileBytes,
+    pinnedPqPublicKeyFileBytesList,
+  });
   const publicKeysById = new Map(bundlePublicKeys.map((item) => [item.id, item]));
   const results = [];
   const warnings = [];
   const userPinProvided = (
-    pinnedPqPublicKeyFileBytes instanceof Uint8Array ||
+    normalizedPinnedPqPublicKeyFileBytesList.length > 0 ||
     String(expectedEd25519Signer || '').trim().length > 0
   );
 
@@ -249,6 +386,7 @@ export async function verifyManifestSignatures({
       signature,
       publicKeysById,
       pinnedPqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytesList: normalizedPinnedPqPublicKeyFileBytesList,
       expectedEd25519Signer,
     }));
     results.push(result);
@@ -260,6 +398,7 @@ export async function verifyManifestSignatures({
       manifestBytes,
       signature,
       pinnedPqPublicKeyFileBytes,
+      pinnedPqPublicKeyFileBytesList: normalizedPinnedPqPublicKeyFileBytesList,
       expectedEd25519Signer,
     }));
     results.push(result);

@@ -131,6 +131,7 @@ export async function inspectManifestBundleTimestamps(bundle) {
       linked: true,
       apparentlyComplete: resolved.apparentlyComplete,
       completeProof: resolved.completeProof,
+      stampedDigestHex: resolved.stampedDigestHex,
       linkLabel: 'OTS evidence linked to signature',
       completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
     };
@@ -139,6 +140,36 @@ export async function inspectManifestBundleTimestamps(bundle) {
 
 export async function assertManifestBundleTimestamps(bundle) {
   await inspectManifestBundleTimestamps(bundle);
+}
+
+function timestampEvidencePreference(entry) {
+  return [
+    entry?.completeProof === true || entry?.apparentlyComplete === true ? 1 : 0,
+    String(entry?.linkLabel || '').startsWith('External ') ? 0 : 1,
+  ];
+}
+
+function compareTimestampEvidencePreference(left, right) {
+  const leftScore = timestampEvidencePreference(left);
+  const rightScore = timestampEvidencePreference(right);
+  for (let i = 0; i < Math.max(leftScore.length, rightScore.length); i += 1) {
+    const diff = (leftScore[i] || 0) - (rightScore[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function dedupeTimestampEvidence(entries) {
+  const bestByStampedDigest = new Map();
+  for (const entry of entries) {
+    const dedupeKey = String(entry?.stampedDigestHex || entry?.targetRef || entry?.id || '').trim();
+    if (!dedupeKey) continue;
+    const current = bestByStampedDigest.get(dedupeKey);
+    if (!current || compareTimestampEvidencePreference(entry, current) > 0) {
+      bestByStampedDigest.set(dedupeKey, entry);
+    }
+  }
+  return [...bestByStampedDigest.values()];
 }
 
 export async function inspectTimestampEvidence({
@@ -165,10 +196,11 @@ export async function inspectTimestampEvidence({
       linked: true,
       apparentlyComplete: resolved.apparentlyComplete,
       completeProof: resolved.completeProof,
+      stampedDigestHex: resolved.stampedDigestHex,
       linkLabel: 'External OTS evidence linked to signature',
       completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
     };
   }));
 
-  return [...embeddedEvidence, ...externalEvidence];
+  return dedupeTimestampEvidence([...embeddedEvidence, ...externalEvidence]);
 }

@@ -7,6 +7,8 @@ import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import { canonicalizeManifestBundle, parseManifestBundleBytes } from './manifest/manifest-bundle.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
+import { buildAttachedArtifactExports } from '../features/qcont/attach-ui.js';
+import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
 import { verifyManifestSignatures } from './auth/verify-signatures.js';
 import { unpackPqpk, unpackQsig } from './auth/qsig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
@@ -1103,6 +1105,29 @@ function buildCases() {
       },
     },
     {
+      name: 'export attached artifacts emits a text file for bundled Stellar signer identifiers',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('stellar-export-attachment');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stellar-export-attachment.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const stellarSig = await buildStellarSignatureFixtureWithSigner(split.manifestBytes);
+
+        const attached = await attachManifestBundleToShards(parsed, {
+          manifestBytes: split.manifestBytes,
+          signatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
+          expectedEd25519Signer: stellarSig.signer,
+        });
+
+        const bundle = parseManifestBundleBytes(attached.bundleBytes).bundle;
+        const exports = buildAttachedArtifactExports(bundle, 'archive');
+        const signerExport = exports.find((item) => item.filename.endsWith('.stellar.txt'));
+        assert(signerExport, 'expected a text export for the bundled Stellar signer identifier');
+        assert(new TextDecoder().decode(signerExport.bytes) === `${stellarSig.signer}\n`, 'expected Stellar signer export to preserve the signer address');
+      },
+    },
+    {
       name: 'attach maps OpenTimestamps by stamped SHA-256 and preserves completion state',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
@@ -1186,6 +1211,75 @@ function buildCases() {
       },
     },
     {
+      name: 'classifyRestoreInputFiles accepts multiple different .pqpk files',
+      fn: async () => {
+        const manifestBytes = textBytes('restore-multiple-pqpk-inputs');
+        const sigA = buildQsigFixture(manifestBytes);
+        const sigB = buildQsigFixture(manifestBytes);
+        const classified = await classifyRestoreInputFiles([
+          fileLike('a.pqpk', sigA.pqpkBytes),
+          fileLike('b.pqpk', sigB.pqpkBytes),
+        ]);
+        assert(classified.pinnedPqPublicKeyFileBytesList.length === 2, 'expected restore inputs to preserve two different .pqpk files');
+        assert(classified.pinnedPqPublicKeyFileBytes instanceof Uint8Array, 'expected restore inputs to retain the first .pqpk as a compatibility field');
+      },
+    },
+    {
+      name: 'restore can use multiple provided .pqpk files as candidate user pins',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('restore-multiple-pqpk-pins');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-multiple-pqpk-pins.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 2,
+        });
+        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const sigA = buildQsigFixture(split.manifestBytes);
+        const sigB = buildQsigFixture(split.manifestBytes);
+
+        const restored = await restoreFromShards(parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: {
+            signatures: [
+              { name: 'archive-a.qsig', bytes: sigA.qsigBytes },
+              { name: 'archive-b.qsig', bytes: sigB.qsigBytes },
+            ],
+            pinnedPqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
+          },
+        });
+
+        assert(restored.authenticity.status.policySatisfied === true, 'multiple restore .pqpk pins should still allow policy-satisfying restore');
+        assert(restored.authenticity.status.userPinned === true, 'at least one provided .pqpk should user-pin a verified signature');
+        assert(restored.authenticity.verification.counts.userPinnedValidTotal === 2, 'expected both detached signatures to match one of the provided .pqpk pins');
+      },
+    },
+    {
+      name: 'multi-pin verification suppresses warnings from non-selected .pqpk candidates when a user pin matches',
+      fn: async () => {
+        const manifestBytes = textBytes('multi-pin-warning-suppression');
+        const matching = buildQsigFixture(manifestBytes);
+        const distractor = buildQsigFixture(manifestBytes);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.qsig', bytes: matching.qsigBytes }],
+          pinnedPqPublicKeyFileBytesList: [matching.pqpkBytes, distractor.pqpkBytes],
+        });
+
+        assert(verification.status.userPinned === true, 'expected a matching .pqpk to set userPinned');
+        assert(
+          verification.warnings.every((warning) => !warning.includes('Pinned PQ signer key suite does not match this .qsig and was ignored.')),
+          'suite-mismatch warnings from non-selected .pqpk candidates should not leak into a matched result'
+        );
+        assert(
+          verification.warnings.every((warning) => !warning.includes('Using signer public key embedded in .qsig')),
+          'embedded-key fallback warnings from non-selected .pqpk candidates should not leak into a matched result'
+        );
+      },
+    },
+    {
       name: 'restore links external OpenTimestamps evidence to bundled detached signatures',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
@@ -1215,6 +1309,56 @@ function buildCases() {
         assert(restored.authenticity.status.policySatisfied === true, 'bundled signature plus external OTS should satisfy archive policy');
         assert(restored.authenticity.timestampEvidence.length === 1, 'expected one external timestamp evidence entry for bundled signature');
         assert(restored.authenticity.timestampEvidence[0].targetSource === 'bundle', 'external OTS should link to bundled detached signature');
+      },
+    },
+    {
+      name: 'restore deduplicates OTS evidence per detached signature and prefers complete proofs',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('restore-ots-dedupe');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-ots-dedupe.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const sigA = buildQsigFixture(split.manifestBytes);
+        const sigB = buildQsigFixture(split.manifestBytes);
+        const embeddedCompleteA = await buildOtsFixture(sigA.qsigBytes, { completeProof: true });
+        const embeddedIncompleteA = await buildOtsFixture(sigA.qsigBytes, { completeProof: false });
+        const embeddedCompleteB = await buildOtsFixture(sigB.qsigBytes, { completeProof: true });
+        const externalIncompleteB = await buildOtsFixture(sigB.qsigBytes, { completeProof: false });
+
+        const attached = await attachManifestBundleToShards(parsed, {
+          manifestBytes: split.manifestBytes,
+          signatures: [
+            { name: 'archive-a.qsig', bytes: sigA.qsigBytes },
+            { name: 'archive-b.qsig', bytes: sigB.qsigBytes },
+          ],
+          timestamps: [
+            { name: 'archive-a-complete.qsig.ots', bytes: embeddedCompleteA },
+            { name: 'archive-a-incomplete.qsig.ots', bytes: embeddedIncompleteA },
+            { name: 'archive-b-complete.qsig.ots', bytes: embeddedCompleteB },
+          ],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
+        });
+
+        const restored = await restoreFromShards(
+          await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob)))),
+          {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              timestamps: [
+                { name: 'archive-a-complete.external.qsig.ots', bytes: embeddedCompleteA },
+                { name: 'archive-b-incomplete.external.qsig.ots', bytes: externalIncompleteB },
+              ],
+            },
+          }
+        );
+
+        assert(restored.authenticity.timestampEvidence.length === 2, 'expected one preferred OTS evidence entry per detached signature');
+        assert(
+          restored.authenticity.timestampEvidence.every((item) => item.apparentlyComplete === true),
+          'complete OTS proofs should win over incomplete duplicates for the same detached signature'
+        );
       },
     },
     {
@@ -1327,6 +1471,39 @@ function buildCases() {
         });
         assert(restored.authenticity.status.policySatisfied === true, 'repeated attach cycles must preserve signature validity');
         assert(restored.authenticity.verification.counts.validTotal === 2, 'repeated attach cycles must preserve both detached signatures');
+      },
+    },
+    {
+      name: 'restore prefers the richer embedded bundle when mixed shards share the same canonical manifest',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('restore-prefer-richer-bundle');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-prefer-richer-bundle.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const originalShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const sig = buildQsigFixture(split.manifestBytes);
+        const attached = await attachManifestBundleToShards(originalShards, {
+          manifestBytes: split.manifestBytes,
+          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+        const updatedShards = await Promise.all(attached.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
+
+        const mixed = [
+          updatedShards[0],
+          updatedShards[1],
+          originalShards[2],
+          originalShards[3],
+        ];
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+        });
+
+        assert(restored.manifestSource === 'embedded-preferred-bundle', `unexpected manifest source: ${restored.manifestSource}`);
+        assert(restored.bundleDigestHex === attached.bundleDigestHex, 'restore should prefer the richer embedded bundle digest');
+        assert(restored.authenticity.status.policySatisfied === true, 'preferred richer embedded bundle should satisfy archive policy');
+        assert(restored.authenticity.status.bundlePinned === true, 'preferred richer embedded bundle should preserve bundled signer pinning');
       },
     },
     {

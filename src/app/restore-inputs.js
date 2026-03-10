@@ -29,7 +29,7 @@ export async function classifyRestoreInputFiles(files) {
   const ignoredFileNames = [];
   let manifestBytes = null;
   let bundleBytes = null;
-  let pinnedPqPublicKeyFileBytes = null;
+  const pinnedPqPublicKeyFileBytesList = [];
 
   for (const file of files) {
     const name = String(file?.name || 'unnamed');
@@ -48,10 +48,9 @@ export async function classifyRestoreInputFiles(files) {
     }
 
     if (startsWithAscii(bytes, 'PQPK') || lowerName.endsWith('.pqpk')) {
-      if (!pinnedPqPublicKeyFileBytes) {
-        pinnedPqPublicKeyFileBytes = bytes;
-      } else if (!bytesEqual(pinnedPqPublicKeyFileBytes, bytes)) {
-        throw new Error('Multiple different .pqpk files were provided. Keep only one pinned PQ key for restore.');
+      const alreadyPresent = pinnedPqPublicKeyFileBytesList.some((item) => bytesEqual(item, bytes));
+      if (!alreadyPresent) {
+        pinnedPqPublicKeyFileBytesList.push(bytes);
       }
       continue;
     }
@@ -102,7 +101,8 @@ export async function classifyRestoreInputFiles(files) {
     bundleBytes,
     signatures,
     timestamps,
-    pinnedPqPublicKeyFileBytes,
+    pinnedPqPublicKeyFileBytes: pinnedPqPublicKeyFileBytesList[0] || null,
+    pinnedPqPublicKeyFileBytesList,
     ignoredFileNames,
   };
 }

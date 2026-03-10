@@ -122,20 +122,20 @@ export function formatAuthenticityStatusMessage(status = {}) {
     }
     const details = [];
     if (status?.strongPqSignatureVerified === true) {
-        details.push('strong PQ');
+        details.push('strong PQ present');
     }
     if (status?.bundlePinned === true) {
-        details.push('bundle-pinned');
+        details.push('bundle pin active');
     }
     if (status?.userPinned === true) {
-        details.push('user-pinned');
+        details.push('user pin matched');
     }
     if (status?.signerPinned === true && details.length === 0) {
-        details.push('signer pinned');
+        details.push('signer pin active');
     }
     return details.length > 0
-        ? `Signature verified (${details.join(', ')}).`
-        : 'Signature verified.';
+        ? `Signatures verified (${details.join(', ')}).`
+        : 'Signatures verified.';
 }
 
 // Log hash with appropriate formatting based on mode

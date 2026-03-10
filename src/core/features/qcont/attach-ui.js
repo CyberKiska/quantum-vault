@@ -115,6 +115,54 @@ function deriveSignableManifestFilename(sourceFiles) {
   return `${deriveManifestBaseName(sourceFiles)}.signable.qvmanifest.json`;
 }
 
+export function buildAttachedArtifactExports(bundle, baseName) {
+  const exports = [];
+  for (const publicKey of bundle?.attachments?.publicKeys || []) {
+    if (publicKey.encoding === 'base64') {
+      exports.push({
+        filename: `${baseName}-${publicKey.id}.pqpk`,
+        bytes: base64ToBytes(publicKey.value),
+        type: 'application/octet-stream',
+      });
+      continue;
+    }
+    if (publicKey.encoding === 'stellar-address') {
+      exports.push({
+        filename: `${baseName}-${publicKey.id}.stellar.txt`,
+        bytes: new TextEncoder().encode(`${String(publicKey.value || '').trim()}\n`),
+        type: 'text/plain;charset=utf-8',
+      });
+      continue;
+    }
+    throw new Error(`Cannot export attached public key ${publicKey.id}: unsupported encoding ${publicKey.encoding}`);
+  }
+
+  for (const signature of bundle?.attachments?.signatures || []) {
+    if (signature.signatureEncoding !== 'base64') {
+      throw new Error(`Cannot export attached signature ${signature.id}: unsupported encoding ${signature.signatureEncoding}`);
+    }
+    const extension = signature.format === 'stellar-sig' ? 'sig' : 'qsig';
+    exports.push({
+      filename: `${baseName}-${signature.id}.${extension}`,
+      bytes: base64ToBytes(signature.signature),
+      type: 'application/octet-stream',
+    });
+  }
+
+  for (const timestamp of bundle?.attachments?.timestamps || []) {
+    if (timestamp.proofEncoding !== 'base64') {
+      throw new Error(`Cannot export attached OTS evidence ${timestamp.id}: unsupported encoding ${timestamp.proofEncoding}`);
+    }
+    exports.push({
+      filename: `${baseName}-${timestamp.id}.ots`,
+      bytes: base64ToBytes(timestamp.proof),
+      type: 'application/octet-stream',
+    });
+  }
+
+  return exports;
+}
+
 async function parseAttachShards(classified) {
   const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
   return shardBytes.map((bytes) => parseShard(bytes, { strict: true }));
@@ -253,30 +301,10 @@ async function exportAttachedArtifacts() {
     }
 
     const baseName = deriveManifestBaseName(files);
+    const artifacts = buildAttachedArtifactExports(bundle, baseName);
     let exportedCount = 0;
-
-    for (const publicKey of bundle.attachments.publicKeys || []) {
-      if (publicKey.encoding !== 'base64') {
-        throw new Error(`Cannot export attached public key ${publicKey.id}: unsupported encoding ${publicKey.encoding}`);
-      }
-      download(new Blob([base64ToBytes(publicKey.value)], { type: 'application/octet-stream' }), `${baseName}-${publicKey.id}.pqpk`);
-      exportedCount += 1;
-    }
-
-    for (const signature of bundle.attachments.signatures || []) {
-      if (signature.signatureEncoding !== 'base64') {
-        throw new Error(`Cannot export attached signature ${signature.id}: unsupported encoding ${signature.signatureEncoding}`);
-      }
-      const extension = signature.format === 'stellar-sig' ? 'sig' : 'qsig';
-      download(new Blob([base64ToBytes(signature.signature)], { type: 'application/octet-stream' }), `${baseName}-${signature.id}.${extension}`);
-      exportedCount += 1;
-    }
-
-    for (const timestamp of bundle.attachments.timestamps || []) {
-      if (timestamp.proofEncoding !== 'base64') {
-        throw new Error(`Cannot export attached OTS evidence ${timestamp.id}: unsupported encoding ${timestamp.proofEncoding}`);
-      }
-      download(new Blob([base64ToBytes(timestamp.proof)], { type: 'application/octet-stream' }), `${baseName}-${timestamp.id}.ots`);
+    for (const artifact of artifacts) {
+      download(new Blob([artifact.bytes], { type: artifact.type }), artifact.filename);
       exportedCount += 1;
     }
 
