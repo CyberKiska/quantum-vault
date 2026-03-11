@@ -5,6 +5,7 @@ import { verifyStellarSigAgainstBytes } from './stellar-sig.js';
 
 const MAGIC_QSIG = asciiBytes('PQSG');
 const PIN_MISMATCH_WARNING_PREFIX = 'Pinned PQ signer key did not match';
+const LEGACY_ED25519_WARNING = 'Legacy Ed25519 signature is not post-quantum secure. Prefer .qsig for PQ authenticity.';
 
 function decodeJsonBytes(bytes) {
   try {
@@ -390,7 +391,6 @@ export async function verifyManifestSignatures({
       expectedEd25519Signer,
     }));
     results.push(result);
-    if (Array.isArray(result.warnings)) warnings.push(...result.warnings);
   }
 
   for (const signature of externalSignatures) {
@@ -402,15 +402,24 @@ export async function verifyManifestSignatures({
       expectedEd25519Signer,
     }));
     results.push(result);
-    if (Array.isArray(result.warnings)) warnings.push(...result.warnings);
   }
 
   const { counts, duplicateWarnings } = buildCounts(results);
+  if (counts.validStrongPq > 0) {
+    for (const result of results) {
+      if (!Array.isArray(result?.warnings) || result.warnings.length === 0) continue;
+      result.warnings = result.warnings.filter((warning) => warning !== LEGACY_ED25519_WARNING);
+    }
+  }
+  for (const result of results) {
+    if (Array.isArray(result.warnings)) warnings.push(...result.warnings);
+  }
   warnings.push(...duplicateWarnings);
+  const dedupedWarnings = dedupeWarnings(warnings);
   return {
     provided: bundleSignatures.length + externalSignatures.length > 0,
     results,
-    warnings,
+    warnings: dedupedWarnings,
     counts,
     signatureArtifacts: results
       .filter((result) => result.signatureBytes instanceof Uint8Array)

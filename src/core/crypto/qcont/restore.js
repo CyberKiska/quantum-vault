@@ -162,7 +162,7 @@ async function evaluateCandidateAuthenticity(candidate, verificationOptions = {}
     signatureArtifacts: verification.signatureArtifacts,
   });
   const warnings = [];
-  if (policy.level === 'integrity-only') {
+  if (policy.level === 'integrity-only' && verification.counts.validTotal === 0) {
     warnings.push('Archive policy is integrity-only; provenance is not bound to a verified signer.');
   }
   const invalidSignatureCount = verification.results.filter((item) => !item.ok).length;
