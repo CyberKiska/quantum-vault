@@ -1,6 +1,7 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { base64ToBytes, toHex } from '../bytes.js';
-import { normalizeSignatureSuite } from '../auth/signature-suites.js';
+import { getSignatureSuiteInfo, normalizeSignatureSuite } from '../auth/signature-suites.js';
+import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
 import { QV_CANONICALIZATION_LABEL, canonicalizeJson, canonicalizeJsonToBytes } from './jcs.js';
 
 export const MANIFEST_BUNDLE_TYPE = 'QV-Manifest-Bundle';
@@ -11,6 +12,7 @@ export const AUTH_POLICY_COMMITMENT_ALG = 'SHA3-512';
 const AUTH_LEVELS = new Set(['integrity-only', 'any-signature', 'strong-pq-signature']);
 const SIGNATURE_FORMATS = new Set(['qsig', 'stellar-sig']);
 const TIMESTAMP_TYPES = new Set(['opentimestamps']);
+const PUBLIC_KEY_ENCODINGS = new Set(['base64', 'stellar-address']);
 
 function ensureObject(value, field) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -70,16 +72,19 @@ function assertUniqueIds(values, field) {
   }
 }
 
-function assertUniqueSignaturePayloads(signatures) {
+function assertUniqueSignatureProofs(signatures) {
   const seen = new Map();
   for (const signature of signatures) {
     if (signature.signatureEncoding !== 'base64') {
       throw new Error(`Unsupported signatureEncoding for ${signature.id}: ${signature.signatureEncoding}`);
     }
-    const digestHex = toHex(sha3_512(base64ToBytes(signature.signature)));
+    const digestHex = computeDetachedSignatureIdentityDigestHex({
+      format: signature.format,
+      signatureBytes: base64ToBytes(signature.signature),
+    });
     const existingId = seen.get(digestHex);
     if (existingId) {
-      throw new Error(`Duplicate signature payload bytes detected across bundle signatures: ${existingId}, ${signature.id}`);
+      throw new Error(`Duplicate signature proof detected across bundle signatures: ${existingId}, ${signature.id}`);
     }
     seen.set(digestHex, signature.id);
   }
@@ -166,11 +171,27 @@ export function computeManifestDigest(manifest) {
 
 function normalizePublicKey(entry, index) {
   const source = ensureObject(entry, `attachments.publicKeys[${index}]`);
+  const suite = normalizeSignatureSuite(source.suite);
+  const suiteInfo = getSignatureSuiteInfo(suite);
+  const kty = ensureString(source.kty, `attachments.publicKeys[${index}].kty`);
+  const encoding = ensureString(source.encoding, `attachments.publicKeys[${index}].encoding`);
+  if (!PUBLIC_KEY_ENCODINGS.has(encoding)) {
+    throw new Error(`Unsupported attachments.publicKeys[${index}].encoding`);
+  }
+  if (kty !== suiteInfo.publicKeyType) {
+    throw new Error(`attachments.publicKeys[${index}].kty does not match suite ${suite}`);
+  }
+  if (encoding === 'base64' && suite === 'ed25519') {
+    throw new Error(`attachments.publicKeys[${index}] ed25519 keys must use stellar-address encoding`);
+  }
+  if (encoding === 'stellar-address' && suite !== 'ed25519') {
+    throw new Error(`attachments.publicKeys[${index}] stellar-address encoding is only valid for ed25519 keys`);
+  }
   return {
     id: ensureString(source.id, `attachments.publicKeys[${index}].id`),
-    kty: ensureString(source.kty, `attachments.publicKeys[${index}].kty`),
-    suite: normalizeSignatureSuite(source.suite),
-    encoding: ensureString(source.encoding, `attachments.publicKeys[${index}].encoding`),
+    kty,
+    suite,
+    encoding,
     value: ensureString(source.value, `attachments.publicKeys[${index}].value`),
     legacy: source.legacy === true,
   };
@@ -193,10 +214,11 @@ function normalizeSignature(entry, index, manifestDigestHex) {
   if (digestValue !== manifestDigestHex) {
     throw new Error('Signature target digest mismatch');
   }
+  const suite = normalizeSignatureSuite(source.suite);
   return {
     id: ensureString(source.id, `attachments.signatures[${index}].id`),
     format,
-    suite: normalizeSignatureSuite(source.suite),
+    suite,
     target: {
       type: 'canonical-manifest',
       digestAlg: MANIFEST_DIGEST_ALG,
@@ -207,6 +229,40 @@ function normalizeSignature(entry, index, manifestDigestHex) {
     publicKeyRef: ensureOptionalString(source.publicKeyRef, `attachments.signatures[${index}].publicKeyRef`),
     legacy: source.legacy === true,
   };
+}
+
+export function getSignaturePublicKeyRefCompatibilityError(signature, publicKey) {
+  if (!signature?.publicKeyRef) return '';
+  if (!publicKey) {
+    return `attachments.signatures publicKeyRef is unknown: ${signature.publicKeyRef}`;
+  }
+
+  if (signature.format === 'qsig') {
+    if (publicKey.encoding !== 'base64') {
+      return 'attachments.signatures publicKeyRef for qsig must reference a bundled PQ public key stored with encoding "base64"';
+    }
+    if (publicKey.suite === 'ed25519') {
+      return 'attachments.signatures publicKeyRef for qsig must not reference an ed25519 signer';
+    }
+    if (publicKey.suite !== signature.suite) {
+      return `attachments.signatures publicKeyRef suite mismatch for qsig: expected ${signature.suite}, got ${publicKey.suite}`;
+    }
+    return '';
+  }
+
+  if (signature.format === 'stellar-sig') {
+    if (publicKey.encoding !== 'stellar-address') {
+      return 'attachments.signatures publicKeyRef for stellar-sig must reference a bundled Stellar signer stored with encoding "stellar-address"';
+    }
+    if (publicKey.suite !== 'ed25519') {
+      return 'attachments.signatures publicKeyRef for stellar-sig must reference an ed25519 signer';
+    }
+    if (signature.suite !== 'ed25519') {
+      return `attachments.signatures suite mismatch for stellar-sig: expected ed25519, got ${signature.suite}`;
+    }
+  }
+
+  return '';
 }
 
 function normalizeTimestamp(entry, index, signatureIds) {
@@ -265,11 +321,19 @@ export function normalizeManifestBundle(bundle) {
     : [];
   assertUniqueIds(publicKeys, 'publicKeys');
   assertUniqueIds(signatures, 'signatures');
-  assertUniqueSignaturePayloads(signatures);
+  assertUniqueSignatureProofs(signatures);
   const publicKeyIds = new Set(publicKeys.map((item) => item.id));
+  const publicKeysById = new Map(publicKeys.map((item) => [item.id, item]));
   for (const signature of signatures) {
     if (signature.publicKeyRef && !publicKeyIds.has(signature.publicKeyRef)) {
       throw new Error(`attachments.signatures publicKeyRef is unknown: ${signature.publicKeyRef}`);
+    }
+    const compatibilityError = getSignaturePublicKeyRefCompatibilityError(
+      signature,
+      publicKeysById.get(signature.publicKeyRef || '')
+    );
+    if (compatibilityError) {
+      throw new Error(compatibilityError);
     }
   }
   const signatureIds = new Set(signatures.map((item) => item.id));

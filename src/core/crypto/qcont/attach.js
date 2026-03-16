@@ -13,8 +13,9 @@ import {
   decodeBundleSignatureBytes,
   resolveOpenTimestampTarget,
 } from '../auth/opentimestamps.js';
-import { verifyQsigAgainstBytes, unpackPqpk } from '../auth/qsig.js';
-import { verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
+import { normalizePqPublicKeyPins, verifyQsigAgainstBytes, unpackPqpk } from '../auth/qsig.js';
+import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
+import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import { getSignatureSuiteInfo } from '../auth/signature-suites.js';
 import { buildShardBlob } from './build.js';
 
@@ -47,6 +48,13 @@ function attachmentId(prefix, bytes) {
   return `${prefix}-${toHex(sha3_512(bytes)).slice(0, 16)}`;
 }
 
+function signatureAttachmentId(format, bytes) {
+  return `sig-${computeDetachedSignatureIdentityDigestHex({
+    format,
+    signatureBytes: bytes,
+  }).slice(0, 16)}`;
+}
+
 function detectExternalSignatureType(signature) {
   const bytes = signature?.bytes;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return 'unknown';
@@ -55,7 +63,7 @@ function detectExternalSignatureType(signature) {
   }
   try {
     const parsed = JSON.parse(new TextDecoder().decode(bytes));
-    if (parsed?.schema === 'stellar-file-signature/v1') {
+    if (isSupportedStellarSignatureDocument(parsed)) {
       return 'stellar-sig';
     }
   } catch {
@@ -64,8 +72,11 @@ function detectExternalSignatureType(signature) {
   return 'unknown';
 }
 
-function buildPublicKeyAttachment(pqpkBytes) {
-  const unpacked = unpackPqpk(pqpkBytes);
+function buildPublicKeyAttachment(pin) {
+  const pqpkBytes = pin?.bytes;
+  const unpacked = pin?.suiteId
+    ? pin
+    : unpackPqpk(pqpkBytes);
   const suiteMap = {
     0x01: 'mldsa-44',
     0x02: 'mldsa-65',
@@ -81,7 +92,7 @@ function buildPublicKeyAttachment(pqpkBytes) {
   }
   const suiteInfo = getSignatureSuiteInfo(suite);
   return {
-    id: attachmentId('key', pqpkBytes),
+    id: attachmentId('key', new TextEncoder().encode(pin?.identityKey || `${unpacked.suiteId}:${toHex(unpacked.keyBytes)}`)),
     kty: suiteInfo.publicKeyType,
     suite,
     encoding: 'base64',
@@ -99,7 +110,7 @@ function buildStellarSignerAttachment(signer) {
     suite: 'ed25519',
     encoding: 'stellar-address',
     value: signerAddress,
-    legacy: true,
+    legacy: false,
   };
 }
 
@@ -122,40 +133,44 @@ function buildBundleSignaturePayloads(signatures) {
   }));
 }
 
-async function importExternalQsig({ manifestBytes, signature, pqPublicKeyFileBytesList }) {
+function verifyQsigOrThrow(options, signatureName) {
+  try {
+    return verifyQsigAgainstBytes(options);
+  } catch (error) {
+    throw new Error(`${signatureName}: ${error?.message || error}`);
+  }
+}
+
+async function importExternalQsig({ manifestBytes, signature, normalizedPqPins }) {
   let matchedKey = null;
   const successful = [];
-  const seenPinnedKeys = new Set();
-  for (const pqpkBytes of pqPublicKeyFileBytesList) {
-    const dedupeKey = toHex(sha3_512(pqpkBytes));
-    if (seenPinnedKeys.has(dedupeKey)) continue;
-    seenPinnedKeys.add(dedupeKey);
-    const result = verifyQsigAgainstBytes({
+  for (const candidatePin of normalizedPqPins) {
+    const result = verifyQsigOrThrow({
       messageBytes: manifestBytes,
       qsigBytes: signature.bytes,
-      bundlePqPublicKeyFileBytes: pqpkBytes,
-      pinnedPqPublicKeyFileBytes: pqpkBytes,
-    });
+      bundlePqPublicKeyFileBytes: candidatePin.bytes,
+      pinnedPqPublicKeyFileBytes: candidatePin.bytes,
+    }, signature.name || 'signature.qsig');
     if (result.ok && result.signerPinned) {
-      successful.push({ result, pqpkBytes });
+      successful.push({ result, pin: candidatePin });
     }
   }
 
   let verified;
   if (successful.length === 1) {
     verified = successful[0].result;
-    matchedKey = successful[0].pqpkBytes;
+    matchedKey = successful[0].pin;
   } else if (successful.length > 1) {
     throw new Error(`Multiple .pqpk files verify ${signature.name}. Keep only the intended signer key.`);
   } else {
-    if (seenPinnedKeys.size > 0) {
+    if (normalizedPqPins.length > 0) {
       throw new Error(`${signature.name}: no provided .pqpk file matches this detached PQ signature.`);
     }
-    verified = verifyQsigAgainstBytes({
+    verified = verifyQsigOrThrow({
       messageBytes: manifestBytes,
       qsigBytes: signature.bytes,
       bundlePqPublicKeyFileBytes: null,
-    });
+    }, signature.name || 'signature.qsig');
     if (!verified.ok) {
       throw new Error(`${signature.name}: ${verified.error}`);
     }
@@ -165,7 +180,7 @@ async function importExternalQsig({ manifestBytes, signature, pqPublicKeyFileByt
   return {
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],
     signature: {
-      id: attachmentId('sig', signature.bytes),
+      id: signatureAttachmentId('qsig', signature.bytes),
       format: 'qsig',
       suite: verified.suite,
       target: {
@@ -197,7 +212,7 @@ async function importExternalStellarSig({ manifestBytes, signature, expectedEd25
   return {
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],
     signature: {
-      id: attachmentId('sig', signature.bytes),
+      id: signatureAttachmentId('stellar-sig', signature.bytes),
       format: 'stellar-sig',
       suite: 'ed25519',
       target: {
@@ -208,7 +223,7 @@ async function importExternalStellarSig({ manifestBytes, signature, expectedEd25
       signatureEncoding: 'base64',
       signature: bytesToBase64(signature.bytes),
       publicKeyRef: publicKeyAttachment?.id || null,
-      legacy: true,
+      legacy: false,
     },
   };
 }
@@ -300,6 +315,11 @@ export async function attachManifestBundleToShards(shards, options = {}) {
   const pqPublicKeyFileBytesList = Array.isArray(options.pqPublicKeyFileBytesList)
     ? options.pqPublicKeyFileBytesList.filter((item) => item instanceof Uint8Array)
     : [];
+  const normalizedPqPins = normalizePqPublicKeyPins({
+    pinnedPqPublicKeyFileBytesList: pqPublicKeyFileBytesList,
+    invalidBehavior: 'throw',
+    invalidLabel: 'Pinned PQ signer key',
+  }).pins;
   const externalSignatures = Array.isArray(options.signatures) ? options.signatures : [];
   const importedPublicKeys = [];
   const importedSignatures = [];
@@ -309,7 +329,7 @@ export async function attachManifestBundleToShards(shards, options = {}) {
       const imported = await importExternalQsig({
         manifestBytes: embeddedManifest.bytes,
         signature,
-        pqPublicKeyFileBytesList,
+        normalizedPqPins,
       });
       importedPublicKeys.push(...imported.publicKeys);
       importedSignatures.push(imported.signature);

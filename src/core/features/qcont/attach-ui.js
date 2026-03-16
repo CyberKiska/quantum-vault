@@ -2,6 +2,7 @@ import { attachManifestBundleToShards, parseShard } from '../../../app/crypto-se
 import { base64ToBytes } from '../../crypto/bytes.js';
 import { parseArchiveManifestBytes } from '../../crypto/manifest/archive-manifest.js';
 import { parseManifestBundleBytes } from '../../crypto/manifest/manifest-bundle.js';
+import { isSupportedStellarSignatureDocument } from '../../crypto/auth/stellar-sig.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
@@ -68,7 +69,7 @@ async function classifyAttachFiles(files) {
 
     try {
       const parsed = JSON.parse(new TextDecoder().decode(bytes));
-      if (parsed?.schema === 'stellar-file-signature/v1') {
+      if (isSupportedStellarSignatureDocument(parsed)) {
         signatures.push({ name, bytes });
         continue;
       }

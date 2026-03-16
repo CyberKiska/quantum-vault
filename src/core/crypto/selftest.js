@@ -13,6 +13,7 @@ import { verifyManifestSignatures } from './auth/verify-signatures.js';
 import { unpackPqpk, unpackQsig } from './auth/qsig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
+import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
 import { inspectManifestBundleTimestamps, parseOpenTimestampProof } from './auth/opentimestamps.js';
 import {
   DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL,
@@ -205,40 +206,85 @@ function encodeStellarAddress(publicKeyBytes) {
   return base32Encode(concatBytes([payload, checksum])).replace(/=+$/g, '');
 }
 
-function buildQsigFixture(messageBytes) {
-  const suiteId = 0x03;
-  const keys = ml_dsa87.keygen();
-  const fileHash = sha3_512(messageBytes);
-  const tbs = concatBytes([
-    asciiBytes('QSTB'),
-    Uint8Array.of(0x01, 0x00, 0x01, 0x00, suiteId, 0x01, 0x00),
-    fileHash,
-  ]);
-  const signature = ml_dsa87.sign(tbs, keys.secretKey);
-  const fingerprintRecord = concatBytes([Uint8Array.of(0x01), sha3_256(keys.publicKey)]);
-  const metaBytes = concatBytes([
-    Uint8Array.of(0x10), u16le(keys.publicKey.length), keys.publicKey,
+const QSIG_FIXTURE_SUITES = Object.freeze({
+  'mldsa-87': {
+    suiteId: 0x03,
+    signer: ml_dsa87,
+  },
+  'slhdsa-shake-128s': {
+    suiteId: 0x11,
+    signer: slh_dsa_shake_128s,
+  },
+});
+
+const STELLAR_PUBLIC_NETWORK_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
+const STELLAR_ENVELOPE_TYPE_TX = 2;
+const STELLAR_OPERATION_TYPE_MANAGE_DATA = 10;
+
+function buildQsigFixture(messageBytes, { suite = 'mldsa-87', ctx = 'quantum-signer/v2', embeddedPublicKey = null } = {}) {
+  const suiteConfig = QSIG_FIXTURE_SUITES[suite];
+  if (!suiteConfig) {
+    throw new Error(`Unsupported selftest qsig fixture suite: ${suite}`);
+  }
+
+  const { suiteId, signer } = suiteConfig;
+  const keys = signer.keygen();
+  const embeddedSignerPublicKey = embeddedPublicKey instanceof Uint8Array
+    ? embeddedPublicKey
+    : keys.publicKey;
+  const payloadDigest = sha3_512(messageBytes);
+  const ctxBytes = utf8ToBytes(ctx);
+  const fingerprintRecord = concatBytes([Uint8Array.of(0x01), sha3_256(embeddedSignerPublicKey)]);
+  const authMetaBytes = concatBytes([
+    Uint8Array.of(0x10), u16le(embeddedSignerPublicKey.length), embeddedSignerPublicKey,
     Uint8Array.of(0x11), u16le(fingerprintRecord.length), fingerprintRecord,
   ]);
+  const authMetaDigest = sha3_256(authMetaBytes);
+  const displayMetaBytes = concatBytes([
+    Uint8Array.of(0x01), u16le('archive.qvmanifest.json'.length), utf8ToBytes('archive.qvmanifest.json'),
+    Uint8Array.of(0x02), u16le(8), (() => {
+      const out = new Uint8Array(8);
+      const view = new DataView(out.buffer);
+      view.setUint32(0, messageBytes.length >>> 0, true);
+      view.setUint32(4, 0, true);
+      return out;
+    })(),
+  ]);
+  const tbs = concatBytes([
+    asciiBytes('QSTB'),
+    Uint8Array.of(0x02, 0x00, 0x02, 0x00, suiteId, 0x01, 0x01, 0x01),
+    payloadDigest,
+    authMetaDigest,
+  ]);
+  const signature = signer.sign(tbs, keys.secretKey, { context: ctxBytes });
   const qsigBytes = concatBytes([
     asciiBytes('PQSG'),
-    Uint8Array.of(0x01, 0x00, suiteId, 0x01),
-    u16le(0x000f),
-    fileHash,
-    Uint8Array.of(0x00, 0x00),
-    u16le(metaBytes.length),
+    Uint8Array.of(0x02, 0x00, suiteId, 0x01, 0x01, 0x01),
+    u16le(0x0007),
+    payloadDigest,
+    authMetaDigest,
+    Uint8Array.of(ctxBytes.length, 0x00),
+    u16le(authMetaBytes.length),
+    u16le(displayMetaBytes.length),
     u32le(signature.length),
-    metaBytes,
+    ctxBytes,
+    authMetaBytes,
+    displayMetaBytes,
     signature,
   ]);
   const pqpkPrefix = concatBytes([
     asciiBytes('PQPK'),
-    Uint8Array.of(0x01, 0x00, suiteId, 0x00),
+    Uint8Array.of(0x01, 0x01, suiteId, 0x00),
     u32le(keys.publicKey.length),
     keys.publicKey,
   ]);
   const pqpkBytes = concatBytes([pqpkPrefix, u32le(crc32(pqpkPrefix))]);
-  return { qsigBytes, pqpkBytes };
+  return {
+    qsigBytes,
+    pqpkBytes,
+    signerPublicKey: keys.publicKey,
+    embeddedSignerPublicKey,
+  };
 }
 
 function mutateQsigMajorVersion(qsigBytes, versionMajor) {
@@ -256,23 +302,71 @@ function mutatePqpkMajorVersion(pqpkBytes, versionMajor) {
   return out;
 }
 
+function mutatePqpkVersionMinor(pqpkBytes, versionMinor) {
+  const out = pqpkBytes.slice();
+  out[5] = versionMinor & 0xff;
+  const prefix = out.subarray(0, out.length - 4);
+  const checksum = u32le(crc32(prefix));
+  out.set(checksum, out.length - 4);
+  return out;
+}
+
+function mutateQsigAuthMetaLen(qsigBytes, authMetaLen) {
+  const out = qsigBytes.slice();
+  new DataView(out.buffer, out.byteOffset, out.byteLength).setUint16(110, authMetaLen, true);
+  return out;
+}
+
+function mutatePqpkKeyLen(pqpkBytes, keyLen) {
+  const out = pqpkBytes.slice();
+  new DataView(out.buffer, out.byteOffset, out.byteLength).setUint32(8, keyLen, true);
+  return out;
+}
+
 function appendUnknownCriticalQsigMetadata(qsigBytes) {
   const parsed = unpackQsig(qsigBytes);
-  const metaBytes = concatBytes([
-    Uint8Array.of(0x90),
-    u16le(1),
-    Uint8Array.of(0x01),
+  const displayMetaParts = [];
+  if (parsed.displayMetadata.filename) {
+    displayMetaParts.push(Uint8Array.of(0x01), u16le(utf8ToBytes(parsed.displayMetadata.filename).length), utf8ToBytes(parsed.displayMetadata.filename));
+  }
+  if (parsed.displayMetadata.filesize !== undefined) {
+    const sizeBytes = new Uint8Array(8);
+    const view = new DataView(sizeBytes.buffer);
+    const size = BigInt(parsed.displayMetadata.filesize);
+    view.setUint32(0, Number(size & 0xffffffffn), true);
+    view.setUint32(4, Number((size >> 32n) & 0xffffffffn), true);
+    displayMetaParts.push(Uint8Array.of(0x02), u16le(8), sizeBytes);
+  }
+  if (parsed.displayMetadata.createdAt) {
+    const createdAtBytes = utf8ToBytes(parsed.displayMetadata.createdAt);
+    displayMetaParts.push(Uint8Array.of(0x03), u16le(createdAtBytes.length), createdAtBytes);
+  }
+  const displayMetaBytes = concatBytes(displayMetaParts);
+  const authMetaBytes = concatBytes([
+    Uint8Array.of(0x10), u16le(parsed.authenticatedMetadata.signerPublicKey.length), parsed.authenticatedMetadata.signerPublicKey,
+    Uint8Array.of(0x11), u16le(parsed.authenticatedMetadata.signerFingerprint.length), parsed.authenticatedMetadata.signerFingerprint,
+    Uint8Array.of(0x90), u16le(1), Uint8Array.of(0x01),
   ]);
   const mutated = concatBytes([
     asciiBytes('PQSG'),
-    Uint8Array.of(parsed.versionMajor, parsed.versionMinor, parsed.suiteId, parsed.hashAlgId),
+    Uint8Array.of(
+      parsed.versionMajor,
+      parsed.versionMinor,
+      parsed.suiteId,
+      parsed.signatureProfileId,
+      parsed.payloadDigestAlgId,
+      parsed.authDigestAlgId
+    ),
     u16le(parsed.flags || 0),
-    parsed.fileHash,
-    u16le(parsed.ctxBytes.length),
-    u16le(metaBytes.length),
+    parsed.payloadDigest,
+    parsed.authMetaDigest,
+    Uint8Array.of(parsed.ctxBytes.length, 0x00),
+    u16le(authMetaBytes.length),
+    u16le(displayMetaBytes.length),
     u32le(parsed.signature.length),
     parsed.ctxBytes,
-    metaBytes,
+    authMetaBytes,
+    displayMetaBytes,
     parsed.signature,
   ]);
   return mutated;
@@ -290,43 +384,239 @@ async function buildOtsFixture(stampedBytes, { completeProof = false } = {}) {
   return concatBytes([header, tail]);
 }
 
-async function buildStellarSignatureFixture(messageBytes) {
+async function createStellarSignerMaterial() {
   const keyPair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
   const publicKeyBytes = new Uint8Array(await crypto.subtle.exportKey('raw', keyPair.publicKey));
   const signer = encodeStellarAddress(publicKeyBytes);
-  const hashes = [
-    { alg: 'SHA-256', hex: bytesToHex(await digestSha256(messageBytes)) },
-    { alg: 'SHA3-512', hex: bytesToHex(sha3_512(messageBytes)) },
-  ];
-  const message = [
-    'STELLAR-WSIGN/v1',
-    'type=file',
-    `size=${messageBytes.length}`,
-    'hashes=SHA-256,SHA3-512',
-    `sha256=${hashes[0].hex}`,
-    `sha3_512=${hashes[1].hex}`,
-  ].join('\n');
-  const payload = await digestSha256(utf8ToBytes(`Stellar Signed Message:\n${message}`));
-  const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', keyPair.privateKey, payload));
+  return { keyPair, publicKeyBytes, signer };
+}
+
+async function buildStellarDigestFixture(messageBytes) {
+  const sha256Bytes = await digestSha256(messageBytes);
+  const sha3_512Bytes = sha3_512(messageBytes);
+  return {
+    hashes: [
+      { alg: 'SHA-256', hex: bytesToHex(sha256Bytes) },
+      { alg: 'SHA3-512', hex: bytesToHex(sha3_512Bytes) },
+    ],
+    digestEntries: [
+      { name: 'ws.sha256', alg: 'SHA-256', bytes: sha256Bytes, digestHex: bytesToHex(sha256Bytes) },
+      { name: 'ws.sha3-512', alg: 'SHA3-512', bytes: sha3_512Bytes, digestHex: bytesToHex(sha3_512Bytes) },
+    ],
+  };
+}
+
+async function buildStellarSignatureFixture(messageBytes, signerMaterial = null) {
+  const material = signerMaterial || await createStellarSignerMaterial();
+  const { hashes } = await buildStellarDigestFixture(messageBytes);
+  const payload = await digestSha256(concatBytes([utf8ToBytes('Stellar Signed Message:\n'), messageBytes]));
+  const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', material.keyPair.privateKey, payload));
   const doc = {
-    schema: 'stellar-file-signature/v1',
-    mode: 'sep53',
-    input: { type: 'file' },
-    signer,
-    message,
+    schema: 'stellar-signature/v2',
+    proofType: 'sep53-message-signature',
+    payloadType: 'raw-bytes',
+    signatureScheme: 'sep53-sha256-ed25519',
+    input: { type: 'file', size: messageBytes.length, name: 'archive.qvmanifest.json' },
+    signer: material.signer,
     hashes,
     signatureB64: bytesToBase64(signature),
   };
-  return new TextEncoder().encode(JSON.stringify(doc));
+  return {
+    bytes: new TextEncoder().encode(JSON.stringify(doc)),
+    signer: material.signer,
+    signerMaterial: material,
+  };
 }
 
 async function buildStellarSignatureFixtureWithSigner(messageBytes) {
-  const bytes = await buildStellarSignatureFixture(messageBytes);
-  const doc = JSON.parse(new TextDecoder().decode(bytes));
+  const fixture = await buildStellarSignatureFixture(messageBytes);
   return {
-    bytes,
-    signer: String(doc.signer || ''),
+    bytes: fixture.bytes,
+    signer: fixture.signer,
+    signerMaterial: fixture.signerMaterial,
   };
+}
+
+class XdrWriter {
+  constructor() {
+    this.parts = [];
+  }
+
+  writeRaw(bytes) {
+    this.parts.push(bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes));
+  }
+
+  writeInt32(value) {
+    const out = new Uint8Array(4);
+    new DataView(out.buffer).setInt32(0, Number(value), false);
+    this.parts.push(out);
+  }
+
+  writeUint32(value) {
+    const out = new Uint8Array(4);
+    new DataView(out.buffer).setUint32(0, Number(value), false);
+    this.parts.push(out);
+  }
+
+  writeInt64(value) {
+    const normalized = BigInt(value);
+    const out = new Uint8Array(8);
+    const view = new DataView(out.buffer);
+    view.setUint32(0, Number((normalized >> 32n) & 0xffffffffn), false);
+    view.setUint32(4, Number(normalized & 0xffffffffn), false);
+    this.parts.push(out);
+  }
+
+  writeOpaqueFixed(bytes) {
+    const raw = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+    this.parts.push(raw);
+    const padLen = (4 - (raw.length % 4)) % 4;
+    if (padLen > 0) {
+      this.parts.push(new Uint8Array(padLen));
+    }
+  }
+
+  writeOpaque(bytes) {
+    const raw = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+    this.writeInt32(raw.length);
+    this.writeOpaqueFixed(raw);
+  }
+
+  writeString(value) {
+    this.writeOpaque(utf8ToBytes(value));
+  }
+
+  finish() {
+    return concatBytes(this.parts);
+  }
+}
+
+function buildStellarManageDataTransaction(sourceAccountBytes, digestEntries) {
+  const writer = new XdrWriter();
+  writer.writeInt32(0);
+  writer.writeOpaqueFixed(sourceAccountBytes);
+  writer.writeUint32(200);
+  writer.writeInt64(0n);
+  writer.writeInt32(0);
+  writer.writeInt32(0);
+  writer.writeInt32(digestEntries.length);
+  for (const entry of digestEntries) {
+    writer.writeInt32(0);
+    writer.writeInt32(STELLAR_OPERATION_TYPE_MANAGE_DATA);
+    writer.writeString(entry.name);
+    writer.writeInt32(1);
+    writer.writeOpaque(entry.bytes);
+  }
+  writer.writeInt32(0);
+  return writer.finish();
+}
+
+async function computeStellarTransactionHash(txXdr, passphrase) {
+  const networkId = await digestSha256(utf8ToBytes(passphrase));
+  const writer = new XdrWriter();
+  writer.writeRaw(networkId);
+  writer.writeInt32(STELLAR_ENVELOPE_TYPE_TX);
+  writer.writeRaw(txXdr);
+  return digestSha256(writer.finish());
+}
+
+function buildDecoratedSignatureEnvelope(txXdr, publicKeyBytes, signatureBytes) {
+  const writer = new XdrWriter();
+  writer.writeInt32(STELLAR_ENVELOPE_TYPE_TX);
+  writer.writeRaw(txXdr);
+  writer.writeInt32(1);
+  writer.writeOpaqueFixed(publicKeyBytes.slice(28, 32));
+  writer.writeOpaque(signatureBytes);
+  return writer.finish();
+}
+
+async function buildStellarXdrSignatureFixture(messageBytes, signerMaterial = null) {
+  const material = signerMaterial || await createStellarSignerMaterial();
+  const { hashes, digestEntries } = await buildStellarDigestFixture(messageBytes);
+  const txXdr = buildStellarManageDataTransaction(material.publicKeyBytes, digestEntries);
+  const txHash = await computeStellarTransactionHash(txXdr, STELLAR_PUBLIC_NETWORK_PASSPHRASE);
+  const signatureBytes = new Uint8Array(
+    await crypto.subtle.sign('Ed25519', material.keyPair.privateKey, txHash)
+  );
+  const signedXdr = buildDecoratedSignatureEnvelope(txXdr, material.publicKeyBytes, signatureBytes);
+  const doc = {
+    schema: 'stellar-signature/v2',
+    proofType: 'xdr-envelope-proof',
+    payloadType: 'detached-digests',
+    signatureScheme: 'tx-envelope-ed25519',
+    input: { type: 'file', size: messageBytes.length, name: 'archive.qvmanifest.json' },
+    signer: material.signer,
+    txSourceAccount: material.signer,
+    hashes,
+    manageData: {
+      entries: digestEntries.map((entry) => ({
+        name: entry.name,
+        alg: entry.alg,
+        digestHex: entry.digestHex,
+      })),
+    },
+    network: {
+      passphrase: STELLAR_PUBLIC_NETWORK_PASSPHRASE,
+      hint: 'pubnet',
+    },
+    signedXdr: bytesToBase64(signedXdr),
+  };
+  return {
+    bytes: new TextEncoder().encode(JSON.stringify(doc)),
+    signer: material.signer,
+    signerMaterial: material,
+  };
+}
+
+function rewriteStellarSignatureDocument(bytes, {
+  reverseHashes = false,
+  reverseManageDataEntries = false,
+  pretty = false,
+} = {}) {
+  const parsed = JSON.parse(new TextDecoder().decode(bytes));
+  const rewritten = {
+    signer: parsed.signer,
+    schema: parsed.schema,
+    proofType: parsed.proofType,
+    payloadType: parsed.payloadType,
+    signatureScheme: parsed.signatureScheme,
+  };
+
+  if (parsed.network && typeof parsed.network === 'object') {
+    rewritten.network = { ...parsed.network };
+  }
+
+  if (Array.isArray(parsed.hashes)) {
+    const hashes = parsed.hashes.map((entry) => ({ ...entry }));
+    rewritten.hashes = reverseHashes ? hashes.reverse() : hashes;
+  }
+
+  if (parsed.manageData && typeof parsed.manageData === 'object') {
+    const entries = Array.isArray(parsed.manageData.entries)
+      ? parsed.manageData.entries.map((entry) => ({ ...entry }))
+      : [];
+    rewritten.manageData = {
+      entries: reverseManageDataEntries ? entries.reverse() : entries,
+    };
+  }
+
+  if (parsed.txSourceAccount !== undefined) {
+    rewritten.txSourceAccount = parsed.txSourceAccount;
+  }
+  if (parsed.signedXdr !== undefined) {
+    rewritten.signedXdr = parsed.signedXdr;
+  }
+  if (parsed.input && typeof parsed.input === 'object') {
+    rewritten.input = { ...parsed.input };
+  }
+  if (parsed.signatureB64 !== undefined) {
+    rewritten.signatureB64 = parsed.signatureB64;
+  }
+
+  const text = pretty
+    ? `${JSON.stringify(rewritten, null, 2)}\n`
+    : JSON.stringify(rewritten);
+  return new TextEncoder().encode(text);
 }
 
 async function ensureRuntimeCrypto() {
@@ -389,7 +679,7 @@ function classifySelfTestGroup(name) {
   const label = String(name || '');
   if (/^(AUTH|ATTACH|QCONT|CORE): /.test(label)) return null;
   if (/attach|OpenTimestamps|OTS/i.test(label)) return 'ATTACH';
-  if (/pinning|signature|auth policy|strong-pq/i.test(label)) return 'AUTH';
+  if (/pinning|signature|auth policy|strong-pq|stellar|detached/i.test(label)) return 'AUTH';
   if (/restore|parseShard|buildQcontShards|qcont|shard|split|cohort/i.test(label)) return 'QCONT';
   return 'CORE';
 }
@@ -746,19 +1036,24 @@ function buildCases() {
       },
     },
     {
-      name: 'parser rejects unsupported .qsig major version',
+      name: 'verification reports unsupported .qsig major version as an invalid detached signature result',
       fn: async () => {
         const manifestBytes = textBytes('bad-qsig-major');
         const { qsigBytes } = buildQsigFixture(manifestBytes);
-        const badQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x02);
+        const badQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
 
-        await expectFailure(
-          () => verifyManifestSignatures({
-            manifestBytes,
-            externalSignatures: [{ name: 'bad.qsig', bytes: badQsigBytes }],
-          }),
-          '.qsig parser unexpectedly accepted unsupported major version'
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'bad.qsig', bytes: badQsigBytes }],
+        });
+
+        assert(verification.results.length === 1, 'expected one invalid .qsig result');
+        assert(verification.results[0].ok === false, 'unsupported .qsig major version must fail closed');
+        assert(
+          String(verification.results[0].error || '').includes('Unsupported detached PQ signature major version'),
+          'expected unsupported .qsig major version error'
         );
+        assert(verification.status.signatureVerified === false, 'malformed .qsig must not satisfy signatureVerified');
       },
     },
     {
@@ -775,18 +1070,49 @@ function buildCases() {
       },
     },
     {
-      name: 'parser rejects unknown critical .qsig metadata TLV tag',
+      name: 'verification reports unknown critical .qsig metadata TLV tags as invalid detached signature results',
       fn: async () => {
         const manifestBytes = textBytes('bad-qsig-critical-tag');
         const { qsigBytes } = buildQsigFixture(manifestBytes);
         const badQsigBytes = appendUnknownCriticalQsigMetadata(qsigBytes);
 
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'critical.qsig', bytes: badQsigBytes }],
+        });
+
+        assert(verification.results.length === 1, 'expected one invalid .qsig result');
+        assert(verification.results[0].ok === false, 'critical-tag .qsig must fail closed');
+        assert(
+          String(verification.results[0].error || '').includes('Unknown critical authMeta TLV tag'),
+          'expected critical authMeta tag failure'
+        );
+        assert(verification.status.signatureVerified === false, 'invalid .qsig must not satisfy signatureVerified');
+      },
+    },
+    {
+      name: 'parser rejects oversized .qsig authenticated metadata length',
+      fn: async () => {
+        const manifestBytes = textBytes('oversized-qsig-authmeta');
+        const { qsigBytes } = buildQsigFixture(manifestBytes);
+        const badQsigBytes = mutateQsigAuthMetaLen(qsigBytes, (8 * 1024) + 1);
+
         await expectFailure(
-          () => verifyManifestSignatures({
-            manifestBytes,
-            externalSignatures: [{ name: 'critical.qsig', bytes: badQsigBytes }],
-          }),
-          '.qsig parser unexpectedly accepted an unknown critical metadata tag'
+          () => Promise.resolve(unpackQsig(badQsigBytes)),
+          '.qsig parser unexpectedly accepted oversized authenticated metadata'
+        );
+      },
+    },
+    {
+      name: 'parser rejects oversized .pqpk key length',
+      fn: async () => {
+        const manifestBytes = textBytes('oversized-pqpk-keylen');
+        const { pqpkBytes } = buildQsigFixture(manifestBytes);
+        const badPqpkBytes = mutatePqpkKeyLen(pqpkBytes, (16 * 1024) + 1);
+
+        await expectFailure(
+          () => Promise.resolve(unpackPqpk(badPqpkBytes)),
+          '.pqpk parser unexpectedly accepted oversized key length'
         );
       },
     },
@@ -824,6 +1150,62 @@ function buildCases() {
           () => Promise.resolve(canonicalizeManifestBundle(mutatedBundle)),
           'manifest bundle unexpectedly accepted duplicate detached signature payload bytes'
         );
+      },
+    },
+    {
+      name: 'policy counting ignores semantically duplicate Stellar SEP-53 proofs with different JSON formatting',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('duplicate-stellar-sep53-policy-count');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-stellar-sep53-policy-count.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 2,
+        });
+        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const stellarSig = await buildStellarSignatureFixture(split.manifestBytes);
+        const duplicateBytes = rewriteStellarSignatureDocument(stellarSig.bytes, { pretty: true });
+
+        await expectFailure(
+          () => restoreFromShards(parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [
+                { name: 'stellar-a.sig', bytes: stellarSig.bytes },
+                { name: 'stellar-b.sig', bytes: duplicateBytes },
+              ],
+            },
+          }),
+          'semantically duplicate Stellar SEP-53 proofs unexpectedly satisfied minValidSignatures'
+        );
+      },
+    },
+    {
+      name: 'attach deduplicates semantically identical Stellar XDR proofs with reordered JSON arrays',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('duplicate-stellar-xdr-attach');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-stellar-xdr-attach.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const stellarSig = await buildStellarXdrSignatureFixture(split.manifestBytes);
+        const duplicateBytes = rewriteStellarSignatureDocument(stellarSig.bytes, {
+          reverseHashes: true,
+          reverseManageDataEntries: true,
+          pretty: true,
+        });
+
+        const attached = await attachManifestBundleToShards([], {
+          manifestBytes: split.manifestBytes,
+          signatures: [
+            { name: 'stellar-a.sig', bytes: stellarSig.bytes },
+            { name: 'stellar-b.sig', bytes: duplicateBytes },
+          ],
+          embedIntoShards: false,
+        });
+
+        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
+        assert(parsedBundle.bundle.attachments.signatures.length === 1, 'semantically duplicate Stellar proofs should collapse to one stored signature');
       },
     },
     {
@@ -915,6 +1297,28 @@ function buildCases() {
       },
     },
     {
+      name: 'restore rejects detached PQ signature with unsupported qsig context',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('unsupported-qsig-context');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'unsupported-qsig-context.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const { qsigBytes } = buildQsigFixture(split.manifestBytes, { ctx: 'quantum-signer/v3' });
+
+        await expectFailure(
+          () => restoreFromShards(parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+            },
+          }),
+          'restore unexpectedly accepted detached PQ signature with unsupported context'
+        );
+      },
+    },
+    {
       name: 'restore any-signature policy accepts one valid Ed25519 signature',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
@@ -922,7 +1326,7 @@ function buildCases() {
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'any-signature-ed25519.bin'));
         const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSigBytes = await buildStellarSignatureFixture(split.manifestBytes);
+        const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
 
         const restored = await restoreFromShards(parsed, {
           onLog: () => {},
@@ -936,7 +1340,104 @@ function buildCases() {
       },
     },
     {
-      name: 'restore ignores invalid extra signatures when one satisfying signature exists',
+      name: 'current-format SLH-DSA detached signature verifies against canonical manifest',
+      fn: async () => {
+        const manifestBytes = textBytes('current-format-slh-manifest');
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes, { suite: 'slhdsa-shake-128s' });
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+          pinnedPqPublicKeyFileBytes: pqpkBytes,
+        });
+
+        assert(verification.status.signatureVerified === true, 'current SLH-DSA detached signature should verify');
+        assert(verification.status.strongPqSignatureVerified === false, 'SLH-DSA-128s should not count as strong PQ in current policy table');
+        assert(verification.status.userPinned === true, 'current SLH-DSA detached signature should match the provided current .pqpk');
+      },
+    },
+    {
+      name: 'current-format detached PQ signature does not emit a false fingerprint mismatch warning',
+      fn: async () => {
+        const manifestBytes = textBytes('current-format-fingerprint-warning-clean');
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+          pinnedPqPublicKeyFileBytes: pqpkBytes,
+        });
+
+        assert(verification.status.signatureVerified === true, 'current detached PQ signature should verify');
+        assert(
+          verification.warnings.every((warning) => !warning.includes('Signer fingerprint in .qsig metadata does not match')),
+          'valid detached PQ signature unexpectedly emitted a fingerprint mismatch warning'
+        );
+      },
+    },
+    {
+      name: 'current-format Stellar XDR proof verifies against canonical manifest',
+      fn: async () => {
+        const manifestBytes = textBytes('current-format-stellar-xdr-manifest');
+        const sigBytes = (await buildStellarXdrSignatureFixture(manifestBytes)).bytes;
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.sig', bytes: sigBytes }],
+        });
+
+        assert(verification.status.signatureVerified === true, 'current Stellar XDR proof should verify');
+        assert(verification.status.strongPqSignatureVerified === false, 'Stellar XDR proof must not count as strong PQ');
+      },
+    },
+    {
+      name: 'bundled qsig warns when authenticated signer binding disagrees with the authoritative verification key',
+      fn: async () => {
+        const manifestBytes = textBytes('bundle-qsig-signer-binding-warning');
+        const misleadingBinding = buildQsigFixture(manifestBytes, {
+          embeddedPublicKey: unpackPqpk(buildQsigFixture(manifestBytes).pqpkBytes).keyBytes,
+        });
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          bundlePublicKeys: [{
+            id: 'pk-good',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(misleadingBinding.pqpkBytes),
+            legacy: false,
+          }],
+          bundleSignatures: [{
+            id: 'sig-qsig',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            target: {
+              type: 'canonical-manifest',
+              digestAlg: 'SHA3-512',
+              digestValue: toHex(sha3_512(manifestBytes)),
+            },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(misleadingBinding.qsigBytes),
+            publicKeyRef: 'pk-good',
+            legacy: false,
+          }],
+        });
+
+        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
+        assert(verification.results[0].ok === true, 'authoritative bundled qsig should still verify with its referenced key');
+        assert(
+          verification.warnings.some((warning) => warning.includes('Embedded signer public key does not match the verification key')),
+          'mismatched authenticated signer public key should be surfaced'
+        );
+        assert(
+          verification.warnings.some((warning) => warning.includes('Signer fingerprint in .qsig metadata does not match the verification key')),
+          'mismatched authenticated signer fingerprint should be surfaced'
+        );
+      },
+    },
+    {
+      name: 'restore ignores malformed extra .qsig signatures when one satisfying signature exists',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('invalid-extra-signatures');
@@ -944,7 +1445,7 @@ function buildCases() {
         const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes } = buildQsigFixture(split.manifestBytes);
-        const brokenQsigBytes = mutateTail(qsigBytes, 0x40);
+        const malformedQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
 
         const restored = await restoreFromShards(parsed, {
           onLog: () => {},
@@ -952,7 +1453,7 @@ function buildCases() {
           verification: {
             signatures: [
               { name: 'archive-good.qsig', bytes: qsigBytes },
-              { name: 'archive-bad.qsig', bytes: brokenQsigBytes },
+              { name: 'archive-bad.qsig', bytes: malformedQsigBytes },
             ],
           },
         });
@@ -1068,6 +1569,172 @@ function buildCases() {
       },
     },
     {
+      name: 'bundled qsig publicKeyRef is authoritative and cannot fall back to embedded signer key',
+      fn: async () => {
+        const manifestBytes = textBytes('bundle-authoritative-qsig-key');
+        const matching = buildQsigFixture(manifestBytes);
+        const wrong = buildQsigFixture(manifestBytes);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          bundlePublicKeys: [{
+            id: 'pk-wrong',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(wrong.pqpkBytes),
+            legacy: false,
+          }],
+          bundleSignatures: [{
+            id: 'sig-qsig',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            target: {
+              type: 'canonical-manifest',
+              digestAlg: 'SHA3-512',
+              digestValue: toHex(sha3_512(manifestBytes)),
+            },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(matching.qsigBytes),
+            publicKeyRef: 'pk-wrong',
+            legacy: false,
+          }],
+        });
+
+        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
+        assert(verification.results[0].ok === false, 'bundled qsig with wrong referenced key must fail');
+        assert(
+          String(verification.results[0].error || '').includes('Bundled PQ public key did not verify'),
+          'expected authoritative bundled key failure'
+        );
+        assert(verification.status.signatureVerified === false, 'failed bundled qsig must not satisfy signatureVerified');
+      },
+    },
+    {
+      name: 'bundled qsig publicKeyRef must not reference a Stellar signer attachment',
+      fn: async () => {
+        const manifestBytes = textBytes('bundle-qsig-stellar-ref');
+        const qsig = buildQsigFixture(manifestBytes);
+        const stellarSig = await buildStellarSignatureFixtureWithSigner(manifestBytes);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          bundlePublicKeys: [{
+            id: 'pk-stellar',
+            kty: 'ed25519-public-key',
+            suite: 'ed25519',
+            encoding: 'stellar-address',
+            value: stellarSig.signer,
+            legacy: false,
+          }],
+          bundleSignatures: [{
+            id: 'sig-qsig',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            target: {
+              type: 'canonical-manifest',
+              digestAlg: 'SHA3-512',
+              digestValue: toHex(sha3_512(manifestBytes)),
+            },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-stellar',
+            legacy: false,
+          }],
+        });
+
+        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
+        assert(verification.results[0].ok === false, 'incompatible qsig publicKeyRef must fail closed');
+        assert(
+          String(verification.results[0].error || '').includes('must reference a bundled PQ public key'),
+          'expected qsig publicKeyRef compatibility error'
+        );
+      },
+    },
+    {
+      name: 'bundled qsig publicKeyRef must match the referenced PQ suite',
+      fn: async () => {
+        const manifestBytes = textBytes('bundle-qsig-suite-mismatch');
+        const qsig = buildQsigFixture(manifestBytes, { suite: 'mldsa-87' });
+        const wrongSuite = buildQsigFixture(manifestBytes, { suite: 'slhdsa-shake-128s' });
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          bundlePublicKeys: [{
+            id: 'pk-wrong-suite',
+            kty: 'slh-dsa-public-key',
+            suite: 'slhdsa-shake-128s',
+            encoding: 'base64',
+            value: bytesToBase64(wrongSuite.pqpkBytes),
+            legacy: false,
+          }],
+          bundleSignatures: [{
+            id: 'sig-qsig',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            target: {
+              type: 'canonical-manifest',
+              digestAlg: 'SHA3-512',
+              digestValue: toHex(sha3_512(manifestBytes)),
+            },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-wrong-suite',
+            legacy: false,
+          }],
+        });
+
+        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
+        assert(verification.results[0].ok === false, 'qsig suite mismatch must fail closed');
+        assert(
+          String(verification.results[0].error || '').includes('publicKeyRef suite mismatch for qsig'),
+          'expected qsig suite-mismatch error'
+        );
+      },
+    },
+    {
+      name: 'bundled stellar-sig publicKeyRef must not reference a PQ public key attachment',
+      fn: async () => {
+        const manifestBytes = textBytes('bundle-stellar-pq-ref');
+        const stellarSig = await buildStellarSignatureFixture(manifestBytes);
+        const qsig = buildQsigFixture(manifestBytes);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          bundlePublicKeys: [{
+            id: 'pk-pq',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(qsig.pqpkBytes),
+            legacy: false,
+          }],
+          bundleSignatures: [{
+            id: 'sig-stellar',
+            format: 'stellar-sig',
+            suite: 'ed25519',
+            target: {
+              type: 'canonical-manifest',
+              digestAlg: 'SHA3-512',
+              digestValue: toHex(sha3_512(manifestBytes)),
+            },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(stellarSig.bytes),
+            publicKeyRef: 'pk-pq',
+            legacy: false,
+          }],
+        });
+
+        assert(verification.results.length === 1, 'expected one bundled stellar-sig verification result');
+        assert(verification.results[0].ok === false, 'incompatible stellar-sig publicKeyRef must fail closed');
+        assert(
+          String(verification.results[0].error || '').includes('must reference a bundled Stellar signer'),
+          'expected stellar-sig publicKeyRef compatibility error'
+        );
+        assert(verification.status.signatureVerified === false, 'incompatible stellar-sig binding must not satisfy signatureVerified');
+      },
+    },
+    {
       name: 'attach persists Stellar signer identifier in bundle and restore marks it pinned',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
@@ -1102,6 +1769,60 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.validTotal === 1, 'expected one bundled Stellar signature');
         assert(restored.authenticity.verification.counts.pinnedValidTotal === 1, 'expected one pinned bundled Stellar signature');
         assert(restored.authenticity.verification.counts.bundlePinnedValidTotal === 1, 'expected one bundle-pinned bundled Stellar signature');
+      },
+    },
+    {
+      name: 'attach accepts current-format detached signatures and preserves signer references',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('attach-current-format-signatures');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach-current-format-signatures.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const manifestBytes = split.manifestBytes;
+        const { qsigBytes: mlQsigBytes, pqpkBytes: mlPqpkBytes } = buildQsigFixture(manifestBytes);
+        const stellarSigner = await createStellarSignerMaterial();
+        const stellarSep53Bytes = (await buildStellarSignatureFixture(manifestBytes, stellarSigner)).bytes;
+        const stellarXdrBytes = (await buildStellarXdrSignatureFixture(manifestBytes, stellarSigner)).bytes;
+
+        const attached = await attachManifestBundleToShards([], {
+          manifestBytes,
+          signatures: [
+            { name: 'MLbundle.qsig', bytes: mlQsigBytes },
+            { name: 'stellar-sep53.sig', bytes: stellarSep53Bytes },
+            { name: 'stellar-xdr.sig', bytes: stellarXdrBytes },
+          ],
+          pqPublicKeyFileBytesList: [mlPqpkBytes],
+        });
+
+        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
+        assert(parsedBundle.bundle.attachments.signatures.length === 3, 'current-format attach should import all detached signatures');
+        assert(parsedBundle.bundle.attachments.publicKeys.length === 2, 'current-format attach should dedupe shared Stellar signer and retain one PQ key');
+        assert(parsedBundle.bundle.attachments.signatures.every((item) => item.publicKeyRef), 'attached current-format signatures should retain signer references when available');
+      },
+    },
+    {
+      name: 'attach dedupes semantically identical .pqpk wrappers for the same signer',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('attach-semantic-pqpk-dedupe');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach-semantic-pqpk-dedupe.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const sig = buildQsigFixture(split.manifestBytes);
+        const alternateWrapper = mutatePqpkVersionMinor(sig.pqpkBytes, 0x07);
+
+        const attached = await attachManifestBundleToShards([], {
+          manifestBytes: split.manifestBytes,
+          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes, alternateWrapper],
+        });
+
+        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
+        assert(parsedBundle.bundle.attachments.publicKeys.length === 1, 'attach should persist one PQ public key per signer identity');
+        assert(parsedBundle.bundle.attachments.signatures.length === 1, 'attach should persist one detached signature');
+        assert(
+          parsedBundle.bundle.attachments.signatures[0].publicKeyRef === parsedBundle.bundle.attachments.publicKeys[0].id,
+          'attached detached signature should reference the deduped PQ public key attachment'
+        );
       },
     },
     {
@@ -1253,6 +1974,28 @@ function buildCases() {
         assert(restored.authenticity.status.policySatisfied === true, 'multiple restore .pqpk pins should still allow policy-satisfying restore');
         assert(restored.authenticity.status.userPinned === true, 'at least one provided .pqpk should user-pin a verified signature');
         assert(restored.authenticity.verification.counts.userPinnedValidTotal === 2, 'expected both detached signatures to match one of the provided .pqpk pins');
+      },
+    },
+    {
+      name: 'multi-pin verification dedupes semantically identical .pqpk wrappers for the same signer',
+      fn: async () => {
+        const manifestBytes = textBytes('multi-pin-semantic-dedupe');
+        const sig = buildQsigFixture(manifestBytes);
+        const alternateWrapper = mutatePqpkVersionMinor(sig.pqpkBytes, 0x09);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
+          pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes, alternateWrapper],
+        });
+
+        assert(verification.results.length === 1, 'expected one detached signature result');
+        assert(verification.results[0].ok === true, 'semantically duplicate .pqpk wrappers should still verify');
+        assert(verification.status.userPinned === true, 'duplicate wrappers for one signer should still set userPinned');
+        assert(
+          verification.warnings.every((warning) => !warning.includes('Multiple provided .pqpk files match this detached PQ signature')),
+          'semantically duplicate .pqpk wrappers must not trigger ambiguity'
+        );
       },
     },
     {
@@ -1415,7 +2158,7 @@ function buildCases() {
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots-does-not-satisfy-policy.bin'));
         const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSigBytes = await buildStellarSignatureFixture(split.manifestBytes);
+        const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
         const otsBytes = await buildOtsFixture(stellarSigBytes, { completeProof: true });
         const attached = await attachManifestBundleToShards(parsed, {
           manifestBytes: split.manifestBytes,
@@ -1502,8 +2245,63 @@ function buildCases() {
 
         assert(restored.manifestSource === 'embedded-preferred-bundle', `unexpected manifest source: ${restored.manifestSource}`);
         assert(restored.bundleDigestHex === attached.bundleDigestHex, 'restore should prefer the richer embedded bundle digest');
+        assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded shard digests should be surfaced explicitly');
+        assert(
+          Array.isArray(restored.embeddedBundleDigestsUsed) &&
+          restored.embeddedBundleDigestsUsed.length === 2 &&
+          restored.embeddedBundleDigestsUsed.includes(split.bundleDigestHex) &&
+          restored.embeddedBundleDigestsUsed.includes(attached.bundleDigestHex),
+          'restore should report all embedded bundle digests used for reconstruction'
+        );
         assert(restored.authenticity.status.policySatisfied === true, 'preferred richer embedded bundle should satisfy archive policy');
         assert(restored.authenticity.status.bundlePinned === true, 'preferred richer embedded bundle should preserve bundled signer pinning');
+        assert(
+          restored.authenticity.warnings.some((warning) => warning.includes('Payload reconstruction used shards from multiple embedded bundle digests')),
+          'mixed embedded bundle cohort should emit an explicit authenticity warning'
+        );
+      },
+    },
+    {
+      name: 'restore with an uploaded bundle still reports mixed embedded bundle cohorts explicitly',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('restore-uploaded-bundle-mixed-cohort');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-uploaded-bundle-mixed-cohort.bin'));
+        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const originalShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const sig = buildQsigFixture(split.manifestBytes);
+        const attached = await attachManifestBundleToShards(originalShards, {
+          manifestBytes: split.manifestBytes,
+          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+        const updatedShards = await Promise.all(attached.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
+
+        const mixed = [
+          updatedShards[0],
+          updatedShards[1],
+          originalShards[2],
+          originalShards[3],
+        ];
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { bundleBytes: attached.bundleBytes },
+        });
+
+        assert(restored.manifestSource === 'uploaded-bundle', `unexpected manifest source: ${restored.manifestSource}`);
+        assert(restored.authenticity.status.bundleCohortMixed === true, 'uploaded bundle restore should still surface mixed shard cohorts');
+        assert(
+          Array.isArray(restored.embeddedBundleDigestsUsed) &&
+          restored.embeddedBundleDigestsUsed.length === 2 &&
+          restored.embeddedBundleDigestsUsed.includes(split.bundleDigestHex) &&
+          restored.embeddedBundleDigestsUsed.includes(attached.bundleDigestHex),
+          'uploaded bundle restore should report all embedded bundle digests used for reconstruction'
+        );
+        assert(
+          restored.authenticity.warnings.some((warning) => warning.includes(`selected bundle ${attached.bundleDigestHex}`)),
+          'mixed uploaded-bundle restore should name the selected bundle in its warning'
+        );
       },
     },
     {
@@ -1514,7 +2312,7 @@ function buildCases() {
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy.bin'));
         const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSigBytes = await buildStellarSignatureFixture(split.manifestBytes);
+        const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
 
         await expectFailure(
           () => restoreFromShards(parsed, {

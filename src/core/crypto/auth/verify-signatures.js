@@ -1,7 +1,9 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { asciiBytes, base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
-import { verifyQsigAgainstBytes } from './qsig.js';
-import { verifyStellarSigAgainstBytes } from './stellar-sig.js';
+import { normalizePqPublicKeyPins, verifyQsigAgainstBytes } from './qsig.js';
+import { computeDetachedSignatureIdentityDigestHex } from './signature-identity.js';
+import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from './stellar-sig.js';
+import { getSignaturePublicKeyRefCompatibilityError } from '../manifest/manifest-bundle.js';
 
 const MAGIC_QSIG = asciiBytes('PQSG');
 const PIN_MISMATCH_WARNING_PREFIX = 'Pinned PQ signer key did not match';
@@ -23,7 +25,7 @@ function detectExternalSignatureType(signature) {
   const lowerName = String(name).toLowerCase();
   if (lowerName.endsWith('.sig') || lowerName.endsWith('.json') || lowerName.length > 0) {
     const json = decodeJsonBytes(bytes);
-    if (json && typeof json === 'object' && json.schema === 'stellar-file-signature/v1') {
+    if (json && isSupportedStellarSignatureDocument(json)) {
       return 'stellar-sig';
     }
   }
@@ -51,51 +53,65 @@ function dedupeWarnings(warnings) {
   return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))];
 }
 
-function normalizePinnedPqPublicKeyFileBytesList({
-  pinnedPqPublicKeyFileBytes = null,
-  pinnedPqPublicKeyFileBytesList = [],
+function buildVerificationFailureResult({
+  type = 'unknown',
+  format = 'unknown',
+  error = 'Verification failed',
+  warnings = [],
 }) {
-  const out = [];
-  const seen = new Set();
-  const add = (bytes) => {
-    if (!(bytes instanceof Uint8Array)) return;
-    const dedupeKey = toHex(sha3_512(bytes));
-    if (seen.has(dedupeKey)) return;
-    seen.add(dedupeKey);
-    out.push(bytes);
+  return {
+    ok: false,
+    bundlePinned: false,
+    userPinned: false,
+    signerPinned: false,
+    type,
+    format,
+    error,
+    warnings: dedupeWarnings(warnings),
   };
-  add(pinnedPqPublicKeyFileBytes);
-  if (Array.isArray(pinnedPqPublicKeyFileBytesList)) {
-    for (const bytes of pinnedPqPublicKeyFileBytesList) add(bytes);
+}
+
+function buildFormatFailureResult(format, error, warnings = []) {
+  if (format === 'qsig') {
+    return buildVerificationFailureResult({ type: 'qsig', format: 'qsig', error, warnings });
   }
-  return out;
+  if (format === 'stellar-sig') {
+    return buildVerificationFailureResult({ type: 'sig', format: 'stellar-sig', error, warnings });
+  }
+  return buildVerificationFailureResult({ type: 'unknown', format, error, warnings });
+}
+
+function safeVerifyQsigAgainstBytes(options) {
+  try {
+    return verifyQsigAgainstBytes(options);
+  } catch (error) {
+    return buildFormatFailureResult('qsig', error?.message || String(error));
+  }
 }
 
 function verifyQsigWithPinnedKeys({
   messageBytes,
   qsigBytes,
   bundlePqPublicKeyFileBytes = null,
-  pinnedPqPublicKeyFileBytes = null,
-  pinnedPqPublicKeyFileBytesList = [],
+  normalizedPinnedPqPins = [],
+  authoritativeBundlePqPublicKey = false,
 }) {
-  const normalizedPins = normalizePinnedPqPublicKeyFileBytesList({
-    pinnedPqPublicKeyFileBytes,
-    pinnedPqPublicKeyFileBytesList,
-  });
-  if (normalizedPins.length === 0) {
-    return verifyQsigAgainstBytes({
+  if (normalizedPinnedPqPins.length === 0) {
+    return safeVerifyQsigAgainstBytes({
       messageBytes,
       qsigBytes,
       bundlePqPublicKeyFileBytes,
       pinnedPqPublicKeyFileBytes: null,
+      authoritativeBundlePqPublicKey,
     });
   }
-  if (normalizedPins.length === 1) {
-    return verifyQsigAgainstBytes({
+  if (normalizedPinnedPqPins.length === 1) {
+    return safeVerifyQsigAgainstBytes({
       messageBytes,
       qsigBytes,
       bundlePqPublicKeyFileBytes,
-      pinnedPqPublicKeyFileBytes: normalizedPins[0],
+      pinnedPqPublicKeyFileBytes: normalizedPinnedPqPins[0].bytes,
+      authoritativeBundlePqPublicKey,
     });
   }
 
@@ -104,12 +120,13 @@ function verifyQsigWithPinnedKeys({
   const matches = [];
   const retainedWarnings = [];
 
-  for (const candidatePin of normalizedPins) {
-    const result = verifyQsigAgainstBytes({
+  for (const candidatePin of normalizedPinnedPqPins) {
+    const result = safeVerifyQsigAgainstBytes({
       messageBytes,
       qsigBytes,
       bundlePqPublicKeyFileBytes,
-      pinnedPqPublicKeyFileBytes: candidatePin,
+      pinnedPqPublicKeyFileBytes: candidatePin.bytes,
+      authoritativeBundlePqPublicKey,
     });
     if (!baseline) baseline = result;
     if (!firstOk && result.ok) firstOk = result;
@@ -144,11 +161,12 @@ function verifyQsigWithPinnedKeys({
     };
   }
 
-  const verified = firstOk || verifyQsigAgainstBytes({
+  const verified = firstOk || safeVerifyQsigAgainstBytes({
     messageBytes,
     qsigBytes,
     bundlePqPublicKeyFileBytes,
     pinnedPqPublicKeyFileBytes: null,
+    authoritativeBundlePqPublicKey,
   });
 
   if (!verified.ok) {
@@ -178,43 +196,69 @@ async function verifyBundleSignature({
   manifestBytes,
   signature,
   publicKeysById,
-  pinnedPqPublicKeyFileBytes,
-  pinnedPqPublicKeyFileBytesList,
+  normalizedPinnedPqPins,
   expectedEd25519Signer,
 }) {
   const name = signature.id || 'bundle-signature';
   const bundlePublicKeyEntry = publicKeysById.get(signature.publicKeyRef || '');
+  const compatibilityError = getSignaturePublicKeyRefCompatibilityError(signature, bundlePublicKeyEntry);
+  if (compatibilityError) {
+    return {
+      ...buildFormatFailureResult(signature.format, compatibilityError),
+      name,
+      source: 'bundle',
+      artifactId: signature.id || name,
+    };
+  }
 
   if (signature.format === 'qsig') {
-    const qsigBytes = signature.signatureEncoding === 'base64'
-      ? base64ToBytes(signature.signature)
-      : (() => {
-          throw new Error(`Unsupported bundle signature encoding: ${signature.signatureEncoding}`);
-        })();
-    const bundleVerificationKeyBytes = loadBundlePublicKey(bundlePublicKeyEntry);
-    const result = verifyQsigWithPinnedKeys({
-      messageBytes: manifestBytes,
-      qsigBytes,
-      bundlePqPublicKeyFileBytes: bundleVerificationKeyBytes,
-      pinnedPqPublicKeyFileBytes,
-      pinnedPqPublicKeyFileBytesList,
-    });
-    return { ...result, name, source: 'bundle', signatureBytes: qsigBytes, artifactId: signature.id || name };
+    try {
+      const qsigBytes = signature.signatureEncoding === 'base64'
+        ? base64ToBytes(signature.signature)
+        : (() => {
+            throw new Error(`Unsupported bundle signature encoding: ${signature.signatureEncoding}`);
+          })();
+      const bundleVerificationKeyBytes = bundlePublicKeyEntry ? loadBundlePublicKey(bundlePublicKeyEntry) : null;
+      const result = verifyQsigWithPinnedKeys({
+        messageBytes: manifestBytes,
+        qsigBytes,
+        bundlePqPublicKeyFileBytes: bundleVerificationKeyBytes,
+        normalizedPinnedPqPins,
+        authoritativeBundlePqPublicKey: Boolean(bundlePublicKeyEntry),
+      });
+      return { ...result, name, source: 'bundle', signatureBytes: qsigBytes, artifactId: signature.id || name };
+    } catch (error) {
+      return {
+        ...buildFormatFailureResult('qsig', error?.message || String(error)),
+        name,
+        source: 'bundle',
+        artifactId: signature.id || name,
+      };
+    }
   }
 
   if (signature.format === 'stellar-sig') {
-    const sigJsonBytes = signature.signatureEncoding === 'base64'
-      ? base64ToBytes(signature.signature)
-      : (() => {
-          throw new Error(`Unsupported bundle signature encoding: ${signature.signatureEncoding}`);
-        })();
-    const result = await verifyStellarSigAgainstBytes({
-      messageBytes: manifestBytes,
-      sigJsonBytes,
-      bundleSigner: loadBundleSignerIdentifier(bundlePublicKeyEntry),
-      expectedSigner: expectedEd25519Signer,
-    });
-    return { ...result, name, source: 'bundle', signatureBytes: sigJsonBytes, artifactId: signature.id || name };
+    try {
+      const sigJsonBytes = signature.signatureEncoding === 'base64'
+        ? base64ToBytes(signature.signature)
+        : (() => {
+            throw new Error(`Unsupported bundle signature encoding: ${signature.signatureEncoding}`);
+          })();
+      const result = await verifyStellarSigAgainstBytes({
+        messageBytes: manifestBytes,
+        sigJsonBytes,
+        bundleSigner: loadBundleSignerIdentifier(bundlePublicKeyEntry),
+        expectedSigner: expectedEd25519Signer,
+      });
+      return { ...result, name, source: 'bundle', signatureBytes: sigJsonBytes, artifactId: signature.id || name };
+    } catch (error) {
+      return {
+        ...buildFormatFailureResult('stellar-sig', error?.message || String(error)),
+        name,
+        source: 'bundle',
+        artifactId: signature.id || name,
+      };
+    }
   }
 
   return {
@@ -235,8 +279,7 @@ async function verifyBundleSignature({
 async function verifyExternalSignature({
   manifestBytes,
   signature,
-  pinnedPqPublicKeyFileBytes,
-  pinnedPqPublicKeyFileBytesList,
+  normalizedPinnedPqPins,
   expectedEd25519Signer,
 }) {
   const sigType = detectExternalSignatureType(signature);
@@ -261,8 +304,7 @@ async function verifyExternalSignature({
       messageBytes: manifestBytes,
       qsigBytes: signature.bytes,
       bundlePqPublicKeyFileBytes: null,
-      pinnedPqPublicKeyFileBytes,
-      pinnedPqPublicKeyFileBytesList,
+      normalizedPinnedPqPins,
     });
     return {
       ...result,
@@ -301,8 +343,8 @@ function buildCounts(results) {
 
   for (const result of results) {
     result.countedForPolicy = false;
-    if (!result.ok || typeof result.signatureContentDigestHex !== 'string') continue;
-    const dedupeKey = `${result.format}:${result.signatureContentDigestHex}`;
+    if (!result.ok || typeof result.proofIdentityDigestHex !== 'string') continue;
+    const dedupeKey = `${result.format}:${result.proofIdentityDigestHex}`;
     const current = uniqueValid.get(dedupeKey);
     if (!current) {
       uniqueValid.set(dedupeKey, {
@@ -347,6 +389,11 @@ async function attachSignatureDigests(result) {
     ...result,
     signatureContentDigestAlg: 'SHA3-512',
     signatureContentDigestHex: toHex(sha3_512(result.signatureBytes)),
+    proofIdentityDigestAlg: 'SHA3-512',
+    proofIdentityDigestHex: computeDetachedSignatureIdentityDigestHex({
+      format: result.format,
+      signatureBytes: result.signatureBytes,
+    }),
     otsStampedDigestAlg: 'SHA-256',
     otsStampedDigestHex: toHex(await digestSha256(result.signatureBytes)),
   };
@@ -369,15 +416,24 @@ export async function verifyManifestSignatures({
     throw new Error('signatures/publicKeys must be arrays');
   }
 
-  const normalizedPinnedPqPublicKeyFileBytesList = normalizePinnedPqPublicKeyFileBytesList({
+  const {
+    pins: normalizedPinnedPqPins,
+    warnings: pinNormalizationWarnings,
+  } = normalizePqPublicKeyPins({
     pinnedPqPublicKeyFileBytes,
     pinnedPqPublicKeyFileBytesList,
+    invalidBehavior: 'warn',
+    invalidLabel: 'Pinned PQ signer key',
   });
   const publicKeysById = new Map(bundlePublicKeys.map((item) => [item.id, item]));
   const results = [];
   const warnings = [];
+  const rawPqPinProvided = (
+    pinnedPqPublicKeyFileBytes instanceof Uint8Array ||
+    (Array.isArray(pinnedPqPublicKeyFileBytesList) && pinnedPqPublicKeyFileBytesList.some((item) => item instanceof Uint8Array))
+  );
   const userPinProvided = (
-    normalizedPinnedPqPublicKeyFileBytesList.length > 0 ||
+    rawPqPinProvided ||
     String(expectedEd25519Signer || '').trim().length > 0
   );
 
@@ -386,8 +442,7 @@ export async function verifyManifestSignatures({
       manifestBytes,
       signature,
       publicKeysById,
-      pinnedPqPublicKeyFileBytes,
-      pinnedPqPublicKeyFileBytesList: normalizedPinnedPqPublicKeyFileBytesList,
+      normalizedPinnedPqPins,
       expectedEd25519Signer,
     }));
     results.push(result);
@@ -397,8 +452,7 @@ export async function verifyManifestSignatures({
     const result = await attachSignatureDigests(await verifyExternalSignature({
       manifestBytes,
       signature,
-      pinnedPqPublicKeyFileBytes,
-      pinnedPqPublicKeyFileBytesList: normalizedPinnedPqPublicKeyFileBytesList,
+      normalizedPinnedPqPins,
       expectedEd25519Signer,
     }));
     results.push(result);
@@ -414,6 +468,7 @@ export async function verifyManifestSignatures({
   for (const result of results) {
     if (Array.isArray(result.warnings)) warnings.push(...result.warnings);
   }
+  warnings.push(...pinNormalizationWarnings);
   warnings.push(...duplicateWarnings);
   const dedupedWarnings = dedupeWarnings(warnings);
   return {

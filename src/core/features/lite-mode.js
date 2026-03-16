@@ -521,6 +521,9 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
     addItem(status.signatureVerified === true, 'Signature verified', status.signatureVerified !== true);
     addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', status.signatureVerified === true && status.strongPqSignatureVerified !== true);
     addItem(status.bundlePinned === true, 'Bundle signer pinned', status.signatureVerified === true && status.bundlePinned !== true);
+    if (status.bundleCohortMixed === true) {
+        addItem(false, 'Mixed embedded bundle cohort used', true);
+    }
     if (status.userPinProvided === true || status.userPinned === true) {
         addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
     }
@@ -592,6 +595,9 @@ async function restoreLiteShards() {
 
         log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
         log(`Selected bundle digest: ${result.bundleDigestHex}`, { isLiteMode: true });
+        if (Array.isArray(result.embeddedBundleDigestsUsed) && result.embeddedBundleDigestsUsed.length > 0) {
+            log(`Embedded shard bundle digests used: ${result.embeddedBundleDigestsUsed.join(', ')}`, { isLiteMode: true });
+        }
         if (result.authenticity?.policy) {
             log(`Archive policy: ${result.authenticity.policy.level}`, { isLiteMode: true });
         }

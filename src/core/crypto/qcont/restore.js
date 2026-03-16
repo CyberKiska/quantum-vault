@@ -232,6 +232,21 @@ function hasManifestEquivalentSibling(candidates, selectedCandidate) {
   return false;
 }
 
+function collectSortedUniqueBundleDigests(shards) {
+  return [...new Set(
+    (Array.isArray(shards) ? shards : [])
+      .map((item) => normalizeHexString(item?.bundleDigestHex))
+      .filter(Boolean)
+  )].sort();
+}
+
+function buildMixedBundleCohortWarning(embeddedBundleDigestsUsed, selectedBundleDigestHex) {
+  if (!Array.isArray(embeddedBundleDigestsUsed) || embeddedBundleDigestsUsed.length <= 1) {
+    return '';
+  }
+  return `Payload reconstruction used shards from multiple embedded bundle digests (${embeddedBundleDigestsUsed.join(', ')}); authenticity and policy were evaluated against selected bundle ${selectedBundleDigestHex}.`;
+}
+
 function selectExplicitCandidate(candidates, verificationOptions) {
   if (verificationOptions.manifestBytes instanceof Uint8Array) {
     const parsedManifest = parseArchiveManifestBytes(verificationOptions.manifestBytes);
@@ -610,6 +625,8 @@ export async function restoreFromShards(shards, options = {}) {
     shard.manifestDigestHex === manifestDigestHex &&
     (useManifestWideShardSelection || shard.bundleDigestHex === selectedEmbeddedBundleDigestHex)
   ));
+  const embeddedBundleDigestsUsed = collectSortedUniqueBundleDigests(group);
+  const bundleCohortMixed = embeddedBundleDigestsUsed.length > 1;
   const rejectedShardIndices = prepared
     .filter((shard) => (
       shard.manifestDigestHex !== manifestDigestHex ||
@@ -891,6 +908,11 @@ export async function restoreFromShards(shards, options = {}) {
   if (!qkeyOk) {
     onWarn('Recovered secret key hash does not match shard metadata.');
   }
+  const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
+  const mixedBundleWarning = buildMixedBundleCohortWarning(embeddedBundleDigestsUsed, bundleDigestHex);
+  if (mixedBundleWarning) {
+    authenticityWarnings.push(mixedBundleWarning);
+  }
 
   return {
     qencBytes,
@@ -909,11 +931,12 @@ export async function restoreFromShards(shards, options = {}) {
     bundle,
     bundleBytes: candidate.bundleBytes,
     bundleDigestHex,
+    embeddedBundleDigestsUsed,
     manifestSource: archiveContext.source,
     authenticity: {
       policy: archiveContext.authenticity.policy,
       verification: archiveContext.authenticity.verification,
-      warnings: archiveContext.authenticity.warnings,
+      warnings: [...new Set(authenticityWarnings.filter(Boolean))],
       status: {
         integrityVerified: true,
         signatureVerified: archiveContext.authenticity.verification.status.signatureVerified,
@@ -923,6 +946,7 @@ export async function restoreFromShards(shards, options = {}) {
         bundlePinned: archiveContext.authenticity.verification.status.bundlePinned,
         userPinned: archiveContext.authenticity.verification.status.userPinned,
         userPinProvided: archiveContext.authenticity.verification.status.userPinProvided,
+        bundleCohortMixed,
         policySatisfied: archiveContext.authenticity.policy.satisfied,
         archivePolicySatisfied: archiveContext.authenticity.policy.satisfied,
       },
