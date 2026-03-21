@@ -15,5 +15,5 @@ debug.log
 examples/
 
 # Notes
-*.md
-!README.md
+docs/internal/
+docs/series/
