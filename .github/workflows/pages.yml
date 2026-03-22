@@ -13,25 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-ref:
-    if: github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          echo "::error::Pages deployment is only allowed from the main branch."
-          exit 1
-
   build:
-    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/reusable-verify-build.yml
     with:
       upload-pages-artifact: true
+      run-audit: true
+      require-main-ref: true
+      # For project Pages repos use /<repo>/.
+      # For user/org Pages (<owner>.github.io) change this to "/".
+      base-path: /${{ github.event.repository.name }}/
 
   deploy:
-    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     permissions:
       pages: write
       id-token: write

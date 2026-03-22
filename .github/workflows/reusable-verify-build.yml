@@ -7,6 +7,18 @@ on:
         type: boolean
         required: false
         default: false
+      run-audit:
+        type: boolean
+        required: false
+        default: true
+      require-main-ref:
+        type: boolean
+        required: false
+        default: false
+      base-path:
+        type: string
+        required: false
+        default: /
 
 permissions:
   contents: read
@@ -17,10 +29,23 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      - name: Enforce main branch for publish flows
+        if: ${{ inputs.require-main-ref }}
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "::error::Pages deployment is only allowed from the main branch."
+            exit 1
+          }
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Setup Pages
+        if: ${{ inputs.upload-pages-artifact }}
+        id: pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - name: Setup Node
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
@@ -33,6 +58,7 @@ jobs:
         run: npm ci
 
       - name: Audit
+        if: ${{ inputs.run-audit }}
         run: npm audit --audit-level=high
 
       - name: Self-test
@@ -40,15 +66,11 @@ jobs:
 
       - name: Build
         env:
-          BASE_PATH: /${{ github.event.repository.name }}/
+          BASE_PATH: ${{ inputs.base-path }}
         run: npm run build
 
-      - name: Setup Pages
-        if: inputs.upload-pages-artifact
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
-
       - name: Upload artifact
-        if: inputs.upload-pages-artifact
+        if: ${{ inputs.upload-pages-artifact }}
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: dist

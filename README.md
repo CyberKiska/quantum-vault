@@ -226,7 +226,7 @@ npm run selftest
 ```
 
 ### Deploy to GitHub Pages
-CI runs on pull requests targeting `main`, pushes to `main`, and merge-queue `merge_group` checks.
+CI runs on pull requests targeting `main` and merge-queue `merge_group` checks.
 GitHub Pages deployment is handled by GitHub Actions (`.github/workflows/pages.yml`) on pushes to `main`.
 The Pages workflow also supports manual dispatch, but the jobs are hard-blocked unless the selected ref is `main`.
 For a local Pages-equivalent build, use:
