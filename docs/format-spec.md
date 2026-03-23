@@ -485,7 +485,7 @@ Current `timestamps[]` contract:
 | --- | --- | --- |
 | `id` | string | REQUIRED unique attachment identifier |
 | `kty` | string | MUST match the declared `suite`; current values include PQ public-key types and `ed25519-public-key` |
-| `suite` | string | normalized supported signature suite |
+| `suite` | string | MUST be a canonical supported signature-suite identifier |
 | `encoding` | string | MUST be `base64` or `stellar-address` |
 | `value` | string | encoded key material or Stellar signer address |
 | `legacy` | boolean | optional compatibility marker; omitted or `false` for current-format material |
@@ -502,7 +502,7 @@ Current compatibility rules:
 | --- | --- | --- |
 | `id` | string | REQUIRED unique attachment identifier |
 | `format` | string | MUST be `qsig` or `stellar-sig` |
-| `suite` | string | normalized signature suite for the detached artifact |
+| `suite` | string | MUST be a canonical supported signature-suite identifier for the detached artifact |
 | `target.type` | string | MUST be `canonical-manifest` |
 | `target.digestAlg` | string | MUST be `SHA3-512` |
 | `target.digestValue` | string | MUST equal `manifestDigest.value` |
