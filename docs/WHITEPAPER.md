@@ -203,7 +203,7 @@ This section describes one of the most important architectural patterns in Quant
 
 ### 5.1 Canonical Manifest
 
-The canonical manifest (`*.qvmanifest.json`) is a JSON object with schema `quantum-vault-archive-manifest/v2` that describes the archive state at creation time. Its fields include:
+The canonical manifest (`*.qvmanifest.json`) is a JSON object with schema `quantum-vault-archive-manifest/v3` that describes the archive state at creation time. Its fields include:
 
 - Cryptographic profile and KDF tree identifiers
 - Nonce policy, AEAD mode, IV strategy, and counter parameters
@@ -212,11 +212,11 @@ The canonical manifest (`*.qvmanifest.json`) is a JSON object with schema `quant
 - Shard body hashes and share commitments
 - An `authPolicyCommitment` binding the manifest to a specific authenticity policy
 
-The manifest is serialized under a project-defined canonical JSON profile (`QV-C14N-v1`) that sorts keys alphabetically, excludes non-finite values, and uses a deterministic number-serialization strategy. `QV-C14N-v1` is not claimed to be a full implementation of RFC 8785 (JSON Canonicalization Scheme, JCS) [16]; it is a project-defined deterministic serialization used for signature stability. The profile converges with JCS on key ordering and whitespace elimination, but diverges in its number-serialization rules and does not implement the full JCS specification for Unicode normalization or escaped-character handling. If a future version adopts JCS fully, the canonicalization label would change (e.g., `QV-C14N-v2/jcs`), and verifiers would distinguish the two by label, preserving backward compatibility for existing manifests.
+The manifest is serialized under an RFC 8785-compatible (JSON Canonicalization Scheme, JCS) [16] canonical JSON profile labeled `QV-JSON-RFC8785-v1`. The same strict canonicalization rules are also used for `authPolicyCommitment` input. Bundle bytes are labeled separately as `QV-BUNDLE-JSON-v1` so unsigned bundle-byte compatibility can evolve independently from detached-signature payload compatibility. The parser rejects duplicate keys, lone surrogates, and invalid UTF-8 before canonicalization.
 
 No formal machine-readable schema language (such as CDDL, RFC 8610 [30]) is currently used for manifest or bundle validation. Schema enforcement is implemented procedurally in the parsing code. Adoption of a formal schema description language is a recognized future direction that would improve interoperability and enable tooling-independent validation.
 
-The canonical manifest bytes — the exact byte output of `QV-C14N-v1` serialization — are the sole payload of all detached signatures. They are embedded identically into every `.qcont` shard and into every manifest bundle. They must not be altered after creation.
+The canonical manifest bytes — the exact byte output of `QV-JSON-RFC8785-v1` serialization — are the sole payload of all detached signatures. They are embedded identically into every `.qcont` shard and into every manifest bundle. They must not be altered after creation.
 
 ### 5.2 Manifest Bundle
 

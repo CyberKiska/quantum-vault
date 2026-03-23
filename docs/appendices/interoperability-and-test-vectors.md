@@ -54,7 +54,7 @@ Not yet first-class in the current implementation:
 
 An interoperable implementation should currently be able to:
 
-- parse and validate canonical manifests and canonical bundles under `QV-C14N-v1`
+- parse and validate canonical manifests under `QV-JSON-RFC8785-v1` and canonical bundles under `QV-BUNDLE-JSON-v1`
 - verify detached signatures only against canonical manifest bytes
 - reject malformed or ambiguous `publicKeyRef` bindings
 - link `.ots` evidence only to detached signature bytes

@@ -5,7 +5,23 @@ import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
-import { canonicalizeManifestBundle, parseManifestBundleBytes } from './manifest/manifest-bundle.js';
+import {
+  canonicalizeManifestBundle,
+  MANIFEST_BUNDLE_TYPE,
+  MANIFEST_BUNDLE_VERSION,
+  parseManifestBundleBytes,
+} from './manifest/manifest-bundle.js';
+import {
+  ARCHIVE_MANIFEST_SCHEMA,
+  ARCHIVE_MANIFEST_VERSION,
+  parseArchiveManifestBytes,
+} from './manifest/archive-manifest.js';
+import { normalizeAuthPolicy } from './manifest/auth-policy.js';
+import {
+  BUNDLE_CANONICALIZATION_LABEL,
+  MANIFEST_CANONICALIZATION_LABEL,
+  canonicalizeJsonToBytes,
+} from './manifest/jcs.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
 import { buildAttachedArtifactExports } from '../features/qcont/attach-ui.js';
 import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
@@ -40,6 +56,52 @@ import { resolveErasureRuntime } from './erasure-runtime.js';
 
 function textBytes(value) {
   return new TextEncoder().encode(value);
+}
+
+function legacyCanonicalizeQvC14n(value) {
+  function serializeNumber(numberValue) {
+    if (!Number.isFinite(numberValue)) {
+      throw new Error('Legacy QV-C14N-v1 does not allow non-finite numbers');
+    }
+    return JSON.stringify(numberValue);
+  }
+
+  function serializeArray(arr) {
+    const items = arr.map((item) => {
+      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') return 'null';
+      return serializeValue(item);
+    });
+    return `[${items.join(',')}]`;
+  }
+
+  function serializeObject(obj) {
+    const keys = Object.keys(obj).sort();
+    const fields = [];
+    for (const key of keys) {
+      const item = obj[key];
+      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue;
+      fields.push(`${JSON.stringify(key)}:${serializeValue(item)}`);
+    }
+    return `{${fields.join(',')}}`;
+  }
+
+  function serializeValue(item) {
+    if (item === null) return 'null';
+    const t = typeof item;
+    if (t === 'boolean') return item ? 'true' : 'false';
+    if (t === 'number') return serializeNumber(item);
+    if (t === 'string') return JSON.stringify(item);
+    if (t === 'bigint') throw new Error('Legacy QV-C14N-v1 does not allow bigint values');
+    if (Array.isArray(item)) return serializeArray(item);
+    if (t === 'object') return serializeObject(item);
+    throw new Error(`Unsupported legacy QV-C14N-v1 value type: ${t}`);
+  }
+
+  return serializeValue(value);
+}
+
+function legacyCanonicalizeQvC14nToBytes(value) {
+  return textBytes(legacyCanonicalizeQvC14n(value));
 }
 
 async function blobToBytes(blob) {
@@ -785,6 +847,13 @@ function buildCases() {
         const shards = split.shards;
 
         assert(shards.length === 5, `expected 5 shards, got ${shards.length}`);
+        assert(split.manifest.schema === ARCHIVE_MANIFEST_SCHEMA, `unexpected manifest schema: ${split.manifest.schema}`);
+        assert(split.manifest.version === ARCHIVE_MANIFEST_VERSION, `unexpected manifest version: ${split.manifest.version}`);
+        assert(split.manifest.canonicalization === MANIFEST_CANONICALIZATION_LABEL, `unexpected manifest canonicalization: ${split.manifest.canonicalization}`);
+        assert(split.bundle.type === MANIFEST_BUNDLE_TYPE, `unexpected bundle type: ${split.bundle.type}`);
+        assert(split.bundle.version === MANIFEST_BUNDLE_VERSION, `unexpected bundle version: ${split.bundle.version}`);
+        assert(split.bundle.bundleCanonicalization === BUNDLE_CANONICALIZATION_LABEL, `unexpected bundle canonicalization: ${split.bundle.bundleCanonicalization}`);
+        assert(split.bundle.manifestCanonicalization === MANIFEST_CANONICALIZATION_LABEL, `unexpected bundle manifestCanonicalization: ${split.bundle.manifestCanonicalization}`);
         for (const shard of shards) {
           const parsed = parseShard(await blobToBytes(shard.blob));
           assert(parsed.metaJSON.n === 5, 'shard metadata n mismatch');
@@ -793,6 +862,114 @@ function buildCases() {
           assert(parsed.metaJSON.hasEmbeddedBundle === true, 'shard metadata must indicate embedded bundle');
           assert(typeof parsed.metaJSON.bundleDigest === 'string' && parsed.metaJSON.bundleDigest.length === 128, 'bundle digest metadata missing');
         }
+      },
+    },
+    {
+      name: 'RFC 8785 canonicalization is byte-identical to legacy QV-C14N-v1 for current manifest-family shapes',
+      fn: async () => {
+        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('manifest-rfc8785-delta');
+        const encrypted = await encryptFile(payload, publicKey, 'manifest-rfc8785-delta.bin');
+        const qencBytes = await blobToBytes(encrypted);
+        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 }, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 2,
+        });
+
+        const normalizedAuthPolicy = normalizeAuthPolicy(split.bundle.authPolicy);
+        const strictManifestBytes = split.manifestBytes;
+        const strictBundleBytes = canonicalizeManifestBundle(split.bundle).bytes;
+        const strictAuthPolicyBytes = canonicalizeJsonToBytes(normalizedAuthPolicy);
+
+        assert(
+          timingSafeEqual(strictManifestBytes, legacyCanonicalizeQvC14nToBytes(split.manifest)),
+          'current archive-manifest shape diverged from legacy QV-C14N-v1 bytes'
+        );
+        assert(
+          timingSafeEqual(strictAuthPolicyBytes, legacyCanonicalizeQvC14nToBytes(normalizedAuthPolicy)),
+          'current authPolicy shape diverged from legacy QV-C14N-v1 bytes'
+        );
+        assert(
+          timingSafeEqual(strictBundleBytes, legacyCanonicalizeQvC14nToBytes(split.bundle)),
+          'current bundle shape diverged from legacy QV-C14N-v1 bytes'
+        );
+      },
+    },
+    {
+      name: 'manifest parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('manifest-duplicate-keys');
+        const encrypted = await encryptFile(payload, publicKey, 'manifest-duplicate-keys.bin');
+        const qencBytes = await blobToBytes(encrypted);
+        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const manifestText = new TextDecoder().decode(split.manifestBytes);
+        const duplicateText = `{\"schema\":\"${ARCHIVE_MANIFEST_SCHEMA}\",${manifestText.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveManifestBytes(textBytes(duplicateText))),
+          'manifest parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'manifest parser rejects lone surrogate escapes on the parse path',
+      fn: async () => {
+        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('manifest-lone-surrogate');
+        const encrypted = await encryptFile(payload, publicKey, 'manifest-lone-surrogate.bin');
+        const qencBytes = await blobToBytes(encrypted);
+        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const manifestText = new TextDecoder().decode(split.manifestBytes);
+        const malformedText = manifestText.replace('"manifestType":"archive"', '"manifestType":"\\ud800"');
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveManifestBytes(textBytes(malformedText))),
+          'manifest parser unexpectedly accepted a lone surrogate escape'
+        );
+      },
+    },
+    {
+      name: 'manifest parser rejects unknown signed fields',
+      fn: async () => {
+        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('manifest-unknown-fields');
+        const encrypted = await encryptFile(payload, publicKey, 'manifest-unknown-fields.bin');
+        const qencBytes = await blobToBytes(encrypted);
+        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const manifestText = new TextDecoder().decode(split.manifestBytes);
+        const malformedText = `{\"unexpectedField\":1,${manifestText.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveManifestBytes(textBytes(malformedText))),
+          'manifest parser unexpectedly accepted an unknown signed field'
+        );
+      },
+    },
+    {
+      name: 'manifest bundle parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('bundle-duplicate-keys');
+        const encrypted = await encryptFile(payload, publicKey, 'bundle-duplicate-keys.bin');
+        const qencBytes = await blobToBytes(encrypted);
+        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const bundleText = new TextDecoder().decode(split.bundleBytes);
+        const duplicateText = `{\"type\":\"${MANIFEST_BUNDLE_TYPE}\",${bundleText.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseManifestBundleBytes(textBytes(duplicateText))),
+          'manifest bundle parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'strict canonicalizer rejects lone surrogate strings',
+      fn: async () => {
+        await expectFailure(
+          () => Promise.resolve(canonicalizeJsonToBytes({ bad: '\ud800' })),
+          'strict canonicalizer unexpectedly accepted a lone surrogate string'
+        );
       },
     },
     {

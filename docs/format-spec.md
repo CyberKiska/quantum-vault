@@ -49,7 +49,7 @@ Internal current-state grounding:
 External references already used elsewhere in the repository:
 
 - RFC 4648 for Base64 encoding conventions
-- RFC 8785 as a comparison point only; `QV-C14N-v1` is not claimed as full JCS
+- RFC 8785 for canonical signable-manifest byte rules under `QV-JSON-RFC8785-v1`
 - FIPS 202 for `SHA3-256` and `SHA3-512`
 - SP 800-185 for KMAC256-based derivation inputs and commitment-related terminology
 - SP 800-38D for AES-GCM AEAD assumptions
@@ -60,7 +60,8 @@ External references already used elsewhere in the repository:
 Implemented now:
 
 - the supported versions, schema IDs, and artifact boundaries listed in Section 1
-- canonical manifest export and embedding under `QV-C14N-v1`
+- canonical manifest export and embedding under `QV-JSON-RFC8785-v1`
+- canonical bundle export under `QV-BUNDLE-JSON-v1`
 - detached signatures over canonical manifest bytes only
 - embedded or external bundle, signature, key, and timestamp inputs during restore
 - current unknown-field handling and deterministic restore candidate selection as documented in the current sections of this file
@@ -78,7 +79,7 @@ Current likely promotion targets, but not current compatibility rules, include:
 
 - expanding the active appendices with additional vectors, malformed cases, and machine-consumable corpus material
 - introducing archive-wide identity material that survives future rewrap or reencryption
-- converging the long-term format stack toward RFC 8785 for canonical signable manifest bytes, RFC 8610 / CDDL for formal artifact schema description, and an OAIS-oriented package model for archival packaging and renewal semantics; until that work is completed, the current compatibility baseline remains the project-defined `QV-C14N-v1` profile and the code-defined current schemas
+- converging the long-term format stack toward a more explicit three-layer standards stack covering canonical bytes, formal grammar, and archival package semantics; the current compatibility baseline is already manifest schema `quantum-vault-archive-manifest/v3` with canonicalization label `QV-JSON-RFC8785-v1`, plus manifest bundle `QV-Manifest-Bundle` v2 with `bundleCanonicalization = "QV-BUNDLE-JSON-v1"`
 
 ## 1. Status and conformance
 
@@ -89,9 +90,10 @@ The supported current boundary is:
 - `.qenc` metadata format identifier `QVv1-5-0`
 - `.qcont` binary shard with magic `QVC1`
 - `.qcont` shard metadata format identifier `QVqcont-6`
-- canonical manifest schema/version `quantum-vault-archive-manifest/v2`
-- manifest canonicalization label `QV-C14N-v1`
-- manifest bundle type/version `QV-Manifest-Bundle` v1
+- canonical manifest schema/version `quantum-vault-archive-manifest/v3`
+- manifest canonicalization label `QV-JSON-RFC8785-v1`
+- manifest bundle type/version `QV-Manifest-Bundle` v2
+- bundle canonicalization label `QV-BUNDLE-JSON-v1`
 - detached PQ signature acceptance: Quantum Signer major version 2 with context `quantum-signer/v2`
 - detached Stellar signature acceptance: `stellar-signature/v2`
 
@@ -111,12 +113,13 @@ Quantum Vault-specific conventions:
 - Hex digests are lowercase.
 - Base64 fields use standard RFC 4648 Base64 with no line breaks.
 - `SHA3-512(x)` means SHA3-512 over the exact byte sequence `x`.
-- `manifestBytes` means the canonical byte serialization of the manifest under `QV-C14N-v1`.
+- `manifestBytes` means the canonical byte serialization of the manifest under `QV-JSON-RFC8785-v1`.
 
 Canonicalization convention:
 
-- `QV-C14N-v1` is the project-defined canonical JSON label used for the canonical manifest and for the bundle's embedded canonical-manifest binding.
-- `QV-C14N-v1` is not claimed to be full RFC 8785 JCS.
+- `QV-JSON-RFC8785-v1` is the canonical JSON label used for canonical manifest bytes and for canonicalized `authPolicy` input when computing `authPolicyCommitment`.
+- `QV-BUNDLE-JSON-v1` is the canonical JSON label used for manifest bundle bytes.
+- current code uses one strict UTF-8 JSON canonicalizer for both labels, but they remain separately labeled because only canonical manifest bytes are detached-signature payload
 
 Key terminology rule used by this file:
 
@@ -174,7 +177,7 @@ Not yet present as a first-class artifact:
 
 ### 5.1 Canonicalization
 
-The canonical manifest uses project-defined canonical JSON `QV-C14N-v1`.
+The canonical manifest uses canonical JSON `QV-JSON-RFC8785-v1`.
 Current behavior is:
 
 - the same canonical bytes are exported as `*.qvmanifest.json`
@@ -185,13 +188,15 @@ Current behavior is:
 Because detached signatures depend on exact bytes:
 
 - Quantum Vault MUST sign only bytes produced by the supported canonicalizer
-- Quantum Vault MUST NOT claim full RFC 8785 compliance unless it implements and labels full RFC 8785
+- Quantum Vault MUST NOT claim RFC 8785 compatibility for any label that does not actually use RFC 8785-compatible byte rules
 
-Detailed current edge cases, examples, and unsupported cases for `QV-C14N-v1` are defined in [appendices/canonicalization-profile.md](appendices/canonicalization-profile.md).
+The manifest canonicalizer rejects duplicate-key JSON on the parse path, rejects invalid UTF-8, rejects lone surrogates, rejects unsupported runtime values, and emits UTF-8 canonical bytes with recursively sorted object keys.
+
+Detailed current edge cases, examples, and unsupported cases for the current canonicalization labels are defined in [appendices/canonicalization-profile.md](appendices/canonicalization-profile.md).
 
 ### 5.2 Canonical manifest contract
 
-The current canonical manifest is generated at split stage with schema/version `quantum-vault-archive-manifest/v2`.
+The current canonical manifest is generated at split stage with schema/version `quantum-vault-archive-manifest/v3`.
 
 Current required contract points include:
 
@@ -216,16 +221,16 @@ Current nonce-bound contract:
 - `0 <= chunkIndex < chunkCount <= maxChunkCount <= 4294967295`
 
 Display order in the following tables is explanatory only.
-Canonical key order is determined by `QV-C14N-v1`, not by the order shown here.
+Canonical key order is determined by `QV-JSON-RFC8785-v1`, not by the order shown here.
 
 ### 5.2.1 Current top-level manifest fields
 
 | Field | Type | Current constraint or meaning |
 | --- | --- | --- |
-| `schema` | string | MUST be `quantum-vault-archive-manifest/v2` |
-| `version` | integer | MUST be `2` |
+| `schema` | string | MUST be `quantum-vault-archive-manifest/v3` |
+| `version` | integer | MUST be `3` |
 | `manifestType` | string | MUST be `archive` |
-| `canonicalization` | string | MUST be `QV-C14N-v1` |
+| `canonicalization` | string | MUST be `QV-JSON-RFC8785-v1` |
 | `cryptoProfileId` | string | MUST be a supported crypto profile; current builder emits `QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2` |
 | `kdfTreeId` | string | MUST match the selected crypto profile; current builder emits `QV-KDF-TREE-v2` |
 | `noncePolicyId` | string | MUST match the selected AEAD mode's nonce contract |
@@ -266,7 +271,7 @@ Canonical key order is determined by `QV-C14N-v1`, not by the order shown here.
 | `sharding.reedSolomon.parity` | integer | current parity count |
 | `sharding.reedSolomon.codecId` | string | current builder emits `QV-RS-ErasureCodes-v1` |
 | `authPolicyCommitment.alg` | string | MUST be `SHA3-512` |
-| `authPolicyCommitment.canonicalization` | string | MUST be `QV-C14N-v1` |
+| `authPolicyCommitment.canonicalization` | string | MUST be `QV-JSON-RFC8785-v1` |
 | `authPolicyCommitment.value` | string | lowercase hex digest over the canonicalized concrete `authPolicy` object |
 | `shardBinding.bodyDefinitionId` | string | MUST be `QV-QCONT-SHARDBODY-v1` |
 | `shardBinding.bodyDefinition.includes` | string array | current builder includes `fragment-len32-stream` |
@@ -287,10 +292,10 @@ Array contents are elided for readability; exact bytes remain governed by the ca
   "aadPolicyId": "QV-AAD-HEADER-CHUNK-v1",
   "authPolicyCommitment": {
     "alg": "SHA3-512",
-    "canonicalization": "QV-C14N-v1",
+    "canonicalization": "QV-JSON-RFC8785-v1",
     "value": "...128 hex chars..."
   },
-  "canonicalization": "QV-C14N-v1",
+  "canonicalization": "QV-JSON-RFC8785-v1",
   "counterBits": 32,
   "cryptoProfileId": "QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2",
   "kdfTreeId": "QV-KDF-TREE-v2",
@@ -312,7 +317,7 @@ Array contents are elided for readability; exact bytes remain governed by the ca
     "primaryAnchor": "qencHash",
     "qencHash": "...128 hex chars..."
   },
-  "schema": "quantum-vault-archive-manifest/v2",
+  "schema": "quantum-vault-archive-manifest/v3",
   "shardBinding": {
     "bodyDefinition": {
       "excludes": ["qcont-header", "embedded-manifest", "embedded-manifest-digest", "embedded-bundle", "embedded-bundle-digest", "external-signatures"],
@@ -339,7 +344,7 @@ Array contents are elided for readability; exact bytes remain governed by the ca
       "threshold": 4
     }
   },
-  "version": 2
+  "version": 3
 }
 ```
 
@@ -347,11 +352,11 @@ Array contents are elided for readability; exact bytes remain governed by the ca
 
 Current canonical-manifest parsing behavior is:
 
-- manifest input bytes MUST already be canonical `QV-C14N-v1` JSON
+- manifest input bytes MUST already be canonical `QV-JSON-RFC8785-v1` JSON
+- parsers reject invalid UTF-8, duplicate object keys, lone surrogates, and unsupported schema/version or canonicalization labels
 - parsers validate the required current fields and the current binding and algorithm identifiers
-- unknown additional manifest fields are not currently rejected solely for being additional fields
-- if additional manifest fields are present, they remain part of the canonical manifest bytes and therefore part of the detached-signature payload
-- compatibility still fails closed on unsupported schema, version, canonicalization, and required-binding mismatches
+- unknown additional manifest fields are rejected at every object level
+- compatibility fails closed on unsupported schema, version, canonicalization, and required-binding mismatches
 
 ## 6. Manifest bundle
 
@@ -363,9 +368,9 @@ It is not the detached-signature payload.
 The current top-level structure is:
 
 - `type = "QV-Manifest-Bundle"`
-- `version = 1`
-- `bundleCanonicalization = "QV-C14N-v1"`
-- `manifestCanonicalization = "QV-C14N-v1"`
+- `version = 2`
+- `bundleCanonicalization = "QV-BUNDLE-JSON-v1"`
+- `manifestCanonicalization = "QV-JSON-RFC8785-v1"`
 - `manifest`
 - `manifestDigest = { alg: "SHA3-512", value: SHA3-512(canonical manifest bytes) }`
 - `authPolicy`
@@ -384,9 +389,9 @@ Naming behavior:
 | Field | Type | Current constraint or meaning |
 | --- | --- | --- |
 | `type` | string | MUST be `QV-Manifest-Bundle` |
-| `version` | integer | MUST be `1` |
-| `bundleCanonicalization` | string | MUST be `QV-C14N-v1` |
-| `manifestCanonicalization` | string | MUST be `QV-C14N-v1` |
+| `version` | integer | MUST be `2` |
+| `bundleCanonicalization` | string | MUST be `QV-BUNDLE-JSON-v1` |
+| `manifestCanonicalization` | string | MUST be `QV-JSON-RFC8785-v1` |
 | `manifest` | object | REQUIRED canonical-manifest object; canonicalized independently from the mutable bundle |
 | `manifestDigest.alg` | string | MUST be `SHA3-512` |
 | `manifestDigest.value` | string | lowercase hex `SHA3-512` over canonical manifest bytes |
@@ -533,15 +538,15 @@ Long Base64 payloads are elided for readability.
     "level": "strong-pq-signature",
     "minValidSignatures": 1
   },
-  "bundleCanonicalization": "QV-C14N-v1",
+  "bundleCanonicalization": "QV-BUNDLE-JSON-v1",
   "manifest": { "...": "canonical manifest object" },
-  "manifestCanonicalization": "QV-C14N-v1",
+  "manifestCanonicalization": "QV-JSON-RFC8785-v1",
   "manifestDigest": {
     "alg": "SHA3-512",
     "value": "...128 hex chars..."
   },
   "type": "QV-Manifest-Bundle",
-  "version": 1
+  "version": 2
 }
 ```
 
@@ -549,10 +554,10 @@ Long Base64 payloads are elided for readability.
 
 Current canonical-bundle parsing behavior is:
 
-- bundle input bytes MUST already be canonical `QV-C14N-v1` JSON under the current normalized bundle schema
+- bundle input bytes MUST already be canonical `QV-BUNDLE-JSON-v1` JSON under the current normalized bundle schema
 - bundle input bytes MUST already include the normalized top-level shape, including `manifestDigest.alg`, `manifestDigest.value`, and explicit `attachments.publicKeys`, `attachments.signatures`, and `attachments.timestamps` arrays
+- parsers reject invalid UTF-8, duplicate object keys, lone surrogates, unsupported bundle or embedded-manifest labels/versions, and structurally unknown current bundle fields
 - parsers normalize bundle content to the current known field set and then require byte-for-byte equality with the canonical bytes of that normalized output
-- unknown additional bundle fields are therefore rejected in current canonical bundle inputs
 - unresolved or incompatible `publicKeyRef` bindings fail closed
 
 ## 7. `.qenc` container format

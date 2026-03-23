@@ -2,14 +2,27 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { base64ToBytes, toHex } from '../bytes.js';
 import { getSignatureSuiteInfo, normalizeSignatureSuite } from '../auth/signature-suites.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
-import { QV_CANONICALIZATION_LABEL, canonicalizeJson, canonicalizeJsonToBytes } from './jcs.js';
+import {
+  assertAuthPolicyCommitment,
+  AUTH_POLICY_COMMITMENT_ALG,
+  computeAuthPolicyCommitment,
+  normalizeAuthPolicy,
+  recoverCommittedAuthPolicy,
+  validateAuthPolicyCommitmentShape,
+} from './auth-policy.js';
+import { canonicalizeArchiveManifest } from './archive-manifest.js';
+import {
+  BUNDLE_CANONICALIZATION_LABEL,
+  MANIFEST_CANONICALIZATION_LABEL,
+  canonicalizeJson,
+  canonicalizeJsonToBytes,
+} from './jcs.js';
+import { parseJsonBytesStrict } from './strict-json.js';
 
 export const MANIFEST_BUNDLE_TYPE = 'QV-Manifest-Bundle';
-export const MANIFEST_BUNDLE_VERSION = 1;
+export const MANIFEST_BUNDLE_VERSION = 2;
 export const MANIFEST_DIGEST_ALG = 'SHA3-512';
-export const AUTH_POLICY_COMMITMENT_ALG = 'SHA3-512';
 
-const AUTH_LEVELS = new Set(['integrity-only', 'any-signature', 'strong-pq-signature']);
 const SIGNATURE_FORMATS = new Set(['qsig', 'stellar-sig']);
 const TIMESTAMP_TYPES = new Set(['opentimestamps']);
 const PUBLIC_KEY_ENCODINGS = new Set(['base64', 'stellar-address']);
@@ -51,13 +64,27 @@ function ensureHex(value, field, expectedLength = null) {
   return text;
 }
 
+function assertExactKeys(source, requiredKeys, optionalKeys, field) {
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  for (const key of Object.keys(source)) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unknown ${field}.${key}`);
+    }
+  }
+  for (const key of requiredKeys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      throw new Error(`Missing ${field}.${key}`);
+    }
+  }
+}
+
 function assertCanonicalBytes(bytes, canonicalBytes, field) {
   if (bytes.length !== canonicalBytes.length) {
-    throw new Error(`${field} is not ${QV_CANONICALIZATION_LABEL} canonical JSON`);
+    throw new Error(`${field} is not ${BUNDLE_CANONICALIZATION_LABEL} canonical JSON`);
   }
   for (let i = 0; i < bytes.length; i += 1) {
     if (bytes[i] !== canonicalBytes[i]) {
-      throw new Error(`${field} is not ${QV_CANONICALIZATION_LABEL} canonical JSON`);
+      throw new Error(`${field} is not ${BUNDLE_CANONICALIZATION_LABEL} canonical JSON`);
     }
   }
 }
@@ -90,87 +117,20 @@ function assertUniqueSignatureProofs(signatures) {
   }
 }
 
-export function normalizeAuthPolicy(authPolicy) {
-  const source = ensureObject(authPolicy, 'authPolicy');
-  const level = String(source.level || '').trim().toLowerCase();
-  if (!AUTH_LEVELS.has(level)) {
-    throw new Error(`Unsupported authPolicy.level: ${source.level}`);
-  }
-  return {
-    level,
-    minValidSignatures: ensureInteger(source.minValidSignatures ?? 1, 'authPolicy.minValidSignatures', 1),
-  };
-}
-
-export function computeAuthPolicyCommitment(authPolicy) {
-  const normalized = normalizeAuthPolicy(authPolicy);
-  return {
-    alg: AUTH_POLICY_COMMITMENT_ALG,
-    canonicalization: QV_CANONICALIZATION_LABEL,
-    value: toHex(sha3_512(canonicalizeJsonToBytes(normalized))),
-  };
-}
-
-export function validateAuthPolicyCommitmentShape(commitment) {
-  const source = ensureObject(commitment, 'authPolicyCommitment');
-  if (ensureString(source.alg, 'authPolicyCommitment.alg') !== AUTH_POLICY_COMMITMENT_ALG) {
-    throw new Error('Unsupported authPolicyCommitment.alg');
-  }
-  if (ensureString(source.canonicalization, 'authPolicyCommitment.canonicalization') !== QV_CANONICALIZATION_LABEL) {
-    throw new Error('Unsupported authPolicyCommitment.canonicalization');
-  }
-  return {
-    alg: source.alg,
-    canonicalization: source.canonicalization,
-    value: ensureHex(source.value, 'authPolicyCommitment.value', 128),
-  };
-}
-
-export function assertAuthPolicyCommitment(commitment, authPolicy) {
-  const actual = validateAuthPolicyCommitmentShape(commitment);
-  const expected = computeAuthPolicyCommitment(authPolicy);
-  if (actual.value !== expected.value) {
-    throw new Error('authPolicyCommitment mismatch');
-  }
-  return actual;
-}
-
-export function recoverCommittedAuthPolicy(commitment, options = {}) {
-  const actual = validateAuthPolicyCommitmentShape(commitment);
-  const maxMinValidSignatures = Number.isInteger(options.maxMinValidSignatures)
-    ? options.maxMinValidSignatures
-    : 64;
-  const matches = [];
-
-  for (const level of AUTH_LEVELS) {
-    for (let minValidSignatures = 1; minValidSignatures <= maxMinValidSignatures; minValidSignatures += 1) {
-      const candidate = { level, minValidSignatures };
-      if (computeAuthPolicyCommitment(candidate).value === actual.value) {
-        matches.push(candidate);
-      }
-    }
-  }
-
-  if (matches.length === 1) {
-    return matches[0];
-  }
-  if (matches.length === 0) {
-    throw new Error('Unable to recover authPolicy from authPolicyCommitment');
-  }
-  throw new Error('authPolicyCommitment is ambiguous');
-}
-
 export function computeManifestDigest(manifest) {
-  const bytes = canonicalizeJsonToBytes(manifest);
+  const canonicalManifest = canonicalizeArchiveManifest(manifest);
   return {
-    canonical: canonicalizeJson(manifest),
-    bytes,
-    digestHex: toHex(sha3_512(bytes)),
+    manifest: canonicalManifest.manifest,
+    canonical: canonicalManifest.canonical,
+    bytes: canonicalManifest.bytes,
+    digestHex: canonicalManifest.digestHex,
   };
 }
 
 function normalizePublicKey(entry, index) {
   const source = ensureObject(entry, `attachments.publicKeys[${index}]`);
+  assertExactKeys(source, ['id', 'kty', 'suite', 'encoding', 'value'], ['legacy'], `attachments.publicKeys[${index}]`);
+
   const suite = normalizeSignatureSuite(source.suite);
   const suiteInfo = getSignatureSuiteInfo(suite);
   const kty = ensureString(source.kty, `attachments.publicKeys[${index}].kty`);
@@ -199,11 +159,19 @@ function normalizePublicKey(entry, index) {
 
 function normalizeSignature(entry, index, manifestDigestHex) {
   const source = ensureObject(entry, `attachments.signatures[${index}]`);
+  assertExactKeys(
+    source,
+    ['id', 'format', 'suite', 'target', 'signatureEncoding', 'signature'],
+    ['publicKeyRef', 'legacy'],
+    `attachments.signatures[${index}]`
+  );
+
   const format = ensureString(source.format, `attachments.signatures[${index}].format`);
   if (!SIGNATURE_FORMATS.has(format)) {
     throw new Error(`Unsupported attachments.signatures[${index}].format`);
   }
   const target = ensureObject(source.target, `attachments.signatures[${index}].target`);
+  assertExactKeys(target, ['type', 'digestAlg', 'digestValue'], [], `attachments.signatures[${index}].target`);
   if (ensureString(target.type, `attachments.signatures[${index}].target.type`) !== 'canonical-manifest') {
     throw new Error('Unsupported signature target.type');
   }
@@ -215,6 +183,10 @@ function normalizeSignature(entry, index, manifestDigestHex) {
     throw new Error('Signature target digest mismatch');
   }
   const suite = normalizeSignatureSuite(source.suite);
+  const signatureEncoding = ensureString(source.signatureEncoding, `attachments.signatures[${index}].signatureEncoding`);
+  if (signatureEncoding !== 'base64') {
+    throw new Error(`Unsupported attachments.signatures[${index}].signatureEncoding`);
+  }
   return {
     id: ensureString(source.id, `attachments.signatures[${index}].id`),
     format,
@@ -224,7 +196,7 @@ function normalizeSignature(entry, index, manifestDigestHex) {
       digestAlg: MANIFEST_DIGEST_ALG,
       digestValue,
     },
-    signatureEncoding: ensureString(source.signatureEncoding, `attachments.signatures[${index}].signatureEncoding`),
+    signatureEncoding,
     signature: ensureString(source.signature, `attachments.signatures[${index}].signature`),
     publicKeyRef: ensureOptionalString(source.publicKeyRef, `attachments.signatures[${index}].publicKeyRef`),
     legacy: source.legacy === true,
@@ -267,6 +239,13 @@ export function getSignaturePublicKeyRefCompatibilityError(signature, publicKey)
 
 function normalizeTimestamp(entry, index, signatureIds) {
   const source = ensureObject(entry, `attachments.timestamps[${index}]`);
+  assertExactKeys(
+    source,
+    ['id', 'type', 'targetRef', 'proofEncoding', 'proof'],
+    ['apparentlyComplete', 'completeProof'],
+    `attachments.timestamps[${index}]`
+  );
+
   const type = ensureString(source.type, `attachments.timestamps[${index}].type`);
   if (!TIMESTAMP_TYPES.has(type)) {
     throw new Error(`Unsupported attachments.timestamps[${index}].type`);
@@ -275,11 +254,15 @@ function normalizeTimestamp(entry, index, signatureIds) {
   if (!signatureIds.has(targetRef)) {
     throw new Error(`attachments.timestamps[${index}].targetRef does not reference a known signature`);
   }
+  const proofEncoding = ensureString(source.proofEncoding, `attachments.timestamps[${index}].proofEncoding`);
+  if (proofEncoding !== 'base64') {
+    throw new Error(`Unsupported attachments.timestamps[${index}].proofEncoding`);
+  }
   return {
     id: ensureString(source.id, `attachments.timestamps[${index}].id`),
     type,
     targetRef,
-    proofEncoding: ensureString(source.proofEncoding, `attachments.timestamps[${index}].proofEncoding`),
+    proofEncoding,
     proof: ensureString(source.proof, `attachments.timestamps[${index}].proof`),
     apparentlyComplete: source.apparentlyComplete === true || source.completeProof === true,
     completeProof: source.apparentlyComplete === true || source.completeProof === true,
@@ -288,22 +271,33 @@ function normalizeTimestamp(entry, index, signatureIds) {
 
 export function normalizeManifestBundle(bundle) {
   const source = ensureObject(bundle, 'bundle');
+  assertExactKeys(source, [
+    'type',
+    'version',
+    'bundleCanonicalization',
+    'manifestCanonicalization',
+    'manifest',
+    'manifestDigest',
+    'authPolicy',
+    'attachments',
+  ], [], 'bundle');
+
   if (ensureString(source.type, 'bundle.type') !== MANIFEST_BUNDLE_TYPE) {
     throw new Error('Unsupported manifest bundle type');
   }
   if (ensureInteger(source.version, 'bundle.version', 1) !== MANIFEST_BUNDLE_VERSION) {
     throw new Error('Unsupported manifest bundle version');
   }
-  if (ensureString(source.bundleCanonicalization, 'bundle.bundleCanonicalization') !== QV_CANONICALIZATION_LABEL) {
+  if (ensureString(source.bundleCanonicalization, 'bundle.bundleCanonicalization') !== BUNDLE_CANONICALIZATION_LABEL) {
     throw new Error('Unsupported bundleCanonicalization');
   }
-  if (ensureString(source.manifestCanonicalization, 'bundle.manifestCanonicalization') !== QV_CANONICALIZATION_LABEL) {
+  if (ensureString(source.manifestCanonicalization, 'bundle.manifestCanonicalization') !== MANIFEST_CANONICALIZATION_LABEL) {
     throw new Error('Unsupported manifestCanonicalization');
   }
 
-  const manifest = ensureObject(source.manifest, 'bundle.manifest');
-  const manifestDigest = computeManifestDigest(manifest);
+  const manifestDigest = computeManifestDigest(source.manifest);
   const manifestDigestObj = ensureObject(source.manifestDigest, 'bundle.manifestDigest');
+  assertExactKeys(manifestDigestObj, ['alg', 'value'], [], 'bundle.manifestDigest');
   if (ensureString(manifestDigestObj.alg, 'bundle.manifestDigest.alg') !== MANIFEST_DIGEST_ALG) {
     throw new Error('Unsupported bundle.manifestDigest.alg');
   }
@@ -312,16 +306,20 @@ export function normalizeManifestBundle(bundle) {
   }
 
   const authPolicy = normalizeAuthPolicy(source.authPolicy);
-  const attachments = ensureObject(source.attachments || {}, 'bundle.attachments');
-  const publicKeys = Array.isArray(attachments.publicKeys)
-    ? attachments.publicKeys.map(normalizePublicKey)
-    : [];
-  const signatures = Array.isArray(attachments.signatures)
-    ? attachments.signatures.map((entry, index) => normalizeSignature(entry, index, manifestDigest.digestHex))
-    : [];
+  assertAuthPolicyCommitment(manifestDigest.manifest.authPolicyCommitment, authPolicy);
+
+  const attachments = ensureObject(source.attachments, 'bundle.attachments');
+  assertExactKeys(attachments, ['publicKeys', 'signatures', 'timestamps'], [], 'bundle.attachments');
+  if (!Array.isArray(attachments.publicKeys) || !Array.isArray(attachments.signatures) || !Array.isArray(attachments.timestamps)) {
+    throw new Error('Invalid bundle.attachments');
+  }
+
+  const publicKeys = attachments.publicKeys.map((entry, index) => normalizePublicKey(entry, index));
+  const signatures = attachments.signatures.map((entry, index) => normalizeSignature(entry, index, manifestDigest.digestHex));
   assertUniqueIds(publicKeys, 'publicKeys');
   assertUniqueIds(signatures, 'signatures');
   assertUniqueSignatureProofs(signatures);
+
   const publicKeyIds = new Set(publicKeys.map((item) => item.id));
   const publicKeysById = new Map(publicKeys.map((item) => [item.id, item]));
   for (const signature of signatures) {
@@ -336,18 +334,17 @@ export function normalizeManifestBundle(bundle) {
       throw new Error(compatibilityError);
     }
   }
+
   const signatureIds = new Set(signatures.map((item) => item.id));
-  const timestamps = Array.isArray(attachments.timestamps)
-    ? attachments.timestamps.map((entry, index) => normalizeTimestamp(entry, index, signatureIds))
-    : [];
+  const timestamps = attachments.timestamps.map((entry, index) => normalizeTimestamp(entry, index, signatureIds));
   assertUniqueIds(timestamps, 'timestamps');
 
   return {
     type: MANIFEST_BUNDLE_TYPE,
     version: MANIFEST_BUNDLE_VERSION,
-    bundleCanonicalization: QV_CANONICALIZATION_LABEL,
-    manifestCanonicalization: QV_CANONICALIZATION_LABEL,
-    manifest,
+    bundleCanonicalization: BUNDLE_CANONICALIZATION_LABEL,
+    manifestCanonicalization: MANIFEST_CANONICALIZATION_LABEL,
+    manifest: manifestDigest.manifest,
     manifestDigest: {
       alg: MANIFEST_DIGEST_ALG,
       value: manifestDigest.digestHex,
@@ -381,7 +378,7 @@ export function parseManifestBundleBytes(bundleBytes, options = {}) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(new TextDecoder().decode(bundleBytes));
+    parsed = parseJsonBytesStrict(bundleBytes);
   } catch (error) {
     throw new Error(`Invalid manifest bundle JSON: ${error?.message || error}`);
   }
@@ -396,8 +393,8 @@ export function buildInitialManifestBundle({ manifest, authPolicy }) {
   return normalizeManifestBundle({
     type: MANIFEST_BUNDLE_TYPE,
     version: MANIFEST_BUNDLE_VERSION,
-    bundleCanonicalization: QV_CANONICALIZATION_LABEL,
-    manifestCanonicalization: QV_CANONICALIZATION_LABEL,
+    bundleCanonicalization: BUNDLE_CANONICALIZATION_LABEL,
+    manifestCanonicalization: MANIFEST_CANONICALIZATION_LABEL,
     manifest,
     manifestDigest: {
       alg: MANIFEST_DIGEST_ALG,
@@ -411,3 +408,12 @@ export function buildInitialManifestBundle({ manifest, authPolicy }) {
     },
   });
 }
+
+export {
+  assertAuthPolicyCommitment,
+  AUTH_POLICY_COMMITMENT_ALG,
+  computeAuthPolicyCommitment,
+  normalizeAuthPolicy,
+  recoverCommittedAuthPolicy,
+  validateAuthPolicyCommitmentShape,
+};

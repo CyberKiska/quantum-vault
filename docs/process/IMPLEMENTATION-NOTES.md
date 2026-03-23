@@ -226,8 +226,10 @@ src/
     │   │   └── restore.js           # Shard restore/reconstruction + authenticity gating
     │   ├── manifest/
     │   │   ├── archive-manifest.js  # Canonical archive manifest schema/validation
+    │   │   ├── auth-policy.js       # authPolicy normalization + commitment binding
     │   │   ├── manifest-bundle.js   # Self-contained manifest bundle schema/validation
-    │   │   └── jcs.js               # Project-defined canonicalization helpers (QV-C14N-v1)
+    │   │   ├── strict-json.js       # Strict UTF-8/duplicate-key/lone-surrogate JSON parser
+    │   │   └── jcs.js               # Current canonicalization labels and strict JSON canonicalizer
     │   ├── auth/
     │   │   ├── qsig.js              # Quantum Signer v2 detached signature parsing/verify
     │   │   ├── stellar-sig.js       # Stellar WebSigner v2 detached signature verify

@@ -75,7 +75,7 @@ Publication note:
 | `docs/glossary.md` | Shared vocabulary and status-term baseline | Release Candidate |
 | `docs/WHITEPAPER.md` | Informative system-level design and rationale doc | Release Candidate |
 | `docs/format-spec.md` | Normative format/verifier doc | Release Candidate |
-| `docs/appendices/canonicalization-profile.md` | Compatibility appendix for `QV-C14N-v1` | Release Candidate |
+| `docs/appendices/canonicalization-profile.md` | Compatibility appendix for current manifest and bundle canonicalization labels | Release Candidate |
 | `docs/appendices/external-artifacts.md` | Compatibility appendix for detached artifact acceptance/linkage | Release Candidate |
 | `docs/appendices/interoperability-and-test-vectors.md` | Compatibility appendix for examples, vectors, and malformed coverage | Release Candidate |
 | `docs/trust-and-policy.md` | Normative policy/pinning doc | Release Candidate |

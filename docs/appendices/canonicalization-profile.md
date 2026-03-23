@@ -1,24 +1,24 @@
-# QV-C14N-v1 canonicalization profile
+# Current JSON canonicalization profiles
 
 Status: Release Candidate
 Type: Normative compatibility appendix
 Audience: implementers, auditors, interoperability tool authors, test-vector maintainers
-Scope: exact current serialization rules for `QV-C14N-v1` as used by canonical manifests, manifest bundles, and canonicalized policy commitments
+Scope: exact current serialization rules for `QV-JSON-RFC8785-v1` and `QV-BUNDLE-JSON-v1` as used by canonical manifests, manifest bundles, and canonicalized policy commitments
 Out of scope: signature semantics, archive-policy meaning, parser acceptance policy for unknown fields
 
 ## Role
 
-This appendix is the compatibility reference for the current `QV-C14N-v1` canonical JSON profile.
+This appendix is the compatibility reference for the current Quantum Vault canonical JSON labels.
 It supports [format-spec.md](../format-spec.md), which owns where canonical bytes are required and how parsers use them.
 
 ## Scope
 
-This file defines the exact current serialization behavior of `QV-C14N-v1`.
+This file defines the exact current serialization behavior of the current canonicalization labels.
 It does not decide whether unknown fields are accepted or rejected in a given artifact type; that remains the responsibility of [format-spec.md](../format-spec.md).
 
 ## Normative status
 
-This appendix is normative for the current `QV-C14N-v1` byte profile.
+This appendix is normative for the current manifest and bundle byte profiles.
 An implementation is conformant to this version if and only if it satisfies all MUST-level requirements defined in the current normative sections of this appendix and the owner document `format-spec.md`.
 If an implementation deviates from this appendix, it MUST explicitly document the deviation and MUST declare itself non-conformant to this version.
 Statements explicitly labeled as future or recommended direction are non-normative until promoted into the current sections of this appendix.
@@ -35,56 +35,66 @@ Internal current-state grounding:
 
 External references already used elsewhere in the repository:
 
-- RFC 8785 as a comparison point only; `QV-C14N-v1` is not claimed as full JCS
+- RFC 8785 for the current strict manifest canonicalization behavior
 - RFC 8259 for the JSON data model baseline
 
 ## Current implementation status
 
 Implemented now:
 
-- UTF-8 canonical byte output for manifests, bundles, and canonicalized policy commitments
-- lexicographic object-key ordering
-- omission of object properties whose value is `undefined`, `function`, or `symbol`
-- coercion of array elements whose value is `undefined`, `function`, or `symbol` to `null`
-- rejection of `bigint` and non-finite numbers
+- strict UTF-8 canonical byte output for manifests, bundles, and canonicalized policy commitments
+- RFC 8785-compatible canonicalization for canonical manifests and `authPolicyCommitment` input
+- current bundle canonicalization using the same strict serializer but a separate bundle-specific label
+- duplicate-key rejection on manifest and bundle parse paths
+- lone-surrogate rejection on parse and canonicalization paths
+- rejection of non-finite numbers, `bigint`, unsupported runtime value types, non-plain objects, and cyclic structures
 
 Not yet first-class in the current implementation:
 
 - a frozen standalone canonicalization vector corpus outside the repository examples and selftests
-- any claim that `QV-C14N-v1` is byte-for-byte identical to full RFC 8785 JCS for all JSON edge cases
+- a separately published external conformance release for the current canonicalization labels
 
 ## Future work and non-normative notes
 
-- Future vector publications may mirror this appendix in a machine-consumable corpus, but that does not change the current profile label.
-- If a materially different profile is introduced later, it should receive a new canonicalization label rather than silently changing `QV-C14N-v1`.
+- Future vector publications may mirror this appendix in a machine-consumable corpus, but that does not change the current profile labels.
+- If a materially different profile is introduced later, it should receive a new canonicalization label rather than silently changing `QV-JSON-RFC8785-v1` or `QV-BUNDLE-JSON-v1`.
 - Intended standards direction, not current behavior: Quantum Vault's long-term target is to move toward a three-layer standards stack consisting of RFC 8785 for canonical signable manifest bytes, RFC 8610 / CDDL for formal artifact descriptions, and an OAIS-oriented archival package model handled in [long-term-archive.md](../long-term-archive.md).
 - In that future direction, CDDL is valuable not as decorative schema text but as a machine-readable conformance and representation-information layer: it reduces parser ambiguity, supports controlled extensibility, strengthens independent implementation work, and improves long-horizon maintainability.
 
 ## 1. Current profile summary
 
-`QV-C14N-v1` is the project-defined canonical JSON serializer used by Quantum Vault today.
-Its canonical bytes are the UTF-8 encoding of the serializer output.
+Current labels:
+
+- `QV-JSON-RFC8785-v1` governs canonical manifest bytes and canonicalized `authPolicy` input for `authPolicyCommitment`
+- `QV-BUNDLE-JSON-v1` governs canonical manifest-bundle bytes
+
+Current implementation note:
+
+- both labels are currently emitted by the same strict UTF-8 JSON canonicalizer
+- the labels remain distinct because only canonical manifest bytes are detached-signature payload
 
 Current uses include:
 
 - canonical manifest export bytes
 - the manifest bytes embedded inside a manifest bundle
 - canonicalized `authPolicy` input when computing `authPolicyCommitment`
+- canonical bundle export bytes
 
 ## 2. Serialization rules
 
-| JSON value category | Current `QV-C14N-v1` behavior |
+| JSON value category | Current behavior |
 | --- | --- |
 | `null` | serialized as `null` |
 | boolean | serialized as `true` or `false` |
 | finite number | serialized with the runtime `JSON.stringify` number rendering |
 | non-finite number (`NaN`, `Infinity`, `-Infinity`) | rejected |
-| string | serialized with the runtime `JSON.stringify` string escaping rules |
+| string | serialized with the runtime `JSON.stringify` string escaping rules after lone-surrogate rejection |
 | array | preserves element order; each element is serialized recursively |
-| array element equal to `undefined`, `function`, or `symbol` | serialized as `null` |
+| array element equal to `undefined`, `function`, or `symbol` | rejected |
 | object | serialized with keys sorted by `Object.keys(obj).sort()` |
-| object property equal to `undefined`, `function`, or `symbol` | omitted |
+| object property equal to `undefined`, `function`, or `symbol` | rejected |
 | `bigint` | rejected |
+| non-plain objects or cyclic structures | rejected |
 | other unsupported runtime value types | rejected |
 
 Additional current profile rules:
@@ -93,34 +103,39 @@ Additional current profile rules:
 - object members use `:` with no extra spacing
 - array and object separators use `,` with no extra spacing
 - canonical bytes are the UTF-8 bytes of the resulting string
+- parse paths reject invalid UTF-8, duplicate object keys, and lone surrogates
 
-## 3. Object-key ordering and omission rules
+## 3. Object-key ordering and parse discipline
 
-Current object handling is intentionally simple:
+Current object handling:
 
 - key order is determined only by `Object.keys(obj).sort()`
-- omitted object properties do not appear in the canonical byte sequence at all
-- omission is value-based, not schema-based
+- unsupported properties are rejected rather than omitted
 
-Current array handling differs from object handling:
+Current array handling:
 
 - array positions are preserved
-- unsupported array element values become literal `null`
+- unsupported array element values are rejected rather than coerced
 
 ## 4. Comparison boundary against RFC 8785
 
-`QV-C14N-v1` should be described honestly:
+`QV-JSON-RFC8785-v1` should be described honestly:
 
-- it is a project-defined canonical JSON profile
-- it is not claimed to be a full RFC 8785 implementation
-- compatibility with an external tool claiming RFC 8785 exists only when that tool emits the same bytes as `QV-C14N-v1` for the concrete object being serialized
+- it is the current manifest-side canonical JSON profile
+- it is intended to be RFC 8785-compatible for the current manifest-family JSON objects the repository emits and accepts
+- compatibility with an external RFC 8785 tool exists only when that tool emits the same bytes for the same JSON value
+
+`QV-BUNDLE-JSON-v1` should also be described honestly:
+
+- it is the current bundle-byte profile label
+- it currently uses the same strict canonicalizer as `QV-JSON-RFC8785-v1`
+- it remains separately labeled so bundle-byte compatibility can evolve independently from detached-signature payload compatibility
 
 This appendix does not attempt to restate every RFC 8785 edge case.
 Its purpose is to document the exact current serializer behavior used by Quantum Vault.
 
 Future design note:
 
-- if Quantum Vault later adopts RFC 8785 canonical bytes for the signable manifest, that should be introduced as an explicit standards-aligned migration target rather than being retroactively implied for `QV-C14N-v1`
 - if Quantum Vault later adds CDDL artifact definitions, those definitions should describe the manifest, manifest bundle, and the logical structure of the `.qcont` header as a formal schema layer above the current code-defined structures
 
 ## 5. Current canonical examples
@@ -139,40 +154,21 @@ Current canonical output:
 {"a":1,"b":2}
 ```
 
-### 5.2 Object omission of unsupported property values
+### 5.2 Object-key sorting with manifest-style labels
 
-Conceptual input object:
+Input object:
 
-```js
-{
-  keep: 1,
-  omitUndefined: undefined,
-  omitFunction: () => 1,
-  omitSymbol: Symbol('x')
-}
+```json
+{"canonicalization":"QV-JSON-RFC8785-v1","schema":"quantum-vault-archive-manifest/v3"}
 ```
 
 Current canonical output:
 
 ```json
-{"keep":1}
+{"canonicalization":"QV-JSON-RFC8785-v1","schema":"quantum-vault-archive-manifest/v3"}
 ```
 
-### 5.3 Array coercion of unsupported element values
-
-Conceptual input array:
-
-```js
-[1, undefined, () => 1, Symbol('x'), "ok"]
-```
-
-Current canonical output:
-
-```json
-[1,null,null,null,"ok"]
-```
-
-## 6. Current malformed or unsupported cases
+### 5.3 Current malformed or unsupported cases
 
 The current serializer rejects:
 
@@ -180,7 +176,12 @@ The current serializer rejects:
 - `Infinity`
 - `-Infinity`
 - `bigint`
+- `undefined`, `function`, and `symbol`
+- lone surrogates
+- duplicate object keys on parse paths
+- invalid UTF-8 on parse paths
 - unsupported runtime value types that cannot be represented by the serializer
+- non-plain objects and cyclic structures
 
 Higher-layer parsers add additional requirements on top of this profile.
-For example, [format-spec.md](../format-spec.md) requires canonical manifest and canonical bundle inputs to already be serialized exactly in `QV-C14N-v1` form.
+For example, [format-spec.md](../format-spec.md) requires canonical manifest inputs to already be serialized exactly in `QV-JSON-RFC8785-v1` form and canonical bundle inputs to already be serialized exactly in `QV-BUNDLE-JSON-v1` form.
