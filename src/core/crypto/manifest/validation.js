@@ -13,19 +13,31 @@ export function ensureString(value, field) {
 }
 
 export function ensureOptionalString(value, field) {
-  if (value == null || value === '') return null;
+  if (value == null) return null;
   return ensureString(value, field);
 }
 
-export function ensureInteger(value, field, min = 0) {
-  if (!Number.isInteger(value) || value < min) {
+export function ensureInteger(value, field, min = 0, max = null) {
+  if (!Number.isInteger(value) || value < min || (max != null && value > max)) {
     throw new Error(`Invalid ${field}`);
   }
   return value;
 }
 
+export function ensureSafeInteger(value, field, min = 0) {
+  return ensureInteger(value, field, min, Number.MAX_SAFE_INTEGER);
+}
+
+export function ensureExactString(value, field, expected) {
+  const text = ensureString(value, field);
+  if (text !== expected) {
+    throw new Error(`Invalid ${field}`);
+  }
+  return text;
+}
+
 export function ensureHex(value, field, expectedLength = null) {
-  const text = ensureString(value, field).toLowerCase();
+  const text = ensureString(value, field);
   if (!/^[0-9a-f]+$/.test(text)) {
     throw new Error(`Invalid ${field}`);
   }

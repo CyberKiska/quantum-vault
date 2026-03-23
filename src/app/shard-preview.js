@@ -2,7 +2,7 @@
 // Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
 import { LEGACY_QCONT_FORMAT_VERSION, QCONT_FORMAT_VERSION } from '../core/crypto/constants.js';
-import { parseManifestBundleBytes } from '../core/crypto/manifest/manifest-bundle.js';
+import { parseManifestBundleBytesPreviewOnly } from '../core/crypto/manifest/manifest-bundle.js';
 
 export async function parseQcontShardPreviewFile(file) {
   const decoder = new TextDecoder();
@@ -58,7 +58,7 @@ export async function parseQcontShardPreviewFile(file) {
   offset += 4;
   await ensureBytes(offset + bundleLen + DIGEST_LEN + 4);
   const bundleBytes = bytes.subarray(offset, offset + bundleLen);
-  const parsedBundle = parseManifestBundleBytes(bundleBytes, { requireCanonical: false });
+  const parsedBundle = parseManifestBundleBytesPreviewOnly(bundleBytes);
   offset += bundleLen + DIGEST_LEN;
 
   await ensureBytes(offset + 4);

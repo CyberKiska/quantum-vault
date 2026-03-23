@@ -88,22 +88,30 @@ export async function runSchemaFixtureCheck() {
     try {
       const instancePath = resolve(schemaDir, fixture.file);
       const instance = await readJsonFile(instancePath);
-      registry.validate(schemaUriForFile(fixture.schema), instance);
-
-      if (fixture.expectSchemaValid !== true) {
-        throw new Error('schema validation unexpectedly succeeded');
+      let schemaValid = false;
+      let schemaError = null;
+      try {
+        registry.validate(schemaUriForFile(fixture.schema), instance);
+        schemaValid = true;
+      } catch (error) {
+        schemaError = error;
       }
 
+      if (fixture.expectSchemaValid === true && !schemaValid) {
+        throw schemaError;
+      }
       if (fixture.runtime) {
         await assertRuntimeExpectation(fixture, instance);
       }
 
+      if (fixture.expectSchemaValid === false) {
+        if (!(schemaError instanceof SchemaValidationError)) {
+          throw new Error('schema validation unexpectedly succeeded');
+        }
+      }
+
       results.push({ name: fixture.id, ok: true });
     } catch (error) {
-      if (fixture.expectSchemaValid === false && error instanceof SchemaValidationError) {
-        results.push({ name: fixture.id, ok: true });
-        continue;
-      }
       results.push({ name: fixture.id, ok: false, error: formatError(error) });
     }
   }

@@ -6,14 +6,18 @@ import { attachManifestBundleToShards } from './qcont/attach.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import {
+  buildInitialManifestBundle,
   canonicalizeManifestBundle,
   MANIFEST_BUNDLE_TYPE,
   MANIFEST_BUNDLE_VERSION,
   parseManifestBundleBytes,
+  parseManifestBundleBytesPreviewOnly,
 } from './manifest/manifest-bundle.js';
 import {
   ARCHIVE_MANIFEST_SCHEMA,
   ARCHIVE_MANIFEST_VERSION,
+  buildArchiveManifest,
+  canonicalizeArchiveManifest,
   parseArchiveManifestBytes,
 } from './manifest/archive-manifest.js';
 import { normalizeAuthPolicy } from './manifest/auth-policy.js';
@@ -41,6 +45,7 @@ import {
   assertPerChunkNonceContract,
   deriveChunkIvFromK,
   IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
+  IV_STRATEGY_SINGLE_IV,
   NONCE_COUNTER_BITS_U32,
   NONCE_MAX_CHUNK_COUNT_U32,
 } from './aead.js';
@@ -54,6 +59,7 @@ import {
 } from './policy.js';
 import { kmac256 } from './kmac.js';
 import { resolveErasureRuntime } from './erasure-runtime.js';
+import { parseJsonTextStrict } from './manifest/strict-json.js';
 
 function textBytes(value) {
   return new TextEncoder().encode(value);
@@ -120,6 +126,34 @@ function fileLike(name, bytes) {
       return toArrayBufferView(bytes);
     },
   };
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function buildManifestParams(overrides = {}) {
+  return {
+    aeadMode: 'per-chunk-aead',
+    qencFormat: FORMAT_VERSION,
+    ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
+    chunkSize: 65536,
+    chunkCount: 3,
+    payloadLength: 131072,
+    qencHash: 'a'.repeat(128),
+    containerId: 'b'.repeat(128),
+    shamirThreshold: 4,
+    shamirShareCount: 5,
+    rsN: 5,
+    rsK: 3,
+    rsParity: 2,
+    rsCodecId: 'QV-RS-ErasureCodes-v1',
+    ...overrides,
+  };
+}
+
+function buildTestArchiveManifest(overrides = {}) {
+  return buildArchiveManifest(buildManifestParams(overrides));
 }
 
 function assert(condition, message) {
@@ -866,34 +900,80 @@ function buildCases() {
       },
     },
     {
-      name: 'RFC 8785 canonicalization is byte-identical to legacy QV-C14N-v1 for current manifest-family shapes',
+      name: 'strict JSON parser preserves special property names as inert data keys',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('manifest-rfc8785-delta');
-        const encrypted = await encryptFile(payload, publicKey, 'manifest-rfc8785-delta.bin');
-        const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 }, {
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
+        const parsed = parseJsonTextStrict(
+          '{"__proto__":{"polluted":1},"constructor":{"safe":2},"prototype":{"safe":3}}'
+        );
 
-        const normalizedAuthPolicy = normalizeAuthPolicy(split.bundle.authPolicy);
-        const strictManifestBytes = split.manifestBytes;
-        const strictBundleBytes = canonicalizeManifestBundle(split.bundle).bytes;
-        const strictAuthPolicyBytes = canonicalizeJsonToBytes(normalizedAuthPolicy);
+        assert(Object.getPrototypeOf(parsed) === null, 'strict JSON parser returned an unexpected prototype-bearing object');
+        assert(Object.prototype.hasOwnProperty.call(parsed, '__proto__'), 'strict JSON parser dropped __proto__');
+        assert(Object.prototype.hasOwnProperty.call(parsed, 'constructor'), 'strict JSON parser dropped constructor');
+        assert(Object.prototype.hasOwnProperty.call(parsed, 'prototype'), 'strict JSON parser dropped prototype');
+        assert(Object.getPrototypeOf(parsed.__proto__) === null, '__proto__ value must remain a parsed JSON object');
+        assert(parsed.__proto__.polluted === 1, '__proto__ value was not preserved as inert data');
+        assert(parsed.constructor.safe === 2, 'constructor value was not preserved as inert data');
+        assert(parsed.prototype.safe === 3, 'prototype value was not preserved as inert data');
+        assert(
+          canonicalizeJson(parsed) === '{"__proto__":{"polluted":1},"constructor":{"safe":2},"prototype":{"safe":3}}',
+          'special-key canonicalization output mismatch'
+        );
+      },
+    },
+    {
+      name: 'RFC 8785 canonicalization is byte-identical to legacy QV-C14N-v1 for covered manifest-family shapes and authPolicy variants',
+      fn: async () => {
+        const authPolicies = [
+          { level: 'integrity-only', minValidSignatures: 1 },
+          { level: 'any-signature', minValidSignatures: 2 },
+          { level: 'strong-pq-signature', minValidSignatures: 3 },
+        ];
+        const manifestCases = [
+          {
+            label: 'per-chunk',
+            overrides: {},
+          },
+          {
+            label: 'single-container',
+            overrides: {
+              aeadMode: 'single-container-aead',
+              ivStrategy: IV_STRATEGY_SINGLE_IV,
+              chunkCount: 1,
+              payloadLength: 2048,
+              qencHash: 'c'.repeat(128),
+              containerId: 'd'.repeat(128),
+            },
+          },
+        ];
 
-        assert(
-          timingSafeEqual(strictManifestBytes, legacyCanonicalizeQvC14nToBytes(split.manifest)),
-          'current archive-manifest shape diverged from legacy QV-C14N-v1 bytes'
-        );
-        assert(
-          timingSafeEqual(strictAuthPolicyBytes, legacyCanonicalizeQvC14nToBytes(normalizedAuthPolicy)),
-          'current authPolicy shape diverged from legacy QV-C14N-v1 bytes'
-        );
-        assert(
-          timingSafeEqual(strictBundleBytes, legacyCanonicalizeQvC14nToBytes(split.bundle)),
-          'current bundle shape diverged from legacy QV-C14N-v1 bytes'
-        );
+        for (const manifestCase of manifestCases) {
+          for (const authPolicy of authPolicies) {
+            const manifest = buildTestArchiveManifest({
+              ...manifestCase.overrides,
+              authPolicyLevel: authPolicy.level,
+              minValidSignatures: authPolicy.minValidSignatures,
+            });
+            const bundle = buildInitialManifestBundle({ manifest, authPolicy });
+            const normalizedAuthPolicy = normalizeAuthPolicy(authPolicy);
+            const strictManifestBytes = canonicalizeArchiveManifest(manifest).bytes;
+            const strictBundleBytes = canonicalizeManifestBundle(bundle).bytes;
+            const strictAuthPolicyBytes = canonicalizeJsonToBytes(normalizedAuthPolicy);
+            const label = `${manifestCase.label}/${authPolicy.level}/${authPolicy.minValidSignatures}`;
+
+            assert(
+              timingSafeEqual(strictManifestBytes, legacyCanonicalizeQvC14nToBytes(manifest)),
+              `current archive-manifest shape diverged from legacy QV-C14N-v1 bytes for ${label}`
+            );
+            assert(
+              timingSafeEqual(strictAuthPolicyBytes, legacyCanonicalizeQvC14nToBytes(normalizedAuthPolicy)),
+              `current authPolicy shape diverged from legacy QV-C14N-v1 bytes for ${label}`
+            );
+            assert(
+              timingSafeEqual(strictBundleBytes, legacyCanonicalizeQvC14nToBytes(bundle)),
+              `current bundle shape diverged from legacy QV-C14N-v1 bytes for ${label}`
+            );
+          }
+        }
       },
     },
     {
@@ -965,6 +1045,105 @@ function buildCases() {
       },
     },
     {
+      name: 'manifest builder and parser enforce the same documented current constraints',
+      fn: async () => {
+        const validManifest = buildTestArchiveManifest({
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 2,
+        });
+        const invalidManifestCases = [
+          {
+            label: 'qenc.format',
+            overrides: { qencFormat: 'NOT-QV' },
+            mutate(manifest) {
+              manifest.qenc.format = 'NOT-QV';
+            },
+          },
+          {
+            label: 'qenc.ivStrategy',
+            overrides: { ivStrategy: 'made-up-iv' },
+            mutate(manifest) {
+              manifest.qenc.ivStrategy = 'made-up-iv';
+            },
+          },
+          {
+            label: 'rsCodecId',
+            overrides: { rsCodecId: 'OTHER-CODEC' },
+            mutate(manifest) {
+              manifest.sharding.reedSolomon.codecId = 'OTHER-CODEC';
+            },
+          },
+          {
+            label: 'qenc.chunkSize safe-integer bound',
+            overrides: { chunkSize: 9007199254740992 },
+            mutate(manifest) {
+              manifest.qenc.chunkSize = 9007199254740992;
+            },
+          },
+        ];
+
+        for (const invalidCase of invalidManifestCases) {
+          await expectFailure(
+            () => Promise.resolve(buildArchiveManifest(buildManifestParams(invalidCase.overrides))),
+            `builder unexpectedly accepted invalid ${invalidCase.label}`
+          );
+          const mutated = cloneJson(validManifest);
+          invalidCase.mutate(mutated);
+          await expectFailure(
+            () => Promise.resolve(parseArchiveManifestBytes(canonicalizeJsonToBytes(mutated))),
+            `parser unexpectedly accepted invalid ${invalidCase.label}`
+          );
+        }
+
+        const validBundle = buildInitialManifestBundle({
+          manifest: validManifest,
+          authPolicy: { level: 'any-signature', minValidSignatures: 2 },
+        });
+
+        await expectFailure(
+          () => Promise.resolve(buildInitialManifestBundle({
+            manifest: validManifest,
+            authPolicy: { level: 'any-signature', minValidSignatures: 9007199254740992 },
+          })),
+          'bundle builder unexpectedly accepted an unsafe authPolicy.minValidSignatures'
+        );
+
+        const mutatedBundle = cloneJson(validBundle);
+        mutatedBundle.authPolicy.minValidSignatures = 9007199254740992;
+        await expectFailure(
+          () => Promise.resolve(parseManifestBundleBytes(canonicalizeJsonToBytes(mutatedBundle))),
+          'bundle parser unexpectedly accepted an unsafe authPolicy.minValidSignatures'
+        );
+      },
+    },
+    {
+      name: 'bundle preview parsing is isolated behind an explicit preview-only API',
+      fn: async () => {
+        const manifest = buildTestArchiveManifest({
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 2,
+        });
+        const bundle = buildInitialManifestBundle({
+          manifest,
+          authPolicy: { level: 'any-signature', minValidSignatures: 2 },
+        });
+        const canonical = canonicalizeManifestBundle(bundle);
+        const previewBytes = textBytes(JSON.stringify(bundle, null, 2));
+
+        await expectFailure(
+          () => Promise.resolve(parseManifestBundleBytes(previewBytes)),
+          'canonical bundle parser unexpectedly accepted preview-only non-canonical bytes'
+        );
+
+        const preview = parseManifestBundleBytesPreviewOnly(previewBytes);
+        assert(preview.bundle.type === MANIFEST_BUNDLE_TYPE, 'preview-only bundle parser returned an unexpected bundle type');
+        assert(
+          timingSafeEqual(preview.bytes, canonical.bytes),
+          'preview-only bundle parser did not preserve canonical bundle bytes'
+        );
+      },
+    },
+    {
       name: 'strict canonicalizer rejects lone surrogate strings',
       fn: async () => {
         await expectFailure(
@@ -1019,6 +1198,19 @@ function buildCases() {
       },
     },
     {
+      name: 'RFC 8785 composite canonicalization reference vector',
+      fn: async () => {
+        const sample = {
+          numbers: [333333333.33333329, 1e30, 4.5, 2e-3, 1e-27],
+          string: 'Euro:\u20ac control:\u000f newline:\n quote:" slash:/ backslash:\\',
+          literals: [null, true, false],
+        };
+        const expected = '{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27],"string":"Euro:€ control:\\u000f newline:\\n quote:\\" slash:/ backslash:\\\\"}';
+        const result = canonicalizeJson(sample);
+        assert(result === expected, `RFC 8785 composite vector failed: expected ${expected}, got ${result}`);
+      },
+    },
+    {
       name: 'RFC 8785 primitive and structural reference vectors',
       fn: async () => {
         const vectors = [
@@ -1059,6 +1251,23 @@ function buildCases() {
         await expectFailure(
           () => Promise.resolve(canonicalizeJsonToBytes(BigInt(1))),
           'canonicalizer unexpectedly accepted bigint'
+        );
+      },
+    },
+    {
+      name: 'canonical manifest byte identity remains stable for a representative current manifest',
+      fn: async () => {
+        const manifest = buildTestArchiveManifest({
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 2,
+        });
+        const expected = '{"aadPolicyId":"QV-AAD-HEADER-CHUNK-v1","authPolicyCommitment":{"alg":"SHA3-512","canonicalization":"QV-JSON-RFC8785-v1","value":"d40373eb7006f8d120acff9e34fe2b6e3cc8eca0cf3e78b48037026aae88d2c230a8b5cb1560710e43c46e6398c2e02bbb8bb0a56d86ca49059b50fcf90eb429"},"canonicalization":"QV-JSON-RFC8785-v1","counterBits":32,"cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2","kdfTreeId":"QV-KDF-TREE-v2","manifestType":"archive","maxChunkCount":4294967295,"nonceMode":"kmac-prefix64-ctr32","noncePolicyId":"QV-GCM-KMACPFX64-CTR32-v3","qenc":{"aeadMode":"per-chunk-aead","chunkCount":3,"chunkSize":65536,"containerId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","containerIdAlg":"SHA3-512(qenc-header-bytes)","containerIdRole":"secondary-header-id","format":"QVv1-5-0","hashAlg":"SHA3-512","ivStrategy":"kmac-prefix64-ctr32-v3","payloadLength":131072,"primaryAnchor":"qencHash","qencHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"schema":"quantum-vault-archive-manifest/v3","sharding":{"reedSolomon":{"codecId":"QV-RS-ErasureCodes-v1","k":3,"n":5,"parity":2},"shamir":{"shareCount":5,"threshold":4}},"version":3}';
+        const canonicalized = canonicalizeArchiveManifest(manifest);
+
+        assert(canonicalized.canonical === expected, 'canonical manifest regression string changed unexpectedly');
+        assert(
+          timingSafeEqual(canonicalized.bytes, textBytes(expected)),
+          'canonical manifest regression bytes changed unexpectedly'
         );
       },
     },

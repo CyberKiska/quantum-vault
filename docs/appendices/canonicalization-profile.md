@@ -43,10 +43,11 @@ External references already used elsewhere in the repository:
 Implemented now:
 
 - strict UTF-8 canonical byte output for manifests, bundles, and canonicalized policy commitments
-- RFC 8785-compatible canonicalization for canonical manifests and `authPolicyCommitment` input
+- RFC 8785-aligned canonicalization for canonical manifests and `authPolicyCommitment` input, with byte-level regression coverage for the current repository vectors and current manifest-family shapes
 - current bundle canonicalization using the same strict serializer but a separate bundle-specific label
 - duplicate-key rejection on manifest and bundle parse paths
 - lone-surrogate rejection on parse and canonicalization paths
+- JSON member names are parsed as inert data keys even when named `__proto__`, `constructor`, or `prototype`
 - rejection of non-finite numbers, `bigint`, unsupported runtime value types, non-plain objects, and cyclic structures
 
 Not yet first-class in the current implementation:
@@ -122,7 +123,7 @@ Current array handling:
 `QV-JSON-RFC8785-v1` should be described honestly:
 
 - it is the current manifest-side canonical JSON profile
-- it is intended to be RFC 8785-compatible for the current manifest-family JSON objects the repository emits and accepts
+- the current repository demonstrates byte-level parity for the covered vectors and current manifest-family JSON objects it emits and accepts
 - compatibility with an external RFC 8785 tool exists only when that tool emits the same bytes for the same JSON value
 
 `QV-BUNDLE-JSON-v1` should also be described honestly:

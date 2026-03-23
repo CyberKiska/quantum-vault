@@ -42,6 +42,19 @@ export function decodeUtf8JsonBytes(bytes) {
 
 const NUMBER_TOKEN_RE = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/;
 
+function createInertJsonObject() {
+  return Object.create(null);
+}
+
+function defineJsonDataProperty(target, key, value) {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
 class StrictJsonParser {
   constructor(text) {
     this.text = text;
@@ -108,7 +121,11 @@ class StrictJsonParser {
     }
     const token = match[0];
     this.pos += token.length;
-    return JSON.parse(token);
+    const value = JSON.parse(token);
+    if (!Number.isFinite(value)) {
+      this.fail('Number is not representable as a finite IEEE 754 value');
+    }
+    return value;
   }
 
   parseHex4() {
@@ -229,7 +246,7 @@ class StrictJsonParser {
     }
     this.pos += 1;
     this.skipWhitespace();
-    const out = {};
+    const out = createInertJsonObject();
     const seen = new Set();
     if (this.peek() === 0x7d) {
       this.pos += 1;
@@ -249,7 +266,7 @@ class StrictJsonParser {
         this.fail('Expected ":" after object key');
       }
       this.pos += 1;
-      out[key] = this.parseValue();
+      defineJsonDataProperty(out, key, this.parseValue());
       this.skipWhitespace();
       const codeUnit = this.peek();
       if (codeUnit === 0x2c) {
@@ -267,7 +284,10 @@ class StrictJsonParser {
 }
 
 export function parseJsonTextStrict(text) {
-  return new StrictJsonParser(String(text)).parse();
+  if (typeof text !== 'string') {
+    throw new Error('JSON text must be a string');
+  }
+  return new StrictJsonParser(text).parse();
 }
 
 export function parseJsonBytesStrict(bytes) {

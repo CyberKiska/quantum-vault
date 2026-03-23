@@ -87,7 +87,10 @@ function resolveJsonPointer(document, pointer) {
   return current;
 }
 
-const SUPPORTED_SCHEMA_KEYS = new Set([
+// This helper is intentionally limited to the keyword subset used by the
+// checked-in Quantum Vault schemas and fixture corpus. It is not a general
+// draft 2020-12 validator.
+export const SUPPORTED_SCHEMA_KEYS = new Set([
   '$schema',
   '$id',
   '$defs',

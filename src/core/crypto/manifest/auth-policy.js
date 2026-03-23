@@ -1,7 +1,7 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../bytes.js';
 import { MANIFEST_CANONICALIZATION_LABEL, canonicalizeJsonToBytes } from './jcs.js';
-import { ensureObject, ensureString, ensureInteger, ensureHex, assertExactKeys } from './validation.js';
+import { ensureObject, ensureString, ensureSafeInteger, ensureHex, assertExactKeys } from './validation.js';
 
 export const AUTH_POLICY_COMMITMENT_ALG = 'SHA3-512';
 
@@ -10,13 +10,13 @@ const AUTH_LEVELS = new Set(['integrity-only', 'any-signature', 'strong-pq-signa
 export function normalizeAuthPolicy(authPolicy) {
   const source = ensureObject(authPolicy, 'authPolicy');
   assertExactKeys(source, ['level', 'minValidSignatures'], [], 'authPolicy');
-  const level = String(source.level || '').trim().toLowerCase();
+  const level = ensureString(source.level, 'authPolicy.level');
   if (!AUTH_LEVELS.has(level)) {
     throw new Error(`Unsupported authPolicy.level: ${source.level}`);
   }
   return {
     level,
-    minValidSignatures: ensureInteger(source.minValidSignatures ?? 1, 'authPolicy.minValidSignatures', 1),
+    minValidSignatures: ensureSafeInteger(source.minValidSignatures ?? 1, 'authPolicy.minValidSignatures', 1),
   };
 }
 

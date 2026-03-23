@@ -63,7 +63,7 @@ Implemented now:
 - the supported versions, schema IDs, and artifact boundaries listed in Section 1
 - canonical manifest export and embedding under `QV-JSON-RFC8785-v1`
 - canonical bundle export under `QV-BUNDLE-JSON-v1`
-- JSON Schema draft 2020-12 files under `docs/schema/` for manifest-family structural grammar plus a checked-in fixture corpus validated in JavaScript CI
+- JSON Schema draft 2020-12 files under `docs/schema/` for manifest-family structural grammar plus a checked-in fixture corpus validated in JavaScript CI by a checked-in validator that covers the active repository keyword subset, not the full draft 2020-12 vocabulary
 - detached signatures over canonical manifest bytes only
 - embedded or external bundle, signature, key, and timestamp inputs during restore
 - current unknown-field handling and deterministic restore candidate selection as documented in the current sections of this file
@@ -158,7 +158,7 @@ These layers are related but distinct:
 - A value can be canonical and schema-valid but semantically invalid (for example, `reedSolomon.parity` does not equal `n - k`).
 - A value can be semantically meaningful but structurally incomplete (missing a required field that the grammar requires).
 
-Conforming parsers MUST enforce all three layers. The JSON Schema grammar layer does not replace canonicalization rules or semantic validation. The current structural grammar layer uses JSON Schema draft 2020-12; any future use of CDDL (RFC 8610) would be a separate long-term representation-information concern, not a replacement for the current validation layer.
+Conforming parsers MUST enforce all three layers. The JSON Schema grammar layer does not replace canonicalization rules or semantic validation. The current structural grammar layer uses JSON Schema draft 2020-12; the repository's checked-in JavaScript CI helper validates only the keyword subset exercised by the current checked-in schemas and fixtures. Any future use of CDDL (RFC 8610) would be a separate long-term representation-information concern, not a replacement for the current validation layer.
 
 ## 3. Artifact model
 
@@ -220,6 +220,7 @@ Because detached signatures depend on exact bytes:
 
 - Quantum Vault MUST sign only bytes produced by the supported canonicalizer
 - Quantum Vault MUST NOT claim RFC 8785 compatibility for any label that does not actually use RFC 8785-compatible byte rules
+- The current repository demonstrates byte-level parity only for the checked-in regression vectors and current manifest-family shapes; it does not make a broader external conformance claim beyond that covered scope
 
 The manifest canonicalizer rejects duplicate-key JSON on the parse path, rejects invalid UTF-8, rejects lone surrogates, rejects unsupported runtime values, and emits UTF-8 canonical bytes with recursively sorted object keys.
 
@@ -279,12 +280,12 @@ Canonical key order is determined by `QV-JSON-RFC8785-v1`, not by the order show
 
 | Field | Type | Current constraint or meaning |
 | --- | --- | --- |
-| `format` | string | MUST identify the supported `.qenc` metadata format; current emitter uses `QVv1-5-0` |
+| `format` | string | MUST be `QVv1-5-0` |
 | `aeadMode` | string | MUST be `single-container-aead` or `per-chunk-aead` |
 | `ivStrategy` | string | MUST match the selected `aeadMode`; current supported values are `single-iv` and `kmac-prefix64-ctr32-v3` |
-| `chunkSize` | integer | positive chunk size used for current encryption layout |
+| `chunkSize` | integer | positive safe integer chunk size used for current encryption layout |
 | `chunkCount` | integer | positive count; MUST remain within the nonce-policy bound |
-| `payloadLength` | integer | positive plaintext payload length carried by `.qenc` |
+| `payloadLength` | integer | positive safe integer plaintext payload length carried by `.qenc` |
 | `hashAlg` | string | MUST be `SHA3-512` |
 | `qencHash` | string | lowercase hex `SHA3-512` over the full `.qenc` bytes |
 | `primaryAnchor` | string | MUST be `qencHash` |
@@ -296,12 +297,12 @@ Canonical key order is determined by `QV-JSON-RFC8785-v1`, not by the order show
 
 | Field | Type | Current constraint or meaning |
 | --- | --- | --- |
-| `sharding.shamir.threshold` | integer | positive threshold for share recovery |
-| `sharding.shamir.shareCount` | integer | positive Shamir share count |
-| `sharding.reedSolomon.n` | integer | positive total shard count |
-| `sharding.reedSolomon.k` | integer | positive minimum fragment count for erasure recovery |
-| `sharding.reedSolomon.parity` | integer | current parity count |
-| `sharding.reedSolomon.codecId` | string | current builder emits `QV-RS-ErasureCodes-v1` |
+| `sharding.shamir.threshold` | integer | positive safe integer threshold for share recovery |
+| `sharding.shamir.shareCount` | integer | positive safe integer Shamir share count |
+| `sharding.reedSolomon.n` | integer | positive safe integer total shard count |
+| `sharding.reedSolomon.k` | integer | positive safe integer minimum fragment count for erasure recovery |
+| `sharding.reedSolomon.parity` | integer | current parity count as a uint32 integer |
+| `sharding.reedSolomon.codecId` | string | MUST be `QV-RS-ErasureCodes-v1` |
 | `authPolicyCommitment.alg` | string | MUST be `SHA3-512` |
 | `authPolicyCommitment.canonicalization` | string | MUST be `QV-JSON-RFC8785-v1` |
 | `authPolicyCommitment.value` | string | lowercase hex digest over the canonicalized concrete `authPolicy` object |
@@ -386,6 +387,7 @@ Current canonical-manifest parsing behavior is:
 
 - manifest input bytes MUST already be canonical `QV-JSON-RFC8785-v1` JSON
 - parsers reject invalid UTF-8, duplicate object keys, lone surrogates, and unsupported schema/version or canonicalization labels
+- JSON member names are always treated as inert data keys on the parse path; names such as `__proto__`, `constructor`, and `prototype` do not trigger prototype or accessor behavior
 - parsers validate the required current fields and the current binding and algorithm identifiers
 - unknown additional manifest fields are rejected at every object level
 - compatibility fails closed on unsupported schema, version, canonicalization, and required-binding mismatches
@@ -429,7 +431,7 @@ Naming behavior:
 | `manifestDigest.alg` | string | MUST be `SHA3-512` |
 | `manifestDigest.value` | string | lowercase hex `SHA3-512` over canonical manifest bytes |
 | `authPolicy.level` | string | MUST be `integrity-only`, `any-signature`, or `strong-pq-signature` |
-| `authPolicy.minValidSignatures` | integer | positive integer, currently normalized with minimum `1` |
+| `authPolicy.minValidSignatures` | integer | positive safe integer; current runtime rejects values above `9007199254740991` |
 | `attachments.publicKeys` | array | current canonical bundle input MUST carry the array even when empty |
 | `attachments.signatures` | array | current canonical bundle input MUST carry the array even when empty |
 | `attachments.timestamps` | array | current canonical bundle input MUST carry the array even when empty |
@@ -591,6 +593,7 @@ Current canonical-bundle parsing behavior is:
 - bundle input bytes MUST already include the normalized top-level shape, including `manifestDigest.alg`, `manifestDigest.value`, and explicit `attachments.publicKeys`, `attachments.signatures`, and `attachments.timestamps` arrays
 - parsers reject invalid UTF-8, duplicate object keys, lone surrogates, unsupported bundle or embedded-manifest labels/versions, and structurally unknown current bundle fields
 - parsers normalize bundle content to the current known field set and then require byte-for-byte equality with the canonical bytes of that normalized output
+- the only supported non-canonical bundle parse boundary is the preview-only API used for UI shard inspection; normal bundle parse APIs remain fail-closed on non-canonical bytes
 - unresolved or incompatible `publicKeyRef` bindings fail closed
 
 ## 7. `.qenc` container format

@@ -1,6 +1,7 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../bytes.js';
-import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL } from '../constants.js';
+import { IV_STRATEGY_KMAC_PREFIX64_CTR32_V3, IV_STRATEGY_SINGLE_IV } from '../aead.js';
+import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL, FORMAT_VERSION } from '../constants.js';
 import {
   AAD_POLICY_ID_V1,
   CRYPTO_PROFILE_ID_V2,
@@ -11,13 +12,30 @@ import {
   getNonceContractForAeadMode,
   getCryptoProfile,
 } from '../policy.js';
-import { computeAuthPolicyCommitment, validateAuthPolicyCommitmentShape } from './auth-policy.js';
+import { computeAuthPolicyCommitment, normalizeAuthPolicy, validateAuthPolicyCommitmentShape } from './auth-policy.js';
 import { MANIFEST_CANONICALIZATION_LABEL, canonicalizeJson, canonicalizeJsonToBytes } from './jcs.js';
 import { parseJsonBytesStrict } from './strict-json.js';
-import { ensureObject, ensureString, ensureInteger, ensureHex, assertExactKeys } from './validation.js';
+import {
+  ensureObject,
+  ensureString,
+  ensureInteger,
+  ensureSafeInteger,
+  ensureExactString,
+  ensureHex,
+  assertExactKeys,
+} from './validation.js';
 
 const MANIFEST_SCHEMA = 'quantum-vault-archive-manifest/v3';
 const MANIFEST_VERSION = 3;
+const QENC_AEAD_MODE_SINGLE_CONTAINER = 'single-container-aead';
+const QENC_AEAD_MODE_PER_CHUNK = 'per-chunk-aead';
+const SHA3_512_ALG = 'SHA3-512';
+const PRIMARY_ANCHOR = 'qencHash';
+const CONTAINER_ID_ROLE = 'secondary-header-id';
+const CONTAINER_ID_ALG = 'SHA3-512(qenc-header-bytes)';
+const REED_SOLOMON_CODEC_ID = 'QV-RS-ErasureCodes-v1';
+const SHARD_BODY_DEFINITION_ID = 'QV-QCONT-SHARDBODY-v1';
+const SHARE_COMMITMENT_INPUT = 'raw-shamir-share-bytes';
 
 const BODY_DEFINITION_INCLUDES = Object.freeze(['fragment-len32-stream']);
 const BODY_DEFINITION_EXCLUDES = Object.freeze([
@@ -64,7 +82,27 @@ function assertExactStringArray(values, expected, field) {
   return actual;
 }
 
-function validateManifestQenc(source, profile) {
+function getExpectedIvStrategyForAeadMode(aeadMode, field = 'aeadMode') {
+  if (aeadMode === QENC_AEAD_MODE_SINGLE_CONTAINER) {
+    return IV_STRATEGY_SINGLE_IV;
+  }
+  if (aeadMode === QENC_AEAD_MODE_PER_CHUNK) {
+    return IV_STRATEGY_KMAC_PREFIX64_CTR32_V3;
+  }
+  throw new Error(`Unsupported ${field}: ${aeadMode}`);
+}
+
+function ensureManifestAeadMode(value, field) {
+  const aeadMode = ensureString(value, field);
+  getExpectedIvStrategyForAeadMode(aeadMode, field);
+  return aeadMode;
+}
+
+function ensureManifestIvStrategy(value, field, aeadMode) {
+  return ensureExactString(value, field, getExpectedIvStrategyForAeadMode(aeadMode, 'qenc.aeadMode'));
+}
+
+function normalizeManifestQencStructure(source) {
   const qenc = ensureObject(source, 'qenc');
   assertExactKeys(qenc, [
     'format',
@@ -81,63 +119,77 @@ function validateManifestQenc(source, profile) {
     'containerIdAlg',
   ], [], 'qenc');
 
-  const aeadMode = ensureString(qenc.aeadMode, 'qenc.aeadMode');
-  const nonceContract = getNonceContractForAeadMode(aeadMode, profile);
-
-  ensureString(qenc.format, 'qenc.format');
-  ensureString(qenc.ivStrategy, 'qenc.ivStrategy');
-  ensureInteger(qenc.chunkSize, 'qenc.chunkSize', 1);
-  const chunkCount = ensureInteger(qenc.chunkCount, 'qenc.chunkCount', 1);
-  ensureInteger(qenc.payloadLength, 'qenc.payloadLength', 1);
-  ensureHex(qenc.qencHash, 'qenc.qencHash', 128);
-  ensureHex(qenc.containerId, 'qenc.containerId', 128);
-
-  if (qenc.hashAlg !== 'SHA3-512') {
-    throw new Error('Unsupported qenc.hashAlg');
+  const aeadMode = ensureManifestAeadMode(qenc.aeadMode, 'qenc.aeadMode');
+  const chunkCount = ensureInteger(qenc.chunkCount, 'qenc.chunkCount', 1, 0xffffffff);
+  if (aeadMode === QENC_AEAD_MODE_SINGLE_CONTAINER && chunkCount !== 1) {
+    throw new Error('Invalid qenc.chunkCount');
   }
-  if (qenc.primaryAnchor !== 'qencHash') {
-    throw new Error('Unsupported qenc.primaryAnchor');
-  }
-  if (qenc.containerIdRole !== 'secondary-header-id') {
-    throw new Error('Unsupported qenc.containerIdRole');
-  }
-  if (qenc.containerIdAlg !== 'SHA3-512(qenc-header-bytes)') {
-    throw new Error('Unsupported qenc.containerIdAlg');
-  }
-
-  assertChunkCountWithinPolicy(chunkCount, profile, aeadMode);
-  return { qenc, nonceContract };
+  return {
+    format: ensureExactString(qenc.format, 'qenc.format', FORMAT_VERSION),
+    aeadMode,
+    ivStrategy: ensureManifestIvStrategy(qenc.ivStrategy, 'qenc.ivStrategy', aeadMode),
+    chunkSize: ensureSafeInteger(qenc.chunkSize, 'qenc.chunkSize', 1),
+    chunkCount,
+    payloadLength: ensureSafeInteger(qenc.payloadLength, 'qenc.payloadLength', 1),
+    hashAlg: ensureExactString(qenc.hashAlg, 'qenc.hashAlg', SHA3_512_ALG),
+    qencHash: ensureHex(qenc.qencHash, 'qenc.qencHash', 128),
+    primaryAnchor: ensureExactString(qenc.primaryAnchor, 'qenc.primaryAnchor', PRIMARY_ANCHOR),
+    containerId: ensureHex(qenc.containerId, 'qenc.containerId', 128),
+    containerIdRole: ensureExactString(qenc.containerIdRole, 'qenc.containerIdRole', CONTAINER_ID_ROLE),
+    containerIdAlg: ensureExactString(qenc.containerIdAlg, 'qenc.containerIdAlg', CONTAINER_ID_ALG),
+  };
 }
 
-function validateManifestSharding(source) {
+function validateManifestQencSemantics(qenc, profile) {
+  const nonceContract = getNonceContractForAeadMode(qenc.aeadMode, profile);
+  assertChunkCountWithinPolicy(qenc.chunkCount, profile, qenc.aeadMode);
+  return nonceContract;
+}
+
+function normalizeManifestShardingStructure(source) {
   const sharding = ensureObject(source, 'sharding');
   assertExactKeys(sharding, ['shamir', 'reedSolomon'], [], 'sharding');
 
   const shamir = ensureObject(sharding.shamir, 'sharding.shamir');
   assertExactKeys(shamir, ['threshold', 'shareCount'], [], 'sharding.shamir');
-  const threshold = ensureInteger(shamir.threshold, 'sharding.shamir.threshold', 2);
-  const shareCount = ensureInteger(shamir.shareCount, 'sharding.shamir.shareCount', 2);
-  if (threshold > shareCount) {
-    throw new Error('Invalid sharding.shamir.threshold');
-  }
+  const threshold = ensureSafeInteger(shamir.threshold, 'sharding.shamir.threshold', 2);
+  const shareCount = ensureSafeInteger(shamir.shareCount, 'sharding.shamir.shareCount', 2);
 
   const reedSolomon = ensureObject(sharding.reedSolomon, 'sharding.reedSolomon');
   assertExactKeys(reedSolomon, ['n', 'k', 'parity', 'codecId'], [], 'sharding.reedSolomon');
-  const n = ensureInteger(reedSolomon.n, 'sharding.reedSolomon.n', 2);
-  const k = ensureInteger(reedSolomon.k, 'sharding.reedSolomon.k', 2);
-  const parity = ensureInteger(reedSolomon.parity, 'sharding.reedSolomon.parity', 0);
-  ensureString(reedSolomon.codecId, 'sharding.reedSolomon.codecId');
+  const n = ensureSafeInteger(reedSolomon.n, 'sharding.reedSolomon.n', 2);
+  const k = ensureSafeInteger(reedSolomon.k, 'sharding.reedSolomon.k', 2);
+  const parity = ensureInteger(reedSolomon.parity, 'sharding.reedSolomon.parity', 0, 0xffffffff);
+  const codecId = ensureExactString(reedSolomon.codecId, 'sharding.reedSolomon.codecId', REED_SOLOMON_CODEC_ID);
+
+  return {
+    shamir: {
+      threshold,
+      shareCount,
+    },
+    reedSolomon: {
+      n,
+      k,
+      parity,
+      codecId,
+    },
+  };
+}
+
+function validateManifestShardingSemantics(sharding) {
+  if (sharding.shamir.threshold > sharding.shamir.shareCount) {
+    throw new Error('Invalid sharding.shamir.threshold');
+  }
+  const { n, k, parity } = sharding.reedSolomon;
   if (k >= n) {
     throw new Error('Invalid sharding.reedSolomon.k');
   }
   if (parity !== n - k) {
     throw new Error('Invalid sharding.reedSolomon.parity');
   }
-
-  return sharding;
 }
 
-function validateShardBinding(source) {
+function normalizeShardBindingStructure(source) {
   const shardBinding = ensureObject(source, 'shardBinding');
   assertExactKeys(
     shardBinding,
@@ -146,38 +198,50 @@ function validateShardBinding(source) {
     'shardBinding'
   );
 
-  if (ensureString(shardBinding.bodyDefinitionId, 'shardBinding.bodyDefinitionId') !== 'QV-QCONT-SHARDBODY-v1') {
-    throw new Error('Unsupported shardBinding.bodyDefinitionId');
-  }
-  if (ensureString(shardBinding.shardBodyHashAlg, 'shardBinding.shardBodyHashAlg') !== 'SHA3-512') {
-    throw new Error('Unsupported shardBinding.shardBodyHashAlg');
-  }
-
   const bodyDefinition = ensureObject(shardBinding.bodyDefinition, 'shardBinding.bodyDefinition');
   assertExactKeys(bodyDefinition, ['includes', 'excludes'], [], 'shardBinding.bodyDefinition');
-  assertExactStringArray(bodyDefinition.includes, BODY_DEFINITION_INCLUDES, 'shardBinding.bodyDefinition.includes');
-  assertExactStringArray(bodyDefinition.excludes, BODY_DEFINITION_EXCLUDES, 'shardBinding.bodyDefinition.excludes');
+  const normalized = {
+    bodyDefinitionId: ensureExactString(
+      shardBinding.bodyDefinitionId,
+      'shardBinding.bodyDefinitionId',
+      SHARD_BODY_DEFINITION_ID
+    ),
+    bodyDefinition: {
+      includes: assertExactStringArray(
+        bodyDefinition.includes,
+        BODY_DEFINITION_INCLUDES,
+        'shardBinding.bodyDefinition.includes'
+      ),
+      excludes: assertExactStringArray(
+        bodyDefinition.excludes,
+        BODY_DEFINITION_EXCLUDES,
+        'shardBinding.bodyDefinition.excludes'
+      ),
+    },
+    shardBodyHashAlg: ensureExactString(shardBinding.shardBodyHashAlg, 'shardBinding.shardBodyHashAlg', SHA3_512_ALG),
+  };
 
   if (shardBinding.shardBodyHashes != null) {
-    ensureHashList(shardBinding.shardBodyHashes, 'shardBinding.shardBodyHashes');
+    normalized.shardBodyHashes = ensureHashList(shardBinding.shardBodyHashes, 'shardBinding.shardBodyHashes');
   }
 
   if (shardBinding.shareCommitment != null || shardBinding.shareCommitments != null) {
     const shareCommitment = ensureObject(shardBinding.shareCommitment, 'shardBinding.shareCommitment');
     assertExactKeys(shareCommitment, ['hashAlg', 'input'], [], 'shardBinding.shareCommitment');
-    if (shareCommitment.hashAlg !== 'SHA3-512' || shareCommitment.input !== 'raw-shamir-share-bytes') {
-      throw new Error('Invalid shardBinding.shareCommitment descriptor');
-    }
-    ensureHashList(shardBinding.shareCommitments, 'shardBinding.shareCommitments');
+    normalized.shareCommitment = {
+      hashAlg: ensureExactString(shareCommitment.hashAlg, 'shardBinding.shareCommitment.hashAlg', SHA3_512_ALG),
+      input: ensureExactString(shareCommitment.input, 'shardBinding.shareCommitment.input', SHARE_COMMITMENT_INPUT),
+    };
+    normalized.shareCommitments = ensureHashList(shardBinding.shareCommitments, 'shardBinding.shareCommitments');
   }
 
-  if (shardBinding.shardBodyHashes == null && shardBinding.shareCommitments == null) {
+  if (normalized.shardBodyHashes == null && normalized.shareCommitments == null) {
     throw new Error('Invalid shardBinding: expected shardBodyHashes or shareCommitments');
   }
-  return shardBinding;
+  return normalized;
 }
 
-export function validateArchiveManifestObject(manifest) {
+function normalizeArchiveManifestStructure(manifest) {
   const source = ensureObject(manifest, 'manifest');
   assertExactKeys(source, [
     'schema',
@@ -196,58 +260,77 @@ export function validateArchiveManifestObject(manifest) {
     'authPolicyCommitment',
   ], ['shardBinding'], 'manifest');
 
-  if (source.schema !== MANIFEST_SCHEMA || source.version !== MANIFEST_VERSION || source.manifestType !== 'archive') {
+  const version = ensureInteger(source.version, 'manifest.version', 1, Number.MAX_SAFE_INTEGER);
+  ensureExactString(source.schema, 'manifest.schema', MANIFEST_SCHEMA);
+  ensureExactString(source.manifestType, 'manifest.manifestType', 'archive');
+  if (version !== MANIFEST_VERSION) {
     throw new Error('Unsupported archive manifest schema/version');
-  }
-  if (source.canonicalization !== MANIFEST_CANONICALIZATION_LABEL) {
-    throw new Error('Unsupported manifest canonicalization');
-  }
-
-  const profileId = ensureString(source.cryptoProfileId, 'manifest.cryptoProfileId');
-  const profile = getCryptoProfile(profileId);
-
-  if (source.kdfTreeId !== profile.kdfTreeId) {
-    throw new Error(`Manifest kdfTreeId does not match profile (${profile.kdfTreeId})`);
-  }
-  if (source.aadPolicyId !== profile.aadPolicyId) {
-    throw new Error(`Manifest aadPolicyId does not match profile (${profile.aadPolicyId})`);
-  }
-
-  const { nonceContract } = validateManifestQenc(source.qenc, profile);
-
-  if (source.noncePolicyId !== nonceContract.noncePolicyId) {
-    throw new Error(`Manifest noncePolicyId does not match AEAD mode ${source.qenc.aeadMode}`);
-  }
-  if (source.nonceMode !== nonceContract.nonceMode) {
-    throw new Error(`Manifest nonceMode does not match AEAD mode ${source.qenc.aeadMode}`);
-  }
-  if (source.counterBits !== nonceContract.counterBits) {
-    throw new Error(`Manifest counterBits does not match AEAD mode ${source.qenc.aeadMode}`);
-  }
-  if (source.maxChunkCount !== nonceContract.maxChunkCount) {
-    throw new Error(`Manifest maxChunkCount does not match AEAD mode ${source.qenc.aeadMode}`);
-  }
-
-  validateManifestSharding(source.sharding);
-  validateAuthPolicyCommitmentShape(source.authPolicyCommitment);
-
-  if (source.shardBinding != null) {
-    validateShardBinding(source.shardBinding);
   }
 
   return {
-    manifest: source,
+    schema: source.schema,
+    version,
+    manifestType: source.manifestType,
+    canonicalization: ensureExactString(
+      source.canonicalization,
+      'manifest.canonicalization',
+      MANIFEST_CANONICALIZATION_LABEL
+    ),
+    cryptoProfileId: ensureString(source.cryptoProfileId, 'manifest.cryptoProfileId'),
+    kdfTreeId: ensureString(source.kdfTreeId, 'manifest.kdfTreeId'),
+    noncePolicyId: ensureString(source.noncePolicyId, 'manifest.noncePolicyId'),
+    nonceMode: ensureString(source.nonceMode, 'manifest.nonceMode'),
+    counterBits: ensureInteger(source.counterBits, 'manifest.counterBits', 0, 0xffffffff),
+    maxChunkCount: ensureInteger(source.maxChunkCount, 'manifest.maxChunkCount', 1, 0xffffffff),
+    aadPolicyId: ensureString(source.aadPolicyId, 'manifest.aadPolicyId'),
+    qenc: normalizeManifestQencStructure(source.qenc),
+    sharding: normalizeManifestShardingStructure(source.sharding),
+    authPolicyCommitment: validateAuthPolicyCommitmentShape(source.authPolicyCommitment),
+    ...(source.shardBinding != null ? { shardBinding: normalizeShardBindingStructure(source.shardBinding) } : {}),
+  };
+}
+
+export function validateArchiveManifestObject(manifest) {
+  const normalized = normalizeArchiveManifestStructure(manifest);
+  const profile = getCryptoProfile(normalized.cryptoProfileId);
+
+  if (normalized.kdfTreeId !== profile.kdfTreeId) {
+    throw new Error(`Manifest kdfTreeId does not match profile (${profile.kdfTreeId})`);
+  }
+  if (normalized.aadPolicyId !== profile.aadPolicyId) {
+    throw new Error(`Manifest aadPolicyId does not match profile (${profile.aadPolicyId})`);
+  }
+
+  const nonceContract = validateManifestQencSemantics(normalized.qenc, profile);
+
+  if (normalized.noncePolicyId !== nonceContract.noncePolicyId) {
+    throw new Error(`Manifest noncePolicyId does not match AEAD mode ${normalized.qenc.aeadMode}`);
+  }
+  if (normalized.nonceMode !== nonceContract.nonceMode) {
+    throw new Error(`Manifest nonceMode does not match AEAD mode ${normalized.qenc.aeadMode}`);
+  }
+  if (normalized.counterBits !== nonceContract.counterBits) {
+    throw new Error(`Manifest counterBits does not match AEAD mode ${normalized.qenc.aeadMode}`);
+  }
+  if (normalized.maxChunkCount !== nonceContract.maxChunkCount) {
+    throw new Error(`Manifest maxChunkCount does not match AEAD mode ${normalized.qenc.aeadMode}`);
+  }
+
+  validateManifestShardingSemantics(normalized.sharding);
+
+  return {
+    manifest: normalized,
     profile,
   };
 }
 
 export function buildArchiveManifest(params) {
-  const authPolicy = {
+  const authPolicy = normalizeAuthPolicy({
     level: params.authPolicyLevel || DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL,
     minValidSignatures: params.minValidSignatures ?? 1,
-  };
+  });
   const profile = getCryptoProfile(params.cryptoProfileId || CRYPTO_PROFILE_ID_V2);
-  const aeadMode = ensureString(params.aeadMode, 'aeadMode');
+  const aeadMode = ensureManifestAeadMode(params.aeadMode, 'aeadMode');
   const nonceContract = getNonceContractForAeadMode(aeadMode, profile);
 
   const noncePolicyId = ensureString(
@@ -261,12 +344,14 @@ export function buildArchiveManifest(params) {
   const counterBits = ensureInteger(
     params.counterBits ?? nonceContract.counterBits,
     'counterBits',
-    0
+    0,
+    0xffffffff
   );
   const maxChunkCount = ensureInteger(
     params.maxChunkCount ?? nonceContract.maxChunkCount,
     'maxChunkCount',
-    1
+    1,
+    0xffffffff
   );
 
   if (noncePolicyId !== nonceContract.noncePolicyId) {
@@ -282,8 +367,10 @@ export function buildArchiveManifest(params) {
     throw new Error(`maxChunkCount does not match AEAD mode ${aeadMode}`);
   }
 
-  const chunkCount = ensureInteger(params.chunkCount, 'chunkCount', 1);
+  const chunkCount = ensureInteger(params.chunkCount, 'chunkCount', 1, 0xffffffff);
   assertChunkCountWithinPolicy(chunkCount, profile, aeadMode);
+  const qencFormat = ensureExactString(params.qencFormat, 'qencFormat', FORMAT_VERSION);
+  const ivStrategy = ensureManifestIvStrategy(params.ivStrategy, 'ivStrategy', aeadMode);
 
   const manifest = {
     schema: MANIFEST_SCHEMA,
@@ -298,67 +385,64 @@ export function buildArchiveManifest(params) {
     maxChunkCount,
     aadPolicyId: profile.aadPolicyId,
     qenc: {
-      format: ensureString(params.qencFormat, 'qencFormat'),
+      format: qencFormat,
       aeadMode,
-      ivStrategy: ensureString(params.ivStrategy, 'ivStrategy'),
-      chunkSize: ensureInteger(params.chunkSize, 'chunkSize', 1),
+      ivStrategy,
+      chunkSize: ensureSafeInteger(params.chunkSize, 'chunkSize', 1),
       chunkCount,
-      payloadLength: ensureInteger(params.payloadLength, 'payloadLength', 1),
-      hashAlg: 'SHA3-512',
+      payloadLength: ensureSafeInteger(params.payloadLength, 'payloadLength', 1),
+      hashAlg: SHA3_512_ALG,
       qencHash: ensureHex(params.qencHash, 'qencHash', 128),
-      primaryAnchor: 'qencHash',
+      primaryAnchor: PRIMARY_ANCHOR,
       containerId: ensureHex(params.containerId, 'containerId', 128),
-      containerIdRole: 'secondary-header-id',
-      containerIdAlg: 'SHA3-512(qenc-header-bytes)',
+      containerIdRole: CONTAINER_ID_ROLE,
+      containerIdAlg: CONTAINER_ID_ALG,
     },
     sharding: {
       shamir: {
-        threshold: ensureInteger(params.shamirThreshold, 'shamirThreshold', 2),
-        shareCount: ensureInteger(params.shamirShareCount, 'shamirShareCount', 2),
+        threshold: ensureSafeInteger(params.shamirThreshold, 'shamirThreshold', 2),
+        shareCount: ensureSafeInteger(params.shamirShareCount, 'shamirShareCount', 2),
       },
       reedSolomon: {
-        n: ensureInteger(params.rsN, 'rsN', 2),
-        k: ensureInteger(params.rsK, 'rsK', 2),
-        parity: ensureInteger(params.rsParity, 'rsParity', 0),
-        codecId: ensureString(params.rsCodecId || 'QV-RS-ErasureCodes-v1', 'rsCodecId'),
+        n: ensureSafeInteger(params.rsN, 'rsN', 2),
+        k: ensureSafeInteger(params.rsK, 'rsK', 2),
+        parity: ensureInteger(params.rsParity, 'rsParity', 0, 0xffffffff),
+        codecId: ensureExactString(
+          params.rsCodecId || REED_SOLOMON_CODEC_ID,
+          'rsCodecId',
+          REED_SOLOMON_CODEC_ID
+        ),
       },
     },
     authPolicyCommitment: computeAuthPolicyCommitment(authPolicy),
   };
-
-  if (manifest.sharding.reedSolomon.parity !== manifest.sharding.reedSolomon.n - manifest.sharding.reedSolomon.k) {
-    throw new Error('rsParity must equal rsN-rsK');
-  }
-  if (manifest.sharding.shamir.threshold > manifest.sharding.shamir.shareCount) {
-    throw new Error('shamirThreshold must not exceed shamirShareCount');
-  }
 
   if (
     (Array.isArray(params.shardBodyHashes) && params.shardBodyHashes.length > 0) ||
     (Array.isArray(params.shareCommitments) && params.shareCommitments.length > 0)
   ) {
     const shardBinding = {
-      bodyDefinitionId: 'QV-QCONT-SHARDBODY-v1',
+      bodyDefinitionId: SHARD_BODY_DEFINITION_ID,
       bodyDefinition: {
         includes: [...BODY_DEFINITION_INCLUDES],
         excludes: [...BODY_DEFINITION_EXCLUDES],
       },
-      shardBodyHashAlg: 'SHA3-512',
+      shardBodyHashAlg: SHA3_512_ALG,
     };
     if (Array.isArray(params.shardBodyHashes) && params.shardBodyHashes.length > 0) {
       shardBinding.shardBodyHashes = ensureHashList(params.shardBodyHashes, 'shardBodyHashes');
     }
     if (Array.isArray(params.shareCommitments) && params.shareCommitments.length > 0) {
       shardBinding.shareCommitment = {
-        hashAlg: 'SHA3-512',
-        input: 'raw-shamir-share-bytes',
+        hashAlg: SHA3_512_ALG,
+        input: SHARE_COMMITMENT_INPUT,
       };
       shardBinding.shareCommitments = ensureHashList(params.shareCommitments, 'shareCommitments');
     }
     manifest.shardBinding = shardBinding;
   }
 
-  return manifest;
+  return validateArchiveManifestObject(manifest).manifest;
 }
 
 export function canonicalizeArchiveManifest(manifest) {
