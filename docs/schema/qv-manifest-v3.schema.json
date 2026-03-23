@@ -1,0 +1,469 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantum-vault.local/schema/qv-manifest-v3.schema.json",
+  "title": "Quantum Vault canonical archive manifest v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "manifestType",
+    "canonicalization",
+    "cryptoProfileId",
+    "kdfTreeId",
+    "noncePolicyId",
+    "nonceMode",
+    "counterBits",
+    "maxChunkCount",
+    "aadPolicyId",
+    "qenc",
+    "sharding",
+    "authPolicyCommitment"
+  ],
+  "properties": {
+    "schema": {
+      "$ref": "qv-common-types.schema.json#/$defs/archiveManifestSchemaId"
+    },
+    "version": {
+      "const": 3
+    },
+    "manifestType": {
+      "$ref": "qv-common-types.schema.json#/$defs/archiveManifestType"
+    },
+    "canonicalization": {
+      "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+    },
+    "cryptoProfileId": {
+      "$ref": "qv-common-types.schema.json#/$defs/cryptoProfileId"
+    },
+    "kdfTreeId": {
+      "$ref": "qv-common-types.schema.json#/$defs/kdfTreeId"
+    },
+    "noncePolicyId": {
+      "oneOf": [
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdSingleContainer"
+        },
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdPerChunk"
+        }
+      ]
+    },
+    "nonceMode": {
+      "oneOf": [
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModeSingleContainer"
+        },
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModePerChunk"
+        }
+      ]
+    },
+    "counterBits": {
+      "$ref": "qv-common-types.schema.json#/$defs/uint32"
+    },
+    "maxChunkCount": {
+      "$ref": "qv-common-types.schema.json#/$defs/uint32"
+    },
+    "aadPolicyId": {
+      "$ref": "qv-common-types.schema.json#/$defs/aadPolicyId"
+    },
+    "qenc": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/qencSingleContainer"
+        },
+        {
+          "$ref": "#/$defs/qencPerChunk"
+        }
+      ]
+    },
+    "sharding": {
+      "$ref": "#/$defs/sharding"
+    },
+    "shardBinding": {
+      "$ref": "#/$defs/shardBinding"
+    },
+    "authPolicyCommitment": {
+      "$ref": "#/$defs/authPolicyCommitment"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "noncePolicyId": {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdSingleContainer"
+        },
+        "nonceMode": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModeSingleContainer"
+        },
+        "counterBits": {
+          "const": 0
+        },
+        "maxChunkCount": {
+          "const": 1
+        },
+        "qenc": {
+          "$ref": "#/$defs/qencSingleContainer"
+        }
+      }
+    },
+    {
+      "properties": {
+        "noncePolicyId": {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdPerChunk"
+        },
+        "nonceMode": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModePerChunk"
+        },
+        "counterBits": {
+          "const": 32
+        },
+        "maxChunkCount": {
+          "const": 4294967295
+        },
+        "qenc": {
+          "$ref": "#/$defs/qencPerChunk"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "qencSingleContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "aeadMode",
+        "ivStrategy",
+        "chunkSize",
+        "chunkCount",
+        "payloadLength",
+        "hashAlg",
+        "qencHash",
+        "primaryAnchor",
+        "containerId",
+        "containerIdRole",
+        "containerIdAlg"
+      ],
+      "properties": {
+        "format": {
+          "$ref": "qv-common-types.schema.json#/$defs/qencFormat"
+        },
+        "aeadMode": {
+          "$ref": "qv-common-types.schema.json#/$defs/aeadModeSingleContainer"
+        },
+        "ivStrategy": {
+          "$ref": "qv-common-types.schema.json#/$defs/ivStrategySingleContainer"
+        },
+        "chunkSize": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        },
+        "chunkCount": {
+          "const": 1
+        },
+        "payloadLength": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        },
+        "hashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "qencHash": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        },
+        "primaryAnchor": {
+          "$ref": "qv-common-types.schema.json#/$defs/primaryAnchor"
+        },
+        "containerId": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        },
+        "containerIdRole": {
+          "$ref": "qv-common-types.schema.json#/$defs/containerIdRole"
+        },
+        "containerIdAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/containerIdAlg"
+        }
+      }
+    },
+    "qencPerChunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "aeadMode",
+        "ivStrategy",
+        "chunkSize",
+        "chunkCount",
+        "payloadLength",
+        "hashAlg",
+        "qencHash",
+        "primaryAnchor",
+        "containerId",
+        "containerIdRole",
+        "containerIdAlg"
+      ],
+      "properties": {
+        "format": {
+          "$ref": "qv-common-types.schema.json#/$defs/qencFormat"
+        },
+        "aeadMode": {
+          "$ref": "qv-common-types.schema.json#/$defs/aeadModePerChunk"
+        },
+        "ivStrategy": {
+          "$ref": "qv-common-types.schema.json#/$defs/ivStrategyPerChunk"
+        },
+        "chunkSize": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        },
+        "chunkCount": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveUint32"
+        },
+        "payloadLength": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        },
+        "hashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "qencHash": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        },
+        "primaryAnchor": {
+          "$ref": "qv-common-types.schema.json#/$defs/primaryAnchor"
+        },
+        "containerId": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        },
+        "containerIdRole": {
+          "$ref": "qv-common-types.schema.json#/$defs/containerIdRole"
+        },
+        "containerIdAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/containerIdAlg"
+        }
+      }
+    },
+    "sharding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shamir",
+        "reedSolomon"
+      ],
+      "properties": {
+        "shamir": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "threshold",
+            "shareCount"
+          ],
+          "properties": {
+            "threshold": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            },
+            "shareCount": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            }
+          }
+        },
+        "reedSolomon": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "k",
+            "parity",
+            "codecId"
+          ],
+          "properties": {
+            "n": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            },
+            "k": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            },
+            "parity": {
+              "$ref": "qv-common-types.schema.json#/$defs/uint32"
+            },
+            "codecId": {
+              "$ref": "qv-common-types.schema.json#/$defs/rsCodecId"
+            }
+          }
+        }
+      }
+    },
+    "bodyDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "includes",
+        "excludes"
+      ],
+      "properties": {
+        "includes": {
+          "const": [
+            "fragment-len32-stream"
+          ]
+        },
+        "excludes": {
+          "const": [
+            "qcont-header",
+            "embedded-manifest",
+            "embedded-manifest-digest",
+            "embedded-bundle",
+            "embedded-bundle-digest",
+            "external-signatures"
+          ]
+        }
+      }
+    },
+    "shareCommitmentDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hashAlg",
+        "input"
+      ],
+      "properties": {
+        "hashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "input": {
+          "$ref": "qv-common-types.schema.json#/$defs/shareCommitmentInput"
+        }
+      }
+    },
+    "shardBindingBodyHashesOnly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bodyDefinitionId",
+        "bodyDefinition",
+        "shardBodyHashAlg",
+        "shardBodyHashes"
+      ],
+      "properties": {
+        "bodyDefinitionId": {
+          "$ref": "qv-common-types.schema.json#/$defs/bodyDefinitionId"
+        },
+        "bodyDefinition": {
+          "$ref": "#/$defs/bodyDefinition"
+        },
+        "shardBodyHashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "shardBodyHashes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+          }
+        }
+      }
+    },
+    "shardBindingShareCommitmentsOnly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bodyDefinitionId",
+        "bodyDefinition",
+        "shardBodyHashAlg",
+        "shareCommitment",
+        "shareCommitments"
+      ],
+      "properties": {
+        "bodyDefinitionId": {
+          "$ref": "qv-common-types.schema.json#/$defs/bodyDefinitionId"
+        },
+        "bodyDefinition": {
+          "$ref": "#/$defs/bodyDefinition"
+        },
+        "shardBodyHashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "shareCommitment": {
+          "$ref": "#/$defs/shareCommitmentDescriptor"
+        },
+        "shareCommitments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+          }
+        }
+      }
+    },
+    "shardBindingWithHashesAndShareCommitments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bodyDefinitionId",
+        "bodyDefinition",
+        "shardBodyHashAlg",
+        "shardBodyHashes",
+        "shareCommitment",
+        "shareCommitments"
+      ],
+      "properties": {
+        "bodyDefinitionId": {
+          "$ref": "qv-common-types.schema.json#/$defs/bodyDefinitionId"
+        },
+        "bodyDefinition": {
+          "$ref": "#/$defs/bodyDefinition"
+        },
+        "shardBodyHashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "shardBodyHashes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+          }
+        },
+        "shareCommitment": {
+          "$ref": "#/$defs/shareCommitmentDescriptor"
+        },
+        "shareCommitments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+          }
+        }
+      }
+    },
+    "shardBinding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/shardBindingBodyHashesOnly"
+        },
+        {
+          "$ref": "#/$defs/shardBindingShareCommitmentsOnly"
+        },
+        {
+          "$ref": "#/$defs/shardBindingWithHashesAndShareCommitments"
+        }
+      ]
+    },
+    "authPolicyCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "canonicalization",
+        "value"
+      ],
+      "properties": {
+        "alg": {
+          "$ref": "qv-common-types.schema.json#/$defs/authPolicyCommitmentAlg"
+        },
+        "canonicalization": {
+          "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+        },
+        "value": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        }
+      }
+    }
+  }
+}

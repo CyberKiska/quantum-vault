@@ -11,7 +11,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "selftest": "node scripts/selftest.mjs",
-    "check": "npm run selftest && npm run build",
+    "schema:fixtures": "node scripts/schema-fixtures.mjs",
+    "check": "npm run selftest && npm run schema:fixtures && npm run build",
     "deploy": "npm run build"
   },
   "dependencies": {

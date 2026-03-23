@@ -25,10 +25,15 @@ JSON Schema is not an IETF RFC. It was previously published as IETF Internet-Dra
 
 The current QV docs already describe:
 
-- a canonical manifest with schema/version `quantum-vault-archive-manifest/v2`
-- a mutable manifest bundle `QV-Manifest-Bundle` v1
+- a canonical manifest with schema/version `quantum-vault-archive-manifest/v3`
+- a mutable manifest bundle `QV-Manifest-Bundle` v2
 - procedural validation in code (`archive-manifest.js`, `manifest-bundle.js`)
-- no current machine-readable formal schema language for manifest or bundle validation
+- machine-readable JSON Schema draft 2020-12 files under `docs/schema/` for the normalized manifest-family grammar layer
+
+Immediate repository note:
+
+- prior to Stage B there was no machine-readable formal schema language for manifest or bundle validation
+- the current repository now carries those schema files plus a checked-in fixture corpus and JavaScript validation step without adding external dependencies
 
 Internal QV grounding to review before implementation:
 
@@ -165,7 +170,7 @@ Both the manifest and bundle schemas reference these shared definitions via `$re
 
 Validation must run in both implementation languages:
 
-- **JavaScript**: validate test fixtures and example instances against schemas using `ajv` (or a lighter JSON Schema 2020-12 validator) in CI
+- **JavaScript**: validate test fixtures and example instances against the checked-in schema files in CI. Under the current repository constraint of no additional dependencies, the immediate implementation may use a checked-in validator that supports the active schema-keyword subset, while keeping the schema files themselves valid draft 2020-12 documents.
 - **Rust**: future independent implementations should validate against the same schema files using the `jsonschema` crate or equivalent validator
 - A fixture that passes one implementation must pass the other
 

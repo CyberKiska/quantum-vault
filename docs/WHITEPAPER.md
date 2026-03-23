@@ -214,13 +214,13 @@ The canonical manifest (`*.qvmanifest.json`) is a JSON object with schema `quant
 
 The manifest is serialized under an RFC 8785-compatible (JSON Canonicalization Scheme, JCS) [16] canonical JSON profile labeled `QV-JSON-RFC8785-v1`. The same strict canonicalization rules are also used for `authPolicyCommitment` input. Bundle bytes are labeled separately as `QV-BUNDLE-JSON-v1` so unsigned bundle-byte compatibility can evolve independently from detached-signature payload compatibility. The parser rejects duplicate keys, lone surrogates, and invalid UTF-8 before canonicalization.
 
-No formal machine-readable schema language (such as CDDL, RFC 8610 [30]) is currently used for manifest or bundle validation. Schema enforcement is implemented procedurally in the parsing code. Adoption of a formal schema description language is a recognized future direction that would improve interoperability and enable tooling-independent validation.
+The current structural grammar for manifest-family JSON artifacts is now also published as JSON Schema draft 2020-12 files under `docs/schema/`. Those schemas define the machine-readable grammar layer for the canonical manifest and manifest bundle. They do not replace canonicalization or semantic validation: parser code still enforces digest equality, commitment equality, and other fail-closed binding rules.
 
 The canonical manifest bytes — the exact byte output of `QV-JSON-RFC8785-v1` serialization — are the sole payload of all detached signatures. They are embedded identically into every `.qcont` shard and into every manifest bundle. They must not be altered after creation.
 
 ### 5.2 Manifest Bundle
 
-The manifest bundle (`*.extended.qvmanifest.json`) is a mutable JSON object of type `QV-Manifest-Bundle` (version 1) that carries:
+The manifest bundle (`*.extended.qvmanifest.json`) is a mutable JSON object of type `QV-Manifest-Bundle` (version 2) that carries:
 
 - The canonical manifest (embedded as a structured object)
 - A `manifestDigest` (SHA3-512 over canonical manifest bytes)

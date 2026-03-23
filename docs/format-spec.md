@@ -43,6 +43,7 @@ Internal current-state grounding:
 - `src/core/crypto/qenc/format.js`, `src/core/crypto/index.js`, and `src/core/crypto/aead.js` for `.qenc` header layout, authenticated-data boundaries, and decrypt-path behavior
 - `src/core/crypto/qcont/build.js`, `src/core/crypto/qcont/attach.js`, and `src/core/crypto/qcont/restore.js` for shard layout, bundle attachment, and restore candidate selection
 - `src/core/crypto/manifest/archive-manifest.js`, `src/core/crypto/manifest/manifest-bundle.js`, and `src/core/crypto/manifest/jcs.js` for manifest, bundle, and canonicalization behavior
+- `docs/schema/qv-common-types.schema.json`, `docs/schema/qv-manifest-v3.schema.json`, and `docs/schema/qv-manifest-bundle-v2.schema.json` for the current machine-readable manifest-family grammar layer
 - `src/core/crypto/auth/verify-signatures.js`, `src/core/crypto/auth/qsig.js`, `src/core/crypto/auth/stellar-sig.js`, and `src/core/crypto/auth/opentimestamps.js` for detached attachment handling relevant to format acceptance
 - `docs/glossary.md`, `docs/trust-and-policy.md`, and `docs/security-model.md` for shared terminology and cross-document semantic constraints
 
@@ -62,6 +63,7 @@ Implemented now:
 - the supported versions, schema IDs, and artifact boundaries listed in Section 1
 - canonical manifest export and embedding under `QV-JSON-RFC8785-v1`
 - canonical bundle export under `QV-BUNDLE-JSON-v1`
+- JSON Schema draft 2020-12 files under `docs/schema/` for manifest-family structural grammar plus a checked-in fixture corpus validated in JavaScript CI
 - detached signatures over canonical manifest bytes only
 - embedded or external bundle, signature, key, and timestamp inputs during restore
 - current unknown-field handling and deterministic restore candidate selection as documented in the current sections of this file
@@ -120,6 +122,15 @@ Canonicalization convention:
 - `QV-JSON-RFC8785-v1` is the canonical JSON label used for canonical manifest bytes and for canonicalized `authPolicy` input when computing `authPolicyCommitment`.
 - `QV-BUNDLE-JSON-v1` is the canonical JSON label used for manifest bundle bytes.
 - current code uses one strict UTF-8 JSON canonicalizer for both labels, but they remain separately labeled because only canonical manifest bytes are detached-signature payload
+
+Formal grammar convention:
+
+- the current manifest-family grammar layer is published as JSON Schema draft 2020-12 files under `docs/schema/`
+- `docs/schema/qv-manifest-v3.schema.json` governs the canonical manifest grammar
+- `docs/schema/qv-manifest-bundle-v2.schema.json` governs the manifest-bundle grammar
+- `docs/schema/qv-common-types.schema.json` provides shared constrained types and enums reused by both artifact families
+- schema-valid does not imply canonical bytes, digest equality, `authPolicyCommitment` equality, signature safety, or restore safety
+- conforming parsers MUST enforce all three layers: canonicalization, schema/grammar, and semantic binding rules
 
 Key terminology rule used by this file:
 
@@ -197,6 +208,7 @@ Detailed current edge cases, examples, and unsupported cases for the current can
 ### 5.2 Canonical manifest contract
 
 The current canonical manifest is generated at split stage with schema/version `quantum-vault-archive-manifest/v3`.
+Its current machine-readable grammar is published in `docs/schema/qv-manifest-v3.schema.json`.
 
 Current required contract points include:
 
@@ -249,7 +261,7 @@ Canonical key order is determined by `QV-JSON-RFC8785-v1`, not by the order show
 | --- | --- | --- |
 | `format` | string | MUST identify the supported `.qenc` metadata format; current emitter uses `QVv1-5-0` |
 | `aeadMode` | string | MUST be `single-container-aead` or `per-chunk-aead` |
-| `ivStrategy` | string | MUST match the selected `aeadMode`; current supported values are `random96` and `kmac-prefix64-ctr32-v3` |
+| `ivStrategy` | string | MUST match the selected `aeadMode`; current supported values are `single-iv` and `kmac-prefix64-ctr32-v3` |
 | `chunkSize` | integer | positive chunk size used for current encryption layout |
 | `chunkCount` | integer | positive count; MUST remain within the nonce-policy bound |
 | `payloadLength` | integer | positive plaintext payload length carried by `.qenc` |
@@ -364,6 +376,7 @@ Current canonical-manifest parsing behavior is:
 
 The manifest bundle is a self-contained mutable JSON object.
 It is not the detached-signature payload.
+Its current machine-readable grammar is published in `docs/schema/qv-manifest-bundle-v2.schema.json`.
 
 The current top-level structure is:
 

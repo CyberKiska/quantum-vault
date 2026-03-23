@@ -1,0 +1,79 @@
+{
+  "schema": "quantum-vault-archive-manifest/v3",
+  "version": 3,
+  "manifestType": "archive",
+  "canonicalization": "QV-JSON-RFC8785-v1",
+  "cryptoProfileId": "QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2",
+  "kdfTreeId": "QV-KDF-TREE-v2",
+  "noncePolicyId": "QV-GCM-KMACPFX64-CTR32-v3",
+  "nonceMode": "kmac-prefix64-ctr32",
+  "counterBits": 32,
+  "maxChunkCount": 4294967295,
+  "aadPolicyId": "QV-AAD-HEADER-CHUNK-v1",
+  "qenc": {
+    "format": "QVv1-5-0",
+    "aeadMode": "per-chunk-aead",
+    "ivStrategy": "kmac-prefix64-ctr32-v3",
+    "chunkSize": 65536,
+    "chunkCount": 3,
+    "payloadLength": 131072,
+    "hashAlg": "SHA3-512",
+    "qencHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "primaryAnchor": "qencHash",
+    "containerId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "containerIdRole": "secondary-header-id",
+    "containerIdAlg": "SHA3-512(qenc-header-bytes)"
+  },
+  "sharding": {
+    "shamir": {
+      "threshold": 4,
+      "shareCount": 5
+    },
+    "reedSolomon": {
+      "n": 5,
+      "k": 3,
+      "parity": 2,
+      "codecId": "QV-RS-ErasureCodes-v1"
+    }
+  },
+  "shardBinding": {
+    "bodyDefinitionId": "QV-QCONT-SHARDBODY-v1",
+    "bodyDefinition": {
+      "includes": [
+        "fragment-len32-stream"
+      ],
+      "excludes": [
+        "qcont-header",
+        "embedded-manifest",
+        "embedded-manifest-digest",
+        "embedded-bundle",
+        "embedded-bundle-digest",
+        "external-signatures"
+      ]
+    },
+    "shardBodyHashAlg": "SHA3-512",
+    "shardBodyHashes": [
+      "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+      "33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333",
+      "44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+      "55555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    ],
+    "shareCommitment": {
+      "hashAlg": "SHA3-512",
+      "input": "raw-shamir-share-bytes"
+    },
+    "shareCommitments": [
+      "66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+      "77777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777",
+      "88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888",
+      "99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+  },
+  "authPolicyCommitment": {
+    "alg": "SHA3-512",
+    "canonicalization": "QV-JSON-RFC8785-v1",
+    "value": "d40373eb7006f8d120acff9e34fe2b6e3cc8eca0cf3e78b48037026aae88d2c230a8b5cb1560710e43c46e6398c2e02bbb8bb0a56d86ca49059b50fcf90eb429"
+  }
+}
