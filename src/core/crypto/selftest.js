@@ -20,6 +20,7 @@ import { normalizeAuthPolicy } from './manifest/auth-policy.js';
 import {
   BUNDLE_CANONICALIZATION_LABEL,
   MANIFEST_CANONICALIZATION_LABEL,
+  canonicalizeJson,
   canonicalizeJsonToBytes,
 } from './manifest/jcs.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
@@ -969,6 +970,95 @@ function buildCases() {
         await expectFailure(
           () => Promise.resolve(canonicalizeJsonToBytes({ bad: '\ud800' })),
           'strict canonicalizer unexpectedly accepted a lone surrogate string'
+        );
+      },
+    },
+    {
+      name: 'RFC 8785 number serialization reference vectors',
+      fn: async () => {
+        const vectors = [
+          [0, '0'],
+          [-0, '0'],
+          [1, '1'],
+          [-1, '-1'],
+          [0.5, '0.5'],
+          [-0.5, '-0.5'],
+          [1e20, '100000000000000000000'],
+          [1e21, '1e+21'],
+          [1e-7, '1e-7'],
+          [1e-6, '0.000001'],
+          [0.1 + 0.2, '0.30000000000000004'],
+          [Number.MAX_SAFE_INTEGER, '9007199254740991'],
+          [-Number.MAX_SAFE_INTEGER, '-9007199254740991'],
+          [Number.MIN_VALUE, '5e-324'],
+          [-Number.MIN_VALUE, '-5e-324'],
+          [Number.MAX_VALUE, '1.7976931348623157e+308'],
+          [-Number.MAX_VALUE, '-1.7976931348623157e+308'],
+        ];
+        for (const [input, expected] of vectors) {
+          const result = canonicalizeJson(input);
+          const label = Object.is(input, -0) ? '-0' : String(input);
+          assert(result === expected, `RFC 8785 number vector failed: ${label} -> expected ${expected}, got ${result}`);
+        }
+      },
+    },
+    {
+      name: 'RFC 8785 object key sorting reference vectors',
+      fn: async () => {
+        const vectors = [
+          [{}, '{}'],
+          [{ b: 2, a: 1 }, '{"a":1,"b":2}'],
+          [{ '': '', a: 'b' }, '{"":"","a":"b"}'],
+          [{ a: { c: 3, b: 2 } }, '{"a":{"b":2,"c":3}}'],
+          [{ z: [1, { b: 'c', a: 'd' }], a: 'e' }, '{"a":"e","z":[1,{"a":"d","b":"c"}]}'],
+        ];
+        for (const [input, expected] of vectors) {
+          const result = canonicalizeJson(input);
+          assert(result === expected, `RFC 8785 object vector failed: expected ${expected}, got ${result}`);
+        }
+      },
+    },
+    {
+      name: 'RFC 8785 primitive and structural reference vectors',
+      fn: async () => {
+        const vectors = [
+          [null, 'null'],
+          [true, 'true'],
+          [false, 'false'],
+          ['', '""'],
+          ['hello', '"hello"'],
+          [[], '[]'],
+          [[1, 2, 3], '[1,2,3]'],
+          [[true, null, 'a'], '[true,null,"a"]'],
+        ];
+        for (const [input, expected] of vectors) {
+          const result = canonicalizeJson(input);
+          assert(result === expected, `RFC 8785 primitive vector failed: expected ${expected}, got ${result}`);
+        }
+      },
+    },
+    {
+      name: 'strict canonicalizer rejects non-finite numbers and unsupported types',
+      fn: async () => {
+        await expectFailure(
+          () => Promise.resolve(canonicalizeJsonToBytes(NaN)),
+          'canonicalizer unexpectedly accepted NaN'
+        );
+        await expectFailure(
+          () => Promise.resolve(canonicalizeJsonToBytes(Infinity)),
+          'canonicalizer unexpectedly accepted Infinity'
+        );
+        await expectFailure(
+          () => Promise.resolve(canonicalizeJsonToBytes(-Infinity)),
+          'canonicalizer unexpectedly accepted -Infinity'
+        );
+        await expectFailure(
+          () => Promise.resolve(canonicalizeJsonToBytes({ bad: undefined })),
+          'canonicalizer unexpectedly accepted undefined value'
+        );
+        await expectFailure(
+          () => Promise.resolve(canonicalizeJsonToBytes(BigInt(1))),
+          'canonicalizer unexpectedly accepted bigint'
         );
       },
     },

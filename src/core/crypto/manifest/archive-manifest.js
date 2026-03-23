@@ -14,6 +14,7 @@ import {
 import { computeAuthPolicyCommitment, validateAuthPolicyCommitmentShape } from './auth-policy.js';
 import { MANIFEST_CANONICALIZATION_LABEL, canonicalizeJson, canonicalizeJsonToBytes } from './jcs.js';
 import { parseJsonBytesStrict } from './strict-json.js';
+import { ensureObject, ensureString, ensureInteger, ensureHex, assertExactKeys } from './validation.js';
 
 const MANIFEST_SCHEMA = 'quantum-vault-archive-manifest/v3';
 const MANIFEST_VERSION = 3;
@@ -27,38 +28,6 @@ const BODY_DEFINITION_EXCLUDES = Object.freeze([
   'embedded-bundle-digest',
   'external-signatures',
 ]);
-
-function ensureObject(value, field) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function ensureString(value, field) {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function ensureInt(value, field, min = 0) {
-  if (!Number.isInteger(value) || value < min) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function ensureHex(value, field, expectedLength = null) {
-  const text = ensureString(value, field).toLowerCase();
-  if (!/^[0-9a-f]+$/.test(text)) {
-    throw new Error(`Invalid ${field}`);
-  }
-  if (expectedLength != null && text.length !== expectedLength) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return text;
-}
 
 function ensureHashList(values, field, expectedLength = 128) {
   if (!Array.isArray(values) || values.length === 0) {
@@ -80,20 +49,6 @@ function ensureCanonicalBytes(inputBytes, canonicalBytes) {
     if (inputBytes[i] !== canonicalBytes[i]) return false;
   }
   return true;
-}
-
-function assertExactKeys(source, requiredKeys, optionalKeys, field) {
-  const allowed = new Set([...requiredKeys, ...optionalKeys]);
-  for (const key of Object.keys(source)) {
-    if (!allowed.has(key)) {
-      throw new Error(`Unknown ${field}.${key}`);
-    }
-  }
-  for (const key of requiredKeys) {
-    if (!Object.prototype.hasOwnProperty.call(source, key)) {
-      throw new Error(`Missing ${field}.${key}`);
-    }
-  }
 }
 
 function assertExactStringArray(values, expected, field) {
@@ -131,9 +86,9 @@ function validateManifestQenc(source, profile) {
 
   ensureString(qenc.format, 'qenc.format');
   ensureString(qenc.ivStrategy, 'qenc.ivStrategy');
-  ensureInt(qenc.chunkSize, 'qenc.chunkSize', 1);
-  const chunkCount = ensureInt(qenc.chunkCount, 'qenc.chunkCount', 1);
-  ensureInt(qenc.payloadLength, 'qenc.payloadLength', 1);
+  ensureInteger(qenc.chunkSize, 'qenc.chunkSize', 1);
+  const chunkCount = ensureInteger(qenc.chunkCount, 'qenc.chunkCount', 1);
+  ensureInteger(qenc.payloadLength, 'qenc.payloadLength', 1);
   ensureHex(qenc.qencHash, 'qenc.qencHash', 128);
   ensureHex(qenc.containerId, 'qenc.containerId', 128);
 
@@ -160,17 +115,17 @@ function validateManifestSharding(source) {
 
   const shamir = ensureObject(sharding.shamir, 'sharding.shamir');
   assertExactKeys(shamir, ['threshold', 'shareCount'], [], 'sharding.shamir');
-  const threshold = ensureInt(shamir.threshold, 'sharding.shamir.threshold', 2);
-  const shareCount = ensureInt(shamir.shareCount, 'sharding.shamir.shareCount', 2);
+  const threshold = ensureInteger(shamir.threshold, 'sharding.shamir.threshold', 2);
+  const shareCount = ensureInteger(shamir.shareCount, 'sharding.shamir.shareCount', 2);
   if (threshold > shareCount) {
     throw new Error('Invalid sharding.shamir.threshold');
   }
 
   const reedSolomon = ensureObject(sharding.reedSolomon, 'sharding.reedSolomon');
   assertExactKeys(reedSolomon, ['n', 'k', 'parity', 'codecId'], [], 'sharding.reedSolomon');
-  const n = ensureInt(reedSolomon.n, 'sharding.reedSolomon.n', 2);
-  const k = ensureInt(reedSolomon.k, 'sharding.reedSolomon.k', 2);
-  const parity = ensureInt(reedSolomon.parity, 'sharding.reedSolomon.parity', 0);
+  const n = ensureInteger(reedSolomon.n, 'sharding.reedSolomon.n', 2);
+  const k = ensureInteger(reedSolomon.k, 'sharding.reedSolomon.k', 2);
+  const parity = ensureInteger(reedSolomon.parity, 'sharding.reedSolomon.parity', 0);
   ensureString(reedSolomon.codecId, 'sharding.reedSolomon.codecId');
   if (k >= n) {
     throw new Error('Invalid sharding.reedSolomon.k');
@@ -303,12 +258,12 @@ export function buildArchiveManifest(params) {
     params.nonceMode || nonceContract.nonceMode,
     'nonceMode'
   );
-  const counterBits = ensureInt(
+  const counterBits = ensureInteger(
     params.counterBits ?? nonceContract.counterBits,
     'counterBits',
     0
   );
-  const maxChunkCount = ensureInt(
+  const maxChunkCount = ensureInteger(
     params.maxChunkCount ?? nonceContract.maxChunkCount,
     'maxChunkCount',
     1
@@ -327,7 +282,7 @@ export function buildArchiveManifest(params) {
     throw new Error(`maxChunkCount does not match AEAD mode ${aeadMode}`);
   }
 
-  const chunkCount = ensureInt(params.chunkCount, 'chunkCount', 1);
+  const chunkCount = ensureInteger(params.chunkCount, 'chunkCount', 1);
   assertChunkCountWithinPolicy(chunkCount, profile, aeadMode);
 
   const manifest = {
@@ -346,9 +301,9 @@ export function buildArchiveManifest(params) {
       format: ensureString(params.qencFormat, 'qencFormat'),
       aeadMode,
       ivStrategy: ensureString(params.ivStrategy, 'ivStrategy'),
-      chunkSize: ensureInt(params.chunkSize, 'chunkSize', 1),
+      chunkSize: ensureInteger(params.chunkSize, 'chunkSize', 1),
       chunkCount,
-      payloadLength: ensureInt(params.payloadLength, 'payloadLength', 1),
+      payloadLength: ensureInteger(params.payloadLength, 'payloadLength', 1),
       hashAlg: 'SHA3-512',
       qencHash: ensureHex(params.qencHash, 'qencHash', 128),
       primaryAnchor: 'qencHash',
@@ -358,13 +313,13 @@ export function buildArchiveManifest(params) {
     },
     sharding: {
       shamir: {
-        threshold: ensureInt(params.shamirThreshold, 'shamirThreshold', 2),
-        shareCount: ensureInt(params.shamirShareCount, 'shamirShareCount', 2),
+        threshold: ensureInteger(params.shamirThreshold, 'shamirThreshold', 2),
+        shareCount: ensureInteger(params.shamirShareCount, 'shamirShareCount', 2),
       },
       reedSolomon: {
-        n: ensureInt(params.rsN, 'rsN', 2),
-        k: ensureInt(params.rsK, 'rsK', 2),
-        parity: ensureInt(params.rsParity, 'rsParity', 0),
+        n: ensureInteger(params.rsN, 'rsN', 2),
+        k: ensureInteger(params.rsK, 'rsK', 2),
+        parity: ensureInteger(params.rsParity, 'rsParity', 0),
         codecId: ensureString(params.rsCodecId || 'QV-RS-ErasureCodes-v1', 'rsCodecId'),
       },
     },

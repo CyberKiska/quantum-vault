@@ -81,7 +81,7 @@ Current likely promotion targets, but not current compatibility rules, include:
 
 - expanding the active appendices with additional vectors, malformed cases, and machine-consumable corpus material
 - introducing archive-wide identity material that survives future rewrap or reencryption
-- converging the long-term format stack toward a more explicit three-layer standards stack covering canonical bytes, formal grammar, and archival package semantics; the current compatibility baseline is already manifest schema `quantum-vault-archive-manifest/v3` with canonicalization label `QV-JSON-RFC8785-v1`, plus manifest bundle `QV-Manifest-Bundle` v2 with `bundleCanonicalization = "QV-BUNDLE-JSON-v1"`
+- the current three-layer specification stack (serialization, structural grammar, semantic rules) is described in Section 2; future work may extend the stack with additional representation-information layers for OAIS-oriented archival packaging
 
 ## 1. Status and conformance
 
@@ -107,6 +107,8 @@ Current conformance rules:
 - Parsers MUST NOT infer algorithms heuristically from filenames, key lengths, or wrapper type.
 
 ## 2. Notation and conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) when, and only when, they appear in all capitals, as shown here.
 
 Quantum Vault-specific conventions:
 
@@ -139,6 +141,24 @@ Key terminology rule used by this file:
 - `secretKey` means symmetric secret material, such as `Kenc` or `Kiv`
 
 The current file name `secretKey.qkey` is treated as a legacy operational name, not as the canonical terminology for the asymmetric object it contains.
+
+### Specification stack
+
+Quantum Vault manifest-family artifacts are governed by three distinct specification layers:
+
+| Layer | Governs | Current anchor |
+| --- | --- | --- |
+| Serialization / canonicalization | Exact bytes: canonical byte output, key ordering, primitive encoding, whitespace rules, UTF-8 encoding | RFC 8785 via `QV-JSON-RFC8785-v1` for canonical manifest bytes and `authPolicyCommitment` input; `QV-BUNDLE-JSON-v1` for bundle bytes |
+| Structural grammar | Required and optional fields, value domains, object shapes, closed-object and extension rules | JSON Schema draft 2020-12 files under `docs/schema/` |
+| Semantic rules | What fields mean, what signatures cover, what changes are permitted, what policy commitment requires, what restore behavior is required | This document (`format-spec.md`), `trust-and-policy.md`, `security-model.md` |
+
+These layers are related but distinct:
+
+- A value can be structurally valid (schema-valid) but not canonical (not serialized under the declared canonicalization profile).
+- A value can be canonical and schema-valid but semantically invalid (for example, `reedSolomon.parity` does not equal `n - k`).
+- A value can be semantically meaningful but structurally incomplete (missing a required field that the grammar requires).
+
+Conforming parsers MUST enforce all three layers. The JSON Schema grammar layer does not replace canonicalization rules or semantic validation. The current structural grammar layer uses JSON Schema draft 2020-12; any future use of CDDL (RFC 8610) would be a separate long-term representation-information concern, not a replacement for the current validation layer.
 
 ## 3. Artifact model
 
@@ -962,7 +982,27 @@ Current mandatory rejection examples:
 Related policy consequences are defined in `trust-and-policy.md`.
 Current selftest-backed vector classes, regression coverage, malformed or fail-closed cases, and any local-development example artifacts are mapped in [appendices/interoperability-and-test-vectors.md](appendices/interoperability-and-test-vectors.md).
 
-## 12. Future coverage retained for this document
+## 12. Compatibility and version policy
+
+Changes to the Quantum Vault format family fall into three categories depending on which specification layer they affect:
+
+| Kind of change | Requires | Examples |
+| --- | --- | --- |
+| Change to canonical byte output for the same logical input | New canonicalization label | Changing key-ordering rules, number serialization, whitespace behavior |
+| Change to required/optional fields, value domains, or object shapes | New schema/version identifier | Adding a required manifest field, changing a `const` identifier, widening or narrowing a type constraint |
+| Change to what fields mean, what operations are permitted, or what verification outcomes are required | Semantic documentation update; may also require a new schema/version if the change also affects structure | Changing the meaning of `authPolicyCommitment`, redefining restore-gating behavior at a given policy level |
+
+Current version-boundary rules:
+
+- Changing canonical JSON byte rules for the manifest or `authPolicyCommitment` requires a new `canonicalization` label and a new manifest schema/version.
+- Changing canonical bundle byte rules requires a new `bundleCanonicalization` label and a new bundle version.
+- Adding new top-level fields to the canonical manifest requires a new manifest schema/version.
+- Adding new attachment fields or new attachment families to the bundle requires a new bundle schema/version.
+- Unknown fields in the canonical manifest are forbidden at every object level.
+- Unknown fields in the current bundle grammar are forbidden at every object level.
+- Future extensibility, if needed, MUST use an explicit versioned extension mechanism rather than silently opening current objects.
+
+## 13. Future coverage retained for this document
 
 This document now carries the current normative baseline, but it still needs future expansion in the following areas:
 

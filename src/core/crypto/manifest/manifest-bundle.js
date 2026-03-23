@@ -18,6 +18,7 @@ import {
   canonicalizeJsonToBytes,
 } from './jcs.js';
 import { parseJsonBytesStrict } from './strict-json.js';
+import { ensureObject, ensureString, ensureOptionalString, ensureInteger, ensureHex, assertExactKeys } from './validation.js';
 
 export const MANIFEST_BUNDLE_TYPE = 'QV-Manifest-Bundle';
 export const MANIFEST_BUNDLE_VERSION = 2;
@@ -26,57 +27,6 @@ export const MANIFEST_DIGEST_ALG = 'SHA3-512';
 const SIGNATURE_FORMATS = new Set(['qsig', 'stellar-sig']);
 const TIMESTAMP_TYPES = new Set(['opentimestamps']);
 const PUBLIC_KEY_ENCODINGS = new Set(['base64', 'stellar-address']);
-
-function ensureObject(value, field) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function ensureString(value, field) {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function ensureOptionalString(value, field) {
-  if (value == null || value === '') return null;
-  return ensureString(value, field);
-}
-
-function ensureInteger(value, field, min = 0) {
-  if (!Number.isInteger(value) || value < min) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function ensureHex(value, field, expectedLength = null) {
-  const text = ensureString(value, field).toLowerCase();
-  if (!/^[0-9a-f]+$/.test(text)) {
-    throw new Error(`Invalid ${field}`);
-  }
-  if (expectedLength != null && text.length !== expectedLength) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return text;
-}
-
-function assertExactKeys(source, requiredKeys, optionalKeys, field) {
-  const allowed = new Set([...requiredKeys, ...optionalKeys]);
-  for (const key of Object.keys(source)) {
-    if (!allowed.has(key)) {
-      throw new Error(`Unknown ${field}.${key}`);
-    }
-  }
-  for (const key of requiredKeys) {
-    if (!Object.prototype.hasOwnProperty.call(source, key)) {
-      throw new Error(`Missing ${field}.${key}`);
-    }
-  }
-}
 
 function assertCanonicalBytes(bytes, canonicalBytes, field) {
   if (bytes.length !== canonicalBytes.length) {

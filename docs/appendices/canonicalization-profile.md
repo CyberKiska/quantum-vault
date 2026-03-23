@@ -58,8 +58,8 @@ Not yet first-class in the current implementation:
 
 - Future vector publications may mirror this appendix in a machine-consumable corpus, but that does not change the current profile labels.
 - If a materially different profile is introduced later, it should receive a new canonicalization label rather than silently changing `QV-JSON-RFC8785-v1` or `QV-BUNDLE-JSON-v1`.
-- Intended standards direction, not current behavior: Quantum Vault's long-term target is to move toward a three-layer standards stack consisting of RFC 8785 for canonical signable manifest bytes, RFC 8610 / CDDL for formal artifact descriptions, and an OAIS-oriented archival package model handled in [long-term-archive.md](../long-term-archive.md).
-- In that future direction, CDDL is valuable not as decorative schema text but as a machine-readable conformance and representation-information layer: it reduces parser ambiguity, supports controlled extensibility, strengthens independent implementation work, and improves long-horizon maintainability.
+- The current structural grammar layer uses JSON Schema draft 2020-12 files under `docs/schema/`, as described in [format-spec.md](../format-spec.md). These schemas govern artifact structure and field constraints for the canonical manifest and manifest bundle.
+- Intended longer-term direction, not current behavior: Quantum Vault may in the future add CDDL (RFC 8610) as a representation-information layer for OAIS-oriented archival package description and long-term format portability, as discussed in [long-term-archive.md](../long-term-archive.md). CDDL in that context would be a separate concern from the current JSON Schema structural-validation layer and would not replace it.
 
 ## 1. Current profile summary
 
@@ -136,7 +136,7 @@ Its purpose is to document the exact current serializer behavior used by Quantum
 
 Future design note:
 
-- if Quantum Vault later adds CDDL artifact definitions, those definitions should describe the manifest, manifest bundle, and the logical structure of the `.qcont` header as a formal schema layer above the current code-defined structures
+- if Quantum Vault later adds CDDL artifact definitions for representation-information purposes, those definitions would describe the format family as an archival-packaging concern distinct from the current JSON Schema grammar layer
 
 ## 5. Current canonical examples
 
