@@ -1,444 +1,398 @@
 # Quantum Vault — Archive Lifecycle Roadmap
 
-Status: Draft
-Type: Informative
-Audience: Contributors, implementers, reviewers
-Scope: Phased evolution toward a full long-term archival system with stable identity, lifecycle state transitions, resharing, and migration
-Relationship: Design rationale in `resharing-design.md`; resolved questions in `implementation-questions-and-reading.md`
+Status: Draft roadmap
+Type: Informative capability and dependency roadmap
+Audience: contributors, implementers, reviewers
+Scope: staged evolution from the current Stage A-C baseline to a successor lifecycle artifact family
+Relationship: architectural depth lives in `resharing-design.md`; decision-prep and research framing lives in `implementation-questions-and-reading.md`; execution sequencing lives in `implementation-plan-lifecycle.md`
 
-## Scope
+## 1. Post-Stage A-C Baseline
 
-This roadmap covers the evolution of Quantum Vault toward a full long-term archival system with:
+Status: Fixed baseline
 
-- stable archive identity separated from shard identity
-- two-layer manifest architecture (archive descriptor + cohort binding)
-- lifecycle state transitions with signed records
-- shard cohort management and resharing
-- migration and crypto agility (rewrap, reencryption)
-- custodian churn handling
-- cohort-level integrity
-- distributed resharing evaluation (future)
+The lifecycle roadmap starts from the completed manifest-canonisation baseline:
 
-## Architectural Prerequisite: Identity Separation
+- signable JSON bytes use the RFC 8785-aligned `QV-JSON-RFC8785-v1` profile
+- `authPolicyCommitment` uses the same signable canonicalization profile
+- bundle serialization is versioned separately under `QV-BUNDLE-JSON-v1`
+- current manifest and bundle grammar are closed and fail-closed
+- JSON Schema draft 2020-12 is the grammar layer, not a substitute for canonicalization or semantics
+- detached signatures authenticate canonical signable bytes only
+- bundle mutation must not change that detached-signature payload
+- `qencHash` remains the current ciphertext binding anchor
+- OTS remains evidence-only over detached signature bytes
 
-The current system merges archive-level identity and shard-level identity into a single canonical manifest. This means `shareCommitments[]` and `shardBodyHashes[]` sit alongside `qencHash` and `authPolicyCommitment` in the same signed object. Any resharing changes `manifestDigest` and invalidates all existing detached signatures.
+This roadmap therefore assumes that lifecycle work will be a **successor artifact-family design**, not a patch onto the current `quantum-vault-archive-manifest/v3` and `QV-Manifest-Bundle` v2 schemas.
 
-**Resolution:** Split the canonical manifest into two objects:
+## 2. Roadmap Objective
 
-1. **Archive descriptor** — the new detached-signature target. Contains only archive-level identity: `archiveId`, `qencHash`, `containerId`, `authPolicyCommitment`, `cryptoProfileId`, sharding parameters (`n`, `k`, `t`), and nonce/AEAD policy. Does NOT contain shard-specific bindings.
+Status: Recommended direction
 
-2. **Cohort binding** — a separate committed object. Contains `cohortId`, `shareCommitments[]`, `shardBodyHashes[]`, `bodyDefinitionId`. Tied to the archive descriptor via `archiveDescriptorDigest`. Committed (hashed) in each shard.
+The objective is to introduce lifecycle support that cleanly separates:
 
-This separation allows resharing without invalidating signatures or evidence.
+- archive identity and archive-state approval
+- source authenticity or provenance evidence
+- cohort or shard-distribution integrity
+- maintenance history for resharing and later migration events
 
-Since there are no active users and no backward-compatibility obligations, this can be implemented as a clean format change rather than a migration path.
+The preferred architecture is:
 
-See `resharing-design.md` for the full architectural design.
+- archive-state descriptor as the long-lived archive-approval signature target
+- cohort binding as replaceable distribution-specific material
+- transition records for maintenance history
+- optional first-class source-evidence objects for source-review claims
 
----
+Concrete `n/k/t/codecId` are recommended to live at the cohort level, not the archive-state level. That is the key enabling decision for signature-preserving same-state resharing.
 
-# 1. Archive Identity Layer
+## 3. Format Cutover Strategy
 
-## Goal
-Introduce stable archive identity independent of encryption, shards, or format changes.
+Status: Required delivery strategy
 
-## Invariants
+Because current schemas are closed, lifecycle support should be introduced as a new format family and cut over deliberately.
 
-```
-INV-AID-1: archiveId MUST be assigned at archive creation.
-INV-AID-2: archiveId MUST NOT change across resharing, rewrap, reencryption,
-           or format migration events.
-INV-AID-3: archiveId MUST NOT be derived from plaintext content, ciphertext,
-           or key material. Use random 256-bit identifier.
-INV-AID-4: A new archiveId means a new archive.
-```
+Recommended cutover strategy:
 
-## Derivation Rules
+1. Freeze the current Stage A-C artifacts as the stable pre-lifecycle baseline.
+2. Define the lifecycle successor family in parallel:
+   - archive-state descriptor
+   - cohort binding
+   - transition record
+   - lifecycle bundle
+   - later, source-evidence object
+3. Reuse existing canonicalization labels where byte rules are unchanged:
+   - `QV-JSON-RFC8785-v1` for signable lifecycle objects
+   - `QV-BUNDLE-JSON-v1` for bundle-style lifecycle carriers unless bundle byte rules actually change
+4. Introduce new schema/version identifiers for every new lifecycle artifact family.
+5. Implement the successor family behind explicit tooling/version selection.
+6. After validation and test-vector coverage are complete, make the lifecycle family the preferred path.
 
-- `archiveId = hex(SHA3-256(random(32)))` — generated once at initial creation.
-- `stateId = archiveDescriptorDigest = SHA3-512(canonical archive descriptor bytes)` — deterministic from archive descriptor content.
-- `parentStateId` = predecessor `stateId`, or null for initial state.
+There are no active deployed users, so the cutover can prioritize coherence over backward-compatibility complexity. Even so, the cutover should remain explicit and versioned rather than implicit.
 
-## Deliverables
+## 4. Dependency-Ordered Milestones
 
-### Phase 1
-- Introduce `archiveId` as a required field in the archive descriptor
-- Introduce `stateId` as a derived identifier (= archive descriptor digest)
-- Define canonical derivation rules (documented above)
-- Add `archiveId` to `.qcont` shard metadata
-- Implement archive descriptor schema (`quantum-vault-archive-descriptor/v1`)
+Status: Primary roadmap
 
-### Phase 2
-- Add `parentStateId` to archive descriptor (optional; null for initial state)
-- Define state-transition DAG model
-- Implement state-transition record schema (`quantum-vault-state-transition/v1`)
+### Milestone 1 — Choose the archive-state vs cohort-state boundary
 
-### Phase 3
-- Verify `archiveId` persistence across all lifecycle events (resharing, rewrap, reencryption)
-- Implement validation rules for state continuity (verify `parentStateId` chain)
+Dependency reason:
 
----
+- every later decision depends on what the long-lived approval surface is
 
-# 2. Two-Layer Manifest Architecture
+Preferred outcome:
 
-## Goal
-Separate archive-level identity (signature target) from shard-level identity (cohort binding).
+- archive-state descriptor signs archive state only
+- cohort binding carries distribution-specific material
+- concrete `n/k/t/codecId` are cohort-level
 
-## Design
+### Milestone 2 — Define authenticity surfaces and signature targets
 
-**Archive descriptor** (`quantum-vault-archive-descriptor/v1`):
-- Signature target — detached signatures sign its canonical bytes
-- Contains: `archiveId`, `parentStateId`, `cryptoProfileId`, `kdfTreeId`, nonce policy fields, `aadPolicyId`, `qenc` binding (`qencHash`, `containerId`), `sharding` parameters, `authPolicyCommitment`
-- Does NOT contain: `shareCommitments[]`, `shardBodyHashes[]`, `bodyDefinitionId`
+Dependency reason:
 
-**Cohort binding** (`quantum-vault-cohort-binding/v1`):
-- Committed in each shard via digest
-- Contains: `archiveDescriptorDigest`, `cohortId`, `bodyDefinitionId`, `bodyDefinition`, `shardBodyHashes[]`, `shareCommitments[]`
-- Tied to archive descriptor via `archiveDescriptorDigest`
+- the lifecycle family must know what each signature means before new attachment families or verification flows are designed
 
-**Updated manifest bundle:**
-- Carries `archiveDescriptor` (replaces `manifest`)
-- Carries `archiveDescriptorDigest` (replaces `manifestDigest`)
-- New field: `cohortBinding` and `cohortBindingDigest`
-- New field: `transitions[]` for state-transition records
-
-## Deliverables
-
-### Phase 1
-- Implement archive descriptor schema and canonicalization
-- Implement cohort binding schema and derivation
-- Update `.qcont` shard layout: embed archive descriptor + cohort binding (replaces unified manifest)
-- Update manifest bundle schema to reference archive descriptor
-
-### Phase 2
-- Update detached-signature tooling to sign archive descriptor bytes (not unified manifest)
-- Update restore logic to validate archive descriptor + cohort binding separately
-- Update attach workflow to operate on the new bundle schema
-
-### Phase 3
-- Update all normative docs (`format-spec.md`, `trust-and-policy.md`, `security-model.md`, `long-term-archive.md`)
-- Update `WHITEPAPER.md` binding chain description
-
----
-
-# 3. State Transition Model
-
-## Goal
-Formalize all changes as explicit state transitions with signed records.
-
-## Event Taxonomy
-
-| Event | Changes stateId? | Changes cohortId? | Signatures survive? |
-| --- | --- | --- | --- |
-| Create / initial split | N/A | N/A | N/A |
-| Sign / attach / timestamp | No | No | Yes (new added) |
-| Reshard (same state) | **No** | **Yes** | **Yes** |
-| Rewrap | Yes | Yes | No (re-sign required) |
-| Reencryption | Yes | Yes | No (re-sign required) |
-| Policy change | Yes | Yes | No (re-sign required) |
-
-## Transition Record Schema
-
-```json
-{
-  "schema": "quantum-vault-state-transition/v1",
-  "type": "reshareSameState | rewrap | reencryption | policyChange",
-  "archiveId": "...",
-  "parentStateId": "...",
-  "newStateId": "...",
-  "parentCohortId": "...",
-  "newCohortId": "...",
-  "timestamp": "ISO-8601",
-  "reason": "custodian-rotation | threshold-margin | crypto-agility | policy-update",
-  "operator": "optional operator identifier",
-  "signatures": []
-}
-```
+Required outputs:
 
-For `reshareSameState`: `parentStateId == newStateId` (archive descriptor unchanged).
+- archive-approval signature semantics
+- source-authenticity semantics
+- maintenance / transition-signature semantics
+- clear statement that same-state resharing does not re-approve content
 
-## Deliverables
+### Milestone 2A — Source authenticity / provenance object design
 
-### Phase 1
-- Define state-transition types (above table)
-- Implement transition record schema
+Dependency reason:
 
-### Phase 2
-- Add `transitions[]` array to manifest bundle
-- Require at least one signature on transition records
+- source evidence should not be improvised inside archive-approval or maintenance objects
 
-### Phase 3
-- Implement verification rules for state continuity (validate `parentStateId` chain)
-- Detect and warn on branching (two independent reshares from same state)
+Required outputs:
 
----
+- minimum field set for a `source-evidence` object
+- signature model for source-review claims
+- relationship model such as `encrypted-from`, `derived-from`, or `reviewed-as`
 
-# 4. Resharing (Same-State)
+This milestone can define the object before implementation without forcing it into the first resharing release.
 
-## Goal
-Support frequent operational shard redistribution without changing archive state or invalidating signatures.
+### Milestone 2B — Operator authority / governance semantics
 
-## Critical Property
-With the two-layer architecture, resharing produces a new cohort binding but does NOT change the archive descriptor. Detached signatures and `.ots` evidence survive intact.
+Dependency reason:
 
-## Invariants
+- same-state resharing, migration, and branch handling all need a clear maintenance-authority model
 
-```
-INV-RSH-1: Same-state resharing MUST NOT alter the archive descriptor.
-INV-RSH-2: Same-state resharing MUST produce new Shamir shares (fresh
-           randomness), new commitments, new cohortId, new cohort binding.
-INV-RSH-3: Existing detached signatures MUST remain valid after resharing.
-INV-RSH-4: A signed state-transition record MUST be produced.
-INV-RSH-5: Old cohort shards SHOULD be destroyed; the system MUST NOT
-           rely on destruction happening.
-INV-RSH-6: ML-KEM private key MUST exist in memory only for the minimum
-           duration of reconstruct + resplit. Zeroize immediately after.
-```
+Required outputs:
 
-## Resharing Ceremony
+- who may authorize same-state resharing
+- who may witness or attest a transition
+- what a maintenance signature means
+- which governance semantics are Phase 1 vs later
 
-1. Gather at least `t` shards from current cohort (validated by `cohortId`)
-2. Reconstruct ML-KEM private key from Shamir shares
-3. Choose new parameters (`n'`, `k'`, `t'` — may differ from original)
-4. Resplit with fresh Shamir randomness; recompute RS fragments if `n`/`k` changed
-5. Build new cohort binding (new commitments, new `cohortId`)
-6. Build new shards (same archive descriptor, new cohort binding)
-7. Create state-transition record
-8. Zeroize private key material
-9. Instruct custodians to destroy old-cohort shards
+### Milestone 2C — Evidence / time architecture claim boundary
 
-## Deliverables
+Dependency reason:
 
-### Phase 1
-- Define `cohortId` derivation: `SHA3-256(canonicalize({shareCommitments, shardBodyHashes, threshold, shareCount, reedSolomon}))`
-- Add `cohortId` to `.qcont` shard metadata and cohort binding
-- Implement `reshareSameState()` in `src/core/crypto/qcont/`
+- lifecycle signatures and transitions need a clear evidence story before future renewal is discussed
 
-### Phase 2
-- Implement cohort consistency validation (reject mixed `cohortId` sets)
-- Implement state-transition record generation
+Required outputs:
 
-### Phase 3
-- Add proactive resharing trigger alerts (based on safety margin formula)
-- Integrate safety-margin monitoring into restore/status reporting
+- restate current OTS scope: detached-signature evidence only
+- document that RFC 3161 and RFC 4998 are standards context, not current implementation claims
+- define how archive-approval signatures, maintenance signatures, and later evidence records relate
+- record that renewal-capable evidence chains remain deferred work
 
----
+### Milestone 2D — Threat-model, pinning, and policy-evolution alignment
 
-# 5. Custodian Churn Model
+Dependency reason:
 
-## Goal
-Handle real-world participant changes safely with defined triggers and response procedures.
+- successor bundles will affect how the project explains trust semantics, but must stay aligned with `security-model.md` and `trust-and-policy.md`
 
-## Churn Types and Response
+Required outputs:
 
-| Type | Detection | Response | Urgency |
-| --- | --- | --- | --- |
-| Benign loss | Custodian reports loss or becomes unreachable | Reshare before margin erodes further | Medium |
-| Planned rotation | Advance notice from custodian | Schedule resharing at convenience | Low |
-| Hostile custodian | Suspected compromise or security incident | Immediate resharing; exclude compromised party | Critical |
+- threat-model alignment note for same-state resharing and old-cohort leakage
+- successor-bundle pinning and signer-identity compatibility notes
+- policy-evolution notes for future updates to `trust-and-policy.md`
+- explicit statement that evidence, pinning, and archive policy remain distinct
 
-## Safety Margin
+### Milestone 3 — Define the successor artifact family and schema/version taxonomy
 
-```
-safety_margin = ceil((n - t) / 2)
-reshare_trigger: available_honest_custodians < t + safety_margin
-```
+Dependency reason:
 
-| Configuration | safety_margin | Trigger |
-| --- | --- | --- |
-| (6, 4) | 1 | available < 5 |
-| (8, 5) | 2 | available < 7 |
-| (10, 6) | 2 | available < 8 |
+- closed grammar discipline means new objects need explicit schemas before implementation starts
 
-## Security Property
+Required outputs:
 
-Shamir provides information-theoretic secrecy: fewer than `t` shares from any single cohort reveal zero information about the secret. Cross-cohort share mixing is also safe — each cohort uses an independent random polynomial.
+- archive-state descriptor schema/version
+- cohort binding schema/version
+- transition-record schema/version
+- lifecycle-bundle schema/version
+- extension policy for future lifecycle artifacts
+- canonical byte definition for the `cohortId` preimage and any cohort-binding digest
+- `.qcont` embedding/version impact if lifecycle JSON artifacts are embedded in shards
 
-## Deliverables
+### Milestone 4 — Implement `archiveId`, `stateId`, and `cohortId`
 
-### Phase 1
-- Define churn types, detection criteria, and response procedures (above)
-- Define safety margin formula and resharing triggers
-- Document threshold selection guidance per archive class
+Dependency reason:
 
-### Phase 2
-- Add quorum health monitoring to shard restore status reporting
-- Add custodian replacement event to state-transition records
+- resharing, transitions, and continuity verification all depend on stable identifiers
 
-### Phase 3
-- Introduce governance layer for resharing authorization
-- Add accountability tracking (who authorized resharing, who participated)
+Required outputs:
 
----
+- `archiveId` generation and persistence rules
+- `stateId` derivation from the archive-state descriptor
+- `cohortId` derivation from the cohort binding
+- restore-time consistency checks over those identifiers
+- cross-runtime canonicalization vectors for archive-state, cohort-binding, and transition-record bytes
 
-# 6. Migration / Rewrap / Reencryption
+### Milestone 5 — Implement same-state resharing
 
-## Goal
-Enable cryptographic evolution without breaking archive continuity.
+Dependency reason:
 
-## Migration Types and Identity Impact
+- this is the first concrete lifecycle capability unlocked by the new artifact boundaries
 
-| Event | archiveId | stateId | cohortId | Requires re-signing |
-| --- | --- | --- | --- | --- |
-| Rewrap | stable | **new** | **new** | Yes |
-| Reencryption | stable | **new** | **new** | Yes |
-| Policy change | stable | **new** | **new** | Yes |
+Required outputs:
 
-## Architectural Prerequisite: Envelope-DEK
+- reconstruct-and-resplit workflow
+- new cohort-binding generation
+- archive-state preservation across resharing
+- updated shard production embedding unchanged archive state plus new cohort
 
-`rewrap` requires a two-layer key architecture not present in the current format:
+### Milestone 6 — Implement transition-record verification and fork handling
 
-```
-Current:  ML-KEM → shared secret → KMAC → Kenc → AES-GCM(payload)
-Required: DEK (random) → AES-GCM(payload)     [inner, stable across rewrap]
-          ML-KEM → shared secret → KMAC → Kwrap → wrap(DEK)  [outer, replaceable]
-```
+Dependency reason:
 
-Until envelope-DEK is implemented, the only cryptographic refresh path is full reencryption.
+- once resharing exists, maintenance history and parallel-cohort detection become necessary
 
-## Deliverables
+Required outputs:
 
-### Phase 1
-- Define rewrap vs reencryption semantics with identity impact (above table)
-- Design envelope-DEK key architecture
-- Add migration event to state-transition record schema
+- transition-record generation and verification
+- maintenance-signature support
+- fork detection for multiple cohorts on the same state
+- warning semantics for branch conditions
 
-### Phase 2
-- Implement envelope-DEK key architecture
-- Implement rewrap flow (replace outer KEM layer, preserve inner ciphertext)
-- Implement reencryption flow (new payload encryption, new archive descriptor, same `archiveId`)
+### Milestone 7 — Later: migration / reencryption continuity
 
-### Phase 3
-- Introduce crypto policy profiles (algorithm acceptability for each archive class)
-- Implement migration validation rules (verify `parentStateId` chain, verify `archiveId` continuity)
+Dependency reason:
 
----
+- migration should build on the already-defined archive/state/cohort separation and transition-record model
 
-# 7. Cohort-Level Integrity
+Required outputs:
 
-## Goal
-Ensure shard sets are internally consistent and tamper-detectable.
+- new-state continuity rules
+- reencryption transition handling
+- archive-approval signature renewal for new states
+- historical evidence preservation across state changes
+- informative migration-trigger framing using NIST IR 8547, without presenting it as a current compliance claim
 
-## Invariants
+### Milestone 8 — Much later: envelope-DEK / `rewrap`
 
-```
-INV-COH-1: cohortId MUST uniquely identify a specific shard set from one
-           split/resplit operation.
-INV-COH-2: Every .qcont shard MUST carry its cohortId.
-INV-COH-3: Restore MUST reject inconsistent cohortId sets.
-INV-COH-4: cohortId MUST NOT be reused across resharing events
-           (guaranteed by fresh Shamir randomness → new commitments).
-```
+Dependency reason:
 
-## Deliverables
+- `rewrap` is architecture-blocked until QV stops encrypting payload content directly under state-derived symmetric material
 
-### Phase 1
-- Add `cohortId` to shard metadata and cohort binding object
-- Add `cohortCommitment` (= `SHA3-256` over canonical cohort binding bytes)
+Required outputs:
 
-### Phase 2
-- Implement cross-shard `cohortId` validation in restore
-- Implement deterministic cohort selection based on `cohortId` (replaces current `manifestDigestHex:bundleDigestHex` composite key)
+- envelope-DEK design
+- inner/outer binding model
+- continuity semantics for rewrap
 
-### Phase 3
-- Optional: Merkle-based commitments for large-`n` scenarios
-  - Compact root hash instead of `n` individual hashes
-  - Per-shard membership proofs (`O(log n)`)
-  - Useful if custodians need independent membership verification
+This is not a near-term feature.
 
----
+### Milestone 9 — Future research: distributed resharing
 
-# 8. Distributed Resharing (Future)
+Dependency reason:
 
-## Goal
-Evaluate and potentially enable resharing without reconstructing the secret.
+- it depends on a broader architectural shift to online or interactive custodians
 
-## Assessment
+Required outputs:
 
-| Criterion | PSS / DPSS | Reconstruct + resplit |
-| --- | --- | --- |
-| Secret exposure | No reconstruction | Brief in-memory exposure |
-| Online requirement | All/most custodians simultaneously | Threshold set + operator |
-| Protocol complexity | Multi-round interactive MPC | Single-party operation |
-| PQ-secure construction | Research-stage | Uses existing Shamir |
-| Client-only compatibility | Incompatible | Compatible |
+- threat and trust model for interactive custodians
+- VSS/PSS feasibility analysis
+- PQ-secure protocol evaluation
 
-**Verdict:** Classify as future research. The reconstruct-and-resplit approach is sound for the near and medium term. PSS requires interactive custodian communication, which is a paradigm shift from the current offline model.
+This remains research, not Phase 1 engineering.
 
-## Deliverables
+## 5. Capability Tracks
 
-### Phase 1 (Research)
-- Evaluate Shamir refresh schemes (Herzberg et al., 1995)
-- Evaluate VSS / PVSS for initial-split integrity enhancement
-- Assess PQ-secure VSS constructions (lattice-based, research-stage)
+Status: Cross-cutting roadmap view
 
-### Phase 2 (Near-term enhancement)
-- Implement Feldman-style commitments for initial split (independently useful, no MPC required)
+### Archive approval track
 
-### Phase 3 (Future prototype)
-- Prototype share refresh protocol (requires custodian communication channel)
-- Evaluate dynamic committee support (DPSS)
+Primary objects:
 
----
+- archive-state descriptor
+- archive-approval signatures
+- OTS evidence over archive-approval signature bytes
 
-# 9. Evidence & Continuity
+Dependency order:
 
-## Goal
-Preserve long-term verifiability across resharing and migration events.
+- Milestones 1 -> 2 -> 2C -> 2D -> 3 -> 4 -> 5 -> 7
 
-## Key Property
+Milestones 2C and 2D document claim boundaries and trust alignment before schema and code work harden assumptions.
 
-With the two-layer architecture, resharing preserves the full evidence chain:
-- Detached signatures target the archive descriptor (unchanged by resharing)
-- `.ots` evidence targets detached signature bytes (unchanged by resharing)
-- Evidence survives resharing intact
+### Source authenticity track
 
-Migration (rewrap, reencryption) requires evidence renewal:
-- New signatures over new archive descriptor
-- New `.ots` evidence for new signatures
-- Old evidence preserved as historical provenance in transition records
+Primary objects:
 
-## Deliverables
+- source-evidence object
+- source-evidence signatures
+- references to external source signatures or reviewed source digests
 
-### Phase 1
-- Link state-transition records to existing signature set
-- Preserve predecessor evidence in transition records
+Dependency order:
 
-### Phase 2
-- Add timestamp chaining for migration events
-- Support multi-witness evidence anchoring
+- Milestones 2 -> 2A -> 2C -> 3 -> later implementation
 
-### Phase 3
-- Introduce renewable evidence chains (RFC 4998 direction)
-- Evidence renewal trigger mechanism (renew before trust anchors weaken)
+Milestone 2C fixes the evidence and standards claim boundary before normative source-evidence schema work.
 
----
+### Maintenance / transition track
 
-# Summary
+Primary objects:
 
-## Priority order
+- cohort binding
+- transition records
+- maintenance signatures
 
-1. Two-layer manifest architecture (archive descriptor + cohort binding) — architectural prerequisite
-2. `archiveId` + `stateId` + `parentStateId` — identity primitives
-3. `cohortId` + cohort binding — shard-level identity
-4. `reshareSameState` + resharing ceremony — primary operational capability
-5. State-transition records + event model — lifecycle tracking
-6. Custodian churn model + safety margins — operational safety
-7. Migration support (envelope-DEK + rewrap) — crypto agility
-8. Distributed resharing (PSS/DPSS) — future research
+Dependency order:
 
-## Dependency graph
+- Milestones 1 -> 2 -> 2B -> 2C -> 2D -> 3 -> 4 -> 5 -> 6
 
-```
-[Two-layer manifest] ──► [archiveId + stateId] ──► [resharing]
-                     │                          │
-                     └──► [cohortId]      ──────┘
-                                                │
-                                    [transition records]
-                                                │
-                                    [custodian churn model]
-                                                │
-                                    [migration / rewrap]
-                                                │
-                                    [distributed resharing (future)]
-```
+These tracks are intentionally separate. Archive approval, source provenance, and maintenance history must not be collapsed into one signature class.
+
+## 6. Compatibility Matrix
+
+Status: Required planning tool
+
+The matrix below is for the **successor lifecycle family** once it exists.
+
+| Change type | New canonicalization label? | New schema/version? | New `stateId`? | New `cohortId`? | New signatures? | New timestamp evidence? |
+| --- | --- | --- | --- | --- | --- | --- |
+| Change signable byte rules for archive-state descriptor | Yes | Usually yes | Yes | Maybe | Yes, archive approval | Recommended |
+| Add a new field to the archive-state descriptor in a closed schema | No, unless byte rules change | Yes | Yes | Maybe | Yes, archive approval | Recommended |
+| Add a new field to cohort binding in a closed schema | No, unless byte rules change | Yes | No | Yes | Maintenance signatures may be needed | No |
+| Same-state resharing with new cohort only | No | No | No | Yes | Archive approval: no; maintenance: recommended | No |
+| New transition record only | No | No | No | Maybe | Maintenance: recommended | Optional |
+| Add new source-evidence object family | No, unless byte rules change | Yes | No | No | Source-evidence signatures as needed | Optional |
+| Policy change affecting `authPolicyCommitment` | No, unless byte rules change | Maybe | Yes | Usually yes | Yes, archive approval | Recommended |
+| Reencryption / crypto-profile migration | No, unless byte rules change | Maybe | Yes | Usually yes | Yes, archive approval | Recommended |
+| Future `rewrap` under envelope-DEK design | No, unless byte rules change | Yes | Yes | Usually yes | Yes, archive approval | Recommended |
+| Add maintenance signature attachment only | No | No, if already in schema | No | No | Yes, maintenance only | Optional |
+
+### 6.1 Resolving "Maybe" cells
+
+Use this key when a cell says **Maybe**:
+
+- **New `stateId?` (archive-state descriptor rows):** Treat as **Yes** whenever the canonical archive-state descriptor bytes that define `stateId` change. Treat as **No** only if nothing in that signable object changes (rare for a schema bump). When unsure, assume **Yes** (fail closed).
+- **New `cohortId?` (archive-state rows):** **Yes** if cohort binding or shard-distribution material changes. **No** if only the archive-state descriptor changes and the cohort binding bytes are unchanged. Same-state resharing with a new cohort is always **Yes** for `cohortId`.
+- **New `cohortId?` (first row — signable byte rules for archive-state descriptor):** **Maybe** covers cases where byte-rule changes are scoped only to serialization of objects that are not part of the cohort preimage. If in doubt, recompute both `stateId` and cohort-binding digests from frozen definitions.
+- **New schema/version? = Maybe** (policy change, reencryption rows): In a closed-schema family, assume **Yes** when any versioned artifact gains a new field or new schema id. Do not rely on implicit extension.
+
+The matrix is intentionally fail-closed:
+
+- new fields in closed current objects require a new schema/version
+- signature survival is driven by signature-target stability, not by bundle mutability
+- evidence renewal is distinct from signature generation
+
+## 7. Near-Term Priorities
+
+Status: First implementation wave
+
+The near-term lifecycle roadmap should prioritize:
+
+1. freeze the state/cohort boundary
+2. freeze the signature/evidence split (Milestone 2 outputs)
+3. close Milestone 2C: evidence/time claim boundary for successor signatures and OTS scope
+4. close Milestone 2D: threat-model alignment, pinning, and policy-evolution notes for successor bundles
+5. define the successor artifact taxonomy and canonical byte rules (Milestone 3)
+6. implement identifiers and verification rules
+7. ship same-state resharing
+8. ship transition verification and fork warnings
+
+This is enough to solve the current contradiction around resharing and signature survivability without prematurely designing all later archival features.
+
+## 8. Deferred Branches
+
+Status: Deliberately deferred
+
+### 8.1 Reencryption continuity
+
+Important, but depends on the earlier lifecycle scaffolding.
+
+### 8.2 Envelope-DEK and `rewrap`
+
+Explicitly demoted from near-term work.
+It stays blocked until a DEK-envelope redesign exists.
+
+### 8.3 Distributed resharing
+
+Future research only.
+
+### 8.4 Merkleized cohort commitments
+
+Optional optimization, not a roadmap gate.
+
+### 8.5 RFC 4998-style renewable evidence
+
+Useful long-term direction, but not current capability.
+
+## 9. Out Of Scope For The First Implementation Wave
+
+Status: Explicit non-scope
+
+The first lifecycle wave should not attempt to deliver all of the following at once:
+
+- MPC or online-custodian resharing
+- fully fledged institutional governance
+- a complete source-provenance product surface
+- envelope-DEK `rewrap`
+- full evidence-renewal chains
+- automatic branch resolution across competing same-state cohorts
+
+## 10. Roadmap Conclusion
+
+Status: Recommended roadmap conclusion
+
+The least risky order for Quantum Vault is:
+
+- first separate archive state from cohort material
+- then separate archive approval from source provenance and maintenance signatures
+- then define the successor family explicitly
+- then implement identifiers and same-state resharing
+- then add transition verification and only later tackle migration continuity
+
+That order preserves the Stage A-C baseline, respects closed-schema discipline, and makes same-state resharing a tractable operational feature instead of a semantic contradiction.

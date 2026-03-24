@@ -551,3 +551,15 @@ This document now carries the current normative baseline, but it still needs fut
 - first-class lifecycle approval objects for migration, renewal, custody transfer, and policy deprecation
 - institution-level deployment patterns and governance mechanisms beyond the current documentation-level expectations
 - audit/compliance framing that does not overclaim certification
+
+### 11.1 Successor lifecycle bundles (non-normative placeholder)
+
+The successor lifecycle artifact family described in `docs/process/roadmap/lifecycle/resharing-design.md` is **not** part of the current normative policy model in this file. Planning and design live under `docs/process/roadmap/lifecycle/`.
+
+When lifecycle bundles are implemented, this document will need normative updates for at least:
+
+- how archive-approval signatures, maintenance signatures, source-evidence signatures, and OTS evidence relate to integrity, signature validity, pinning, and policy satisfaction for the successor bundle shape
+- pinning and `authPolicy` / policy satisfaction when attachment taxonomy differs from the current manifest bundle
+- explicit OTS scope: evidence remains over detached signature bytes and does not satisfy archive policy by itself
+
+Until those updates land, `docs/format-spec.md`, `docs/trust-and-policy.md` (current sections), and `docs/security-model.md` remain authoritative for the **current** `quantum-vault-archive-manifest/v3` and `QV-Manifest-Bundle` v2 family only.
