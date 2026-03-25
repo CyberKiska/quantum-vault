@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantum-vault.local/schema/qv-source-evidence-v1.schema.json",
+  "title": "Quantum Vault source evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "sourceEvidenceType",
+    "canonicalization",
+    "relationType",
+    "sourceObjectType",
+    "sourceDigests",
+    "externalSourceSignatureRefs",
+    "mediaType"
+  ],
+  "properties": {
+    "schema": {
+      "$ref": "qv-common-types.schema.json#/$defs/sourceEvidenceSchemaId"
+    },
+    "version": {
+      "const": 1
+    },
+    "sourceEvidenceType": {
+      "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+    },
+    "canonicalization": {
+      "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+    },
+    "relationType": {
+      "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+    },
+    "sourceObjectType": {
+      "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+    },
+    "sourceDigests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/sourceDigest"
+      }
+    },
+    "externalSourceSignatureRefs": {
+      "type": "array",
+      "items": {
+        "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+      }
+    },
+    "mediaType": {
+      "$ref": "qv-common-types.schema.json#/$defs/nullableString"
+    }
+  },
+  "$defs": {
+    "sourceDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "value"
+      ],
+      "properties": {
+        "alg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sourceDigestAlg"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantum-vault.local/schema/qv-cohort-binding-v1.schema.json",
+  "title": "Quantum Vault cohort binding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "cohortType",
+    "canonicalization",
+    "archiveId",
+    "stateId",
+    "sharding",
+    "bodyDefinitionId",
+    "bodyDefinition",
+    "shardBodyHashAlg",
+    "shardBodyHashes",
+    "shareCommitment",
+    "shareCommitments"
+  ],
+  "properties": {
+    "schema": {
+      "$ref": "qv-common-types.schema.json#/$defs/cohortBindingSchemaId"
+    },
+    "version": {
+      "const": 1
+    },
+    "cohortType": {
+      "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+    },
+    "canonicalization": {
+      "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+    },
+    "archiveId": {
+      "$ref": "qv-common-types.schema.json#/$defs/archiveIdHex"
+    },
+    "stateId": {
+      "$ref": "qv-common-types.schema.json#/$defs/stateIdHex"
+    },
+    "sharding": {
+      "$ref": "#/$defs/sharding"
+    },
+    "bodyDefinitionId": {
+      "$ref": "qv-common-types.schema.json#/$defs/bodyDefinitionId"
+    },
+    "bodyDefinition": {
+      "$ref": "#/$defs/bodyDefinition"
+    },
+    "shardBodyHashAlg": {
+      "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+    },
+    "shardBodyHashes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+      }
+    },
+    "shareCommitment": {
+      "$ref": "#/$defs/shareCommitment"
+    },
+    "shareCommitments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+      }
+    }
+  },
+  "$defs": {
+    "sharding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shamir",
+        "reedSolomon"
+      ],
+      "properties": {
+        "shamir": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "threshold",
+            "shareCount"
+          ],
+          "properties": {
+            "threshold": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            },
+            "shareCount": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            }
+          }
+        },
+        "reedSolomon": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "k",
+            "parity",
+            "codecId"
+          ],
+          "properties": {
+            "n": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            },
+            "k": {
+              "$ref": "qv-common-types.schema.json#/$defs/minimumTwoInteger"
+            },
+            "parity": {
+              "$ref": "qv-common-types.schema.json#/$defs/uint32"
+            },
+            "codecId": {
+              "$ref": "qv-common-types.schema.json#/$defs/rsCodecId"
+            }
+          }
+        }
+      }
+    },
+    "bodyDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "includes",
+        "excludes"
+      ],
+      "properties": {
+        "includes": {
+          "const": [
+            "fragment-len32-stream"
+          ]
+        },
+        "excludes": {
+          "const": [
+            "qcont-header",
+            "embedded-archive-state",
+            "embedded-archive-state-digest",
+            "embedded-cohort-binding",
+            "embedded-cohort-binding-digest",
+            "embedded-lifecycle-bundle",
+            "embedded-lifecycle-bundle-digest",
+            "external-signatures"
+          ]
+        }
+      }
+    },
+    "shareCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hashAlg",
+        "input"
+      ],
+      "properties": {
+        "hashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "input": {
+          "$ref": "qv-common-types.schema.json#/$defs/shareCommitmentInput"
+        }
+      }
+    }
+  }
+}

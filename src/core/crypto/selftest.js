@@ -3,8 +3,31 @@ import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fr
 import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
+import { buildLifecycleQcontShards, parseLifecycleShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
+import {
+  buildArchiveStateDescriptor,
+  buildCohortBinding,
+  buildTransitionRecord,
+  buildSourceEvidence,
+  buildLifecycleBundle,
+  canonicalizeArchiveStateDescriptor as canonicalizeLifecycleArchiveState,
+  canonicalizeCohortBinding,
+  canonicalizeCohortIdPreimage,
+  canonicalizeTransitionRecord,
+  canonicalizeSourceEvidence,
+  canonicalizeLifecycleBundle,
+  computeCohortBindingDigest,
+  deriveCohortId,
+  deriveStateId,
+  generateArchiveId,
+  parseArchiveStateDescriptorBytes,
+  parseCohortBindingBytes,
+  parseTransitionRecordBytes,
+  parseSourceEvidenceBytes,
+  parseLifecycleBundleBytes,
+} from './lifecycle/artifacts.js';
 import {
   buildInitialManifestBundle,
   canonicalizeManifestBundle,
@@ -155,6 +178,101 @@ function buildManifestParams(overrides = {}) {
 function buildTestArchiveManifest(overrides = {}) {
   return buildArchiveManifest(buildManifestParams(overrides));
 }
+
+async function buildLifecycleSampleArtifacts() {
+  const shardBodyHashes = ['11', '22', '33', '44', '55'].map((value) => value.repeat(64));
+  const shareCommitments = ['66', '77', '88', '99', 'aa'].map((value) => value.repeat(64));
+  const archiveState = buildArchiveStateDescriptor({
+    archiveId: 'ab'.repeat(32),
+    parentStateId: null,
+    chunkSize: 65536,
+    chunkCount: 3,
+    payloadLength: 131072,
+    qencHash: 'cd'.repeat(64),
+    containerId: 'ef'.repeat(64),
+    authPolicy: { level: 'strong-pq-signature', minValidSignatures: 1 },
+  });
+  const canonicalArchiveState = canonicalizeLifecycleArchiveState(archiveState);
+  const stateId = canonicalArchiveState.stateId;
+  const cohortBinding = buildCohortBinding({
+    archiveId: archiveState.archiveId,
+    stateId,
+    shamirThreshold: 4,
+    shamirShareCount: 5,
+    rsN: 5,
+    rsK: 3,
+    rsParity: 2,
+    shardBodyHashes,
+    shareCommitments,
+  });
+  const canonicalCohortBinding = canonicalizeCohortBinding(cohortBinding);
+  const cohortId = deriveCohortId({
+    archiveId: archiveState.archiveId,
+    stateId,
+    cohortBindingDigest: canonicalCohortBinding.digest,
+  });
+  const transitionRecord = buildTransitionRecord({
+    archiveId: archiveState.archiveId,
+    fromStateId: stateId,
+    toStateId: stateId,
+    fromCohortId: '01'.repeat(32),
+    toCohortId: cohortId,
+    fromCohortBindingDigest: { alg: 'SHA3-512', value: '23'.repeat(64) },
+    toCohortBindingDigest: canonicalCohortBinding.digest,
+    reasonCode: 'cohort-rotation',
+    performedAt: '2026-03-25T12:34:56.000Z',
+    operatorRole: 'operator',
+    actorHints: { ceremony: 'reshare-01' },
+    notes: null,
+  });
+  const sourceEvidence = buildSourceEvidence({
+    relationType: 'reviewed-source',
+    sourceObjectType: 'archive-manifest-v3',
+    sourceDigests: [
+      { alg: 'SHA3-512', value: '45'.repeat(64) },
+      { alg: 'SHA-256', value: '67'.repeat(32) },
+    ],
+    externalSourceSignatureRefs: ['sig:external-1'],
+    mediaType: 'application/json',
+  });
+  const lifecycleBundle = await buildLifecycleBundle({
+    archiveState,
+    currentCohortBinding: cohortBinding,
+    authPolicy: { level: 'strong-pq-signature', minValidSignatures: 1 },
+    sourceEvidence: [sourceEvidence],
+    transitions: [transitionRecord],
+    attachments: {
+      publicKeys: [],
+      archiveApprovalSignatures: [],
+      maintenanceSignatures: [],
+      sourceEvidenceSignatures: [],
+      timestamps: [],
+    },
+  });
+  return {
+    archiveState,
+    canonicalArchiveState,
+    stateId,
+    cohortBinding,
+    canonicalCohortBinding,
+    cohortId,
+    transitionRecord,
+    sourceEvidence,
+    lifecycleBundle,
+  };
+}
+
+const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
+  archiveStateCanonical: '{"aadPolicyId":"QV-AAD-HEADER-CHUNK-v1","archiveId":"abababababababababababababababababababababababababababababababab","authPolicyCommitment":{"alg":"SHA3-512","canonicalization":"QV-JSON-RFC8785-v1","value":"2c293897933111ac3037ce108c3ced8f05c0835cc880a3fa8cbcef913bea655ac203dfeca4167aeca4a972e2a7799bc9f08d0d1dbedad99b7afc9e3a61cef05a"},"canonicalization":"QV-JSON-RFC8785-v1","counterBits":32,"cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2","kdfTreeId":"QV-KDF-TREE-v2","maxChunkCount":4294967295,"nonceMode":"kmac-prefix64-ctr32","noncePolicyId":"QV-GCM-KMACPFX64-CTR32-v3","parentStateId":null,"qenc":{"chunkCount":3,"chunkSize":65536,"containerId":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","containerIdAlg":"SHA3-512(qenc-header-bytes)","containerIdRole":"secondary-header-id","hashAlg":"SHA3-512","payloadLength":131072,"primaryAnchor":"qencHash","qencHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"},"schema":"quantum-vault-archive-state-descriptor/v1","stateType":"archive-state","version":1}',
+  stateId: 'e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117',
+  cohortBindingCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","bodyDefinition":{"excludes":["qcont-header","embedded-archive-state","embedded-archive-state-digest","embedded-cohort-binding","embedded-cohort-binding-digest","embedded-lifecycle-bundle","embedded-lifecycle-bundle-digest","external-signatures"],"includes":["fragment-len32-stream"]},"bodyDefinitionId":"QV-QCONT-SHARDBODY-v1","canonicalization":"QV-JSON-RFC8785-v1","cohortType":"shard-cohort","schema":"quantum-vault-cohort-binding/v1","shardBodyHashAlg":"SHA3-512","shardBodyHashes":["11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111","22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222","33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333","44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444","55555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"],"sharding":{"reedSolomon":{"codecId":"QV-RS-ErasureCodes-v1","k":3,"n":5,"parity":2},"shamir":{"shareCount":5,"threshold":4}},"shareCommitment":{"hashAlg":"SHA3-512","input":"raw-shamir-share-bytes"},"shareCommitments":["66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666","77777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777","88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888","99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","version":1}',
+  cohortBindingDigest: '711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c',
+  cohortIdPreimageCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","cohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","type":"quantum-vault-cohort-id-preimage/v1"}',
+  cohortId: 'd14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b',
+  transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"0101010101010101010101010101010101010101010101010101010101010101","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
+  sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"mediaType":"application/json","relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-manifest-v3","version":1}',
+  lifecycleBundleDigest: '1ffa7e96eb0b05ae0f8b5e6bcb73927b82bd323f58cc5c9408c24f26de22804cbf52892381512a1f1d9fde4b1d848da78671eeca0a3e3d64a9c80950ddddebb6',
+});
 
 function assert(condition, message) {
   if (!condition) {
@@ -1269,6 +1387,262 @@ function buildCases() {
           timingSafeEqual(canonicalized.bytes, textBytes(expected)),
           'canonical manifest regression bytes changed unexpectedly'
         );
+      },
+    },
+    {
+      name: 'successor archive-state canonical bytes and stateId regression vector remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const expectedArchiveId = generateArchiveId(new Uint8Array(32).fill(0xab));
+
+        assert(expectedArchiveId === sample.archiveState.archiveId, 'archiveId generation regression mismatch');
+        assert(
+          sample.canonicalArchiveState.canonical === LIFECYCLE_SAMPLE_VECTORS.archiveStateCanonical,
+          'archive-state canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(sample.canonicalArchiveState.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.archiveStateCanonical)),
+          'archive-state canonical regression bytes changed unexpectedly'
+        );
+        assert(sample.stateId === LIFECYCLE_SAMPLE_VECTORS.stateId, 'archive-state stateId regression changed unexpectedly');
+
+        const parsed = parseArchiveStateDescriptorBytes(sample.canonicalArchiveState.bytes);
+        assert(parsed.digest.value === LIFECYCLE_SAMPLE_VECTORS.stateId, 'archive-state parser digest regression mismatch');
+      },
+    },
+    {
+      name: 'successor archive-state supports the single-container nonce contract',
+      fn: async () => {
+        const archiveState = buildArchiveStateDescriptor({
+          archiveId: '12'.repeat(32),
+          parentStateId: null,
+          noncePolicyId: NONCE_POLICY_SINGLE_CONTAINER_V1,
+          nonceMode: NONCE_MODE_RANDOM96,
+          counterBits: 0,
+          maxChunkCount: 1,
+          chunkSize: 2048,
+          chunkCount: 1,
+          payloadLength: 2048,
+          qencHash: '34'.repeat(64),
+          containerId: '56'.repeat(64),
+          authPolicy: { level: 'strong-pq-signature', minValidSignatures: 1 },
+        });
+        const canonicalized = canonicalizeLifecycleArchiveState(archiveState);
+        const parsed = parseArchiveStateDescriptorBytes(canonicalized.bytes);
+
+        assert(parsed.archiveState.noncePolicyId === NONCE_POLICY_SINGLE_CONTAINER_V1, 'single-container noncePolicyId mismatch');
+        assert(parsed.archiveState.nonceMode === NONCE_MODE_RANDOM96, 'single-container nonceMode mismatch');
+        assert(parsed.archiveState.counterBits === 0, 'single-container counterBits mismatch');
+        assert(parsed.archiveState.maxChunkCount === 1, 'single-container maxChunkCount mismatch');
+      },
+    },
+    {
+      name: 'successor cohort-binding canonical bytes and cohortId regression vector remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const cohortIdPreimage = canonicalizeCohortIdPreimage({
+          archiveId: sample.archiveState.archiveId,
+          stateId: sample.stateId,
+          cohortBindingDigest: sample.canonicalCohortBinding.digest,
+        });
+
+        assert(
+          sample.canonicalCohortBinding.canonical === LIFECYCLE_SAMPLE_VECTORS.cohortBindingCanonical,
+          'cohort-binding canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(sample.canonicalCohortBinding.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.cohortBindingCanonical)),
+          'cohort-binding canonical regression bytes changed unexpectedly'
+        );
+        assert(
+          sample.canonicalCohortBinding.digest.value === LIFECYCLE_SAMPLE_VECTORS.cohortBindingDigest,
+          'cohort-binding digest regression changed unexpectedly'
+        );
+        assert(sample.cohortId === LIFECYCLE_SAMPLE_VECTORS.cohortId, 'cohortId regression changed unexpectedly');
+        assert(
+          cohortIdPreimage.canonical === LIFECYCLE_SAMPLE_VECTORS.cohortIdPreimageCanonical,
+          'cohortId preimage canonical regression changed unexpectedly'
+        );
+
+        const parsed = parseCohortBindingBytes(sample.canonicalCohortBinding.bytes);
+        assert(parsed.digest.value === LIFECYCLE_SAMPLE_VECTORS.cohortBindingDigest, 'cohort-binding parser digest regression mismatch');
+      },
+    },
+    {
+      name: 'successor transition-record and source-evidence canonical vectors remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+
+        assert(
+          canonicalTransition.canonical === LIFECYCLE_SAMPLE_VECTORS.transitionRecordCanonical,
+          'transition-record canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(canonicalTransition.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.transitionRecordCanonical)),
+          'transition-record canonical regression bytes changed unexpectedly'
+        );
+        assert(
+          canonicalSourceEvidence.canonical === LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceCanonical,
+          'source-evidence canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(canonicalSourceEvidence.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceCanonical)),
+          'source-evidence canonical regression bytes changed unexpectedly'
+        );
+
+        assert(
+          parseTransitionRecordBytes(canonicalTransition.bytes).digest.value === canonicalTransition.digest.value,
+          'transition-record parser digest regression mismatch'
+        );
+        assert(
+          parseSourceEvidenceBytes(canonicalSourceEvidence.bytes).digest.value === canonicalSourceEvidence.digest.value,
+          'source-evidence parser digest regression mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle digest and embedded links remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalBundle = await canonicalizeLifecycleBundle(sample.lifecycleBundle);
+        const parsed = await parseLifecycleBundleBytes(canonicalBundle.bytes);
+
+        assert(
+          canonicalBundle.digest.value === LIFECYCLE_SAMPLE_VECTORS.lifecycleBundleDigest,
+          'lifecycle bundle digest regression changed unexpectedly'
+        );
+        assert(parsed.digest.value === LIFECYCLE_SAMPLE_VECTORS.lifecycleBundleDigest, 'lifecycle bundle parser digest regression mismatch');
+        assert(parsed.lifecycleBundle.archiveStateDigest.value === sample.stateId, 'lifecycle bundle archiveStateDigest mismatch');
+        assert(
+          parsed.lifecycleBundle.currentCohortBindingDigest.value === LIFECYCLE_SAMPLE_VECTORS.cohortBindingDigest,
+          'lifecycle bundle cohort-binding digest mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor archive-state parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const duplicateText = `{\"schema\":\"${sample.archiveState.schema}\",${sample.canonicalArchiveState.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveStateDescriptorBytes(textBytes(duplicateText))),
+          'archive-state parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor archive-state parser rejects self-referential stateId fields',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const withStateId = `{\"stateId\":\"${sample.stateId}\",${sample.canonicalArchiveState.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveStateDescriptorBytes(textBytes(withStateId))),
+          'archive-state parser unexpectedly accepted self-referential stateId'
+        );
+      },
+    },
+    {
+      name: 'successor cohort-binding parser rejects self-referential cohortId fields',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const withCohortId = `{\"cohortId\":\"${sample.cohortId}\",${sample.canonicalCohortBinding.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseCohortBindingBytes(textBytes(withCohortId))),
+          'cohort-binding parser unexpectedly accepted self-referential cohortId'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalBundle = await canonicalizeLifecycleBundle(sample.lifecycleBundle);
+        const duplicateText = `{\"type\":\"${sample.lifecycleBundle.type}\",${canonicalBundle.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(textBytes(duplicateText)),
+          'lifecycle bundle parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle fails closed on unknown publicKeyRef',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: 'AA==',
+            publicKeyRef: 'missing-public-key',
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted an unknown publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor shard embedding round-trips archive-state cohort-binding and lifecycle bundle bytes',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-successor.bin'));
+        const archiveIdRandomBytes = new Uint8Array(32).fill(0xab);
+        const split = await buildLifecycleQcontShards(
+          qencBytes,
+          pair.secretKey,
+          { n: 5, k: 3 },
+          { authPolicyLevel: 'integrity-only', archiveIdRandomBytes }
+        );
+
+        assert(split.shards.length === 5, 'expected 5 successor shards');
+        assert(split.archiveId === generateArchiveId(archiveIdRandomBytes), 'successor shard archiveId mismatch');
+        assert(split.stateId === split.archiveStateDigestHex, 'successor shard stateId must equal archive-state digest');
+        assert(split.cohortBinding.stateId === split.stateId, 'successor cohort-binding stateId mismatch');
+        assert(split.lifecycleBundle.archiveStateDigest.value === split.stateId, 'successor lifecycle bundle archiveStateDigest mismatch');
+        assert(
+          split.lifecycleBundle.currentCohortBindingDigest.value === split.cohortBindingDigestHex,
+          'successor lifecycle bundle cohort-binding digest mismatch'
+        );
+
+        for (const shard of split.shards) {
+          const parsed = await parseLifecycleShard(await blobToBytes(shard.blob));
+          assert(parsed.metaJSON.archiveId === split.archiveId, 'successor shard metadata archiveId mismatch');
+          assert(parsed.metaJSON.stateId === split.stateId, 'successor shard metadata stateId mismatch');
+          assert(parsed.metaJSON.cohortId === split.cohortId, 'successor shard metadata cohortId mismatch');
+          assert(parsed.shardIndex === shard.index, 'successor shard index mismatch');
+          assert(parsed.archiveState.archiveId === split.archiveId, 'embedded archive-state archiveId mismatch');
+          assert(parsed.stateId === split.stateId, 'embedded archive-state stateId mismatch');
+          assert(parsed.cohortBinding.stateId === split.stateId, 'embedded cohort-binding stateId mismatch');
+          assert(parsed.cohortId === split.cohortId, 'embedded cohortId mismatch');
+          assert(
+            timingSafeEqual(parsed.archiveStateBytes, split.archiveStateBytes),
+            'embedded archive-state bytes changed unexpectedly'
+          );
+          assert(
+            timingSafeEqual(parsed.cohortBindingBytes, split.cohortBindingBytes),
+            'embedded cohort-binding bytes changed unexpectedly'
+          );
+          assert(
+            timingSafeEqual(parsed.lifecycleBundleBytes, split.lifecycleBundleBytes),
+            'embedded lifecycle bundle bytes changed unexpectedly'
+          );
+        }
       },
     },
     {

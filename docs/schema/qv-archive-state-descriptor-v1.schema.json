@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantum-vault.local/schema/qv-archive-state-descriptor-v1.schema.json",
+  "title": "Quantum Vault archive-state descriptor v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "stateType",
+    "canonicalization",
+    "archiveId",
+    "parentStateId",
+    "cryptoProfileId",
+    "kdfTreeId",
+    "noncePolicyId",
+    "nonceMode",
+    "counterBits",
+    "maxChunkCount",
+    "aadPolicyId",
+    "qenc",
+    "authPolicyCommitment"
+  ],
+  "properties": {
+    "schema": {
+      "$ref": "qv-common-types.schema.json#/$defs/archiveStateSchemaId"
+    },
+    "version": {
+      "const": 1
+    },
+    "stateType": {
+      "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+    },
+    "canonicalization": {
+      "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+    },
+    "archiveId": {
+      "$ref": "qv-common-types.schema.json#/$defs/archiveIdHex"
+    },
+    "parentStateId": {
+      "oneOf": [
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/stateIdHex"
+        },
+        {
+          "const": null
+        }
+      ]
+    },
+    "cryptoProfileId": {
+      "$ref": "qv-common-types.schema.json#/$defs/cryptoProfileId"
+    },
+    "kdfTreeId": {
+      "$ref": "qv-common-types.schema.json#/$defs/kdfTreeId"
+    },
+    "noncePolicyId": {
+      "oneOf": [
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdSingleContainer"
+        },
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdPerChunk"
+        }
+      ]
+    },
+    "nonceMode": {
+      "oneOf": [
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModeSingleContainer"
+        },
+        {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModePerChunk"
+        }
+      ]
+    },
+    "counterBits": {
+      "enum": [
+        0,
+        32
+      ]
+    },
+    "maxChunkCount": {
+      "enum": [
+        1,
+        4294967295
+      ]
+    },
+    "aadPolicyId": {
+      "$ref": "qv-common-types.schema.json#/$defs/aadPolicyId"
+    },
+    "qenc": {
+      "$ref": "#/$defs/qenc"
+    },
+    "authPolicyCommitment": {
+      "$ref": "#/$defs/authPolicyCommitment"
+    }
+  },
+  "$defs": {
+    "qenc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chunkSize",
+        "chunkCount",
+        "payloadLength",
+        "hashAlg",
+        "primaryAnchor",
+        "qencHash",
+        "containerId",
+        "containerIdRole",
+        "containerIdAlg"
+      ],
+      "properties": {
+        "chunkSize": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        },
+        "chunkCount": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveUint32"
+        },
+        "payloadLength": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        },
+        "hashAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "primaryAnchor": {
+          "$ref": "qv-common-types.schema.json#/$defs/primaryAnchor"
+        },
+        "qencHash": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        },
+        "containerId": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        },
+        "containerIdRole": {
+          "$ref": "qv-common-types.schema.json#/$defs/containerIdRole"
+        },
+        "containerIdAlg": {
+          "$ref": "qv-common-types.schema.json#/$defs/containerIdAlg"
+        }
+      }
+    },
+    "authPolicyCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "canonicalization",
+        "value"
+      ],
+      "properties": {
+        "alg": {
+          "$ref": "qv-common-types.schema.json#/$defs/authPolicyCommitmentAlg"
+        },
+        "canonicalization": {
+          "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+        },
+        "value": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "noncePolicyId": {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdSingleContainer"
+        },
+        "nonceMode": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModeSingleContainer"
+        },
+        "counterBits": {
+          "const": 0
+        },
+        "maxChunkCount": {
+          "const": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "noncePolicyId": {
+          "$ref": "qv-common-types.schema.json#/$defs/noncePolicyIdPerChunk"
+        },
+        "nonceMode": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonceModePerChunk"
+        },
+        "counterBits": {
+          "const": 32
+        },
+        "maxChunkCount": {
+          "const": 4294967295
+        }
+      }
+    }
+  ]
+}

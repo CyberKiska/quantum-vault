@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantum-vault.local/schema/qv-lifecycle-bundle-v1.schema.json",
+  "title": "Quantum Vault lifecycle bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "version",
+    "bundleCanonicalization",
+    "archiveStateCanonicalization",
+    "archiveState",
+    "archiveStateDigest",
+    "currentCohortBinding",
+    "currentCohortBindingDigest",
+    "authPolicy",
+    "sourceEvidence",
+    "transitions",
+    "attachments"
+  ],
+  "properties": {
+    "type": {
+      "$ref": "qv-common-types.schema.json#/$defs/lifecycleBundleType"
+    },
+    "version": {
+      "const": 1
+    },
+    "bundleCanonicalization": {
+      "$ref": "qv-common-types.schema.json#/$defs/bundleCanonicalizationLabel"
+    },
+    "archiveStateCanonicalization": {
+      "$ref": "qv-common-types.schema.json#/$defs/manifestCanonicalizationLabel"
+    },
+    "archiveState": {
+      "$ref": "qv-archive-state-descriptor-v1.schema.json"
+    },
+    "archiveStateDigest": {
+      "$ref": "#/$defs/sha3_512Digest"
+    },
+    "currentCohortBinding": {
+      "$ref": "qv-cohort-binding-v1.schema.json"
+    },
+    "currentCohortBindingDigest": {
+      "$ref": "#/$defs/sha3_512Digest"
+    },
+    "authPolicy": {
+      "$ref": "#/$defs/authPolicy"
+    },
+    "sourceEvidence": {
+      "type": "array",
+      "items": {
+        "$ref": "qv-source-evidence-v1.schema.json"
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "$ref": "qv-transition-record-v1.schema.json"
+      }
+    },
+    "attachments": {
+      "$ref": "#/$defs/attachments"
+    }
+  },
+  "$defs": {
+    "sha3_512Digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "value"
+      ],
+      "properties": {
+        "alg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Alg"
+        },
+        "value": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha3_512Hex"
+        }
+      }
+    },
+    "sha256Digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "value"
+      ],
+      "properties": {
+        "alg": {
+          "$ref": "qv-common-types.schema.json#/$defs/sha256Alg"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "authPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "minValidSignatures"
+      ],
+      "properties": {
+        "level": {
+          "$ref": "qv-common-types.schema.json#/$defs/authPolicyLevel"
+        },
+        "minValidSignatures": {
+          "$ref": "qv-common-types.schema.json#/$defs/positiveSafeInteger"
+        }
+      }
+    },
+    "publicKeyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kty",
+        "suite",
+        "encoding",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        },
+        "kty": {
+          "enum": [
+            "ml-dsa-public-key",
+            "slh-dsa-public-key",
+            "ed25519-public-key"
+          ]
+        },
+        "suite": {
+          "$ref": "qv-common-types.schema.json#/$defs/allSignatureSuites"
+        },
+        "encoding": {
+          "$ref": "qv-common-types.schema.json#/$defs/publicKeyEncoding"
+        },
+        "value": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "kty": { "const": "ml-dsa-public-key" },
+            "suite": { "$ref": "qv-common-types.schema.json#/$defs/mlDsaSuites" },
+            "encoding": { "const": "base64" }
+          }
+        },
+        {
+          "properties": {
+            "kty": { "const": "slh-dsa-public-key" },
+            "suite": { "$ref": "qv-common-types.schema.json#/$defs/slhDsaSuites" },
+            "encoding": { "const": "base64" }
+          }
+        },
+        {
+          "properties": {
+            "kty": { "const": "ed25519-public-key" },
+            "suite": { "const": "ed25519" },
+            "encoding": { "const": "stellar-address" }
+          }
+        }
+      ]
+    },
+    "detachedSignatureEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "signatureFamily",
+        "format",
+        "suite",
+        "targetType",
+        "targetRef",
+        "targetDigest",
+        "signatureEncoding",
+        "signature"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        },
+        "signatureFamily": {
+          "$ref": "qv-common-types.schema.json#/$defs/signatureFamily"
+        },
+        "format": {
+          "$ref": "qv-common-types.schema.json#/$defs/signatureFormat"
+        },
+        "suite": {
+          "$ref": "qv-common-types.schema.json#/$defs/allSignatureSuites"
+        },
+        "targetType": {
+          "$ref": "qv-common-types.schema.json#/$defs/lifecycleTargetType"
+        },
+        "targetRef": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        },
+        "targetDigest": {
+          "$ref": "#/$defs/sha3_512Digest"
+        },
+        "signatureEncoding": {
+          "const": "base64"
+        },
+        "signature": {
+          "$ref": "qv-common-types.schema.json#/$defs/base64String"
+        },
+        "publicKeyRef": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "format": {
+              "const": "qsig"
+            },
+            "suite": {
+              "$ref": "qv-common-types.schema.json#/$defs/pqSignatureSuites"
+            }
+          }
+        },
+        {
+          "properties": {
+            "format": {
+              "const": "stellar-sig"
+            },
+            "suite": {
+              "const": "ed25519"
+            }
+          }
+        }
+      ]
+    },
+    "archiveApprovalSignatureEntry": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/detachedSignatureEntry"
+        },
+        {
+          "properties": {
+            "signatureFamily": {
+              "const": "archive-approval"
+            },
+            "targetType": {
+              "const": "archive-state"
+            }
+          }
+        }
+      ]
+    },
+    "maintenanceSignatureEntry": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/detachedSignatureEntry"
+        },
+        {
+          "properties": {
+            "signatureFamily": {
+              "const": "maintenance"
+            },
+            "targetType": {
+              "const": "transition-record"
+            }
+          }
+        }
+      ]
+    },
+    "sourceEvidenceSignatureEntry": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/detachedSignatureEntry"
+        },
+        {
+          "properties": {
+            "signatureFamily": {
+              "const": "source-evidence"
+            },
+            "targetType": {
+              "const": "source-evidence"
+            }
+          }
+        }
+      ]
+    },
+    "timestampEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "targetRef",
+        "targetDigest",
+        "proofEncoding",
+        "proof"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        },
+        "type": {
+          "$ref": "qv-common-types.schema.json#/$defs/timestampType"
+        },
+        "targetRef": {
+          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+        },
+        "targetDigest": {
+          "$ref": "#/$defs/sha256Digest"
+        },
+        "proofEncoding": {
+          "const": "base64"
+        },
+        "proof": {
+          "$ref": "qv-common-types.schema.json#/$defs/base64String"
+        }
+      }
+    },
+    "attachments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicKeys",
+        "archiveApprovalSignatures",
+        "maintenanceSignatures",
+        "sourceEvidenceSignatures",
+        "timestamps"
+      ],
+      "properties": {
+        "publicKeys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/publicKeyEntry"
+          }
+        },
+        "archiveApprovalSignatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/archiveApprovalSignatureEntry"
+          }
+        },
+        "maintenanceSignatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/maintenanceSignatureEntry"
+          }
+        },
+        "sourceEvidenceSignatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceEvidenceSignatureEntry"
+          }
+        },
+        "timestamps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/timestampEntry"
+          }
+        }
+      }
+    }
+  }
+}
