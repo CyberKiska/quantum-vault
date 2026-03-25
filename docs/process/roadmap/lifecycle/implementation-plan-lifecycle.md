@@ -44,6 +44,13 @@ The implementation plan inherits the current baseline and must not reopen it:
 9. OpenTimestamps remains evidence-only over detached signature bytes.
 10. Integrity, signature validity, pinning, and policy satisfaction remain separate states and MUST stay separate in the successor family.
 
+Lifecycle JSON discipline is also fixed input for implementation:
+
+- parse as RFC 8259 JSON before any schema, canonicalization, digest, or signature step
+- reject duplicate object names
+- keep lifecycle v1 artifacts inside an I-JSON-safe subset compatible with RFC 7493
+- treat JSON Schema draft 2020-12 as grammar only, not canonicalization or policy semantics
+
 ## 3. Cross-Document Architecture Decisions Frozen For Implementation
 
 The following decisions are treated as frozen inputs for engineering work in this plan.
@@ -97,6 +104,12 @@ The successor archive-state descriptor MUST carry at least:
 
 This field set is frozen strongly enough for schema work, external signer target updates, restore checks, and future migration continuity.
 
+Identifier representation rule:
+
+- `archiveStateDigest = { alg: "SHA3-512", value: "<lowercase hex>" }`
+- `stateId = archiveStateDigest.value`
+- `stateId` is derived-only metadata and MUST NOT appear inside the canonical archive-state descriptor bytes used to derive it
+
 ### 3.5 Shard carriage strategy
 
 Successor `.qcont` shards produced by Quantum Vault will embed:
@@ -108,6 +121,26 @@ Successor `.qcont` shards produced by Quantum Vault will embed:
 
 This is a deliberate carry-forward of the current self-contained shard model.
 External archive-state, bundle, signature, key, and timestamp artifacts may still be supplied at attach or restore time, but QV-produced shards remain self-describing.
+
+Identifier and digest rule for cohort material:
+
+- `cohortBindingDigest = { alg: "SHA3-512", value: "<lowercase hex>" }`
+- `cohortId` is derived-only metadata and MUST NOT appear inside the canonical cohort-binding bytes used to derive `cohortBindingDigest`
+- `cohortId` is derived from the exact RFC 8785-canonicalized preimage:
+
+```json
+{
+  "type": "quantum-vault-cohort-id-preimage/v1",
+  "archiveId": "<archiveId>",
+  "stateId": "<stateId>",
+  "cohortBindingDigest": {
+    "alg": "SHA3-512",
+    "value": "<cohortBindingDigest.value>"
+  }
+}
+```
+
+- `cohortId = SHA3-256(canonical cohort-id preimage bytes)` encoded as lowercase hex
 
 ### 3.6 Lifecycle-bundle v1 contents
 
@@ -180,17 +213,27 @@ Required decisions and outputs:
   - source-evidence object
   - lifecycle bundle
 - freeze the minimum archive-state descriptor field set
-- freeze the cohort-binding preimage for `cohortId`
+- freeze derived-only `stateId` semantics
+- freeze derived-only `cohortId` semantics and the exact cohort-id preimage
 - freeze shard carriage and embedding strategy
 - freeze lifecycle-bundle v1 contents
 - freeze transition-record requirement for same-state resharing
 - freeze successor `publicKeyRef` failure semantics
+- freeze detached-signature and timestamp attachment contracts:
+  - `signatureFamily`
+  - `targetType`
+  - `targetRef`
+  - `targetDigest`
+  - `publicKeyRef`
+- freeze restore bundle-selection semantics with no heuristic auto-selection across multiple embedded bundle digests
+- freeze verifier predicates and rejection conditions
 
 Spec/document tasks:
 
 - align `implementation-questions-and-reading.md`, `resharing-design.md`, and `roadmap-archive-lifecycle.md` with the frozen decisions above
 - document explicit successor-family cutover from the current manifest/bundle family
 - document migration continuity as an architectural requirement even though migration features remain deferred
+- document normative/informative boundaries and RFC 2119 / RFC 8174 usage
 
 Code tasks:
 
@@ -205,6 +248,7 @@ Security review points:
 - confirm the frozen field set fully preserves current ciphertext/policy interpretation requirements
 - confirm bundle v1 contents do not weaken closed-schema discipline
 - confirm shard carriage keeps the Phase 1 system browser-first and client-only
+- confirm there is no self-referential identifier hashing ambiguity
 
 Exit criteria:
 
@@ -231,8 +275,12 @@ Spec/schema tasks:
 - state that lifecycle-bundle bytes use `QV-BUNDLE-JSON-v1`
 - define `archiveStateDigest = SHA3-512(canonical archive-state bytes)`
 - define `stateId = archiveStateDigest.value`
+- state that `stateId` MUST NOT appear inside the canonical archive-state descriptor bytes
 - define `cohortBindingDigest = SHA3-512(canonical cohort-binding bytes)`
+- state that `cohortId` MUST NOT appear inside the canonical cohort-binding bytes
 - define the exact preimage used for `cohortId`
+- define lowercase-hex encoding for all successor digest and identifier values
+- define duplicate-name rejection and I-JSON-safe numeric expectations for lifecycle parsing
 
 Shard-format tasks:
 
@@ -248,6 +296,8 @@ Implementation tasks:
 - implement `archiveId` generation
 - implement `stateId` derivation from archive-state canonical bytes
 - implement `cohortId` derivation from the frozen preimage
+- reject archive-state objects that attempt to carry `stateId`
+- reject cohort-binding objects that attempt to carry `cohortId`
 - add serializers/parsers for all successor artifacts
 - update shard builder to embed the three successor objects plus their digests
 
@@ -258,6 +308,8 @@ Test-vector tasks:
 - valid/invalid lifecycle-bundle fixtures
 - identifier derivation vectors for `archiveId`, `stateId`, and `cohortId`
 - cross-runtime canonicalization vectors for archive-state, cohort-binding, transition-record, and source-evidence bytes
+- malformed JSON vectors with duplicate object names
+- out-of-profile numeric vectors that violate the I-JSON-safe subset
 
 Security review points:
 
@@ -286,13 +338,34 @@ Spec/schema tasks:
 - define archive-approval signature attachment shape targeting archive-state descriptor bytes
 - define maintenance-signature attachment shape targeting transition-record bytes
 - define source-evidence-signature attachment shape targeting source-evidence object bytes
-- define timestamp attachment shape targeting detached signature bytes by signature-family plus `targetRef`
+- require all detached-signature entries to carry:
+  - `id`
+  - `signatureFamily`
+  - `format`
+  - `suite`
+  - `targetType`
+  - `targetRef`
+  - `targetDigest`
+  - `signatureEncoding`
+  - `signature`
+  - optional `publicKeyRef`
+- freeze family mappings:
+  - archive-approval -> `targetType = "archive-state"`
+  - maintenance -> `targetType = "transition-record"`
+  - source-evidence -> `targetType = "source-evidence"`
+- define `targetRef` rules:
+  - `state:<stateId>`
+  - `transition:sha3-512:<digest>`
+  - `source-evidence:sha3-512:<digest>`
+- define `targetDigest` rules:
+  - `SHA3-512` over canonical target bytes for archive-state, transition-record, and source-evidence targets
+- define timestamp attachment shape targeting detached signature bytes by `targetRef` plus exact `targetDigest = SHA-256(detached-signature-bytes)`
 - define bundled `publicKeys[]` shape and compatible `publicKeyRef` use across attachment families
 
 External signer tooling tasks:
 
 - update export flows so the canonical archive-state descriptor is the signable external artifact
-- update signature verification descriptors so archive-approval signatures declare `target.type = archive-state`
+- update signature verification descriptors so archive-approval signatures declare `targetType = "archive-state"`
 - preserve the current detached-wrapper discipline for `.qsig` and `.sig`
 - keep direct `.qenc` signatures out of the default archive-approval flow
 
@@ -300,6 +373,7 @@ Attach-flow tasks:
 
 - update attach to import archive-approval signatures, bundled key material, and OTS evidence into `QV-Lifecycle-Bundle` v1
 - validate that archive-approval signatures target the selected `archiveStateDigest`
+- validate all signature-family / `targetType` / `targetRef` / `targetDigest` combinations against the actual target bytes
 - validate `publicKeyRef` fail closed for bundled signatures
 - validate OTS linkage only against detached signature bytes
 - write updated lifecycle bundles without mutating archive-state or cohort-binding bytes
@@ -321,6 +395,8 @@ Test-vector tasks:
 
 - valid archive-approval signature vectors over archive-state descriptor bytes
 - invalid target-type and target-digest vectors
+- invalid `signatureFamily` / `targetType` combinations
+- invalid `targetRef` prefix or digest-reference vectors
 - `publicKeyRef` mismatch vectors that fail signature verification
 - OTS linkage vectors over detached signature bytes
 - attach/regression vectors proving archive-state bytes remain unchanged through attach
@@ -362,8 +438,9 @@ Bundle-selection tasks:
 
 - treat differing embedded lifecycle-bundle digests within one otherwise identical cohort as bundle variants, not new cohorts
 - accept an uploaded lifecycle bundle only if it matches the selected archive-state and current cohort-binding digests
-- if no uploaded bundle is supplied, select an embedded lifecycle bundle deterministically only within the already selected state/cohort
-- preserve honest warnings when payload reconstruction uses shards carrying different embedded lifecycle-bundle digests
+- if no uploaded bundle is supplied and exactly one embedded lifecycle-bundle digest is present, use it
+- if no uploaded bundle is supplied and more than one embedded lifecycle-bundle digest is present, fail closed and require explicit lifecycle-bundle bytes or explicit operator selection of one embedded bundle digest
+- preserve honest reporting when payload reconstruction uses shards carrying different embedded lifecycle-bundle digests
 
 Verification-state tasks:
 
@@ -377,19 +454,29 @@ Verification-state tasks:
   - OTS evidence linked
 - ensure archive policy is satisfied only by archive-approval signatures
 - ensure maintenance or source-evidence signatures never satisfy archive policy
+- define explicit verifier predicates for:
+  - archive-state digest equality
+  - `stateId` derivation equality
+  - cohort-binding digest equality
+  - `cohortId` derivation equality
+  - shard-set consistency
+  - fail-closed `publicKeyRef` resolution
+  - OTS linkage equality
+  - archive-policy counting
 
 Implementation tasks:
 
 - replace current manifest/bundle digest-pair candidate grouping with explicit state/cohort grouping
 - update restore UI/reporting to surface mixed bundle variants within one cohort honestly
 - preserve explicit uploaded bundle / uploaded archive-state disambiguation paths
-- keep bundle richness heuristics scoped only to lifecycle-bundle selection within one already selected cohort
+- remove bundle-richness heuristics from automatic restore selection
 
 Test-vector tasks:
 
 - mixed state rejection
 - mixed cohort rejection
 - same cohort with multiple embedded lifecycle-bundle digests
+- restore rejection when multiple embedded bundle digests exist and no explicit bundle is supplied
 - uploaded lifecycle bundle disambiguation
 - uploaded archive-state descriptor disambiguation
 - vectors showing policy is driven by archive-approval signatures only
@@ -399,6 +486,7 @@ Security review points:
 
 - verify restore never falls back to a “largest cohort wins” rule
 - verify bundle-variant selection cannot cross state or cohort boundaries
+- verify multi-bundle states fail closed without explicit operator selection
 - verify pinning and archive policy remain distinct result channels
 
 Exit criteria:
@@ -566,6 +654,10 @@ Implementation tasks:
 - implement source-evidence schema validation
 - implement canonical source-evidence serialization and digesting
 - implement source-evidence signature verification
+- implement the privacy-preserving default profile:
+  - emit digests and relation metadata by default
+  - require explicit opt-in for descriptive fields
+  - suppress local paths, usernames, email addresses, and operator notes by default
 - display source-evidence verification distinctly from archive approval and maintenance signatures
 - preserve external-source-signature references when present
 

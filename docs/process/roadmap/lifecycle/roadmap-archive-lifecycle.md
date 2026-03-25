@@ -17,6 +17,7 @@ The lifecycle roadmap starts from the completed manifest-canonisation baseline:
 - bundle serialization uses `QV-BUNDLE-JSON-v1`
 - current manifest and bundle grammar are closed and fail closed
 - JSON Schema draft 2020-12 is the grammar layer, not a substitute for canonicalization or semantics
+- lifecycle JSON parsing must follow RFC 8259, reject duplicate object names, and stay within an I-JSON-safe subset compatible with RFC 7493
 - detached signatures authenticate canonical signable bytes only
 - bundle mutation must not change the detached-signature payload
 - `qencHash` remains the ciphertext binding anchor
@@ -78,8 +79,11 @@ The roadmap assumes the following are already frozen:
 
 - archive-state descriptor is the long-lived archive-approval target
 - concrete `n/k/t/codecId` are cohort-level
+- `stateId` is derived-only from canonical archive-state descriptor bytes and MUST NOT appear inside those bytes
+- `cohortId` is derived-only from a frozen preimage rooted in `archiveId`, `stateId`, and `cohortBindingDigest`
 - successor shards remain self-contained and embed archive-state, cohort-binding, and lifecycle-bundle bytes plus digests
 - lifecycle-bundle v1 contents are fixed rather than “reserved for later”
+- detached-signature and timestamp attachment fields are frozen strongly enough for attach and restore to share one target contract
 - `publicKeyRef` failure is fail closed
 - every QV-produced same-state resharing event MUST create a transition record
 - any future state-changing migration must preserve predecessor descriptor/signature/evidence sets before the feature ships
@@ -100,6 +104,8 @@ Required outputs:
 - cohort binding selected as the distribution-specific object
 - concrete `n/k/t/codecId` frozen as cohort-level
 - successor-family artifact list frozen
+- derived-only `stateId` semantics frozen
+- exact `cohortId` preimage frozen
 
 ### Milestone 2 — Freeze successor verification semantics
 
@@ -114,6 +120,7 @@ Required outputs:
 - maintenance signatures do not count toward archive policy
 - integrity, signature validity, pinning, and policy satisfaction remain distinct
 - OTS remains evidence-only over detached signature bytes
+- archive policy counts archive-approval signatures only
 
 ### Milestone 2A — Source-authenticity / provenance object design
 
@@ -127,6 +134,7 @@ Required outputs:
 - minimum field set
 - relation-type vocabulary
 - source-evidence signature target semantics
+- privacy-preserving default descriptive profile
 
 This milestone defines the object class without forcing full productization in the first resharing release.
 
@@ -167,6 +175,7 @@ Required outputs:
 - bundled `publicKeys[]` carried in lifecycle-bundle v1
 - fail-closed `publicKeyRef` semantics for bundled signatures
 - explicit separation between pinning and policy satisfaction
+- one shared detached-signature / timestamp target contract for attach and restore
 
 ### Milestone 3 — Freeze shard carriage and successor bundle contents
 
@@ -179,6 +188,9 @@ Required outputs:
 - self-contained shard strategy frozen
 - lifecycle-bundle v1 contents frozen
 - distinction between mixed lifecycle-bundle digests and mixed cohorts frozen
+- restore bundle-selection rule frozen:
+  - auto-select only when exactly one embedded lifecycle-bundle digest exists inside the selected state-plus-cohort
+  - otherwise require explicit bundle input or explicit operator selection
 
 ### Milestone 4 — Implement successor artifact schemas and canonical bytes
 
@@ -194,6 +206,13 @@ Required outputs:
 - source-evidence schema/version
 - lifecycle-bundle schema/version
 - `stateId`, `cohortId`, and digest derivation rules
+- detached-signature field contracts:
+  - `signatureFamily`
+  - `targetType`
+  - `targetRef`
+  - `targetDigest`
+  - `publicKeyRef`
+- OTS linkage contract to exact detached-signature bytes
 
 ### Milestone 5 — Update signer, attach, and restore seams
 
@@ -207,6 +226,7 @@ Required outputs:
 - attach flow updated for successor bundle and bundled-key semantics
 - restore selection updated to explicit archive/state/cohort logic
 - bundle-variant handling within one cohort specified and implemented
+- no heuristic bundle auto-selection across multiple embedded bundle digests
 
 ### Milestone 6 — Implement same-state resharing
 
@@ -233,6 +253,7 @@ Required outputs:
 - maintenance-signature verification
 - same-state cohort-fork detection
 - warning semantics without automatic winner selection
+- explicit rejection conditions for mixed state / mixed cohort inputs
 
 ### Milestone 8 — Later: state-changing migration continuity
 
@@ -335,6 +356,7 @@ Interpretation notes:
 - “Same `cohortId`?” is strict. A new `stateId` requires a new cohort binding and therefore a new `cohortId`.
 - “Existing OTS still relevant?” distinguishes surviving current-state approval from preserved historical evidence.
 - Archive policy is evaluated from archive-approval signatures only, regardless of what other signature families are present.
+- Mixed embedded lifecycle-bundle digests inside one selected cohort do not authorize heuristic winner selection.
 
 ## 8. Near-Term Priorities
 
@@ -343,9 +365,9 @@ Status: First implementation wave
 The near-term lifecycle roadmap should prioritize:
 
 1. freeze the artifact family, state/cohort boundary, and successor verification semantics
-2. freeze shard carriage and lifecycle-bundle v1 contents
-3. implement successor artifact schemas and canonical bytes
-4. update external signer, attach, and restore seams
+2. freeze shard carriage, lifecycle-bundle v1 contents, and the no-heuristic bundle-selection rule
+3. implement successor artifact schemas, canonical bytes, and exact derived-identifier rules
+4. update external signer, attach, and restore seams around one shared target contract
 5. ship same-state resharing
 6. ship transition verification and fork warnings
 7. optionally ship source-evidence authoring and semantic verification

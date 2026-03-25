@@ -27,6 +27,11 @@ The document uses four labels deliberately:
 - **True open question:** still undecided after this revision because implementation can proceed without freezing it yet
 - **Future research:** not part of the near-term successor family
 
+Normative language in this document:
+
+- uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals
+- explanatory prose outside frozen-decision, wire-contract, and verifier-predicate sections is informative and does not create independent conformance requirements
+
 ## 1. Fixed Baseline Inherited From Stage A-C
 
 Status: Current fact
@@ -57,6 +62,20 @@ Lifecycle work therefore MUST NOT:
 - treat schema validity as if it settled lifecycle meaning
 - silently add lifecycle semantics to the current manifest/bundle family
 - weaken the current integrity/signature/pinning/policy separation
+
+### 1.1 JSON discipline inherited into lifecycle v1
+
+Status: Recommended decision
+
+Lifecycle parsing and normalization MUST stay explicit:
+
+- lifecycle JSON text MUST parse as RFC 8259 JSON before any schema, canonicalization, digest, or signature step
+- parsers MUST reject duplicate object names
+- lifecycle v1 artifacts MUST stay within an I-JSON-safe subset compatible with RFC 7493:
+  - strings are encoded as UTF-8 JSON text at the byte level
+  - numeric fields, where used, MUST be finite integers in the exact interoperable range `0..2^53-1`
+  - non-finite numbers are forbidden
+- JSON Schema draft 2020-12 remains grammar only; it does not define canonical bytes, derived identifiers, target semantics, or policy semantics
 
 ## 2. Lifecycle Pressure Points Exposed By The Current Baseline
 
@@ -205,6 +224,7 @@ All arrays above are present even when empty.
 - Transition records are maintenance/provenance records.
 - Maintenance signatures over transition records are not archive-approval signatures.
 - Maintenance-signature support belongs in the successor family from the start even if governance later decides when such signatures are mandatory.
+- `actorHints` remain free-form advisory metadata in v1.
 
 ### 3.8 Migration continuity requirement
 
@@ -239,7 +259,11 @@ Why not content-derived:
 
 Recommended decision:
 
-- `stateId = SHA3-512(canonical archive-state descriptor bytes)`
+- `archiveStateDigest` has shape `{ "alg": "SHA3-512", "value": "<lowercase hex>" }`
+- `archiveStateDigest.value = SHA3-512(canonical archive-state descriptor bytes)`
+- `stateId = archiveStateDigest.value`
+- `stateId` is derived-only metadata
+- the archive-state descriptor MUST NOT contain `stateId` inside the canonical bytes used to derive it
 - one `stateId` corresponds to one canonical archive-state descriptor
 - bundle mutation does not change `stateId`
 - same-state resharing does not change `stateId`
@@ -291,13 +315,25 @@ Recommended exclusion boundary:
 Recommended decision:
 
 - `cohortId` identifies one shard-distribution cohort for one archive state
-- `cohortId` is derived from a frozen preimage that includes:
-  - `archiveId`
-  - `stateId`
-  - concrete `n/k/t/codecId`
-  - body-definition identity and body-definition content
-  - share-commitment algorithm/input descriptor and `shareCommitments[]`
-  - shard-body-hash algorithm and `shardBodyHashes[]`
+- `cohortBindingDigest` has shape `{ "alg": "SHA3-512", "value": "<lowercase hex>" }`
+- `cohortBindingDigest.value = SHA3-512(canonical cohort-binding bytes)`
+- `cohortId` is derived-only metadata
+- the cohort-binding bytes used to derive `cohortBindingDigest` MUST NOT contain `cohortId`
+- `cohortId` is derived from the exact RFC 8785-canonicalized JSON preimage:
+
+```json
+{
+  "type": "quantum-vault-cohort-id-preimage/v1",
+  "archiveId": "<archiveId>",
+  "stateId": "<stateId>",
+  "cohortBindingDigest": {
+    "alg": "SHA3-512",
+    "value": "<cohortBindingDigest.value>"
+  }
+}
+```
+
+- `cohortId = SHA3-256(canonical cohort-id preimage bytes)` encoded as lowercase hex
 
 Important distinction:
 
@@ -328,7 +364,21 @@ Minimum useful source-evidence content:
 - `sourceObjectType`
 - one or more `sourceDigests`
 - optional external-source-signature references
-- optional non-sensitive descriptive fields such as filename or media type
+- optional descriptive fields only under a privacy-preserving default profile
+
+#### 4.4.1 Privacy-preserving default profile
+
+Recommended decision:
+
+- the default v1 source-evidence profile SHOULD emit only:
+  - `relationType`
+  - `sourceObjectType`
+  - `sourceDigests`
+  - external-source-signature references, if any
+- human-readable descriptive fields are opt-in, not default
+- local paths, usernames, email addresses, and operator notes MUST NOT be emitted by default
+- `mediaType` MAY be emitted when operationally necessary
+- descriptive metadata never upgrades provenance into archive approval
 
 ## 5. Authenticity Surfaces And Signature Targets
 
@@ -350,6 +400,65 @@ Recommended target split:
 - maintenance signatures target transition-record bytes
 - source-evidence signatures target source-evidence object bytes
 - OTS targets detached signature bytes
+
+### 5.1 Minimal successor attachment wire contracts
+
+Recommended decision:
+
+Successor detached-signature entries share one minimum contract:
+
+- `id`: required unique attachment identifier
+- `signatureFamily`: required; one of `archive-approval`, `maintenance`, `source-evidence`
+- `format`: required detached-signature wrapper family
+- `suite`: required signature-suite identifier
+- `targetType`: required; one of `archive-state`, `transition-record`, `source-evidence`
+- `targetRef`: required typed reference string
+- `targetDigest`: required digest object `{ "alg": "...", "value": "<lowercase hex>" }`
+- `signatureEncoding`: required detached-signature payload encoding
+- `signature`: required detached-signature payload bytes encoded as declared
+- `publicKeyRef`: optional bundled-key reference string
+
+Frozen family mappings:
+
+- `archiveApprovalSignatures[]` entries MUST carry `signatureFamily = "archive-approval"` and `targetType = "archive-state"`
+- `maintenanceSignatures[]` entries MUST carry `signatureFamily = "maintenance"` and `targetType = "transition-record"`
+- `sourceEvidenceSignatures[]` entries MUST carry `signatureFamily = "source-evidence"` and `targetType = "source-evidence"`
+
+Frozen `targetRef` and `targetDigest` rules:
+
+- archive-state signatures:
+  - `targetRef = "state:" + stateId`
+  - `targetDigest = archiveStateDigest`
+- maintenance signatures:
+  - `targetRef = "transition:sha3-512:" + SHA3-512(canonical transition-record bytes)`
+  - `targetDigest = { "alg": "SHA3-512", "value": SHA3-512(canonical transition-record bytes) }`
+- source-evidence signatures:
+  - `targetRef = "source-evidence:sha3-512:" + SHA3-512(canonical source-evidence bytes)`
+  - `targetDigest = { "alg": "SHA3-512", "value": SHA3-512(canonical source-evidence bytes) }`
+
+Frozen bundled-key contract:
+
+- `attachments.publicKeys[]` entries MUST carry `id`, `kty`, `suite`, `encoding`, and `value`
+- if `publicKeyRef` is present, it MUST equal one bundled key `id`
+- attach and restore MUST use the same `publicKeyRef` resolution and compatibility rules
+
+Frozen timestamp contract:
+
+- `attachments.timestamps[]` entries MUST carry:
+  - `id`
+  - `type = "opentimestamps"`
+  - `targetRef`
+  - `targetDigest = { "alg": "SHA-256", "value": "<lowercase hex>" }`
+  - `proofEncoding`
+  - `proof`
+- `targetRef` MUST reference one known detached-signature attachment entry by `id`
+- `targetDigest.value` MUST equal `SHA-256` over the exact detached-signature bytes targeted by that `targetRef`
+- “exact detached-signature bytes” means the decoded payload bytes from the targeted signature entry’s `signature` field, not bundle bytes and not canonical JSON bytes
+
+Attach and restore consequence:
+
+- attach and restore MUST interpret `signatureFamily`, `targetType`, `targetRef`, `targetDigest`, and `publicKeyRef` identically
+- no lifecycle code path may reinterpret a signature target by family-local heuristic
 
 ## 6. Successor Verification Invariants
 
@@ -382,6 +491,41 @@ Required non-collapse rules:
 - OTS evidence does not satisfy archive policy
 - maintenance signatures do not satisfy archive policy
 - source-evidence signatures do not satisfy archive policy
+
+### 6.1 Required verifier predicates
+
+Recommended decision:
+
+At minimum, successor verification MUST evaluate the following predicates explicitly:
+
+1. archive-state digest equality
+   - recompute `SHA3-512(canonical archive-state descriptor bytes)` and require equality with `archiveStateDigest.value`
+2. `stateId` derivation equality
+   - require `stateId == archiveStateDigest.value`
+3. cohort-binding digest equality
+   - recompute `SHA3-512(canonical cohort-binding bytes)` and require equality with `cohortBindingDigest.value`
+4. `cohortId` derivation equality
+   - recompute the exact canonical cohort-id preimage and require `cohortId == SHA3-256(preimage-bytes)` encoded as lowercase hex
+5. shard-set consistency
+   - require one `archiveId`, one `stateId`, one `cohortId`, one exact archive-state byte sequence, and one exact cohort-binding byte sequence inside the selected candidate set
+6. signature target equality
+   - require each detached signature entry’s `signatureFamily`, `targetType`, `targetRef`, and `targetDigest` to match its actual target object and target bytes
+7. fail-closed `publicKeyRef` resolution
+   - if `publicKeyRef` is present, require one compatible bundled key entry and successful verification against that key or reject that signature
+8. OTS linkage equality
+   - if an OTS entry is present, require `targetRef` resolution to one detached signature entry and require `targetDigest.value == SHA-256(exact detached-signature bytes)`
+9. archive-policy counting
+   - count only verified archive-approval signatures toward archive policy
+
+Required rejection conditions:
+
+- mixed `stateId` values in one restore candidate set MUST be rejected
+- mixed `cohortId` values in one restore candidate set MUST be rejected
+- exact archive-state byte mismatch inside one claimed state MUST be rejected
+- exact cohort-binding byte mismatch inside one claimed cohort MUST be rejected
+- mismatched `targetType` / `targetRef` / `targetDigest` metadata MUST reject the affected signature entry
+- unresolved or incompatible `publicKeyRef` MUST reject the affected signature entry
+- unresolved or mismatched OTS linkage MUST reject the affected timestamp entry as invalid evidence and MUST NOT be reassigned heuristically to another signature
 
 ## 7. Signer, Attach, Restore, And Shard-Carriage Implications
 
@@ -439,7 +583,9 @@ Practical implication:
 
 - the current `manifestDigestHex:bundleDigestHex` composite key is replaced
 - uploaded archive-state descriptors and lifecycle bundles remain valid explicit disambiguation tools
-- bundle-selection heuristics, if used, must operate only **inside** one already selected cohort
+- if exactly one embedded lifecycle-bundle digest is present inside the already selected state-plus-cohort, restore MAY use it automatically
+- if more than one embedded lifecycle-bundle digest is present inside the selected state-plus-cohort and no explicit bundle input is supplied, restore MUST NOT auto-select; it MUST require explicit lifecycle-bundle bytes or explicit operator selection of one embedded bundle digest
+- attachment count, timestamp count, “richness,” lexical order, and similar heuristics MUST NOT choose a bundle variant
 
 ### 7.4 Shard carriage and embedding implications
 
@@ -601,10 +747,9 @@ Status: True open question
 
 The following remain open because implementation can proceed without freezing them today:
 
-1. Whether `actorHints` in transition records should stay free-form strings or be narrowed to a controlled vocabulary in v1.
-2. Whether future governance profiles should require maintenance signatures for every resharing event or only for some archive classes.
-3. Whether direct `.qenc` signatures should ever be bundled in a future extension family for non-QV repository workflows.
-4. Whether source-evidence descriptive fields need a stricter privacy-preserving profile before broad use.
+1. Whether future governance profiles should require maintenance signatures for every resharing event or only for some archive classes.
+2. Whether direct `.qenc` signatures should ever be bundled in a future extension family for non-QV repository workflows.
+3. Whether later lifecycle versions need a signed “active cohort” governance rule for resolving known same-state forks without operator intervention.
 
 These are deliberately smaller than the state/cohort boundary question and do not justify reopening the frozen architecture.
 

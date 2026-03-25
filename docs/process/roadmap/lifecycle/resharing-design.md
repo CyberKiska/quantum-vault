@@ -4,7 +4,7 @@ Status: Draft successor-design document
 Type: Informative technical design with recommended Phase 1 direction
 Audience: contributors, implementers, reviewers, cryptographic auditors
 Scope: same-state resharing, lifecycle artifact boundaries, signature/evidence split, transition semantics, shard carriage, and operator roles
-Out of scope: byte-for-byte final normative spec language, institutional governance policy, and interactive MPC protocols
+Out of scope: full external-format publication, institutional governance policy, and interactive MPC protocols
 Relationship: builds on the completed Stage A-C baseline; feeds `implementation-plan-lifecycle.md`, future normative lifecycle specs, and any future successor-format implementation
 
 ## 1. Design Posture
@@ -30,6 +30,21 @@ Therefore, if lifecycle support introduces:
 - new attachment families for maintenance and provenance signatures
 
 then it must do so as a new artifact family with explicit schemas and versions.
+
+### 1.1 Normative language and JSON discipline
+
+Uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals.
+Explanatory prose outside frozen-decision, wire-contract, and verifier-predicate sections is informative.
+
+Lifecycle JSON discipline is part of the design, not a later editorial cleanup:
+
+- lifecycle JSON text MUST parse as RFC 8259 JSON before any schema, canonicalization, digest, or signature step
+- parsers MUST reject duplicate object names
+- lifecycle v1 artifacts MUST stay within an I-JSON-safe subset compatible with RFC 7493:
+  - strings are encoded as UTF-8 JSON text at the byte level
+  - numeric fields, where used, MUST be finite integers in the exact interoperable range `0..2^53-1`
+  - non-finite numbers are forbidden
+- JSON Schema draft 2020-12 remains grammar only; it does not define canonical bytes, derived identifiers, target semantics, or policy semantics
 
 ## 2. Motivation: The Current Failure Mode
 
@@ -122,11 +137,17 @@ Recommended invariants:
 Recommended derivation:
 
 ```text
-stateId = hex(SHA3-512(canonical archive-state descriptor bytes))
+archiveStateDigest = {
+  alg: "SHA3-512",
+  value: hex(SHA3-512(canonical archive-state descriptor bytes))
+}
+stateId = archiveStateDigest.value
 ```
 
 Recommended meaning:
 
+- `stateId` is derived-only metadata
+- the archive-state descriptor MUST NOT contain `stateId` inside the canonical bytes used to derive it
 - one `stateId` corresponds to one archive-state descriptor
 - the archive-state descriptor is the long-lived archive-approval signature target
 - same-state resharing preserves `stateId`
@@ -181,26 +202,28 @@ Important distinction:
 
 ### 4.5 `cohortId`
 
-The exact preimage shape is frozen semantically here and will be frozen syntactically in Phase 1 schema/test-vector work.
-
-Recommended derivation intent:
+Recommended derivation:
 
 ```text
-cohortId = hex(SHA3-256(canonicalize({
+cohortBindingDigest = {
+  alg: "SHA3-512",
+  value: hex(SHA3-512(canonical cohort-binding bytes))
+}
+
+cohortIdPreimage = canonicalize({
+  type: "quantum-vault-cohort-id-preimage/v1",
   archiveId,
   stateId,
-  sharding,
-  bodyDefinitionId,
-  bodyDefinition,
-  shardBodyHashAlg,
-  shardBodyHashes,
-  shareCommitment,
-  shareCommitments
-})))
+  cohortBindingDigest
+})
+
+cohortId = hex(SHA3-256(cohortIdPreimage))
 ```
 
 Recommended meaning:
 
+- `cohortId` is derived-only metadata
+- the canonical cohort-binding bytes used for `cohortBindingDigest` MUST NOT contain `cohortId`
 - unique to one split or reshare event
 - replaceable without changing archive state
 - carried in every shard and lifecycle record
@@ -216,6 +239,13 @@ Recommended meaning:
 - references the original source object or reviewed precursor object
 - may preserve source digests, source signatures, or source-review claims
 - survives same-state resharing as provenance if the referenced relation is unchanged
+
+Recommended privacy-preserving default profile:
+
+- source-evidence v1 SHOULD emit digests and relation metadata by default
+- human-readable descriptive fields are opt-in, not default
+- local paths, usernames, email addresses, and operator notes MUST NOT be emitted by default
+- `mediaType` MAY be emitted when operationally necessary
 
 ## 5. Frozen State/Cohort Boundary
 
@@ -314,7 +344,6 @@ Recommended fields:
 - `canonicalization`
 - `archiveId`
 - `stateId`
-- `cohortId`
 - `sharding`
 - `bodyDefinitionId`
 - `bodyDefinition`
@@ -322,6 +351,11 @@ Recommended fields:
 - `shardBodyHashes[]`
 - `shareCommitment`
 - `shareCommitments[]`
+
+Important representation rule:
+
+- `cohortId` is derived from the canonical cohort-binding bytes but is not carried inside those bytes
+- `cohortId` may be carried in shard metadata, transition records, and verification reports
 
 ### 6.3 Transition record
 
@@ -355,6 +389,9 @@ Recommended fields:
 - `operatorRole`
 - `actorHints`
 - `notes`
+
+`actorHints` stays free-form in v1.
+It is advisory operator metadata, not a controlled authority vocabulary.
 
 For same-state resharing:
 
@@ -427,7 +464,8 @@ Canonical archive-state descriptor bytes
 
 Archive-state descriptor
   ├── archiveId
-  ├── stateId = SHA3-512(canonical archive-state descriptor bytes)
+  ├── archiveStateDigest = SHA3-512(canonical archive-state descriptor bytes)
+  ├── stateId = archiveStateDigest.value
   ├── qencHash / containerId
   ├── cryptoProfileId / kdfTreeId / nonce/AAD semantics
   └── authPolicyCommitment
@@ -439,12 +477,13 @@ Archive-state descriptor
 Cohort binding
   ├── archiveId
   ├── stateId
-  ├── cohortId
   ├── concrete n/k/t/codecId
   ├── bodyDefinition
   ├── shareCommitments[]
   └── shardBodyHashes[]
-         └── binds one shard-distribution cohort for one archive state
+         └── cohortBindingDigest = SHA3-512(canonical cohort-binding bytes)
+                └── cohortId = SHA3-256(canonical cohort-id preimage)
+                       └── binds one shard-distribution cohort for one archive state
 
 Transition record
   ├── archiveId
@@ -581,6 +620,73 @@ Pinning remains separate from:
 
 Archive policy counts archive-approval signatures only.
 
+### 11.4 Minimal successor attachment contracts
+
+Required minimum detached-signature fields:
+
+- `id`
+- `signatureFamily`
+- `format`
+- `suite`
+- `targetType`
+- `targetRef`
+- `targetDigest`
+- `signatureEncoding`
+- `signature`
+- optional `publicKeyRef`
+
+Required family mappings:
+
+- archive-approval signature entries MUST carry `signatureFamily = "archive-approval"` and `targetType = "archive-state"`
+- maintenance signature entries MUST carry `signatureFamily = "maintenance"` and `targetType = "transition-record"`
+- source-evidence signature entries MUST carry `signatureFamily = "source-evidence"` and `targetType = "source-evidence"`
+
+Required target mappings:
+
+- archive-state signatures:
+  - `targetRef = "state:" + stateId`
+  - `targetDigest = archiveStateDigest`
+- maintenance signatures:
+  - `targetRef = "transition:sha3-512:" + SHA3-512(canonical transition-record bytes)`
+  - `targetDigest = { alg: "SHA3-512", value: SHA3-512(canonical transition-record bytes) }`
+- source-evidence signatures:
+  - `targetRef = "source-evidence:sha3-512:" + SHA3-512(canonical source-evidence bytes)`
+  - `targetDigest = { alg: "SHA3-512", value: SHA3-512(canonical source-evidence bytes) }`
+
+Attach and restore MUST interpret these fields identically.
+No family-local heuristic reinterpretation is allowed.
+
+### 11.5 Bundled-key and OTS linkage contract
+
+Bundled key entries MUST carry:
+
+- `id`
+- `kty`
+- `suite`
+- `encoding`
+- `value`
+
+`publicKeyRef` rule:
+
+- if present, `publicKeyRef` MUST equal one bundled key `id`
+- unresolved, incompatible, or non-verifying `publicKeyRef` is a verification failure for that signature
+
+Timestamp entries MUST carry:
+
+- `id`
+- `type = "opentimestamps"`
+- `targetRef`
+- `targetDigest = { alg: "SHA-256", value: "<lowercase hex>" }`
+- `proofEncoding`
+- `proof`
+
+Exact OTS linkage rule:
+
+- `targetRef` MUST resolve to one detached-signature entry by `id`
+- the verifier MUST decode that signature entry’s `signature` field to the exact detached-signature bytes
+- `targetDigest.value` MUST equal `SHA-256` over those exact detached-signature bytes
+- an unresolved or mismatched OTS entry is invalid evidence for that signature and MUST NOT be heuristically reassigned
+
 ## 12. Shard Carriage, Attach Flow, And Restore Flow
 
 Status: Required implementation-relevant design detail
@@ -625,13 +731,47 @@ Step 1: select archive state plus cohort
 Step 2: select lifecycle-bundle context
 
 - accept uploaded lifecycle bundle only if it matches the selected archive-state and current cohort-binding digests
-- otherwise select an embedded lifecycle bundle only within the already selected cohort
-- retain warnings if payload reconstruction used shards carrying multiple embedded lifecycle-bundle digests
+- if no explicit lifecycle bundle is supplied and the selected shard set carries exactly one embedded lifecycle-bundle digest, use that digest
+- if the selected shard set carries more than one embedded lifecycle-bundle digest, restore MUST NOT auto-select by timestamp count, signature count, “richness,” lexical order, or similar heuristics
+- in that multi-bundle case, restore MUST require explicit lifecycle-bundle bytes or explicit operator selection of one embedded bundle digest
 
 Important distinction:
 
 - multiple bundle digests inside one selected cohort are **not** a cohort fork
 - different `cohortId` values for one `archiveId` plus `stateId` **are** a cohort fork
+
+### 12.4 Verifier predicates and rejection conditions
+
+Required predicates:
+
+1. archive-state digest equality
+   - require `archiveStateDigest.value == SHA3-512(canonical archive-state descriptor bytes)`
+2. `stateId` derivation equality
+   - require `stateId == archiveStateDigest.value`
+3. cohort-binding digest equality
+   - require `cohortBindingDigest.value == SHA3-512(canonical cohort-binding bytes)`
+4. `cohortId` derivation equality
+   - require `cohortId == SHA3-256(canonical cohort-id preimage bytes)` encoded as lowercase hex
+5. shard-set consistency
+   - require one `archiveId`, one `stateId`, one `cohortId`, one exact archive-state byte sequence, and one exact cohort-binding byte sequence inside the selected candidate set
+6. signature target equality
+   - require each detached signature entry’s `signatureFamily`, `targetType`, `targetRef`, and `targetDigest` to match its actual target object and target bytes
+7. fail-closed `publicKeyRef`
+   - if `publicKeyRef` is present, require one compatible bundled key entry and successful verification against that key
+8. exact OTS linkage
+   - if an OTS entry is present, require `targetRef` resolution and `targetDigest.value == SHA-256(exact detached-signature bytes)`
+9. archive-policy counting
+   - count only verified archive-approval signatures toward archive policy
+
+Required rejection conditions:
+
+- mixed `stateId` values in one restore candidate set MUST be rejected
+- mixed `cohortId` values in one restore candidate set MUST be rejected
+- exact archive-state byte mismatch inside one claimed state MUST be rejected
+- exact cohort-binding byte mismatch inside one claimed cohort MUST be rejected
+- mismatched `targetType` / `targetRef` / `targetDigest` metadata MUST reject the affected signature entry
+- unresolved or incompatible `publicKeyRef` MUST reject the affected signature entry
+- unresolved or mismatched OTS linkage MUST reject the affected timestamp entry as invalid evidence
 
 ## 13. Same-State Resharing Design
 
@@ -675,25 +815,26 @@ It does not require:
 
 1. Gather at least `t` shards from the predecessor cohort.
 2. Verify `archiveId`, `stateId`, and `cohortId` consistency.
-3. Verify predecessor archive-state bytes and predecessor cohort-binding bytes are internally consistent.
-4. Verify share commitments and shard-body hashes for the predecessor cohort.
-5. Reconstruct the ML-KEM private key material in memory.
-6. Choose new cohort parameters:
+3. Recompute `archiveStateDigest`, `stateId`, `cohortBindingDigest`, and `cohortId`; reject any mismatch with carried metadata.
+4. Verify predecessor archive-state bytes and predecessor cohort-binding bytes are internally consistent.
+5. Verify share commitments and shard-body hashes for the predecessor cohort.
+6. Reconstruct the ML-KEM private key material in memory.
+7. Choose new cohort parameters:
    - `n'`
    - `k'`
    - `t'`
    - `codecId'`
    - body-definition changes that remain cohort-level
-7. Generate a fresh cohort with fresh share randomness.
-8. Build the successor cohort-binding object and derive the new `cohortId`.
-9. Build successor shards embedding:
+8. Generate a fresh cohort with fresh share randomness.
+9. Build the successor cohort-binding object, compute `cohortBindingDigest`, and derive the new `cohortId`.
+10. Build successor shards embedding:
    - unchanged archive-state descriptor
    - new cohort binding
    - updated lifecycle bundle
-10. Create the required transition record.
-11. Optionally sign that transition record with maintenance keys.
-12. Zeroize reconstructed secret material as quickly as possible.
-13. Instruct custodians to destroy predecessor shards, recognizing that the system cannot prove destruction.
+11. Create the required transition record.
+12. Optionally sign that transition record with maintenance keys.
+13. Zeroize reconstructed secret material as quickly as possible.
+14. Instruct custodians to destroy predecessor shards, recognizing that the system cannot prove destruction.
 
 ### 13.4 Allowed and forbidden changes
 
@@ -977,7 +1118,7 @@ Possible later additions:
 
 - reviewer role metadata
 - richer external-source-signature references
-- privacy-preserving descriptive profiles
+- richer opt-in descriptive vocabularies beyond the privacy-preserving default profile
 
 ### 21.2 Envelope-DEK and future `rewrap`
 
