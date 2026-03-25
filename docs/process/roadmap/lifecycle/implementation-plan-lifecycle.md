@@ -26,6 +26,18 @@ Those responsibilities stay in:
 - `resharing-design.md`
 - `roadmap-archive-lifecycle.md`
 
+## 1.1 Document Conventions
+
+This plan is informative except where it restates:
+
+- Phase 0 frozen inputs
+- mandatory security-review dispositions
+- mandatory exit criteria
+- mandatory later-phase implementation gates derived from frozen Phase 0 inputs
+
+Uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals.
+Later phases may codify, schema-encode, test, or implement Phase 0 contracts, but they MUST NOT reopen or weaken them.
+
 ## 2. Fixed Inputs From The Current Quantum Vault Baseline
 
 The implementation plan inherits the current baseline and must not reopen it:
@@ -74,33 +86,38 @@ The following decisions are treated as frozen inputs for engineering work in thi
 - Any state change creates a new `stateId`.
 - Because cohort bindings are state-bound, any new `stateId` also requires a new cohort-binding object and a new `cohortId`.
 
-### 3.4 Minimum archive-state descriptor field set
+### 3.4 Exact archive-state descriptor v1 field set
 
-The successor archive-state descriptor MUST carry at least:
+The successor archive-state descriptor v1 field set is frozen exactly as:
 
-- `schema`
-- `version`
-- `stateType`
-- `canonicalization`
-- `archiveId`
-- `parentStateId`
-- `cryptoProfileId`
-- `kdfTreeId`
-- `noncePolicyId`
-- `nonceMode`
-- `counterBits`
-- `maxChunkCount`
-- `aadPolicyId`
-- `qenc.chunkSize`
-- `qenc.chunkCount`
-- `qenc.payloadLength`
-- `qenc.hashAlg`
-- `qenc.primaryAnchor`
-- `qenc.qencHash`
-- `qenc.containerId`
-- `qenc.containerIdRole`
-- `qenc.containerIdAlg`
-- `authPolicyCommitment`
+- top-level members:
+  - `schema`
+  - `version`
+  - `stateType`
+  - `canonicalization`
+  - `archiveId`
+  - `parentStateId`
+  - `cryptoProfileId`
+  - `kdfTreeId`
+  - `noncePolicyId`
+  - `nonceMode`
+  - `counterBits`
+  - `maxChunkCount`
+  - `aadPolicyId`
+  - `qenc`
+  - `authPolicyCommitment`
+- `qenc` members:
+  - `chunkSize`
+  - `chunkCount`
+  - `payloadLength`
+  - `hashAlg`
+  - `primaryAnchor`
+  - `qencHash`
+  - `containerId`
+  - `containerIdRole`
+  - `containerIdAlg`
+- no additional top-level members and no additional `qenc` members are permitted in archive-state descriptor v1
+- schema validation and semantic validation MUST both reject any archive-state descriptor v1 object that carries out-of-set members
 
 This field set is frozen strongly enough for schema work, external signer target updates, restore checks, and future migration continuity.
 
@@ -144,33 +161,46 @@ Identifier and digest rule for cohort material:
 
 ### 3.6 Lifecycle-bundle v1 contents
 
-`QV-Lifecycle-Bundle` v1 is frozen as containing:
+`QV-Lifecycle-Bundle` v1 is frozen as containing exactly:
 
-- `type`
-- `version`
-- `bundleCanonicalization`
-- `archiveStateCanonicalization`
-- `archiveState`
-- `archiveStateDigest`
-- `currentCohortBinding`
-- `currentCohortBindingDigest`
-- `authPolicy`
-- `sourceEvidence[]`
-- `transitions[]`
-- `attachments.publicKeys[]`
-- `attachments.archiveApprovalSignatures[]`
-- `attachments.maintenanceSignatures[]`
-- `attachments.sourceEvidenceSignatures[]`
-- `attachments.timestamps[]`
+- top-level members:
+  - `type`
+  - `version`
+  - `bundleCanonicalization`
+  - `archiveStateCanonicalization`
+  - `archiveState`
+  - `archiveStateDigest`
+  - `currentCohortBinding`
+  - `currentCohortBindingDigest`
+  - `authPolicy`
+  - `sourceEvidence`
+  - `transitions`
+  - `attachments`
+- `attachments` members:
+  - `publicKeys`
+  - `archiveApprovalSignatures`
+  - `maintenanceSignatures`
+  - `sourceEvidenceSignatures`
+  - `timestamps`
+- no additional top-level members and no additional `attachments` members are permitted in lifecycle-bundle v1
+- `sourceEvidence`, `transitions`, and all five attachment arrays MUST be present even when empty
 
-All array-valued attachment families and top-level arrays above MUST be present even when empty.
 This avoids a second top-level schema change merely to introduce a semantically central lifecycle object class.
 
 ### 3.7 `publicKeyRef` and pinning semantics
 
-- A bundled signature entry that declares `publicKeyRef` MUST resolve to compatible bundled key material for that signature.
+- A bundled signature entry that declares `publicKeyRef` MUST resolve using the frozen compatibility predicate below.
 - Failure to resolve or verify a declared `publicKeyRef` is a **signature verification failure** for that signature, not merely absence of pinning.
 - Pinning remains separate from signature validity and separate from archive policy satisfaction.
+
+Frozen compatibility predicate:
+
+- exactly one bundled key entry MUST satisfy `id == publicKeyRef`
+- that entry MUST also satisfy `suite == <signature-entry.suite>`
+- the declared bundled-key `encoding` MUST decode successfully into exactly one key value
+- the decoded key value MUST be structurally valid for the declared `kty` and usable with the declared `suite`
+- detached-signature verification against that decoded key and the declared target bytes MUST succeed
+- zero matches, multiple matches, decode failure, structural key invalidity, suite mismatch, or verification failure MUST reject the signature entry
 
 ### 3.8 Transition-record semantics
 
@@ -212,13 +242,13 @@ Required decisions and outputs:
   - transition record
   - source-evidence object
   - lifecycle bundle
-- freeze the minimum archive-state descriptor field set
+- freeze the exact archive-state descriptor v1 allowed field set with no additional v1 fields
 - freeze derived-only `stateId` semantics
 - freeze derived-only `cohortId` semantics and the exact cohort-id preimage
 - freeze shard carriage and embedding strategy
-- freeze lifecycle-bundle v1 contents
+- freeze lifecycle-bundle v1 contents and the exact top-level / `attachments` member boundary
 - freeze transition-record requirement for same-state resharing
-- freeze successor `publicKeyRef` failure semantics
+- freeze successor `publicKeyRef` compatibility and fail-closed semantics
 - freeze detached-signature and timestamp attachment contracts:
   - `signatureFamily`
   - `targetType`
@@ -254,7 +284,64 @@ Exit criteria:
 
 - no remaining ambiguity on archive-state fields, shard carriage, lifecycle-bundle v1 contents, or transition-record requirement
 
-## 6. Phase 1 — Define Successor Artifacts, Canonical Bytes, And Shard Layout
+### 5.1 Phase 0 Freeze Addendum
+
+This addendum is the authoritative Phase 0 freeze record for the lifecycle successor family.
+Later phases may only encode, test, or implement the contracts below.
+They MUST NOT reinterpret or reopen them.
+
+| Contract | Frozen now in Phase 0 | Later codification work |
+| --- | --- | --- |
+| Successor-family boundary | Successor artifact family only; current manifest/bundle family remains unchanged; archive-state descriptor is the long-lived archive-approval target | Encode in schemas, tooling selectors, and migration guards without reopening the boundary |
+| Artifact identifiers | `quantum-vault-archive-state-descriptor/v1`, `quantum-vault-cohort-binding/v1`, `quantum-vault-transition-record/v1`, `quantum-vault-source-evidence/v1`, and `QV-Lifecycle-Bundle` v1 are fixed | Materialize these exact identifiers in schemas, fixtures, parsers, and reporting |
+| Archive-state descriptor v1 field closure | Exact allowed top-level and `qenc` members are frozen; no additional v1 fields are permitted | Encode the closed schema and semantic rejection paths |
+| `stateId` | `stateId = archiveStateDigest.value`; derived-only; excluded from canonical archive-state bytes | Implement digest/identifier helpers and rejection vectors |
+| `cohortId` | `cohortId = SHA3-256(RFC 8785-canonicalized cohort-id preimage)`; derived-only; excluded from canonical cohort-binding bytes | Encode the exact preimage and rejection vectors |
+| Shard carriage | QV-produced shards embed archive-state bytes/digest, cohort-binding bytes/digest, lifecycle-bundle bytes/digest, plus shard metadata carrying `archiveId`, `stateId`, `cohortId`, and shard index | Encode shard-carrier fields and restore readers without changing semantics |
+| Lifecycle-bundle v1 member boundary | Exact top-level members and exact `attachments` members are frozen; arrays are always present; no extra v1 members are permitted | Encode bundle schema, serializers, and honest mixed-bundle reporting |
+| Transition requirement | Every QV-produced same-state resharing event MUST emit one transition record | Implement emission and verification paths; governance policy may later require extra signatures but not remove the record |
+| Detached-signature and timestamp wire contracts | Attachment field set, family mappings, target mappings, exact detached-signature-byte timestamp linkage, and no heuristic reinterpretation are frozen | Encode schemas, signer exports, attach handling, and restore validation |
+| `publicKeyRef` | Compatibility predicate and fail-closed behavior are frozen, including exact-one-match, suite equality, successful decode, structural key validity, and successful verification | Encode shared attach/restore resolution logic and negative vectors |
+| Restore bundle selection | Restore groups by `archiveId`, `stateId`, `cohortId`, exact archive-state bytes, and exact cohort-binding bytes; no heuristic bundle auto-selection across multiple embedded bundle digests | Implement UI/input flows and bundle-selection validation without adding heuristics |
+| Verifier predicates and rejections | Digest equality, derived-ID equality, shard-set consistency, target equality, exact OTS linkage, fail-closed `publicKeyRef`, and explicit rejection conditions are frozen | Implement verifier/reporting code and test vectors; no predicate may be silently dropped or collapsed |
+| Normative/informative boundary | RFC 2119 / RFC 8174 keywords apply only where documents explicitly use all-caps requirements; explanatory prose remains informative | Keep later edits consistent with the same boundary and avoid prose-only contract changes |
+
+### 5.2 Phase 0 Security Review Dispositions
+
+Disposition 1: frozen field set preserves current ciphertext/policy interpretation requirements.
+
+- accepted
+- the archive-state descriptor retains the current ciphertext-binding and policy-interpretation classes:
+  - `qencHash` / container identity anchors
+  - AEAD/AAD interpretation fields carried by `noncePolicyId`, `nonceMode`, `counterBits`, `maxChunkCount`, and `aadPolicyId`
+  - KDF interpretation fields carried by `kdfTreeId`
+  - crypto-profile identity carried by `cryptoProfileId`
+  - policy commitment carried by `authPolicyCommitment`
+- concrete `n/k/t/codecId`, shard hashes, and custodian logistics remain outside archive-state identity and therefore do not weaken ciphertext/policy interpretation
+
+Disposition 2: lifecycle-bundle v1 contents do not weaken closed-schema discipline.
+
+- accepted
+- lifecycle-bundle v1 now has an exact top-level member set and exact `attachments` member set
+- all attachment families and top-level arrays are mandatory even when empty, so later semantics do not depend on missing-member heuristics
+- later work must encode explicit schemas under JSON Schema draft 2020-12 rather than introduce prose-only extension paths
+
+Disposition 3: shard carriage keeps the Phase 1 system browser-first and client-only.
+
+- accepted
+- QV-produced shards remain self-contained and carry all lifecycle objects needed for restore
+- attach and restore may accept optional external files, but no server coordinator, interactive MPC protocol, or always-online dependency is introduced by shard carriage
+
+Disposition 4: there is no self-referential identifier hashing ambiguity.
+
+- accepted
+- `stateId` is excluded from the canonical archive-state descriptor bytes used to derive it
+- `cohortId` is excluded from the canonical cohort-binding bytes used to derive `cohortBindingDigest`
+- `cohortId` is derived from a separate frozen preimage rooted in `archiveId`, `stateId`, and `cohortBindingDigest`
+- lifecycle-bundle digest is explicitly outside state/cohort identity
+- timestamp linkage is over exact detached-signature bytes rather than over mutable bundle bytes
+
+## 6. Phase 1 — Encode Frozen Successor Artifacts, Canonical Bytes, And Shard Layout
 
 Objective:
 
@@ -266,28 +353,28 @@ Depends on:
 
 Spec/schema tasks:
 
-- define `quantum-vault-archive-state-descriptor/v1`
-- define `quantum-vault-cohort-binding/v1`
-- define `quantum-vault-transition-record/v1`
-- define `quantum-vault-source-evidence/v1`
-- define `QV-Lifecycle-Bundle` v1
-- state that archive-state, cohort-binding, transition-record, and source-evidence canonical bytes use `QV-JSON-RFC8785-v1`
-- state that lifecycle-bundle bytes use `QV-BUNDLE-JSON-v1`
-- define `archiveStateDigest = SHA3-512(canonical archive-state bytes)`
-- define `stateId = archiveStateDigest.value`
-- state that `stateId` MUST NOT appear inside the canonical archive-state descriptor bytes
-- define `cohortBindingDigest = SHA3-512(canonical cohort-binding bytes)`
-- state that `cohortId` MUST NOT appear inside the canonical cohort-binding bytes
-- define the exact preimage used for `cohortId`
-- define lowercase-hex encoding for all successor digest and identifier values
-- define duplicate-name rejection and I-JSON-safe numeric expectations for lifecycle parsing
+- encode `quantum-vault-archive-state-descriptor/v1`
+- encode `quantum-vault-cohort-binding/v1`
+- encode `quantum-vault-transition-record/v1`
+- encode `quantum-vault-source-evidence/v1`
+- encode `QV-Lifecycle-Bundle` v1
+- encode that archive-state, cohort-binding, transition-record, and source-evidence canonical bytes use `QV-JSON-RFC8785-v1`
+- encode that lifecycle-bundle bytes use `QV-BUNDLE-JSON-v1`
+- encode `archiveStateDigest = SHA3-512(canonical archive-state bytes)`
+- encode `stateId = archiveStateDigest.value`
+- enforce that `stateId` MUST NOT appear inside the canonical archive-state descriptor bytes
+- encode `cohortBindingDigest = SHA3-512(canonical cohort-binding bytes)`
+- enforce that `cohortId` MUST NOT appear inside the canonical cohort-binding bytes
+- encode the exact preimage used for `cohortId`
+- encode lowercase-hex output for all successor digest and identifier values
+- encode duplicate-name rejection and I-JSON-safe numeric expectations for lifecycle parsing
 
 Shard-format tasks:
 
-- define successor `.qcont` embedding fields for archive-state bytes/digest, cohort-binding bytes/digest, and lifecycle-bundle bytes/digest
-- define shard metadata fields carrying `archiveId`, `stateId`, `cohortId`, and shard index
-- freeze that lifecycle-bundle digest is **not** part of cohort identity
-- define that mixed bundle digests inside one otherwise consistent cohort are bundle-variation cases, not mixed-cohort cases
+- encode successor `.qcont` embedding fields for archive-state bytes/digest, cohort-binding bytes/digest, and lifecycle-bundle bytes/digest
+- encode shard metadata fields carrying `archiveId`, `stateId`, `cohortId`, and shard index
+- enforce that lifecycle-bundle digest is **not** part of cohort identity
+- encode that mixed bundle digests inside one otherwise consistent cohort are bundle-variation cases, not mixed-cohort cases
 
 Implementation tasks:
 
@@ -323,7 +410,7 @@ Exit criteria:
 - shards can carry the successor artifacts
 - canonicalization/digest vectors pass
 
-## 7. Phase 2 — External Signer Targets, Attach Flow, And Signature Attachment Semantics
+## 7. Phase 2 — External Signer Targets, Attach Flow, And Frozen Signature Attachment Semantics
 
 Objective:
 
@@ -335,9 +422,9 @@ Depends on:
 
 Spec/schema tasks:
 
-- define archive-approval signature attachment shape targeting archive-state descriptor bytes
-- define maintenance-signature attachment shape targeting transition-record bytes
-- define source-evidence-signature attachment shape targeting source-evidence object bytes
+- encode archive-approval signature attachment shape targeting archive-state descriptor bytes
+- encode maintenance-signature attachment shape targeting transition-record bytes
+- encode source-evidence-signature attachment shape targeting source-evidence object bytes
 - require all detached-signature entries to carry:
   - `id`
   - `signatureFamily`
@@ -349,18 +436,18 @@ Spec/schema tasks:
   - `signatureEncoding`
   - `signature`
   - optional `publicKeyRef`
-- freeze family mappings:
+- encode family mappings:
   - archive-approval -> `targetType = "archive-state"`
   - maintenance -> `targetType = "transition-record"`
   - source-evidence -> `targetType = "source-evidence"`
-- define `targetRef` rules:
+- encode `targetRef` rules:
   - `state:<stateId>`
   - `transition:sha3-512:<digest>`
   - `source-evidence:sha3-512:<digest>`
-- define `targetDigest` rules:
+- encode `targetDigest` rules:
   - `SHA3-512` over canonical target bytes for archive-state, transition-record, and source-evidence targets
-- define timestamp attachment shape targeting detached signature bytes by `targetRef` plus exact `targetDigest = SHA-256(detached-signature-bytes)`
-- define bundled `publicKeys[]` shape and compatible `publicKeyRef` use across attachment families
+- encode timestamp attachment shape targeting detached signature bytes by `targetRef` plus exact `targetDigest = SHA-256(detached-signature-bytes)`
+- encode bundled `publicKeys[]` shape and the frozen `publicKeyRef` compatibility predicate across attachment families
 
 External signer tooling tasks:
 
@@ -454,8 +541,9 @@ Verification-state tasks:
   - OTS evidence linked
 - ensure archive policy is satisfied only by archive-approval signatures
 - ensure maintenance or source-evidence signatures never satisfy archive policy
-- define explicit verifier predicates for:
+- implement and report the frozen explicit verifier predicates for:
   - archive-state digest equality
+  - archive identity equality
   - `stateId` derivation equality
   - cohort-binding digest equality
   - `cohortId` derivation equality

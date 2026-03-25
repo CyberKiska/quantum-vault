@@ -1,7 +1,7 @@
 # Quantum Vault — Implementation Questions & Reading Guide
 
-Status: Decision-prep document
-Type: Informative architecture / standards / decision guide
+Status: Frozen decision record plus reading guide
+Type: Informative architecture / standards / frozen-decision guide
 Audience: contributors, implementers, reviewers, cryptographic auditors
 Scope: lifecycle design questions that remain after the completed Stage A-C baseline
 Relationship: the current normative baseline remains `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`; this document supports the successor design in `resharing-design.md` and the execution plan in `implementation-plan-lifecycle.md`
@@ -13,7 +13,7 @@ This document is intentionally **not** the implementation checklist.
 Its job is to:
 
 - restate the fixed baseline inherited from Stage A, Stage B, and Stage C
-- separate current fact from recommended decision
+- separate current fact from frozen decision
 - preserve implementation-relevant nuance that matters at signer, attach, restore, and shard-carriage seams
 - identify the few questions that truly remain open
 - tie the main lifecycle decisions to the standards frame without pretending standards dictate the exact QV object model
@@ -23,7 +23,7 @@ Its job is to:
 The document uses four labels deliberately:
 
 - **Current fact:** already true in the current Quantum Vault baseline
-- **Recommended decision:** design choice this revision freezes strongly enough to guide implementation
+- **Frozen decision:** design choice this revision freezes as a completed Phase 0 contract
 - **True open question:** still undecided after this revision because implementation can proceed without freezing it yet
 - **Future research:** not part of the near-term successor family
 
@@ -31,6 +31,7 @@ Normative language in this document:
 
 - uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals
 - explanatory prose outside frozen-decision, wire-contract, and verifier-predicate sections is informative and does not create independent conformance requirements
+- sections labeled **Frozen decision**, **Frozen derivation**, or **Frozen identifier** record completed Phase 0 contracts; later phases may only codify or implement them
 
 ## 1. Fixed Baseline Inherited From Stage A-C
 
@@ -65,7 +66,7 @@ Lifecycle work therefore MUST NOT:
 
 ### 1.1 JSON discipline inherited into lifecycle v1
 
-Status: Recommended decision
+Status: Frozen decision
 
 Lifecycle parsing and normalization MUST stay explicit:
 
@@ -148,7 +149,7 @@ Implementation consequence:
 
 ## 3. Architecture Decisions Frozen In This Revision
 
-Status: Recommended decision
+Status: Frozen decision
 
 This revision freezes the following architecture strongly enough for implementation planning.
 
@@ -210,13 +211,25 @@ Lifecycle-bundle v1 is frozen as carrying:
 - `attachments.timestamps[]`
 
 All arrays above are present even when empty.
+The lifecycle-bundle v1 top-level member set is exactly `type`, `version`, `bundleCanonicalization`, `archiveStateCanonicalization`, `archiveState`, `archiveStateDigest`, `currentCohortBinding`, `currentCohortBindingDigest`, `authPolicy`, `sourceEvidence`, `transitions`, and `attachments`.
+The `attachments` member set is exactly `publicKeys`, `archiveApprovalSignatures`, `maintenanceSignatures`, `sourceEvidenceSignatures`, and `timestamps`.
+No additional top-level lifecycle-bundle v1 members and no additional `attachments` members are permitted.
 
 ### 3.6 `publicKeyRef` semantics
 
-- A bundled signature entry that declares `publicKeyRef` MUST resolve to compatible bundled key material for that signature.
+- A bundled signature entry that declares `publicKeyRef` MUST resolve using the frozen compatibility predicate below.
 - Failure to resolve or verify that declared reference is a signature verification failure for that signature.
 - This is true for archive-approval, maintenance, and source-evidence signatures.
 - Pinning remains a separate status layer.
+
+Frozen compatibility predicate:
+
+- exactly one bundled key entry MUST satisfy `id == publicKeyRef`
+- that entry MUST also satisfy `suite == <signature-entry.suite>`
+- the declared key `encoding` MUST decode successfully into exactly one key value
+- the decoded key MUST be structurally valid for the declared `kty` and usable with the declared `suite`
+- detached-signature verification against that decoded key and the declared target bytes MUST succeed
+- zero matches, multiple matches, decode failure, structural key invalidity, suite mismatch, or verification failure MUST reject the signature entry
 
 ### 3.7 Transition records
 
@@ -233,7 +246,7 @@ All arrays above are present even when empty.
 
 ## 4. Archive Identity, Archive State, Cohort Identity, And Source Evidence
 
-Status: Recommended decision
+Status: Frozen decision
 
 The lifecycle successor family uses three identity layers plus a separate provenance layer.
 
@@ -243,7 +256,7 @@ Current fact:
 
 - the current artifact family has no first-class stable archive-wide identifier
 
-Recommended decision:
+Frozen decision:
 
 - introduce `archiveId` as a random, opaque, non-content-derived logical-archive identifier
 - assign it once at archive creation
@@ -257,7 +270,7 @@ Why not content-derived:
 
 ### 4.2 Archive state
 
-Recommended decision:
+Frozen decision:
 
 - `archiveStateDigest` has shape `{ "alg": "SHA3-512", "value": "<lowercase hex>" }`
 - `archiveStateDigest.value = SHA3-512(canonical archive-state descriptor bytes)`
@@ -268,9 +281,9 @@ Recommended decision:
 - bundle mutation does not change `stateId`
 - same-state resharing does not change `stateId`
 
-#### 4.2.1 Minimum archive-state descriptor field set
+#### 4.2.1 Exact archive-state descriptor v1 field set
 
-The minimum archive-state descriptor field set is frozen as:
+The archive-state descriptor v1 field set is frozen exactly as:
 
 - `schema`
 - `version`
@@ -302,7 +315,7 @@ Why each class of fields matters:
 - `qenc` fields bind the descriptor to one exact ciphertext state
 - `authPolicyCommitment` preserves the current “mutable policy carrier, immutable signable commitment” model
 
-Recommended exclusion boundary:
+Frozen exclusion boundary:
 
 - no concrete `n/k/t/codecId`
 - no `shareCommitments[]`
@@ -310,9 +323,15 @@ Recommended exclusion boundary:
 - no cohort-specific body-definition material
 - no custodian identities or cohort logistics
 
+Exact closure rule:
+
+- top-level members are exactly `schema`, `version`, `stateType`, `canonicalization`, `archiveId`, `parentStateId`, `cryptoProfileId`, `kdfTreeId`, `noncePolicyId`, `nonceMode`, `counterBits`, `maxChunkCount`, `aadPolicyId`, `qenc`, and `authPolicyCommitment`
+- `qenc` members are exactly `chunkSize`, `chunkCount`, `payloadLength`, `hashAlg`, `primaryAnchor`, `qencHash`, `containerId`, `containerIdRole`, and `containerIdAlg`
+- archive-state descriptor v1 MUST reject any additional top-level members or additional `qenc` members
+
 ### 4.3 Cohort identity
 
-Recommended decision:
+Frozen decision:
 
 - `cohortId` identifies one shard-distribution cohort for one archive state
 - `cohortBindingDigest` has shape `{ "alg": "SHA3-512", "value": "<lowercase hex>" }`
@@ -348,7 +367,7 @@ Current fact:
 
 - the current artifact family does not contain a first-class source-evidence object
 
-Recommended decision:
+Frozen decision:
 
 - the successor family defines a separate source-evidence object family
 - source evidence is provenance about reviewed or precursor objects
@@ -368,7 +387,7 @@ Minimum useful source-evidence content:
 
 #### 4.4.1 Privacy-preserving default profile
 
-Recommended decision:
+Frozen decision:
 
 - the default v1 source-evidence profile SHOULD emit only:
   - `relationType`
@@ -382,7 +401,7 @@ Recommended decision:
 
 ## 5. Authenticity Surfaces And Signature Targets
 
-Status: Recommended decision
+Status: Frozen decision
 
 Lifecycle work is strongest when it keeps the authenticity surfaces explicit.
 
@@ -394,7 +413,7 @@ Lifecycle work is strongest when it keeps the authenticity surfaces explicit.
 | Cohort integrity | cohort binding plus shards | commitments, hashes, shard checks | Integrity only, not archive approval |
 | Maintenance history | transition records | maintenance signatures and timestamps | Not counted toward archive policy |
 
-Recommended target split:
+Frozen target split:
 
 - archive-approval signatures target archive-state descriptor bytes
 - maintenance signatures target transition-record bytes
@@ -403,7 +422,7 @@ Recommended target split:
 
 ### 5.1 Minimal successor attachment wire contracts
 
-Recommended decision:
+Frozen decision:
 
 Successor detached-signature entries share one minimum contract:
 
@@ -441,6 +460,13 @@ Frozen bundled-key contract:
 - `attachments.publicKeys[]` entries MUST carry `id`, `kty`, `suite`, `encoding`, and `value`
 - if `publicKeyRef` is present, it MUST equal one bundled key `id`
 - attach and restore MUST use the same `publicKeyRef` resolution and compatibility rules
+- exact compatibility predicate:
+  - exactly one bundled key entry MUST satisfy `id == publicKeyRef`
+  - that entry MUST also satisfy `suite == <signature-entry.suite>`
+  - the declared key `encoding` MUST decode successfully into exactly one key value
+  - the decoded key MUST be structurally valid for the declared `kty` and usable with the declared `suite`
+  - detached-signature verification against that decoded key and the declared target bytes MUST succeed
+  - zero matches, multiple matches, decode failure, structural key invalidity, suite mismatch, or verification failure MUST reject the signature entry
 
 Frozen timestamp contract:
 
@@ -462,7 +488,7 @@ Attach and restore consequence:
 
 ## 6. Successor Verification Invariants
 
-Status: Recommended decision
+Status: Frozen decision
 
 The successor family MUST preserve the current trust-model separation.
 
@@ -494,42 +520,46 @@ Required non-collapse rules:
 
 ### 6.1 Required verifier predicates
 
-Recommended decision:
+Frozen decision:
 
 At minimum, successor verification MUST evaluate the following predicates explicitly:
 
 1. archive-state digest equality
    - recompute `SHA3-512(canonical archive-state descriptor bytes)` and require equality with `archiveStateDigest.value`
-2. `stateId` derivation equality
+2. archive identity equality
+   - require one `archiveId` across the selected candidate set
+3. `stateId` derivation equality
    - require `stateId == archiveStateDigest.value`
-3. cohort-binding digest equality
+4. cohort-binding digest equality
    - recompute `SHA3-512(canonical cohort-binding bytes)` and require equality with `cohortBindingDigest.value`
-4. `cohortId` derivation equality
+5. `cohortId` derivation equality
    - recompute the exact canonical cohort-id preimage and require `cohortId == SHA3-256(preimage-bytes)` encoded as lowercase hex
-5. shard-set consistency
+6. shard-set consistency
    - require one `archiveId`, one `stateId`, one `cohortId`, one exact archive-state byte sequence, and one exact cohort-binding byte sequence inside the selected candidate set
-6. signature target equality
+7. signature target equality
    - require each detached signature entry’s `signatureFamily`, `targetType`, `targetRef`, and `targetDigest` to match its actual target object and target bytes
-7. fail-closed `publicKeyRef` resolution
-   - if `publicKeyRef` is present, require one compatible bundled key entry and successful verification against that key or reject that signature
-8. OTS linkage equality
+8. fail-closed `publicKeyRef` resolution
+   - if `publicKeyRef` is present, require the frozen exact-one-match compatibility predicate and successful verification against that key or reject that signature
+9. OTS linkage equality
    - if an OTS entry is present, require `targetRef` resolution to one detached signature entry and require `targetDigest.value == SHA-256(exact detached-signature bytes)`
-9. archive-policy counting
+10. archive-policy counting
    - count only verified archive-approval signatures toward archive policy
 
 Required rejection conditions:
 
+- mixed `archiveId` values in one restore candidate set MUST be rejected
 - mixed `stateId` values in one restore candidate set MUST be rejected
 - mixed `cohortId` values in one restore candidate set MUST be rejected
 - exact archive-state byte mismatch inside one claimed state MUST be rejected
 - exact cohort-binding byte mismatch inside one claimed cohort MUST be rejected
+- any explicit lifecycle bundle whose `archiveStateDigest` or `currentCohortBindingDigest` does not match the selected state-plus-cohort MUST be rejected
 - mismatched `targetType` / `targetRef` / `targetDigest` metadata MUST reject the affected signature entry
 - unresolved or incompatible `publicKeyRef` MUST reject the affected signature entry
 - unresolved or mismatched OTS linkage MUST reject the affected timestamp entry as invalid evidence and MUST NOT be reassigned heuristically to another signature
 
 ## 7. Signer, Attach, Restore, And Shard-Carriage Implications
 
-Status: Recommended decision
+Status: Frozen decision
 
 This section keeps the implementation-relevant seams explicit so the architecture does not become cleaner but weaker.
 
@@ -539,7 +569,7 @@ Current fact:
 
 - Quantum Vault currently uses external signer tooling to sign canonical signable bytes
 
-Recommended decision:
+Frozen decision:
 
 - successor external signing targets canonical archive-state descriptor bytes
 - detached signature wrappers remain external artifacts
@@ -552,7 +582,7 @@ Practical implication:
 
 ### 7.2 Attach-flow implications
 
-Recommended decision:
+Frozen decision:
 
 - attach mutates the lifecycle bundle only
 - attach MUST NOT mutate archive-state descriptor bytes
@@ -569,7 +599,7 @@ Practical implication:
 
 ### 7.3 Restore cohort-selection implications
 
-Recommended decision:
+Frozen decision:
 
 - restore groups candidates by explicit state/cohort identity
 - the grouping boundary is:
@@ -583,13 +613,14 @@ Practical implication:
 
 - the current `manifestDigestHex:bundleDigestHex` composite key is replaced
 - uploaded archive-state descriptors and lifecycle bundles remain valid explicit disambiguation tools
+- an uploaded lifecycle bundle is acceptable only if its `archiveStateDigest` and `currentCohortBindingDigest` match the already selected state-plus-cohort
 - if exactly one embedded lifecycle-bundle digest is present inside the already selected state-plus-cohort, restore MAY use it automatically
 - if more than one embedded lifecycle-bundle digest is present inside the selected state-plus-cohort and no explicit bundle input is supplied, restore MUST NOT auto-select; it MUST require explicit lifecycle-bundle bytes or explicit operator selection of one embedded bundle digest
 - attachment count, timestamp count, “richness,” lexical order, and similar heuristics MUST NOT choose a bundle variant
 
 ### 7.4 Shard carriage and embedding implications
 
-Recommended decision:
+Frozen decision:
 
 - successor shards remain self-contained
 - every QV-produced shard embeds:
@@ -605,7 +636,7 @@ Practical implication:
 
 ## 8. Same-State Resharing: What It Is And What It Is Not
 
-Status: Recommended decision
+Status: Frozen decision
 
 ### 8.1 What same-state resharing is
 
@@ -620,7 +651,7 @@ Same-state resharing is:
 
 Do not blur this point.
 
-Recommended decision:
+Frozen decision:
 
 - same-state resharing reconstructs the threshold-recovered ML-KEM private key material needed to re-split access to the current encrypted state
 - it does not require decrypting plaintext
@@ -643,7 +674,7 @@ Therefore:
 
 ## 9. Event Classes That Must Stay Distinct
 
-Status: Recommended decision
+Status: Frozen decision
 
 | Event class | Primary problem | Correct artifact effect | Same state? |
 | --- | --- | --- | --- |
@@ -662,7 +693,7 @@ safety_margin = ceil((n - t) / 2)
 reshare_trigger: available_honest_custodians < t + safety_margin
 ```
 
-Recommended interpretation:
+Frozen interpretation:
 
 - this is maintenance guidance for the current cohort
 - it is not part of archive-state authenticity
@@ -692,9 +723,9 @@ Current fact:
 - it does not witness the whole bundle in its later mutable form
 - it does not satisfy archive policy by itself
 
-### 10.2 Recommended successor posture
+### 10.2 Frozen successor posture
 
-Recommended decision:
+Frozen decision:
 
 - archive-approval signatures remain the main long-lived OTS target
 - maintenance signatures may also carry timestamps for maintenance provenance
@@ -716,11 +747,11 @@ Current OTS use does **not** prove:
 
 ### 10.4 Standards claim boundary
 
-Recommended decision:
+Frozen decision:
 
-- RFC 3161 is timestamping context
 - RFC 4998 is future-direction context for renewable evidence
-- neither is a current QV implementation claim in the lifecycle successor family
+- the current lifecycle successor family does not adopt any additional timestamp standard beyond the fixed QV OTS evidence posture inherited from the baseline
+- RFC 4998 does not describe current implementation capability and MUST remain future-only context
 
 ## 11. Standards Reading Map
 

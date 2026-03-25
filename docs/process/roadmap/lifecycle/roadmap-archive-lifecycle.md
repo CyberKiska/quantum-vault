@@ -1,10 +1,13 @@
 # Quantum Vault — Archive Lifecycle Roadmap
 
-Status: Draft roadmap
+Status: Draft roadmap with Phase 0-frozen dependencies
 Type: Informative capability and dependency roadmap
 Audience: contributors, implementers, reviewers
 Scope: staged evolution from the current Stage A-C baseline to the successor lifecycle artifact family
 Relationship: architectural depth lives in `resharing-design.md`; decision framing and standards reasoning live in `implementation-questions-and-reading.md`; execution sequencing lives in `implementation-plan-lifecycle.md`
+
+Uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals.
+This roadmap is otherwise informative except where it restates frozen Phase 0 decisions or mandatory dependency ordering.
 
 ## 1. Post-Stage A-C Baseline
 
@@ -78,19 +81,23 @@ Status: Cross-document decisions the roadmap assumes
 The roadmap assumes the following are already frozen:
 
 - archive-state descriptor is the long-lived archive-approval target
+- archive-state descriptor v1 has an exact closed field set with no additional v1 members
 - concrete `n/k/t/codecId` are cohort-level
 - `stateId` is derived-only from canonical archive-state descriptor bytes and MUST NOT appear inside those bytes
 - `cohortId` is derived-only from a frozen preimage rooted in `archiveId`, `stateId`, and `cohortBindingDigest`
 - successor shards remain self-contained and embed archive-state, cohort-binding, and lifecycle-bundle bytes plus digests
-- lifecycle-bundle v1 contents are fixed rather than “reserved for later”
+- lifecycle-bundle v1 contents and exact top-level / `attachments` member boundary are fixed rather than “reserved for later”
 - detached-signature and timestamp attachment fields are frozen strongly enough for attach and restore to share one target contract
-- `publicKeyRef` failure is fail closed
+- `publicKeyRef` compatibility and failure behavior are fail closed
 - every QV-produced same-state resharing event MUST create a transition record
 - any future state-changing migration must preserve predecessor descriptor/signature/evidence sets before the feature ships
 
 ## 5. Dependency-Ordered Milestones
 
 Status: Primary roadmap
+
+Milestones 1 through 3 are decision-complete under the Phase 0 freeze addendum.
+Milestone 4 and later may encode and implement those decisions, but must not reopen them.
 
 ### Milestone 1 — Freeze the state/cohort boundary and artifact family
 
@@ -160,7 +167,7 @@ Dependency reason:
 Required outputs:
 
 - current OTS scope restated precisely
-- RFC 3161 framed as timestamping context only
+- no additional timestamp standard adopted into the current lifecycle claim set
 - RFC 4998 framed as future-direction context only
 - clear relationship among archive-approval signatures, maintenance signatures, source-evidence signatures, and OTS evidence
 
@@ -173,7 +180,7 @@ Dependency reason:
 Required outputs:
 
 - bundled `publicKeys[]` carried in lifecycle-bundle v1
-- fail-closed `publicKeyRef` semantics for bundled signatures
+- frozen `publicKeyRef` compatibility predicate and fail-closed semantics for bundled signatures
 - explicit separation between pinning and policy satisfaction
 - one shared detached-signature / timestamp target contract for attach and restore
 
@@ -186,13 +193,13 @@ Dependency reason:
 Required outputs:
 
 - self-contained shard strategy frozen
-- lifecycle-bundle v1 contents frozen
+- lifecycle-bundle v1 contents and exact member boundary frozen
 - distinction between mixed lifecycle-bundle digests and mixed cohorts frozen
 - restore bundle-selection rule frozen:
   - auto-select only when exactly one embedded lifecycle-bundle digest exists inside the selected state-plus-cohort
   - otherwise require explicit bundle input or explicit operator selection
 
-### Milestone 4 — Implement successor artifact schemas and canonical bytes
+### Milestone 4 — Encode successor artifact schemas and canonical bytes
 
 Dependency reason:
 
@@ -200,19 +207,19 @@ Dependency reason:
 
 Required outputs:
 
-- archive-state descriptor schema/version
-- cohort binding schema/version
-- transition-record schema/version
-- source-evidence schema/version
-- lifecycle-bundle schema/version
-- `stateId`, `cohortId`, and digest derivation rules
-- detached-signature field contracts:
+- archive-state descriptor schema/version encoded using the frozen Phase 0 identifier and field closure
+- cohort binding schema/version encoded using the frozen Phase 0 identifier
+- transition-record schema/version encoded using the frozen Phase 0 identifier
+- source-evidence schema/version encoded using the frozen Phase 0 identifier
+- lifecycle-bundle schema/version encoded using the frozen Phase 0 identifier and member closure
+- frozen `stateId`, `cohortId`, and digest derivation rules encoded without semantic change
+- frozen detached-signature field contracts encoded without semantic change:
   - `signatureFamily`
   - `targetType`
   - `targetRef`
   - `targetDigest`
   - `publicKeyRef`
-- OTS linkage contract to exact detached-signature bytes
+- frozen OTS linkage contract to exact detached-signature bytes encoded without semantic change
 
 ### Milestone 5 — Update signer, attach, and restore seams
 
@@ -413,7 +420,7 @@ Useful long-term direction, but not current lifecycle capability.
 
 ## 11. Roadmap Conclusion
 
-Status: Recommended roadmap conclusion
+Status: Frozen roadmap conclusion
 
 The least risky lifecycle order for Quantum Vault is:
 
