@@ -1,703 +1,659 @@
 # Quantum Vault — Implementation Questions & Reading Guide
 
 Status: Decision-prep document
-Type: Informative planning / research guide
+Type: Informative architecture / standards / decision guide
 Audience: contributors, implementers, reviewers, cryptographic auditors
-Scope: lifecycle design questions that remain after the completed Stage A–C baseline
-Relationship: the current normative baseline remains `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`; this document prepares the successor lifecycle design captured in `resharing-design.md` and the staged work in `implementation-plan-lifecycle.md`
+Scope: lifecycle design questions that remain after the completed Stage A-C baseline
+Relationship: the current normative baseline remains `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`; this document supports the successor design in `resharing-design.md` and the execution plan in `implementation-plan-lifecycle.md`
 
 ## Purpose
 
-This document is intentionally not the strict implementation plan.
+This document is intentionally **not** the implementation checklist.
 
-Its role is to:
+Its job is to:
 
-- restate the fixed baseline inherited from the completed manifest-canonisation work
-- identify the tensions introduced by lifecycle requirements
-- separate resolved questions from still-open design choices
-- preserve meaningful alternatives and trade-off analysis
-- tie the major design questions to the standards that inform them
+- restate the fixed baseline inherited from Stage A, Stage B, and Stage C
+- separate current fact from recommended decision
+- preserve implementation-relevant nuance that matters at signer, attach, restore, and shard-carriage seams
+- identify the few questions that truly remain open
+- tie the main lifecycle decisions to the standards frame without pretending standards dictate the exact QV object model
 
-The goal is to make implementation planning safer, not to compress every issue into a single final answer.
+## How To Read This Document
+
+The document uses four labels deliberately:
+
+- **Current fact:** already true in the current Quantum Vault baseline
+- **Recommended decision:** design choice this revision freezes strongly enough to guide implementation
+- **True open question:** still undecided after this revision because implementation can proceed without freezing it yet
+- **Future research:** not part of the near-term successor family
 
 ## 1. Fixed Baseline Inherited From Stage A-C
 
-Status: Fixed baseline
+Status: Current fact
 
-The following points are already settled and must be treated as constraints for lifecycle work:
+The following are already settled and must be treated as hard inputs for lifecycle design:
 
-1. Detached signatures currently authenticate canonical signable JSON bytes only. They do not authenticate mutable bundle bytes.
+1. Detached signatures currently authenticate canonical signable JSON bytes only.
 2. Bundle mutation MUST NOT change the detached-signature payload.
-3. Canonicalization is now role-specific:
-   - signable manifest-family bytes use the RFC 8785-aligned `QV-JSON-RFC8785-v1` profile
-   - `authPolicyCommitment` uses the same signable canonicalization profile
-   - bundle serialization is versioned separately under `QV-BUNDLE-JSON-v1`
-4. Current grammar discipline is closed and fail-closed:
-   - unknown current top-level fields are not an implicit extension path
-   - adding new top-level objects or new attachment families requires a new schema/version
-5. JSON Schema draft 2020-12 is the grammar layer. It does not replace canonicalization rules or semantic verification.
-6. Current restore and verification already treat `qencHash` as the primary ciphertext binding anchor and detached signatures as external authenticity artifacts linked to the signable object.
-7. OpenTimestamps evidence is evidence-only. It targets detached signature bytes, not the bundle and not the whole archive package.
+3. Signable canonical JSON uses the RFC 8785-aligned `QV-JSON-RFC8785-v1` profile.
+4. Bundle serialization is separately versioned under `QV-BUNDLE-JSON-v1`.
+5. Stage A, Stage B, and Stage C are completed constraints:
+   - Stage A: RFC 8785-aligned canonicalization for the signable manifest surface
+   - Stage B: JSON Schema structural validation and closed grammar discipline
+   - Stage C: strict separation of serialization, schema, and semantics
+6. Closed grammar remains in force:
+   - new top-level fields require a new schema/version
+   - new attachment families require a new schema/version
+   - grammar openness is not an extension mechanism
+7. JSON Schema draft 2020-12 is the grammar layer only.
+8. `qencHash` is the current ciphertext binding anchor.
+9. Detached signatures are external authenticity artifacts linked to the signable object.
+10. OpenTimestamps is evidence-only and targets detached signature bytes, not bundle bytes.
+11. Current trust semantics keep integrity, signature validity, pinning, and policy satisfaction distinct.
 
 Lifecycle work therefore MUST NOT:
 
 - reopen the Stage A canonicalization question
-- reintroduce grammar openness through roadmap prose
-- treat schema validity as if it settled semantic lifecycle meaning
-- silently retrofit new lifecycle fields into `quantum-vault-archive-manifest/v3` or `QV-Manifest-Bundle` v2
+- treat schema validity as if it settled lifecycle meaning
+- silently add lifecycle semantics to the current manifest/bundle family
+- weaken the current integrity/signature/pinning/policy separation
 
-The lifecycle branch is a successor artifact-family design problem, not a quiet patch to the current manifest/bundle baseline.
+## 2. Lifecycle Pressure Points Exposed By The Current Baseline
 
-## 2. Current Tensions Introduced By Lifecycle Requirements
+Status: Current fact
 
-Status: Active design pressure
-
-The completed baseline is internally coherent for the current split-time manifest model, but lifecycle requirements expose several tensions:
+The current split-time manifest model is internally coherent for the implemented artifact family, but lifecycle requirements expose several real tensions.
 
 ### 2.1 Split-time signature target vs same-state resharing
 
-Today the signable object is produced at split time and includes shard-specific material. That makes detached signatures cohort-bound.
+Current fact:
 
-If `shareCommitments[]`, `shardBodyHashes[]`, or concrete shard-layout parameters remain inside the long-lived signature target, same-state resharing cannot preserve signatures.
+- the current canonical manifest includes shard-distribution material
+- that material includes concrete `n/k/t/codecId`, shard-body hashes, and share-commitment-related content
+- detached signatures therefore target a **cohort-bound** object
 
-### 2.2 Archive authenticity vs source authenticity
+Implementation consequence:
 
-Current detached signatures prove only that a signer key signed the signable JSON bytes.
+- same-state resharing changes current signable bytes
+- `manifestDigest` changes
+- detached signatures and OTS linkage tied to those bytes do not carry forward as stable archive-state approval
 
-They do not, by themselves, prove:
+This is not a cosmetic documentation problem.
+It is the architectural reason lifecycle work needs a successor-family split.
 
-- that the signer reviewed the plaintext source
-- that the signer approved a later resharing ceremony
-- that the signer approved a migration event
+### 2.2 Archive-state approval vs source-review claims
 
-Lifecycle planning must stop treating these as one claim.
+Current fact:
+
+- a detached signature currently means only that a signer key signed the canonical signable bytes
+- it does not prove, by itself, that the signer reviewed plaintext
+- it does not prove that the signer approved a later resharing or migration event
+
+Implementation consequence:
+
+- source-review provenance and archive-state approval must not be overloaded onto one signature surface
 
 ### 2.3 Availability maintenance vs compromise response
 
-Ordinary custodian churn and suspected quorum leakage are different classes of event.
+Current fact:
 
-- Availability maintenance is about keeping a state recoverable.
-- Compromise response is about whether the underlying secret may already be exposed.
+- custodian churn, quorum erosion, and compromised old quorum material are different event classes
+- the current docs already contain operational churn language, but the lifecycle successor family must make the distinction explicit
 
-Same-state resharing can help the first problem. It does not, by itself, repair the second.
+Implementation consequence:
 
-### 2.4 Stable identity vs current current-state anchors
+- same-state resharing is an availability-maintenance mechanism
+- if old quorum material may already have leaked, same-state resharing is not sufficient response
 
-The current baseline has strong current-state fixity anchors (`qencHash`, `containerId`, `manifestDigest`, `authPolicyCommitment`) but no first-class `archiveId` that survives reencryption or future rewrap.
+### 2.4 Stable archive identity vs current state anchors
 
-Long-term continuity therefore remains under-specified until lifecycle artifacts introduce it explicitly.
+Current fact:
 
-### 2.5 Closed schemas vs lifecycle expansion
+- the current artifact family has strong current-state anchors such as `qencHash`, `containerId`, `manifestDigest`, and `authPolicyCommitment`
+- it does not have a first-class archive-wide `archiveId`
 
-Archive descriptors, cohort bindings, transition records, maintenance signatures, and source evidence are all new artifact concepts.
+Implementation consequence:
 
-Because Stage B adopted closed grammar discipline, these concepts cannot be added informally to the current manifest or bundle. They require a successor artifact family with its own schema/version taxonomy.
+- reencryption or future `rewrap` continuity is under-specified until the successor family introduces a stable logical-archive identifier
 
-## 3. Archive Identity, Archive State, Cohort Identity, And Source Evidence
+### 2.5 Closed grammar vs lifecycle expansion
 
-Status: Recommended conceptual separation
+Current fact:
 
-The lifecycle design should use four distinct objects or identity layers:
+- archive-state descriptors, cohort bindings, transition records, and source-evidence objects are new artifact classes
+- the current manifest and bundle cannot absorb them informally because grammar openness is not allowed
 
-### 3.1 Archive identity
+Implementation consequence:
 
-`archiveId` identifies the logical archive across lifecycle events.
+- lifecycle work must be a versioned successor family, not a quiet semantic reinterpretation of the current family
 
-Recommended properties:
+## 3. Architecture Decisions Frozen In This Revision
 
-- random, opaque, non-content-derived identifier
-- assigned once at archive creation
-- stable across same-state resharing, reencryption, and future rewrap
+Status: Recommended decision
 
-Why this matters:
+This revision freezes the following architecture strongly enough for implementation planning.
 
-- content-derived identifiers leak equivalence
-- `qencHash` is too state-specific to serve as long-term archive identity
-- OAIS-style continuity needs a durable identifier distinct from any one ciphertext state
+### 3.1 Successor-family model
 
-### 3.2 Archive state
+- Lifecycle support is a successor artifact family.
+- The current `quantum-vault-archive-manifest/v3` and `QV-Manifest-Bundle` v2 family stays unchanged.
+- Signable successor artifacts reuse `QV-JSON-RFC8785-v1` unless byte rules truly change.
+- The lifecycle bundle uses `QV-BUNDLE-JSON-v1` unless bundle byte rules truly change.
 
-`stateId` identifies one specific archive-state descriptor: one cryptographic/policy state of an archive.
+### 3.2 Long-lived signable object
 
-Recommended meaning:
+- The long-lived detached-signature target is the **archive-state descriptor**.
+- Archive-approval signatures sign canonical archive-state descriptor bytes.
+- `qenc` authenticity is normally indirect:
 
-- a state is defined by the signed archive-state descriptor
-- changing the ciphertext binding, crypto profile, nonce/AAD semantics, or `authPolicyCommitment` creates a new state
-- bundle mutation alone does not create a new state
-- same-state resharing does not create a new state
+```text
+archive-approval signature
+  -> archive-state descriptor canonical bytes
+  -> qencHash / containerId
+  -> exact .qenc bytes
+```
 
-### 3.3 Cohort identity
+- Direct `.qenc` signatures remain optional external-workflow artifacts, not the default QV authenticity mechanism.
 
-`cohortId` identifies one shard-distribution cohort for one archive state.
+### 3.3 State/cohort boundary
 
-Recommended meaning:
+- The archive-state descriptor carries stable archive-state, ciphertext, and policy identity.
+- Concrete `n/k/t/codecId` are cohort-level.
+- Same-state resharing MAY change concrete cohort parameters without changing `stateId`.
+- A new `stateId` always requires a new cohort-binding object and therefore a new `cohortId`, because cohort bindings are state-bound in the successor family.
 
-- new cohort on every split or reshare
-- tied to one archive state, but replaceable within that state
-- carries distribution-specific integrity material such as concrete `n/k/t/codecId`, `shareCommitments[]`, `shardBodyHashes[]`, and shard-body definition
+### 3.4 Shard carriage strategy
 
-Recommended preimage intent:
+- QV-produced successor shards embed archive-state descriptor bytes and digest, cohort-binding bytes and digest, and lifecycle-bundle bytes and digest.
+- Shards remain self-contained by default.
+- External archive-state, bundle, signature, key, and timestamp artifacts are still allowed as attach/restore inputs.
+- Differing embedded lifecycle-bundle digests inside one otherwise identical state-plus-cohort are bundle variants, not different cohorts.
 
-- archive/state binding, so the cohort cannot be silently reinterpreted as belonging to another archive state
-- threshold semantics, including at least the concrete reconstruction threshold and share count for that cohort
-- Reed-Solomon or equivalent coding parameters, including codec/profile identifiers and parity/data-count semantics
-- shard-body-definition identity, so body-hash meaning is stable
-- per-share commitments and per-shard body hashes
+### 3.5 Lifecycle-bundle v1 contents
 
-The exact nested JSON shape should be frozen in the successor schema, not improvised in prose. The important point here is the semantic content of the preimage, not the placeholder object syntax.
+Lifecycle-bundle v1 is frozen as carrying:
 
-### 3.4 Source authenticity evidence
+- `type`
+- `version`
+- `bundleCanonicalization`
+- `archiveStateCanonicalization`
+- `archiveState`
+- `archiveStateDigest`
+- `currentCohortBinding`
+- `currentCohortBindingDigest`
+- `authPolicy`
+- `sourceEvidence[]`
+- `transitions[]`
+- `attachments.publicKeys[]`
+- `attachments.archiveApprovalSignatures[]`
+- `attachments.maintenanceSignatures[]`
+- `attachments.sourceEvidenceSignatures[]`
+- `attachments.timestamps[]`
 
-Source evidence is a separate provenance object, not a substitute for archive-state authenticity.
+All arrays above are present even when empty.
 
-It exists to express claims like:
+### 3.6 `publicKeyRef` semantics
 
-- "this plaintext source object had digest X"
-- "this package was encrypted from that reviewed source"
-- "this archived state derives from an externally signed source artifact"
+- A bundled signature entry that declares `publicKeyRef` MUST resolve to compatible bundled key material for that signature.
+- Failure to resolve or verify that declared reference is a signature verification failure for that signature.
+- This is true for archive-approval, maintenance, and source-evidence signatures.
+- Pinning remains a separate status layer.
 
-Source evidence may survive same-state resharing as provenance, but its semantic claim is different from archive approval.
+### 3.7 Transition records
 
-## 4. Authenticity Surfaces And Signature Targets
+- Every QV-produced same-state resharing event MUST create a transition record.
+- Transition records are maintenance/provenance records.
+- Maintenance signatures over transition records are not archive-approval signatures.
+- Maintenance-signature support belongs in the successor family from the start even if governance later decides when such signatures are mandatory.
 
-Status: Core design question
+### 3.8 Migration continuity requirement
 
-Lifecycle work is safest when it explicitly separates four authenticity/integrity surfaces:
+- State-changing operations are deferred, but the requirement is already frozen:
+- policy change, reencryption, and future `rewrap` MUST preserve predecessor archive-state descriptors, predecessor archive-approval signatures, predecessor timestamps/evidence, and explicit continuity links sufficient to verify lineage
 
-| Surface | Primary object | Typical proof | Survives same-state resharing? | Notes |
-| --- | --- | --- | --- | --- |
-| Source authenticity | source artifact or source-evidence object | source signature or auditor signature | Yes, as provenance | Distinct from approval of encrypted archive state |
-| Ciphertext/container authenticity | exact `.qenc` bytes | indirect archive-state signature via `qencHash`/`containerId`, or optional direct `qenc` signature | Yes, if `.qenc` bytes unchanged | Usually indirect in QV |
-| Archive-state authenticity | archive-state descriptor | detached archive-approval signatures | Yes | This is the long-lived approval surface |
-| Cohort/shard-distribution integrity | cohort binding + shards | commitments, hashes, optional maintenance signatures | No; new cohort replaces old one | Operational and replaceable |
+## 4. Archive Identity, Archive State, Cohort Identity, And Source Evidence
+
+Status: Recommended decision
+
+The lifecycle successor family uses three identity layers plus a separate provenance layer.
+
+### 4.1 Archive identity
+
+Current fact:
+
+- the current artifact family has no first-class stable archive-wide identifier
+
+Recommended decision:
+
+- introduce `archiveId` as a random, opaque, non-content-derived logical-archive identifier
+- assign it once at archive creation
+- preserve it across same-state resharing, reencryption, and future `rewrap`
+
+Why not content-derived:
+
+- content-derived identity leaks equivalence
+- ciphertext-derived identity is too state-specific
+- OAIS-style continuity benefits from a durable logical identifier separate from any one ciphertext state
+
+### 4.2 Archive state
+
+Recommended decision:
+
+- `stateId = SHA3-512(canonical archive-state descriptor bytes)`
+- one `stateId` corresponds to one canonical archive-state descriptor
+- bundle mutation does not change `stateId`
+- same-state resharing does not change `stateId`
+
+#### 4.2.1 Minimum archive-state descriptor field set
+
+The minimum archive-state descriptor field set is frozen as:
+
+- `schema`
+- `version`
+- `stateType`
+- `canonicalization`
+- `archiveId`
+- `parentStateId`
+- `cryptoProfileId`
+- `kdfTreeId`
+- `noncePolicyId`
+- `nonceMode`
+- `counterBits`
+- `maxChunkCount`
+- `aadPolicyId`
+- `qenc.chunkSize`
+- `qenc.chunkCount`
+- `qenc.payloadLength`
+- `qenc.hashAlg`
+- `qenc.primaryAnchor`
+- `qenc.qencHash`
+- `qenc.containerId`
+- `qenc.containerIdRole`
+- `qenc.containerIdAlg`
+- `authPolicyCommitment`
+
+Why each class of fields matters:
+
+- `cryptoProfileId`, `kdfTreeId`, `noncePolicyId`, `nonceMode`, `counterBits`, `maxChunkCount`, and `aadPolicyId` are algorithm-interpretation and ciphertext-interpretation fields, not distribution metadata
+- `qenc` fields bind the descriptor to one exact ciphertext state
+- `authPolicyCommitment` preserves the current “mutable policy carrier, immutable signable commitment” model
+
+Recommended exclusion boundary:
+
+- no concrete `n/k/t/codecId`
+- no `shareCommitments[]`
+- no `shardBodyHashes[]`
+- no cohort-specific body-definition material
+- no custodian identities or cohort logistics
+
+### 4.3 Cohort identity
+
+Recommended decision:
+
+- `cohortId` identifies one shard-distribution cohort for one archive state
+- `cohortId` is derived from a frozen preimage that includes:
+  - `archiveId`
+  - `stateId`
+  - concrete `n/k/t/codecId`
+  - body-definition identity and body-definition content
+  - share-commitment algorithm/input descriptor and `shareCommitments[]`
+  - shard-body-hash algorithm and `shardBodyHashes[]`
+
+Important distinction:
+
+- `cohortId` identifies the semantic shard-distribution cohort
+- `cohortBindingDigest` identifies exact canonical cohort-binding bytes
+
+In Phase 1 v1, the cohort-binding object is intentionally narrow enough that these values should move together under normal processing.
+
+### 4.4 Source authenticity evidence
+
+Current fact:
+
+- the current artifact family does not contain a first-class source-evidence object
+
+Recommended decision:
+
+- the successor family defines a separate source-evidence object family
+- source evidence is provenance about reviewed or precursor objects
+- it is not archive-state approval
+
+Minimum useful source-evidence content:
+
+- `schema`
+- `version`
+- `sourceEvidenceType`
+- `canonicalization`
+- `relationType`
+- `sourceObjectType`
+- one or more `sourceDigests`
+- optional external-source-signature references
+- optional non-sensitive descriptive fields such as filename or media type
+
+## 5. Authenticity Surfaces And Signature Targets
+
+Status: Recommended decision
+
+Lifecycle work is strongest when it keeps the authenticity surfaces explicit.
+
+| Surface | Primary object | Typical proof | Role in archive policy |
+| --- | --- | --- | --- |
+| Source authenticity | source artifact or source-evidence object | source signature or source-evidence signature | Not counted toward archive policy |
+| Ciphertext authenticity | exact `.qenc` bytes | indirect archive-approval binding via `qencHash` / `containerId`; optional direct `.qenc` signature | Indirect by default |
+| Archive-state authenticity | archive-state descriptor | archive-approval detached signatures | Counted toward archive policy |
+| Cohort integrity | cohort binding plus shards | commitments, hashes, shard checks | Integrity only, not archive approval |
+| Maintenance history | transition records | maintenance signatures and timestamps | Not counted toward archive policy |
 
 Recommended target split:
 
-- Archive-approval signatures sign canonical archive-state descriptor bytes.
-- Source-authenticity signatures sign either the original source artifact or a dedicated source-evidence object.
-- Maintenance signatures sign transition records and, if ever needed, other maintenance-specific artifacts.
-- Cohort integrity is primarily commitment-based, not approval-signature-based.
+- archive-approval signatures target archive-state descriptor bytes
+- maintenance signatures target transition-record bytes
+- source-evidence signatures target source-evidence object bytes
+- OTS targets detached signature bytes
 
-### 4.1 Should QV support a first-class source-evidence object?
+## 6. Successor Verification Invariants
 
-Recommended answer: yes, but not as a Phase 1 blocker for same-state resharing.
+Status: Recommended decision
 
-Minimal useful fields:
+The successor family MUST preserve the current trust-model separation.
 
-- `schema` / `version`
-- `relationType` such as `encrypted-from`, `derived-from`, or `reviewed-as`
-- `sourceObjectType`
-- one or more `sourceDigests`
-- optional non-sensitive source descriptors such as `sourceFilename` or `mediaType`
-- references to external source signatures or reviewer evidence, if present
+Minimum required successor verification states:
 
-Why first-class support is useful:
+1. `integrity verified`
+   - archive-state, cohort-binding, shard, digest, and reconstruction checks hold
+2. `archive-approval signature verified`
+   - at least one detached archive-approval signature verifies over the canonical archive-state descriptor bytes
+3. `signer pinned`
+   - a verified signature matches bundled or user-supplied signer identity material
+4. `archive policy satisfied`
+   - the declared archive policy is satisfied by archive-approval signatures only
 
-- it prevents source-review claims from being silently overloaded onto archive-state signatures
-- it creates a place to preserve external provenance without changing the archive-state signature target
+Additional successor verification states MAY be reported, but they do not replace the four above:
 
-### 4.2 Should source evidence be signed separately from archive-state signatures?
+- `maintenance signature verified`
+- `source-evidence signature verified`
+- `OTS evidence linked`
 
-Recommended answer: yes.
+Required non-collapse rules:
 
-If Quantum Vault carries a source-evidence object, signatures over that object SHOULD remain semantically separate from archive-approval signatures.
+- integrity does not imply signature validity
+- signature validity does not imply pinning
+- pinning does not imply policy satisfaction
+- OTS evidence does not satisfy archive policy
+- maintenance signatures do not satisfy archive policy
+- source-evidence signatures do not satisfy archive policy
 
-Reason:
+## 7. Signer, Attach, Restore, And Shard-Carriage Implications
 
-- "I reviewed this source object" is a different claim from "I approve this encrypted archive state"
-- keeping them separate allows either claim to exist without misrepresenting the other
+Status: Recommended decision
 
-### 4.3 Should `qenc` itself be directly signed?
+This section keeps the implementation-relevant seams explicit so the architecture does not become cleaner but weaker.
 
-Recommended answer: usually no, optionally yes for external workflows.
+### 7.1 External signer tooling implications
 
-If archive-approval signatures cover an archive-state descriptor that binds `qencHash` and `containerId`, then a direct `.qenc` signature is normally redundant inside Quantum Vault:
+Current fact:
 
-`archive-state signature -> qencHash/containerId -> exact qenc bytes`
+- Quantum Vault currently uses external signer tooling to sign canonical signable bytes
 
-A direct `.qenc` signature may still be useful when:
+Recommended decision:
 
-- a non-QV workflow consumes `.qenc` without the lifecycle artifacts
-- a repository wants an independent transport-layer authenticity claim over the ciphertext object itself
+- successor external signing targets canonical archive-state descriptor bytes
+- detached signature wrappers remain external artifacts
+- target descriptors and verification metadata must change from `canonical-manifest` semantics to `archive-state` semantics
 
-## 5. Hard Unresolved Decisions Before Code
+Practical implication:
 
-Status: Open questions that still affect implementation shape
+- export/import, signer documentation, and verification tooling must be updated explicitly
+- this is not just a schema change inside QV core
 
-The following issues should be frozen before the lifecycle successor family is coded:
+### 7.2 Attach-flow implications
 
-1. Exact successor artifact names and schema/version identifiers.
-2. Whether `parentStateId` belongs inside the archive-state descriptor, only inside transition records, or in both.
-3. Whether transition records are required for every same-state resharing event or only strongly recommended.
-4. Whether maintenance signatures on transition records are mandatory for produced records or optional but supported.
-5. The minimum Phase 1 field set for source-evidence objects if that work is started before resharing ships.
-6. Whether `archiveId` remains cleartext in shard metadata or is hidden behind a commitment/reference strategy.
-7. Whether fork handling is warning-only in Phase 1 or whether some governance rule is needed to mark a preferred active cohort.
+Recommended decision:
 
-These are real design choices. They are smaller than the state/cohort boundary question, but they still affect format and verification behavior.
+- attach mutates the lifecycle bundle only
+- attach MUST NOT mutate archive-state descriptor bytes
+- attach MUST NOT mutate cohort-binding bytes
+- attach validates:
+  - signature target types and digests
+  - declared `publicKeyRef`
+  - timestamp linkage to detached signature bytes
 
-## 6. Recommended Decisions
+Practical implication:
 
-Status: Recommended direction for implementation planning
+- partial shard rewriting remains possible
+- when some shards carry older embedded lifecycle bundles and some carry newer ones, restore must treat this as a bundle-variant condition inside one cohort, not as mixed-cohort acceptance
 
-### 6.1 Use a successor lifecycle artifact family
+### 7.3 Restore cohort-selection implications
 
-Do not mutate the current `quantum-vault-archive-manifest/v3` and `QV-Manifest-Bundle` v2 objects.
+Recommended decision:
 
-Recommended path:
+- restore groups candidates by explicit state/cohort identity
+- the grouping boundary is:
+  - `archiveId`
+  - `stateId`
+  - `cohortId`
+  - exact archive-state bytes
+  - exact cohort-binding bytes
 
-- keep the current Stage A-C baseline intact as the implemented current family
-- define a successor lifecycle family with separate archive-state, cohort, transition, and evidence artifacts
-- reuse the same signable canonicalization profile (`QV-JSON-RFC8785-v1`) for signable successor objects unless byte rules actually change
+Practical implication:
 
-### 6.2 Prefer Option 2 for concrete sharding parameters
+- the current `manifestDigestHex:bundleDigestHex` composite key is replaced
+- uploaded archive-state descriptors and lifecycle bundles remain valid explicit disambiguation tools
+- bundle-selection heuristics, if used, must operate only **inside** one already selected cohort
 
-Recommended choice:
+### 7.4 Shard carriage and embedding implications
 
-- concrete `n/k/t/codecId` belong to the cohort binding, not the archive-state descriptor
-- same-state resharing MAY change these values without changing `stateId`
+Recommended decision:
 
-Why this is the least dangerous option now:
+- successor shards remain self-contained
+- every QV-produced shard embeds:
+  - archive-state descriptor bytes and digest
+  - current cohort-binding bytes and digest
+  - current lifecycle-bundle bytes and digest
 
-- it matches the requirement that same-state resharing preserve archive-approval signatures
-- it keeps distribution-specific material out of the long-lived approval target
-- it avoids inventing a fake "same state" while still changing signed bytes
+Practical implication:
 
-Important caveat:
+- current “attach and optionally rewrite embedded bundles” behavior carries forward naturally
+- restore can still proceed from shards alone
+- external files remain optional overrides or augmentations rather than mandatory dependencies
 
-- changing `n/k/t` may change operational security and recoverability posture
-- that change should be represented as maintenance history and, later, governance semantics
-- it is not itself proof that the archive content changed
+## 8. Same-State Resharing: What It Is And What It Is Not
 
-### 6.3 Define archive-state authenticity narrowly but explicitly
+Status: Recommended decision
 
-The archive-state descriptor should bind at least:
+### 8.1 What same-state resharing is
 
-- `archiveId`
-- its own schema/version/canonicalization identity
-- the ciphertext anchor (`qencHash`, `containerId`, and related stable binding details)
-- `cryptoProfileId`
-- nonce/AAD semantics
-- `authPolicyCommitment`
-- optional lineage material such as `parentStateId`, if Phase 0 freezes that choice
+Same-state resharing is:
 
-It should not bind:
+- availability maintenance for one unchanged archive state
+- rotation of shard-distribution material
+- creation of a new cohort binding and new `cohortId`
+- preservation of the existing archive-state descriptor and its archive-approval signatures
 
-- `shareCommitments[]`
-- `shardBodyHashes[]`
-- `cohortId`
-- concrete custodial layout or distribution metadata
+### 8.2 Exact meaning of reconstructed secret material
 
-### 6.4 Represent source authenticity as provenance, not as archive approval
+Do not blur this point.
 
-Quantum Vault should plan for a first-class source-evidence object, but it should be framed as provenance support rather than as a prerequisite for same-state resharing.
+Recommended decision:
 
-Phase 1 implication:
+- same-state resharing reconstructs the threshold-recovered ML-KEM private key material needed to re-split access to the current encrypted state
+- it does not require decrypting plaintext
+- it does not change the `.qenc` bytes
 
-- the lifecycle model should reserve a place for source evidence
-- same-state resharing should not depend on having source evidence implemented
+### 8.3 What same-state resharing does not prove or repair
 
-### 6.5 Make transition records maintenance records
+Same-state resharing does **not**:
 
-Transition records should document events such as same-state resharing, reencryption, or future rewrap.
+- re-approve archive content
+- revoke previously leaked old quorum material
+- create new source-authenticity evidence
+- change the ciphertext state
+- by itself respond to algorithm weakness, HNDL pressure, or policy change
 
-Recommended semantics:
+Therefore:
 
-- they record what maintenance event occurred
-- they do not replace archive-approval signatures
-- their signatures, when present, are maintenance/authorization/witness signatures
-- verifiers MUST NOT treat them as proof that an auditor approved the archive content
+- ordinary maintenance stays same-state
+- compromise response requiring new cryptographic state is not same-state resharing
 
-### 6.6 Prefer indirect `qenc` authenticity inside QV
+## 9. Event Classes That Must Stay Distinct
 
-The default QV path should be:
+Status: Recommended decision
 
-`archive-state signature -> archive-state descriptor -> qencHash/containerId -> qenc bytes`
-
-Direct `.qenc` signatures are optional future support, not the main architectural path.
-
-### 6.7 Bridge from the current implementation to explicit cohort identity
-
-The current implementation already has an implicit notion of "these shards belong together" during restore, but it is not expressed as a first-class lifecycle object.
-
-Today, restore groups candidates using the manifest/bundle digest pairing as an implicit cohort key. In practice this behaves like a composite archive-state-plus-distribution selector.
-
-Recommended successor strengthening:
-
-- carry an explicit `cohortId` in shard metadata
-- bind it to an explicit cohort-binding object
-- keep `stateId` separate from `cohortId`
-
-This is not just a rename. It makes same-state resharing auditable and explicit:
-
-- `stateId` says "same archive state"
-- `cohortId` says "this specific shard-distribution cohort for that state"
-
-That is a cleaner and more fail-closed model than continuing to overload manifest/bundle digest pairing as an implicit cohort selector.
-
-## 7. Availability Maintenance, Compromise Response, Policy Change, And Migration
-
-Status: Recommended operational separation
-
-These event classes should not be merged in the docs:
-
-| Event class | Primary problem | Preferred response | Same state? |
+| Event class | Primary problem | Correct artifact effect | Same state? |
 | --- | --- | --- | --- |
-| Availability maintenance | custodians lost, rotated, or threshold margin eroded | same-state resharing | Yes |
-| Compromise response | old quorum material may have leaked | new cryptographic state, at minimum reencryption | No |
-| Policy change | archive approval semantics changed | new archive state and new archive-approval signatures | No |
-| Migration / reencryption | ciphertext or crypto profile changes | new archive state plus continuity records | No |
-| Future rewrap | outer confidentiality envelope rotates while inner content stays stable | future branch only, depends on envelope-DEK redesign | No |
+| Availability maintenance | quorum erosion, custodian rotation, benign shard loss | new cohort binding, new `cohortId`, required transition record | Yes |
+| Suspected old-quorum leakage | old cohort may already reveal the secret | new archive state at minimum | No |
+| Policy change | archive approval semantics change | new archive-state descriptor and new archive-approval signatures | No |
+| Reencryption / crypto migration | ciphertext or crypto profile changes | new archive-state descriptor, new cohort, continuity preservation required | No |
+| Future `rewrap` | outer confidentiality envelope rotates under future DEK design | future branch only | No |
 
-### 7.1 Resharing does not strongly revoke old shares
+### 9.1 Operational trigger guidance
 
-This point needs especially careful wording.
-
-Same-state resharing:
-
-- creates a fresh cohort with fresh share randomness
-- prevents old and new shares from being mixed into one valid cohort
-- improves forward availability and future custodial posture
-
-But same-state resharing does **not** guarantee that old shares are cryptographically useless in the strong confidentiality sense.
-
-If an adversary already obtained enough shares from the old cohort to reconstruct the old underlying secret, resharing does not undo that exposure. Old shares may also remain dangerous if custodians fail to destroy them and an adversary later accumulates enough of that old cohort.
-
-### 7.2 Suggested availability trigger
-
-The current churn guidance remains useful if interpreted as cohort-level operational guidance:
+Current fact preserved as useful cohort-level guidance:
 
 ```text
 safety_margin = ceil((n - t) / 2)
 reshare_trigger: available_honest_custodians < t + safety_margin
 ```
 
-This is an operational trigger for the current cohort, not part of archive-state authenticity.
+Recommended interpretation:
 
-Worked examples:
+- this is maintenance guidance for the current cohort
+- it is not part of archive-state authenticity
+- it is not proof that compromise has or has not occurred
 
-- `(6, 4)` gives `safety_margin = ceil((6 - 4) / 2) = 1`, so the trigger is `available < 5`. In practice, losing two custodians means the cohort is down to the threshold plus a one-loss margin and should be reshared.
-- `(8, 5)` gives `safety_margin = ceil((8 - 5) / 2) = 2`, so the trigger is `available < 7`. Losing two custodians already consumes the whole extra margin.
-- `(10, 6)` gives `safety_margin = ceil((10 - 6) / 2) = 2`, so the trigger is `available < 8`.
+### 9.2 Cross-cohort mixing
 
-What the margin is protecting:
+Current fact:
 
-- it is not a proof of security
-- it is operational headroom so the resharing ceremony is not started only when the cohort is already one additional loss away from irrecoverability
-- in other words, it is intended to tolerate one more loss during the ceremony window, not merely losses before the ceremony starts
+- independent cohorts use independent Shamir polynomials
+- shares from different cohorts are not combinable into one valid reconstruction set
 
-### 7.3 Cross-cohort mixing
+Important caveat:
 
-Cross-cohort share mixing does not help an attacker reconstruct a valid cohort because each cohort is generated independently.
+- this is weaker than saying resharing “revokes” old shares
+- an old cohort remains its own confidentiality surface until enough old material is destroyed or otherwise known unavailable
 
-That property is useful, but it is weaker than saying resharing "invalidates" old shares outright. The old cohort remains its own confidentiality surface until enough of it is destroyed or otherwise known unavailable.
+## 10. Evidence And Time
 
-### 7.4 Threat model / adversary operations
+Status: Current fact plus recommended decision
 
-The lifecycle design should stay aligned with `docs/security-model.md`, especially its current adversary assumptions around passive capture, active tampering, long-horizon storage, and residual browser/runtime risk.
+### 10.1 Current OTS posture
 
-Byzantine-fault and distributed-systems literature is useful vocabulary for **custodian misbehavior and churn modeling**; Quantum Vault does not implement a Byzantine agreement protocol, but the distinction between benign loss, rotation, and hostile behavior remains operationally important.
+Current fact:
 
-Collecting shares over time:
+- OTS currently witnesses detached signature bytes
+- it does not witness the whole bundle in its later mutable form
+- it does not satisfy archive policy by itself
 
-- fewer than `t` shares from one cohort reveal no information about the secret under Shamir's model
-- collecting shares across different cohorts does not let the adversary mix them into one valid reconstruction set, because the cohorts are independently generated
-- however, if the adversary accumulates `t` or more shares from a single cohort before resharing or destruction, the secret for that cohort is compromised
+### 10.2 Recommended successor posture
 
-Tampering path:
+Recommended decision:
 
-- shard tampering is detected first by cohort consistency checks
-- then by shard-body hashes for the encoded shard body
-- then by share commitments for the raw threshold-share material before reconstruction
+- archive-approval signatures remain the main long-lived OTS target
+- maintenance signatures may also carry timestamps for maintenance provenance
+- source-evidence signatures may also carry timestamps for provenance, but those timestamps do not become archive approval
 
-This is important operationally. A bad shard should fail closed and reduce the usable cohort, not produce a silent wrong reconstruction.
-
-Residual risk:
-
-- if `>= t` shares from a predecessor cohort leak before resharing completes, same-state resharing does not repair that exposure
-- if the host environment is compromised during restore or resharing, the browser implementation cannot fully defeat that adversary
-
-### 7.5 Migration and crypto-agility context
-
-NIST IR 8547 is useful here as migration-trigger framing, not as a claim that Quantum Vault already implements an IR-8547-complete migration program.
-
-Useful planning posture:
-
-- migrate before confidence in the active profile erodes, not only after public failure
-- treat algorithm diversity as a future option, not a present commitment
-- record migration continuity explicitly once lifecycle transition records exist
-
-Optional future directions, not commitments:
-
-- alternative or diversified KEM families such as HQC
-- hybrid KEM constructions during transition periods
-- signature diversity such as SLH-DSA alongside existing PQ approval paths
-
-Why `rewrap` is still blocked today:
-
-```text
-Current:
-  ML-KEM -> shared secret -> KMAC -> Kenc -> AES-GCM(payload)
-
-Future rewrap-capable direction:
-  DEK (random) -> AES-GCM(payload)                 [inner stable layer]
-  ML-KEM -> shared secret -> KMAC -> Kwrap -> wrap(DEK)  [outer replaceable layer]
-```
-
-Until such a two-layer envelope exists, migration that changes confidentiality state means reencryption, not `rewrap`.
-
-## 8. Evidence & Time
-
-Status: Current scope vs future direction
-
-### 8.1 Current OTS posture and Q-Day framing
-
-For long-lived archives it is useful to think in three times:
-
-- archive creation time
-- `Q-Day`, when large-scale practical attacks against classical public-key signatures become realistic
-- later verification time, potentially years or decades after both
-
-Current QV posture:
-
-- detached signatures are the authenticity object
-- `.ots` evidence is linked to detached signature bytes
-- OTS therefore currently says, at most, "these detached signature bytes existed before some witness-observed time"
-
-Implication for signature families:
-
-- if the detached signature is PQ and the OTS proof predates `Q-Day`, the verifier has both a still-meaningful signature family and evidence that the signature existed before that time
-- if the detached signature is classical-only, the OTS proof can still preserve historical timing value, but it does not make the classical signature cryptographically future-proof after `Q-Day`
-
-### 8.2 What current OTS does and does not prove
+### 10.3 What current OTS does and does not prove
 
 Current OTS use does prove:
 
-- detached signature bytes existed before a witness-observed time
-- those signature bytes can be linked to the archive state if the detached signature verifies against the archive-state descriptor
+- detached signature bytes existed before some witness-observed time
+- those signature bytes can be linked to the relevant signed object if the detached signature verifies
 
 Current OTS use does **not** prove:
 
-- that the whole bundle existed in exactly its later form
-- that the source plaintext was reviewed
-- that signer pinning or archive policy was satisfied
-- that a renewal-capable archival evidence chain already exists
+- that archive policy was satisfied
+- that a signer was pinned
+- that the plaintext source was reviewed
+- that a renewable evidence chain already exists
 
-This is consistent with the current `trust-and-policy.md` posture: evidence is supplementary and must not be misread as a substitute for signature policy.
+### 10.4 Standards claim boundary
 
-### 8.3 Standards context, not current implementation
+Recommended decision:
 
-RFC 3161 is relevant as timestamping context.
-RFC 4998 is relevant as evidence-renewal context.
-
-Neither should be presented as a current QV implementation claim here.
-
-Honest current statement:
-
-- Quantum Vault currently interoperates with OTS as a detached-signature witness layer
-- Quantum Vault does not currently implement RFC 4998-style renewable evidence chains
-- any future renewal design would need first-class evidence-record objects, successor-witness strategy, and explicit renewal timing rules
-
-## 9. Alternatives Considered
-
-Status: Alternatives retained for architectural memory
-
-### 9.1 Option 1 — `n/k/t/codecId` are state-level
-
-Model:
-
-- concrete sharding parameters remain inside the archive-state descriptor
-- same-state resharing MUST NOT change them
-- changing them creates a new state
-
-Strengths:
-
-- simple approval semantics
-- threshold policy stays inside the signed state object
-
-Weaknesses:
-
-- too restrictive for operational resharing
-- still leaves pressure to explain why some shard changes are same-state and others are not
-- does not match the existing desire to let same-state resharing change concrete distribution parameters
-
-### 9.2 Option 2 — `n/k/t/codecId` are cohort-level
-
-Model:
-
-- concrete sharding parameters move into the cohort binding
-- same-state resharing MAY change them
-- archive-state signatures survive because the archive-state descriptor is unchanged
-
-Strengths:
-
-- cleanest signature-survival story
-- best match for the operational-maintenance framing
-
-Weaknesses:
-
-- operational security posture can change without changing the archive-state descriptor
-- later governance semantics may need an additional signed operational-policy layer
-
-### 9.3 Option 3 — split policy class from concrete cohort parameters
-
-Model:
-
-- archive state carries a signed sharding-policy class or allowed bounds
-- each cohort carries concrete `n/k/t/codecId`
-- same-state resharing may vary concrete values only inside the signed bounds
-
-Why it remains interesting:
-
-- preserves signature survival
-- gives a place to sign operational limits
-
-Why it is not the current recommendation:
-
-- it adds another policy object before the simpler archive-state/cohort split is implemented
-- it risks overdesign for a project that currently has no deployed users and no existing governance layer
-
-This remains the most credible future refinement if QV later needs signed operational limits on resharing.
-
-## 10. Future Research / Not In Current Scope
-
-Status: Future work
-
-The following branches are worth preserving, but they should not block the first lifecycle implementation wave:
-
-### 10.1 Distributed resharing, PSS, and DPSS
-
-Proactive Secret Sharing and Dynamic PSS remain future research only.
-
-Useful reference points:
-
-- Herzberg et al. (1995) for proactive share refresh
-- Feldman (1987) and Pedersen (1991) for VSS building blocks
-- later DPSS literature for committee-change assumptions and transcript complexity
-
-Reasons:
-
-- they require interactive custodian participation rather than inert shard files
-- they assume online participants during protocol rounds
-- they assume secure pairwise channels or a broadcast channel
-- they introduce honest-participant and committee-overlap assumptions that do not match the current offline client-only model
-- DPSS adds further committee-change assumptions, often requiring sufficient honest overlap in the predecessor committee
-- PQ-secure verifiable distributed resharing remains a research-heavy area
-
-Related note:
-
-- Feldman/Pedersen-style verifiability may still be worth studying as a separate integrity enhancement for initial split, but not as a Phase 1 lifecycle dependency
-
-### 10.2 Merkle cohort commitments
-
-Flat `shareCommitments[]` and `shardBodyHashes[]` are sufficient at current scale.
-Merkleized cohort proofs remain an optional later optimization.
-
-### 10.3 RFC 4998-style evidence renewal
-
-Evidence renewal is important for long-term archives, but it is not already implemented.
-
-Current baseline:
-
-- OTS evidence is supplementary and signature-byte-targeted
-
-Future direction:
-
-- first-class renewable evidence records that can chain across decades
-
-### 10.4 Envelope-DEK and future rewrap
-
-`rewrap` is architecture-blocked until QV adopts a wrapped-DEK design.
-Until then, cryptographic compromise response means reencryption, not rewrap.
-
-### 10.5 Richer source-evidence claims
-
-Possible later additions:
-
-- reviewer role metadata
-- chain-of-custody annotations
-- normalized references to external signature containers
-- privacy-preserving or partially redacted source descriptors
+- RFC 3161 is timestamping context
+- RFC 4998 is future-direction context for renewable evidence
+- neither is a current QV implementation claim in the lifecycle successor family
 
 ## 11. Standards Reading Map
 
-Status: Reading map for specific design questions
+Status: Reading map for design reasoning
 
-| Standard / source | Architectural question it informs | Why it matters here |
+| Standard / authority | Architectural question it informs | Why it matters here |
 | --- | --- | --- |
-| RFC 8785 | What exact bytes should archive-state descriptors, transition records, and other signable JSON artifacts use? | Signable lifecycle objects should reuse the Stage A signable canonicalization discipline unless byte rules truly change |
-| RFC 7493 and RFC 8259 | What JSON edge cases must lifecycle JSON reject before canonicalization? | Successor lifecycle artifacts should inherit the same fail-closed JSON discipline as the current signable manifest family |
-| JSON Schema draft 2020-12 | How should lifecycle artifacts express closed grammar and versioned evolution? | Archive-state, cohort, transition, and source-evidence objects need their own closed schemas rather than ad hoc extensions |
-| RFC 2119 and RFC 8174 | Where should lifecycle docs use normative terms? | Useful for freezing fail-closed verification behavior and distinguishing recommendations from binding Phase 1 rules |
-| RFC 5116 and NIST SP 800-38D | Which ciphertext semantics belong in the archive-state descriptor? | AEAD interpretation depends on nonce/AAD semantics; those semantics belong with the long-lived ciphertext-binding state, not with cohort metadata |
-| FIPS 202 | Which digest-family assumptions back `archiveId`-adjacent identifiers, `stateId`, `cohortId`, and commitment hashes? | Keeps identifier and commitment choices aligned with current QV primitive families |
-| FIPS 203 and NIST SP 800-185 | Which primitive choices matter for current QV state interpretation? | The current KEM/KDF stack shapes what a state means and what a migration would change |
-| RFC 3161 | What timestamping model is relevant as standards context? | Useful as timestamp-token context, but not a claim that QV currently implements RFC 3161 flows |
-| ISO 14721 (OAIS) and ISO 16363 | Why separate archive identity, state history, provenance, and fixity surfaces? | Long-term archival framing needs durable identifiers, preservation events, provenance records, and fixity evidence with clear scope |
-| RFC 4998 | How might later evidence renewal work without changing the present implementation story? | Useful only as future-direction context for evidence renewal; not evidence that QV already implements renewable evidence records |
-| NIST IR 8547 | How should QV think about when migration planning becomes urgent? | Useful as migration-trigger framing for PQ timelines and long-horizon risk, not as a compliance claim |
+| RFC 8785 | What exact bytes should signable or deterministically hashed lifecycle JSON objects use? | Archive-state, transition, cohort-binding, and source-evidence bytes need deterministic canonicalization compatible with the Stage A baseline |
+| RFC 7493 | What JSON subset should lifecycle artifacts stay within? | Reinforces I-JSON-safe expectations such as no duplicate names, portable number handling, and interoperable JSON discipline |
+| RFC 8259 | What JSON parser constraints still matter before canonicalization? | Lifecycle parsing still must reject malformed JSON before any canonicalization or semantic steps |
+| JSON Schema draft 2020-12 | How should lifecycle grammar stay closed and versioned? | New artifact families and attachment families need explicit schemas rather than prose-only extension paths |
+| RFC 2119 / RFC 8174 | Where should lifecycle docs use MUST/SHOULD language? | Distinguishes frozen implementation requirements from recommendations and future work |
+| RFC 5116 / NIST SP 800-38D | Which AEAD and AAD semantics belong in archive-state identity? | Nonce and AAD interpretation are state semantics, not cohort logistics |
+| FIPS 202 | Which digest-family assumptions back state IDs, cohort IDs, and binding digests? | Keeps identifier and commitment choices aligned with current QV primitive families |
+| FIPS 203 | What current KEM state is the archive-state descriptor describing? | The successor state descriptor still represents an ML-KEM-based confidentiality state in the current baseline |
+| NIST SP 800-185 | Why do KMAC/KDF interpretation fields remain state-level? | KDF-tree and derivation semantics are part of cryptographic state identity |
+| ISO 14721 (OAIS) | Why separate logical archive identity, fixity, provenance, and preservation events? | Supports the archive/state/cohort/provenance split without pretending OAIS dictates QV JSON shape |
+| ISO 16363 | Why preserve auditable distinction among integrity, authenticity, provenance, and evidence? | Supports explicit, separately reportable verification outcomes rather than one opaque trust bit |
+| RFC 4998 | How should future renewable evidence be framed honestly? | Only as future-direction context for evidence renewal, not current implementation |
 
-## 12. Key Insight
+## 12. True Open Questions After This Revision
 
-The old split-time unified manifest created a specific failure mechanism:
+Status: True open question
 
-- shard-distribution fields sat inside the signable object
-- resharing changed those fields
-- canonical manifest bytes changed
-- `manifestDigest` changed
-- detached signatures and OTS linkage tied to those bytes no longer carried forward cleanly
+The following remain open because implementation can proceed without freezing them today:
 
-The successor split fixes that by separating:
+1. Whether `actorHints` in transition records should stay free-form strings or be narrowed to a controlled vocabulary in v1.
+2. Whether future governance profiles should require maintenance signatures for every resharing event or only for some archive classes.
+3. Whether direct `.qenc` signatures should ever be bundled in a future extension family for non-QV repository workflows.
+4. Whether source-evidence descriptive fields need a stricter privacy-preserving profile before broad use.
 
-- archive-state approval, which should survive same-state resharing
-- cohort/distribution material, which is operationally replaceable
+These are deliberately smaller than the state/cohort boundary question and do not justify reopening the frozen architecture.
 
-That separation is the key lifecycle design move. It is what turns resharing from a signature-breaking manifest mutation into a maintenance event on a stable archive state.
+## 13. Future Research / Not In Near-Term Scope
 
-See also `resharing-design.md` (Motivation) for the same failure mode in design-doc form.
+Status: Future research
 
-## 13. Sources And Cross-links
+### 13.1 Distributed resharing
 
-Status: Consolidated bibliography appendix
+PSS, VSS, and DPSS remain future research only.
 
-Archival identity and continuity:
+Why:
 
-- ISO 14721 (OAIS)
-- ISO 16363
-- `docs/long-term-archive.md`
+- they require interactive online custodians
+- they require secure channels or broadcast semantics
+- they would move QV away from the current browser-first, client-only model
 
-Threshold, churn, and threat framing:
+### 13.2 Merkleized cohort commitments
 
-- Shamir (1979)
-- Byzantine fault-tolerance / distributed fault-model literature as general churn-model context
-- `docs/security-model.md`
+Flat commitments remain sufficient at current scale.
+Merkleization is an optimization, not a Phase 1 gate.
 
-Distributed resharing and verifiability:
+### 13.3 Envelope-DEK and future `rewrap`
 
-- Herzberg et al. (1995) on proactive secret sharing
-- Feldman (1987)
-- Pedersen (1991)
-- later DPSS / MPC literature as future research context
+Future `rewrap` remains architecture-blocked until QV adopts a wrapped-DEK design.
 
-Evidence and time:
+### 13.4 Renewable evidence chains
 
-- RFC 3161
-- RFC 4998
-- OpenTimestamps project documentation
-- `docs/trust-and-policy.md`
-- `docs/long-term-archive.md`
+Renewable evidence is important for long-term archives but is not already implemented.
+It remains future work rather than current lifecycle capability.
 
-Migration and crypto agility:
+## 14. Key Insight
 
-- NIST IR 8547 as migration-trigger framing
-- FIPS 202
-- FIPS 203
-- NIST SP 800-185
-- `docs/long-term-archive.md`
+Status: Consolidated conclusion
 
-Current-format and successor-design cross-links:
+The lifecycle contradiction was never just “resharing needs a nicer description.”
 
-- `docs/format-spec.md`
-- `docs/security-model.md`
-- `docs/trust-and-policy.md`
-- `docs/process/roadmap/lifecycle/resharing-design.md`
+It was:
+
+- shard-distribution material lived inside the signable object
+- same-state resharing changed that material
+- canonical signable bytes changed
+- detached signatures and OTS linkage no longer carried forward cleanly as archive-state approval
+
+The successor-family fix is therefore structural:
+
+- archive-state approval moves to a stable archive-state descriptor
+- distribution-specific material moves to a cohort binding
+- maintenance history moves to transition records
+- source-review provenance moves to source evidence
+
+That split preserves the post-Stage A-C baseline, keeps the model fail closed, and turns same-state resharing into a coherent implementation target rather than a semantic contradiction.
