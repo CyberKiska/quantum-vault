@@ -24,6 +24,10 @@ async function readJsonFile(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'));
 }
 
+async function readFileBytes(filePath) {
+  return new Uint8Array(await readFile(filePath));
+}
+
 async function loadSchemaRegistry() {
   const schemaFiles = [
     'qv-common-types.schema.json',
@@ -53,9 +57,9 @@ function formatError(error) {
   return String(error);
 }
 
-async function assertRuntimeExpectation(fixture, instance) {
-  const bytes = canonicalizeJsonToBytes(instance);
+async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
   const runtime = fixture.runtime;
+  const bytes = runtime.useRawJsonBytes === true ? rawJsonBytes : canonicalizeJsonToBytes(instance);
   if (runtime.artifact === 'manifest') {
     if (runtime.expectParseSuccess) {
       parseArchiveManifestBytes(bytes);
@@ -180,6 +184,7 @@ export async function runSchemaFixtureCheck() {
     try {
       const instancePath = resolve(schemaDir, fixture.file);
       const instance = await readJsonFile(instancePath);
+      const rawJsonBytes = await readFileBytes(instancePath);
       let schemaValid = false;
       let schemaError = null;
       try {
@@ -193,7 +198,7 @@ export async function runSchemaFixtureCheck() {
         throw schemaError;
       }
       if (fixture.runtime) {
-        await assertRuntimeExpectation(fixture, instance);
+        await assertRuntimeExpectation(fixture, instance, rawJsonBytes);
       }
 
       if (fixture.expectSchemaValid === false) {

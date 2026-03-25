@@ -895,6 +895,9 @@ async function validateTimestampConsistency(bundle) {
 }
 
 async function validateLifecycleBundleSemantics(bundle) {
+  if (bundle.version !== LIFECYCLE_BUNDLE_VERSION) {
+    throw new Error('Unsupported lifecycleBundle.version');
+  }
   const archiveStateDigest = computeArchiveStateDigest(bundle.archiveState);
   if (bundle.archiveStateDigest.value !== archiveStateDigest.value) {
     throw new Error('lifecycleBundle.archiveStateDigest mismatch');

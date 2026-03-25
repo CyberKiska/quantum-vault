@@ -182,6 +182,16 @@
       }
     },
     {
+      "id": "cohort-binding-v1-invalid-unsafe-integer",
+      "schema": "qv-cohort-binding-v1.schema.json",
+      "file": "fixtures/qv-cohort-binding-v1.invalid.unsafe-integer.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "cohort-binding",
+        "expectParseSuccess": false
+      }
+    },
+    {
       "id": "cohort-binding-v1-schema-valid-semantic-invalid-rs-parity",
       "schema": "qv-cohort-binding-v1.schema.json",
       "file": "fixtures/qv-cohort-binding-v1.schema-valid.semantic-invalid.rs-parity.json",
@@ -242,6 +252,16 @@
       }
     },
     {
+      "id": "lifecycle-bundle-v1-invalid-authpolicy-unsafe-integer",
+      "schema": "qv-lifecycle-bundle-v1.schema.json",
+      "file": "fixtures/qv-lifecycle-bundle-v1.invalid.authpolicy-unsafe-integer.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "lifecycle-bundle",
+        "expectParseSuccess": false
+      }
+    },
+    {
       "id": "lifecycle-bundle-v1-schema-valid-semantic-invalid-archive-state-digest",
       "schema": "qv-lifecycle-bundle-v1.schema.json",
       "file": "fixtures/qv-lifecycle-bundle-v1.schema-valid.semantic-invalid.archive-state-digest.json",
@@ -249,6 +269,17 @@
       "runtime": {
         "artifact": "lifecycle-bundle",
         "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "lifecycle-bundle-v1-schema-valid-wire-invalid-noncanonical-bytes",
+      "schema": "qv-lifecycle-bundle-v1.schema.json",
+      "file": "fixtures/qv-lifecycle-bundle-v1.valid.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "lifecycle-bundle",
+        "expectParseSuccess": false,
+        "useRawJsonBytes": true
       }
     }
   ]

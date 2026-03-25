@@ -1522,6 +1522,19 @@ function buildCases() {
       },
     },
     {
+      name: 'successor lifecycle bundle parser rejects version values beyond v1',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.version = 2;
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted version 2'
+        );
+      },
+    },
+    {
       name: 'successor archive-state parser rejects duplicate object keys on the parse path',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
@@ -1530,6 +1543,44 @@ function buildCases() {
         await expectFailure(
           () => Promise.resolve(parseArchiveStateDescriptorBytes(textBytes(duplicateText))),
           'archive-state parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor cohort-binding parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const duplicateText = `{\"schema\":\"${sample.cohortBinding.schema}\",${sample.canonicalCohortBinding.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseCohortBindingBytes(textBytes(duplicateText))),
+          'cohort-binding parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor transition-record parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const duplicateText = `{\"schema\":\"${sample.transitionRecord.schema}\",${canonicalTransition.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseTransitionRecordBytes(textBytes(duplicateText))),
+          'transition-record parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const duplicateText = `{\"schema\":\"${sample.sourceEvidence.schema}\",${canonicalSourceEvidence.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseSourceEvidenceBytes(textBytes(duplicateText))),
+          'source-evidence parser unexpectedly accepted duplicate object keys'
         );
       },
     },

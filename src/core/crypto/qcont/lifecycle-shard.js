@@ -30,6 +30,7 @@ const DIGEST_LEN = 64;
 const KEY_COMMITMENT_LEN = 32;
 const MAX_META_LEN = 65535;
 const MAX_ARTIFACT_LEN = 16 * 1024 * 1024;
+const LOWER_HEX_RE = /^[0-9a-f]+$/;
 
 function readJsonStrict(bytes, field) {
   try {
@@ -41,6 +42,13 @@ function readJsonStrict(bytes, field) {
 
 function computeDigestHex(bytes) {
   return toHex(sha3_512(bytes));
+}
+
+function requireLowercaseHexMetadata(value, field, expectedLength) {
+  if (typeof value !== 'string' || value.length !== expectedLength || !LOWER_HEX_RE.test(value)) {
+    throw new Error(`Invalid shard metadata ${field}`);
+  }
+  return value;
 }
 
 function buildSuccessorShardBlob({
@@ -572,13 +580,16 @@ async function parseLifecycleShardUnsafe(arr) {
     stateId,
     cohortBindingDigest: parsedCohortBinding.digest,
   });
-  if (String(metaJSON?.archiveId || '').toLowerCase() !== parsedArchiveState.archiveState.archiveId) {
+  const metadataArchiveId = requireLowercaseHexMetadata(metaJSON?.archiveId, 'archiveId', 64);
+  const metadataStateId = requireLowercaseHexMetadata(metaJSON?.stateId, 'stateId', 128);
+  const metadataCohortId = requireLowercaseHexMetadata(metaJSON?.cohortId, 'cohortId', 64);
+  if (metadataArchiveId !== parsedArchiveState.archiveState.archiveId) {
     throw new Error('Shard metadata archiveId mismatch');
   }
-  if (String(metaJSON?.stateId || '').toLowerCase() !== stateId) {
+  if (metadataStateId !== stateId) {
     throw new Error('Shard metadata stateId mismatch');
   }
-  if (String(metaJSON?.cohortId || '').toLowerCase() !== cohortId) {
+  if (metadataCohortId !== cohortId) {
     throw new Error('Shard metadata cohortId mismatch');
   }
   if (Number(metaJSON?.shardIndex) !== shardIndex) {
@@ -626,6 +637,7 @@ export async function parseLifecycleShard(arr, options = {}) {
   try {
     return await parseLifecycleShardUnsafe(arr);
   } catch (error) {
+    // Non-strict mode is diagnostics-only and must not be treated as a security boundary.
     if (strict) throw error;
     return {
       diagnostics: { errors: [error?.message || String(error)], warnings: [] },
