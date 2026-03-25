@@ -419,6 +419,30 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
   };
 }
 
+export function rewriteLifecycleBundleInShard(shard, lifecycleBundleBytes) {
+  if (!(lifecycleBundleBytes instanceof Uint8Array) || lifecycleBundleBytes.length === 0) {
+    throw new Error('rewriteLifecycleBundleInShard requires canonical lifecycle-bundle bytes');
+  }
+  return {
+    index: shard.shardIndex,
+    shardIndex: shard.shardIndex,
+    blob: buildSuccessorShardBlob({
+      metaJSON: shard.metaJSON,
+      archiveStateBytes: shard.archiveStateBytes,
+      cohortBindingBytes: shard.cohortBindingBytes,
+      lifecycleBundleBytes,
+      encapsulatedKey: shard.encapsulatedKey,
+      containerNonce: shard.iv,
+      kdfSalt: shard.salt,
+      qencMetaBytes: shard.qencMetaBytes,
+      keyCommitment: shard.keyCommit,
+      shardIndex: shard.shardIndex,
+      share: shard.share,
+      bodyBytes: shard.fragments,
+    }),
+  };
+}
+
 async function parseLifecycleShardUnsafe(arr) {
   if (!(arr instanceof Uint8Array)) {
     throw new Error('Shard must be a Uint8Array');

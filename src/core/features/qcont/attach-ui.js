@@ -1,8 +1,19 @@
-import { attachManifestBundleToShards, parseShard } from '../../../app/crypto-service.js';
+import {
+  attachLifecycleBundleToShards,
+  attachManifestBundleToShards,
+  parseLifecycleShard,
+  parseShard as parseLegacyShard,
+} from '../../../app/crypto-service.js';
+import { packPqpk } from '../../crypto/auth/qsig.js';
 import { base64ToBytes } from '../../crypto/bytes.js';
+import { isSupportedStellarSignatureDocument } from '../../crypto/auth/stellar-sig.js';
+import {
+  canonicalizeArchiveStateDescriptor,
+  parseArchiveStateDescriptorBytes,
+  parseLifecycleBundleBytes,
+} from '../../crypto/lifecycle/artifacts.js';
 import { parseArchiveManifestBytes } from '../../crypto/manifest/archive-manifest.js';
 import { parseManifestBundleBytes } from '../../crypto/manifest/manifest-bundle.js';
-import { isSupportedStellarSignatureDocument } from '../../crypto/auth/stellar-sig.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
@@ -22,6 +33,8 @@ async function classifyAttachFiles(files) {
   const pqPublicKeyFileBytesList = [];
   let manifestBytes = null;
   let bundleBytes = null;
+  let archiveStateBytes = null;
+  let lifecycleBundleBytes = null;
 
   for (const file of files) {
     const name = String(file?.name || 'unnamed');
@@ -47,6 +60,24 @@ async function classifyAttachFiles(files) {
     if (lowerName.endsWith('.ots')) {
       timestamps.push({ name, bytes });
       continue;
+    }
+
+    try {
+      const parsedLifecycleBundle = await parseLifecycleBundleBytes(bytes);
+      if (lifecycleBundleBytes) throw new Error('Multiple lifecycle bundle files were provided.');
+      lifecycleBundleBytes = parsedLifecycleBundle.bytes;
+      continue;
+    } catch {
+      // try other file types
+    }
+
+    try {
+      const parsedArchiveState = parseArchiveStateDescriptorBytes(bytes);
+      if (archiveStateBytes) throw new Error('Multiple archive-state descriptor files were provided.');
+      archiveStateBytes = parsedArchiveState.bytes;
+      continue;
+    } catch {
+      // try legacy artifact types
     }
 
     try {
@@ -82,41 +113,76 @@ async function classifyAttachFiles(files) {
     shardFiles,
     manifestBytes,
     bundleBytes,
+    archiveStateBytes,
+    lifecycleBundleBytes,
     signatures,
     timestamps,
     pqPublicKeyFileBytesList,
   };
 }
 
-function stripManifestVariantSuffix(name) {
+function stripArchiveVariantSuffix(name) {
   return String(name || 'archive')
+    .replace(/\.archive-state\.json$/i, '')
+    .replace(/\.lifecycle-bundle\.json$/i, '')
     .replace(/\.signable\.qvmanifest\.json$/i, '')
     .replace(/\.extended\.qvmanifest\.json$/i, '')
     .replace(/\.bundle\.qvmanifest\.json$/i, '')
     .replace(/\.qvmanifest\.json$/i, '');
 }
 
-function deriveManifestBaseName(sourceFiles) {
-  const explicit = sourceFiles.find((file) => String(file?.name || '').toLowerCase().endsWith('.qvmanifest.json'));
-  if (explicit) return stripManifestVariantSuffix(explicit.name);
+function deriveArchiveBaseName(sourceFiles) {
+  const explicit = sourceFiles.find((file) => /\.(qvmanifest\.json|archive-state\.json|lifecycle-bundle\.json)$/i.test(String(file?.name || '')));
+  if (explicit) return stripArchiveVariantSuffix(explicit.name);
   const shard = sourceFiles.find((file) => String(file?.name || '').toLowerCase().endsWith('.qcont'));
   if (!shard) return 'archive';
-  return stripManifestVariantSuffix(shard.name.replace(/\.part\d+-of-\d+\.qcont$/i, ''));
+  return stripArchiveVariantSuffix(shard.name.replace(/\.part\d+-of-\d+\.qcont$/i, ''));
 }
 
-function deriveManifestFilename(sourceFiles) {
-  return `${deriveManifestBaseName(sourceFiles)}.qvmanifest.json`;
+function deriveSignableFilename(sourceFiles, mode) {
+  const baseName = deriveArchiveBaseName(sourceFiles);
+  return mode === 'successor'
+    ? `${baseName}.archive-state.json`
+    : `${baseName}.signable.qvmanifest.json`;
 }
 
-function deriveBundleFilename(sourceFiles) {
-  return `${deriveManifestBaseName(sourceFiles)}.extended.qvmanifest.json`;
+function deriveBundleFilename(sourceFiles, mode) {
+  const baseName = deriveArchiveBaseName(sourceFiles);
+  return mode === 'successor'
+    ? `${baseName}.lifecycle-bundle.json`
+    : `${baseName}.extended.qvmanifest.json`;
 }
 
-function deriveSignableManifestFilename(sourceFiles) {
-  return `${deriveManifestBaseName(sourceFiles)}.signable.qvmanifest.json`;
+function isSuccessorShard(shard) {
+  return shard?.archiveStateBytes instanceof Uint8Array && shard?.lifecycleBundleBytes instanceof Uint8Array;
 }
 
-export function buildAttachedArtifactExports(bundle, baseName) {
+function classifyAttachMode(classified, shards = []) {
+  const shardModes = new Set(shards.map((shard) => (isSuccessorShard(shard) ? 'successor' : 'legacy')));
+  if (shardModes.size > 1) {
+    throw new Error('Attach does not support mixing legacy and successor shard families.');
+  }
+
+  const shardMode = shardModes.size === 1 ? [...shardModes][0] : null;
+  const hasLegacyArtifacts = classified.manifestBytes instanceof Uint8Array || classified.bundleBytes instanceof Uint8Array;
+  const hasSuccessorArtifacts = classified.archiveStateBytes instanceof Uint8Array || classified.lifecycleBundleBytes instanceof Uint8Array;
+
+  if (hasLegacyArtifacts && hasSuccessorArtifacts) {
+    throw new Error('Attach input mixes legacy manifest artifacts with successor lifecycle artifacts.');
+  }
+  if (shardMode === 'legacy' && hasSuccessorArtifacts) {
+    throw new Error('Legacy shards cannot be attached using successor archive-state or lifecycle-bundle artifacts.');
+  }
+  if (shardMode === 'successor' && hasLegacyArtifacts) {
+    throw new Error('Successor shards cannot be attached using legacy manifest or manifest-bundle artifacts.');
+  }
+
+  if (shardMode) return shardMode;
+  if (hasSuccessorArtifacts) return 'successor';
+  return 'legacy';
+}
+
+function buildLegacyAttachedArtifactExports(bundle, baseName) {
   const exports = [];
   for (const publicKey of bundle?.attachments?.publicKeys || []) {
     if (publicKey.encoding === 'base64') {
@@ -164,24 +230,99 @@ export function buildAttachedArtifactExports(bundle, baseName) {
   return exports;
 }
 
-async function parseAttachShards(classified) {
-  const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
-  return shardBytes.map((bytes) => parseShard(bytes, { strict: true }));
-}
-
-function deriveAttachPlan(classified, shards) {
-  if (!Array.isArray(shards) || shards.length === 0) {
-    return {
-      embedIntoShards: false,
-      modeLabel: 'Manifest-side bundle only',
-      hint: 'No shard files are loaded. Attach will update only the manifest-side bundle.',
-      warning: false,
-    };
+function buildLifecycleAttachedArtifactExports(bundle, baseName) {
+  const exports = [];
+  for (const publicKey of bundle?.attachments?.publicKeys || []) {
+    if (publicKey.encoding === 'base64') {
+      exports.push({
+        filename: `${baseName}-${publicKey.id}.pqpk`,
+        bytes: packPqpk({
+          suite: publicKey.suite,
+          publicKeyBytes: base64ToBytes(publicKey.value),
+        }),
+        type: 'application/octet-stream',
+      });
+      continue;
+    }
+    if (publicKey.encoding === 'stellar-address') {
+      exports.push({
+        filename: `${baseName}-${publicKey.id}.stellar.txt`,
+        bytes: new TextEncoder().encode(`${String(publicKey.value || '').trim()}\n`),
+        type: 'text/plain;charset=utf-8',
+      });
+      continue;
+    }
+    throw new Error(`Cannot export attached public key ${publicKey.id}: unsupported encoding ${publicKey.encoding}`);
   }
 
-  const cohortKeys = new Set(shards.map((shard) => `${shard.manifestDigestHex}:${shard.bundleDigestHex}`));
-  if (cohortKeys.size !== 1) {
-    throw new Error('Attach requires shard files from exactly one archive cohort.');
+  const signatures = [
+    ...(bundle?.attachments?.archiveApprovalSignatures || []),
+    ...(bundle?.attachments?.maintenanceSignatures || []),
+    ...(bundle?.attachments?.sourceEvidenceSignatures || []),
+  ];
+  for (const signature of signatures) {
+    if (signature.signatureEncoding !== 'base64') {
+      throw new Error(`Cannot export attached signature ${signature.id}: unsupported encoding ${signature.signatureEncoding}`);
+    }
+    const extension = signature.format === 'stellar-sig' ? 'sig' : 'qsig';
+    exports.push({
+      filename: `${baseName}-${signature.id}.${extension}`,
+      bytes: base64ToBytes(signature.signature),
+      type: 'application/octet-stream',
+    });
+  }
+
+  for (const timestamp of bundle?.attachments?.timestamps || []) {
+    if (timestamp.proofEncoding !== 'base64') {
+      throw new Error(`Cannot export attached OTS evidence ${timestamp.id}: unsupported encoding ${timestamp.proofEncoding}`);
+    }
+    exports.push({
+      filename: `${baseName}-${timestamp.id}.ots`,
+      bytes: base64ToBytes(timestamp.proof),
+      type: 'application/octet-stream',
+    });
+  }
+
+  return exports;
+}
+
+export function buildAttachedArtifactExports(bundle, baseName) {
+  if (bundle?.type === 'QV-Lifecycle-Bundle') {
+    return buildLifecycleAttachedArtifactExports(bundle, baseName);
+  }
+  return buildLegacyAttachedArtifactExports(bundle, baseName);
+}
+
+async function parseAttachShards(classified) {
+  const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
+  return Promise.all(shardBytes.map(async (bytes, index) => {
+    try {
+      return await parseLifecycleShard(bytes, { strict: true });
+    } catch {
+      try {
+        return parseLegacyShard(bytes, { strict: true });
+      } catch (error) {
+        throw new Error(`Shard ${classified.shardFiles[index]?.name || index + 1} could not be parsed: ${error?.message || error}`);
+      }
+    }
+  }));
+}
+
+function deriveAttachPlan(classified, shards, mode) {
+  if (!Array.isArray(shards) || shards.length === 0) {
+    return mode === 'successor'
+      ? {
+          embedIntoShards: false,
+          modeLabel: 'Lifecycle-bundle only',
+          hint: 'No shard files are loaded. Attach will update only the standalone lifecycle bundle.',
+          warning: false,
+        }
+      : {
+          embedIntoShards: false,
+          modeLabel: 'Manifest-side bundle only',
+          hint: 'No shard files are loaded. Attach will update only the manifest-side bundle.',
+          warning: false,
+        };
   }
 
   const uniqueIndices = new Set(shards.map((shard) => shard.shardIndex));
@@ -192,6 +333,32 @@ function deriveAttachPlan(classified, shards) {
   const expectedShardCount = Number(shards[0]?.metaJSON?.n);
   if (!Number.isInteger(expectedShardCount) || expectedShardCount <= 0) {
     throw new Error('Attach could not determine the expected shard count for this archive.');
+  }
+
+  if (mode === 'successor') {
+    const cohortKeys = new Set(shards.map((shard) => `${shard.metaJSON.archiveId}:${shard.metaJSON.stateId}:${shard.metaJSON.cohortId}`));
+    if (cohortKeys.size !== 1) {
+      throw new Error('Attach requires successor shards from exactly one archive/state/cohort set.');
+    }
+    if (uniqueIndices.size === expectedShardCount) {
+      return {
+        embedIntoShards: true,
+        modeLabel: 'Embed into selected successor shards',
+        hint: `Full successor shard cohort detected (${uniqueIndices.size}/${expectedShardCount}). Attach will rewrite the selected shard files and update the lifecycle bundle.`,
+        warning: false,
+      };
+    }
+    return {
+      embedIntoShards: true,
+      modeLabel: 'Partial successor shard rewrite',
+      hint: `Only ${uniqueIndices.size}/${expectedShardCount} successor shard files are loaded. Attach will rewrite only the selected shard files; other shards may continue carrying a different embedded lifecycle-bundle digest within the same cohort.`,
+      warning: true,
+    };
+  }
+
+  const cohortKeys = new Set(shards.map((shard) => `${shard.manifestDigestHex}:${shard.bundleDigestHex}`));
+  if (cohortKeys.size !== 1) {
+    throw new Error('Attach requires shard files from exactly one archive cohort.');
   }
 
   if (uniqueIndices.size === expectedShardCount) {
@@ -211,13 +378,28 @@ function deriveAttachPlan(classified, shards) {
   };
 }
 
-async function resolveAttachSourceBundle(classified) {
+async function resolveAttachSourceBundle(classified, mode) {
+  if (mode === 'successor') {
+    if (classified.lifecycleBundleBytes instanceof Uint8Array) {
+      return (await parseLifecycleBundleBytes(classified.lifecycleBundleBytes)).lifecycleBundle;
+    }
+    if (classified.shardFiles.length > 0) {
+      const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
+      const parsedShard = await parseLifecycleShard(shardBytes, { strict: true });
+      return parsedShard.lifecycleBundle;
+    }
+    if (classified.archiveStateBytes instanceof Uint8Array) {
+      return null;
+    }
+    throw new Error('No archive-state descriptor or lifecycle bundle is available.');
+  }
+
   if (classified.bundleBytes instanceof Uint8Array) {
     return parseManifestBundleBytes(classified.bundleBytes).bundle;
   }
   if (classified.shardFiles.length > 0) {
     const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
-    const parsedShard = parseShard(shardBytes, { strict: true });
+    const parsedShard = parseLegacyShard(shardBytes, { strict: true });
     return parseManifestBundleBytes(parsedShard.bundleBytes).bundle;
   }
   if (classified.manifestBytes instanceof Uint8Array) {
@@ -244,7 +426,8 @@ async function updateAttachStatus() {
   try {
     const classified = await classifyAttachFiles([...(input.files || [])]);
     const shards = await parseAttachShards(classified);
-    const plan = deriveAttachPlan(classified, shards);
+    const mode = classifyAttachMode(classified, shards);
+    const plan = deriveAttachPlan(classified, shards, mode);
     text.textContent = `${count} attach file(s) selected. ${plan.modeLabel}.`;
     hint.textContent = plan.hint;
   } catch (error) {
@@ -263,20 +446,44 @@ async function exportSignableManifest() {
   setButtonsDisabled(true);
   try {
     const classified = await classifyAttachFiles(files);
-    let manifestBytes = classified.manifestBytes;
-    if (!manifestBytes && classified.bundleBytes) {
-      manifestBytes = parseManifestBundleBytes(classified.bundleBytes).manifestBytes;
+    const shards = await parseAttachShards(classified);
+    const mode = classifyAttachMode(classified, shards);
+
+    let signableBytes = null;
+    if (mode === 'successor') {
+      signableBytes = classified.archiveStateBytes;
+      if (!signableBytes && classified.lifecycleBundleBytes) {
+        const parsedLifecycleBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+        signableBytes = canonicalizeArchiveStateDescriptor(parsedLifecycleBundle.lifecycleBundle.archiveState).bytes;
+      }
+      if (!signableBytes && classified.shardFiles.length > 0) {
+        const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
+        const parsedShard = await parseLifecycleShard(shardBytes, { strict: true });
+        signableBytes = parsedShard.archiveStateBytes;
+      }
+      if (!(signableBytes instanceof Uint8Array)) {
+        throw new Error('No archive-state descriptor is available to export.');
+      }
+      const name = deriveSignableFilename(files, mode);
+      download(new Blob([signableBytes], { type: 'application/json' }), name);
+      logSuccess(`Extracted canonical archive-state descriptor: ${name}`);
+      return;
     }
-    if (!manifestBytes && classified.shardFiles.length > 0) {
+
+    signableBytes = classified.manifestBytes;
+    if (!signableBytes && classified.bundleBytes) {
+      signableBytes = parseManifestBundleBytes(classified.bundleBytes).manifestBytes;
+    }
+    if (!signableBytes && classified.shardFiles.length > 0) {
       const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
-      const parsedShard = parseShard(shardBytes, { strict: true });
-      manifestBytes = parsedShard.manifestBytes;
+      const parsedShard = parseLegacyShard(shardBytes, { strict: true });
+      signableBytes = parsedShard.manifestBytes;
     }
-    if (!(manifestBytes instanceof Uint8Array)) {
+    if (!(signableBytes instanceof Uint8Array)) {
       throw new Error('No canonical manifest is available to export.');
     }
-    const name = deriveSignableManifestFilename(files);
-    download(new Blob([manifestBytes], { type: 'application/json' }), name);
+    const name = deriveSignableFilename(files, mode);
+    download(new Blob([signableBytes], { type: 'application/json' }), name);
     logSuccess(`Extracted canonical signable manifest: ${name}`);
   } catch (error) {
     logError(error);
@@ -296,12 +503,18 @@ async function exportAttachedArtifacts() {
   setButtonsDisabled(true);
   try {
     const classified = await classifyAttachFiles(files);
-    const bundle = await resolveAttachSourceBundle(classified);
+    const shards = await parseAttachShards(classified);
+    const mode = classifyAttachMode(classified, shards);
+    const bundle = await resolveAttachSourceBundle(classified, mode);
     if (!bundle) {
-      throw new Error('The selected inputs contain only the canonical manifest; there are no attached artifacts to export.');
+      throw new Error(
+        mode === 'successor'
+          ? 'The selected inputs contain only the archive-state descriptor; there are no attached artifacts to export.'
+          : 'The selected inputs contain only the canonical manifest; there are no attached artifacts to export.'
+      );
     }
 
-    const baseName = deriveManifestBaseName(files);
+    const baseName = deriveArchiveBaseName(files);
     const artifacts = buildAttachedArtifactExports(bundle, baseName);
     let exportedCount = 0;
     for (const artifact of artifacts) {
@@ -332,29 +545,51 @@ async function attachFilesToShards() {
   setButtonsDisabled(true);
   try {
     const classified = await classifyAttachFiles(files);
+    const shards = await parseAttachShards(classified);
+    const mode = classifyAttachMode(classified, shards);
     if (
+      mode === 'legacy' &&
       !classified.shardFiles.length &&
       !(classified.bundleBytes instanceof Uint8Array) &&
       !(classified.manifestBytes instanceof Uint8Array)
     ) {
       throw new Error('Attach requires at least one .qcont shard, canonical manifest, or existing manifest bundle.');
     }
-    const shards = await parseAttachShards(classified);
-    const plan = deriveAttachPlan(classified, shards);
+    if (
+      mode === 'successor' &&
+      !classified.shardFiles.length &&
+      !(classified.lifecycleBundleBytes instanceof Uint8Array)
+    ) {
+      throw new Error('Successor attach requires at least one successor .qcont shard or an existing lifecycle bundle.');
+    }
+
+    const plan = deriveAttachPlan(classified, shards, mode);
     if (plan.warning) {
       logWarning(plan.hint);
     } else {
       log(plan.hint);
     }
-    const result = await attachManifestBundleToShards(shards, {
-      manifestBytes: classified.manifestBytes,
-      bundleBytes: classified.bundleBytes,
-      signatures: classified.signatures,
-      timestamps: classified.timestamps,
-      pqPublicKeyFileBytesList: classified.pqPublicKeyFileBytesList,
-      expectedEd25519Signer: String(expectedEdSigner?.value || '').trim(),
-      embedIntoShards: plan.embedIntoShards,
-    });
+
+    const expectedEd25519Signer = String(expectedEdSigner?.value || '').trim();
+    const result = mode === 'successor'
+      ? await attachLifecycleBundleToShards(shards, {
+          archiveStateBytes: classified.archiveStateBytes,
+          lifecycleBundleBytes: classified.lifecycleBundleBytes,
+          signatures: classified.signatures,
+          timestamps: classified.timestamps,
+          pqPublicKeyFileBytesList: classified.pqPublicKeyFileBytesList,
+          expectedEd25519Signer,
+          embedIntoShards: plan.embedIntoShards,
+        })
+      : await attachManifestBundleToShards(shards, {
+          manifestBytes: classified.manifestBytes,
+          bundleBytes: classified.bundleBytes,
+          signatures: classified.signatures,
+          timestamps: classified.timestamps,
+          pqPublicKeyFileBytesList: classified.pqPublicKeyFileBytesList,
+          expectedEd25519Signer,
+          embedIntoShards: plan.embedIntoShards,
+        });
 
     if (plan.embedIntoShards && classified.shardFiles.length > 0) {
       classified.shardFiles.forEach((file, index) => {
@@ -364,12 +599,26 @@ async function attachFilesToShards() {
       });
     }
 
-    const manifestName = deriveBundleFilename(files);
-    download(new Blob([result.bundleBytes], { type: 'application/json' }), manifestName);
+    const bundleName = deriveBundleFilename(files, mode);
+    download(new Blob([result.lifecycleBundleBytes || result.bundleBytes], { type: 'application/json' }), bundleName);
+    if (mode === 'successor') {
+      if (plan.embedIntoShards && classified.shardFiles.length > 0) {
+        logSuccess(`Embedded attached artifacts into the selected successor shards and updated ${bundleName}.`);
+      } else {
+        logSuccess(`Updated ${bundleName} without rewriting shard files.`);
+      }
+      log(`Lifecycle bundle digest: ${result.lifecycleBundleDigestHex}`);
+      if (result.mixedEmbeddedLifecycleBundleDigests) {
+        logWarning('The selected successor shard set previously carried multiple embedded lifecycle-bundle digests within one cohort. The attach result preserves that fact without treating it as mixed cohorts.');
+      }
+      log('Detached archive-approval signatures bind the canonical archive-state descriptor bytes, not mutable lifecycle-bundle bytes.');
+      return;
+    }
+
     if (plan.embedIntoShards && classified.shardFiles.length > 0) {
-      logSuccess(`Embedded attached artifacts into the selected shards and updated ${manifestName}.`);
+      logSuccess(`Embedded attached artifacts into the selected shards and updated ${bundleName}.`);
     } else {
-      logSuccess(`Updated ${manifestName} as a manifest-side bundle without rewriting shard files.`);
+      logSuccess(`Updated ${bundleName} as a manifest-side bundle without rewriting shard files.`);
     }
     log(`Bundle digest: ${result.bundleDigestHex}`);
     log('Detached signatures still bind the embedded canonical manifest bytes, not the whole bundle file.');

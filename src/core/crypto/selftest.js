@@ -3,6 +3,7 @@ import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fr
 import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
+import { attachLifecycleBundleToShards } from './qcont/lifecycle-attach.js';
 import { buildLifecycleQcontShards, parseLifecycleShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
@@ -1645,6 +1646,313 @@ function buildCases() {
           () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
           'lifecycle bundle unexpectedly accepted an unknown publicKeyRef'
         );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle accepts valid archive-approval qsig entries and exact OTS linkage over archive-state bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const otsBytes = await buildOtsFixture(qsig.qsigBytes, { completeProof: true });
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          {
+            id: 'pk-1',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(qsig.signerPublicKey),
+          },
+        ];
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-1',
+          },
+        ];
+        mutated.attachments.timestamps = [
+          {
+            id: 'ots-1',
+            type: 'opentimestamps',
+            targetRef: 'sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(otsBytes),
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        assert(parsed.lifecycleBundle.attachments.archiveApprovalSignatures.length === 1, 'expected one archive-approval signature');
+        assert(parsed.lifecycleBundle.attachments.timestamps.length === 1, 'expected one exact OTS attachment');
+
+        const exports = buildAttachedArtifactExports(parsed.lifecycleBundle, 'archive');
+        const pqpkExport = exports.find((entry) => entry.filename.endsWith('.pqpk'));
+        assert(pqpkExport, 'expected successor export to emit a .pqpk file for bundled PQ keys');
+        const unpacked = unpackPqpk(pqpkExport.bytes);
+        assert(timingSafeEqual(unpacked.keyBytes, qsig.signerPublicKey), 'successor PQ export did not preserve the bundled raw public key');
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects invalid archive-approval family mappings',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'maintenance',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted an invalid signatureFamily / targetType mapping'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects archive-approval targetRef mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${'f'.repeat(128)}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a mismatched targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects archive-approval targetDigest mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: '0'.repeat(128) },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a mismatched targetDigest'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects incompatible publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const stellar = await createStellarSignerMaterial();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          {
+            id: 'pk-1',
+            kty: 'ed25519-public-key',
+            suite: 'ed25519',
+            encoding: 'stellar-address',
+            value: stellar.signer,
+          },
+        ];
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-1',
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted an incompatible publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects non-verifying publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const wrongKey = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          {
+            id: 'pk-1',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(wrongKey.signerPublicKey),
+          },
+        ];
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-1',
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a non-verifying publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects OTS proofs that do not stamp the exact detached-signature bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const wrongOts = await buildOtsFixture(textBytes('wrong-signature-bytes'), { completeProof: true });
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+        mutated.attachments.timestamps = [
+          {
+            id: 'ots-1',
+            type: 'opentimestamps',
+            targetRef: 'sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(wrongOts),
+          },
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted OTS evidence for different detached-signature bytes'
+        );
+      },
+    },
+    {
+      name: 'successor attach preserves archive-state and cohort-binding bytes while attaching archive-approval signatures',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 3072);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-attach-regression.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        const sig = buildQsigFixture(split.archiveStateBytes);
+
+        const attached = await attachLifecycleBundleToShards(parsed, {
+          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+
+        assert(timingSafeEqual(attached.signableArchiveStateBytes, split.archiveStateBytes), 'attach changed the external signer target bytes');
+        assert(timingSafeEqual(attached.archiveStateBytes, split.archiveStateBytes), 'attach changed archive-state bytes');
+        assert(timingSafeEqual(attached.cohortBindingBytes, split.cohortBindingBytes), 'attach changed cohort-binding bytes');
+
+        const reparsed = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        for (const shard of reparsed) {
+          assert(timingSafeEqual(shard.archiveStateBytes, split.archiveStateBytes), 'rewritten shard archive-state bytes changed unexpectedly');
+          assert(timingSafeEqual(shard.cohortBindingBytes, split.cohortBindingBytes), 'rewritten shard cohort-binding bytes changed unexpectedly');
+        }
+      },
+    },
+    {
+      name: 'successor attach preserves mixed embedded lifecycle-bundle digests inside one cohort during partial rewrites',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 6144);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-partial-rewrite.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigA = buildQsigFixture(split.archiveStateBytes);
+        const firstAttach = await attachLifecycleBundleToShards(parsedOriginal, {
+          signatures: [{ name: 'archive-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigB = buildQsigFixture(firstAttach.archiveStateBytes);
+        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
+          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'archive-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+        const parsedSecondSubset = await Promise.all(secondAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        const mixedCohort = [...parsedSecondSubset, ...parsedFirstAttach.slice(2)];
+        assert(
+          new Set(mixedCohort.map((shard) => `${shard.metaJSON.archiveId}:${shard.metaJSON.stateId}:${shard.metaJSON.cohortId}`)).size === 1,
+          'partial successor rewrite unexpectedly changed the cohort identity'
+        );
+
+        const sigC = buildQsigFixture(split.archiveStateBytes);
+        const mixedAttach = await attachLifecycleBundleToShards(mixedCohort, {
+          lifecycleBundleBytes: secondAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'archive-c.qsig', bytes: sigC.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigC.pqpkBytes],
+        });
+
+        assert(mixedAttach.mixedEmbeddedLifecycleBundleDigests === true, 'expected mixed embedded lifecycle-bundle digests to be reported');
+        assert(mixedAttach.embeddedLifecycleBundleDigests.length === 2, 'expected two embedded lifecycle-bundle digests inside one cohort');
       },
     },
     {

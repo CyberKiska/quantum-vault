@@ -481,6 +481,41 @@ function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+function u32le(value) {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint32(0, value >>> 0, true);
+  return out;
+}
+
+function normalizedSuiteToSuiteId(value) {
+  const canonical = getSignatureSuiteInfo(value).canonical;
+  for (const [suiteId, info] of Object.entries(SUITE_REGISTRY)) {
+    if (info.normalizedSuite === canonical) {
+      return Number(suiteId);
+    }
+  }
+  throw new Error(`Unsupported detached PQ public key suite: ${value}`);
+}
+
+export function packPqpk({
+  suite,
+  publicKeyBytes,
+  versionMinor = 0x01,
+} = {}) {
+  if (!(publicKeyBytes instanceof Uint8Array) || publicKeyBytes.length === 0) {
+    throw new Error('Detached PQ public key bytes must be a non-empty Uint8Array');
+  }
+  ensureBytesLimit(publicKeyBytes, MAX_KEY_BYTES, 'Detached PQ public key');
+  const suiteId = normalizedSuiteToSuiteId(suite);
+  const prefix = concatBytes([
+    MAGIC_PQPK,
+    Uint8Array.of(KEY_FORMAT_VERSION_MAJOR, versionMinor & 0xff, suiteId, 0x00),
+    u32le(publicKeyBytes.length),
+    publicKeyBytes,
+  ]);
+  return concatBytes([prefix, u32le(crc32(prefix))]);
+}
+
 export function unpackPqpk(publicKeyFileBytes) {
   ensureBytesLimit(publicKeyFileBytes, MAX_KEY_FILE_BYTES, 'Detached PQ public key');
   const reader = new Reader(publicKeyFileBytes);

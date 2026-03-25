@@ -7,7 +7,10 @@ import {
 } from '@noble/post-quantum/slh-dsa.js';
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
+import { parseOpenTimestampProof } from '../auth/opentimestamps.js';
+import { packPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import { getSignatureSuiteInfo, normalizeSignatureSuite } from '../auth/signature-suites.js';
+import { verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import {
   normalizeAuthPolicy,
   computeAuthPolicyCommitment,
@@ -807,78 +810,241 @@ function validateBundledPublicKeyCompatibility(signature, publicKeys, field) {
   return publicKey;
 }
 
-function validateSignatureTargetConsistency(bundle) {
-  const archiveStateDigest = computeArchiveStateDigest(bundle.archiveState);
-  const stateId = archiveStateDigest.value;
-  const transitionTargets = new Map();
-  for (const transition of bundle.transitions) {
-    const digest = computeTransitionRecordDigest(transition);
-    transitionTargets.set(digest.value, digest);
-  }
-  const sourceEvidenceTargets = new Map();
-  for (const evidence of bundle.sourceEvidence) {
-    const digest = computeSourceEvidenceDigest(evidence);
-    sourceEvidenceTargets.set(digest.value, digest);
-  }
-
-  for (const signature of bundle.attachments.archiveApprovalSignatures) {
-    if (signature.signatureFamily !== 'archive-approval') {
-      throw new Error('archiveApprovalSignatures entry has wrong signatureFamily');
-    }
-    if (signature.targetType !== 'archive-state') {
-      throw new Error('archiveApprovalSignatures entry has wrong targetType');
-    }
-    if (signature.targetRef !== `state:${stateId}`) {
-      throw new Error('archiveApprovalSignatures targetRef mismatch');
-    }
-    if (signature.targetDigest.value !== archiveStateDigest.value) {
-      throw new Error('archiveApprovalSignatures targetDigest mismatch');
-    }
-  }
-
-  for (const signature of bundle.attachments.maintenanceSignatures) {
-    if (signature.signatureFamily !== 'maintenance') {
-      throw new Error('maintenanceSignatures entry has wrong signatureFamily');
-    }
-    if (signature.targetType !== 'transition-record') {
-      throw new Error('maintenanceSignatures entry has wrong targetType');
-    }
-    if (!signature.targetRef.startsWith('transition:sha3-512:')) {
-      throw new Error('maintenanceSignatures targetRef mismatch');
-    }
-    if (signature.targetRef !== `transition:sha3-512:${signature.targetDigest.value}`) {
-      throw new Error('maintenanceSignatures targetRef mismatch');
-    }
-    if (!transitionTargets.has(signature.targetDigest.value)) {
-      throw new Error('maintenanceSignatures targetDigest mismatch');
-    }
-  }
-
-  for (const signature of bundle.attachments.sourceEvidenceSignatures) {
-    if (signature.signatureFamily !== 'source-evidence') {
-      throw new Error('sourceEvidenceSignatures entry has wrong signatureFamily');
-    }
-    if (signature.targetType !== 'source-evidence') {
-      throw new Error('sourceEvidenceSignatures entry has wrong targetType');
-    }
-    if (!signature.targetRef.startsWith('source-evidence:sha3-512:')) {
-      throw new Error('sourceEvidenceSignatures targetRef mismatch');
-    }
-    if (signature.targetRef !== `source-evidence:sha3-512:${signature.targetDigest.value}`) {
-      throw new Error('sourceEvidenceSignatures targetRef mismatch');
-    }
-    if (!sourceEvidenceTargets.has(signature.targetDigest.value)) {
-      throw new Error('sourceEvidenceSignatures targetDigest mismatch');
-    }
-  }
-}
-
-async function validateTimestampConsistency(bundle) {
-  const signatures = [
+function listLifecycleSignatureEntries(bundle) {
+  return [
     ...bundle.attachments.archiveApprovalSignatures,
     ...bundle.attachments.maintenanceSignatures,
     ...bundle.attachments.sourceEvidenceSignatures,
   ];
+}
+
+function buildLifecycleTargetRegistry(bundle) {
+  const canonicalArchiveState = canonicalizeArchiveStateDescriptor(bundle.archiveState);
+  const archiveApprovalTarget = {
+    signatureFamily: 'archive-approval',
+    targetType: 'archive-state',
+    targetRef: `state:${canonicalArchiveState.stateId}`,
+    digest: canonicalArchiveState.digest,
+    bytes: canonicalArchiveState.bytes,
+  };
+  const transitionTargets = new Map();
+  for (const transition of bundle.transitions) {
+    const canonicalTransition = canonicalizeTransitionRecord(transition);
+    transitionTargets.set(canonicalTransition.digest.value, {
+      signatureFamily: 'maintenance',
+      targetType: 'transition-record',
+      targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+      digest: canonicalTransition.digest,
+      bytes: canonicalTransition.bytes,
+    });
+  }
+  const sourceEvidenceTargets = new Map();
+  for (const evidence of bundle.sourceEvidence) {
+    const canonicalSourceEvidence = canonicalizeSourceEvidence(evidence);
+    sourceEvidenceTargets.set(canonicalSourceEvidence.digest.value, {
+      signatureFamily: 'source-evidence',
+      targetType: 'source-evidence',
+      targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+      digest: canonicalSourceEvidence.digest,
+      bytes: canonicalSourceEvidence.bytes,
+    });
+  }
+  return {
+    archiveApprovalTarget,
+    transitionTargets,
+    sourceEvidenceTargets,
+  };
+}
+
+function resolveLifecycleSignatureTargetFromRegistry(signature, registry, field) {
+  if (signature.signatureFamily === 'archive-approval') {
+    return registry.archiveApprovalTarget;
+  }
+  if (signature.signatureFamily === 'maintenance') {
+    const target = registry.transitionTargets.get(signature.targetDigest.value);
+    if (!target) {
+      throw new Error(`${field} targetDigest mismatch`);
+    }
+    return target;
+  }
+  if (signature.signatureFamily === 'source-evidence') {
+    const target = registry.sourceEvidenceTargets.get(signature.targetDigest.value);
+    if (!target) {
+      throw new Error(`${field} targetDigest mismatch`);
+    }
+    return target;
+  }
+  throw new Error(`${field} has unsupported signatureFamily`);
+}
+
+function signatureEntryField(signature) {
+  if (signature.signatureFamily === 'archive-approval') return 'archiveApprovalSignatures';
+  if (signature.signatureFamily === 'maintenance') return 'maintenanceSignatures';
+  if (signature.signatureFamily === 'source-evidence') return 'sourceEvidenceSignatures';
+  return 'detachedSignature';
+}
+
+function validateDeclaredSignatureFamily(signature, field, expectedFamily, expectedTargetType) {
+  if (signature.signatureFamily !== expectedFamily) {
+    throw new Error(`${field} entry has wrong signatureFamily`);
+  }
+  if (signature.targetType !== expectedTargetType) {
+    throw new Error(`${field} entry has wrong targetType`);
+  }
+}
+
+function validateLifecycleSignatureTargetEntry(signature, registry) {
+  const field = signatureEntryField(signature);
+  const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, field);
+  if (signature.targetType !== target.targetType) {
+    throw new Error(`${field} entry has wrong targetType`);
+  }
+  if (signature.targetRef !== target.targetRef) {
+    throw new Error(`${field} targetRef mismatch`);
+  }
+  if (signature.targetDigest.value !== target.digest.value) {
+    throw new Error(`${field} targetDigest mismatch`);
+  }
+  return { field, target };
+}
+
+function validateSignatureTargetConsistency(bundle, registry = buildLifecycleTargetRegistry(bundle)) {
+  for (const signature of bundle.attachments.archiveApprovalSignatures) {
+    validateDeclaredSignatureFamily(signature, 'archiveApprovalSignatures', 'archive-approval', 'archive-state');
+    validateLifecycleSignatureTargetEntry(signature, registry);
+  }
+  for (const signature of bundle.attachments.maintenanceSignatures) {
+    validateDeclaredSignatureFamily(signature, 'maintenanceSignatures', 'maintenance', 'transition-record');
+    validateLifecycleSignatureTargetEntry(signature, registry);
+  }
+  for (const signature of bundle.attachments.sourceEvidenceSignatures) {
+    validateDeclaredSignatureFamily(signature, 'sourceEvidenceSignatures', 'source-evidence', 'source-evidence');
+    validateLifecycleSignatureTargetEntry(signature, registry);
+  }
+}
+
+export function decodeLifecycleSignatureBytes(signature, field = 'detached signature') {
+  if (signature?.signatureEncoding !== 'base64') {
+    throw new Error(`Unsupported ${field}.signatureEncoding`);
+  }
+  return base64ToBytes(signature.signature);
+}
+
+function buildBundledKeyVerificationMaterial(publicKey, field) {
+  const decodedKeyBytes = decodeBundledPublicKey(publicKey, field);
+  if (publicKey.encoding === 'base64') {
+    return {
+      decodedKeyBytes,
+      bundlePqPublicKeyFileBytes: packPqpk({
+        suite: publicKey.suite,
+        publicKeyBytes: decodedKeyBytes,
+      }),
+      bundleSigner: '',
+    };
+  }
+  return {
+    decodedKeyBytes,
+    bundlePqPublicKeyFileBytes: null,
+    bundleSigner: String(publicKey.value || '').trim(),
+  };
+}
+
+async function assertDeclaredPublicKeyRefCompatibility(signature, bundle, targetBytes, field, expectedEd25519Signer = '') {
+  if (!signature.publicKeyRef) return null;
+  const publicKey = validateBundledPublicKeyCompatibility(signature, bundle.attachments.publicKeys, field);
+  const verificationMaterial = buildBundledKeyVerificationMaterial(publicKey, `${field} bundled key`);
+  const signatureBytes = decodeLifecycleSignatureBytes(signature, field);
+
+  if (signature.format === 'qsig') {
+    const verification = verifyQsigAgainstBytes({
+      messageBytes: targetBytes,
+      qsigBytes: signatureBytes,
+      bundlePqPublicKeyFileBytes: verificationMaterial.bundlePqPublicKeyFileBytes,
+      authoritativeBundlePqPublicKey: true,
+    });
+    if (!verification.ok || verification.bundlePinned !== true) {
+      throw new Error(`${field} publicKeyRef did not verify detached signature`);
+    }
+    return { publicKey, verification, signatureBytes };
+  }
+
+  const verification = await verifyStellarSigAgainstBytes({
+    messageBytes: targetBytes,
+    sigJsonBytes: signatureBytes,
+    bundleSigner: verificationMaterial.bundleSigner,
+    expectedSigner: expectedEd25519Signer,
+  });
+  if (!verification.ok || verification.bundlePinned !== true) {
+    throw new Error(`${field} publicKeyRef did not verify detached signature`);
+  }
+  return { publicKey, verification, signatureBytes };
+}
+
+export function resolveLifecycleSignatureTarget(bundle, signature, options = {}) {
+  const registry = options.registry || buildLifecycleTargetRegistry(bundle);
+  const { field, target } = validateLifecycleSignatureTargetEntry(signature, registry);
+  return {
+    ...target,
+    field,
+  };
+}
+
+export async function verifyLifecycleSignatureEntry(bundle, signature, options = {}) {
+  const expectedEd25519Signer = String(options.expectedEd25519Signer || '').trim();
+  const registry = options.registry || buildLifecycleTargetRegistry(bundle);
+  const target = resolveLifecycleSignatureTarget(bundle, signature, { registry });
+  const { field } = target;
+  const declaredVerification = await assertDeclaredPublicKeyRefCompatibility(
+    signature,
+    bundle,
+    target.bytes,
+    field,
+    expectedEd25519Signer
+  );
+  const signatureBytes = declaredVerification?.signatureBytes || decodeLifecycleSignatureBytes(signature, field);
+
+  if (signature.format === 'qsig') {
+    const verification = declaredVerification?.verification || verifyQsigAgainstBytes({
+      messageBytes: target.bytes,
+      qsigBytes: signatureBytes,
+    });
+    if (!verification.ok) {
+      throw new Error(`${field} signature verification failed: ${verification.error}`);
+    }
+    return {
+      ...verification,
+      field,
+      targetBytes: target.bytes,
+      targetDigest: target.digest,
+      targetRef: target.targetRef,
+      targetType: target.targetType,
+      signatureBytes,
+      publicKey: declaredVerification?.publicKey || null,
+    };
+  }
+
+  const verification = declaredVerification?.verification || await verifyStellarSigAgainstBytes({
+    messageBytes: target.bytes,
+    sigJsonBytes: signatureBytes,
+    expectedSigner: expectedEd25519Signer,
+  });
+  if (!verification.ok) {
+    throw new Error(`${field} signature verification failed: ${verification.error}`);
+  }
+  return {
+    ...verification,
+    field,
+    targetBytes: target.bytes,
+    targetDigest: target.digest,
+    targetRef: target.targetRef,
+    targetType: target.targetType,
+    signatureBytes,
+    publicKey: declaredVerification?.publicKey || null,
+  };
+}
+
+async function validateTimestampConsistency(bundle, registry = buildLifecycleTargetRegistry(bundle)) {
+  const signatures = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(signatures, 'detached signature');
   const signaturesById = new Map(signatures.map((entry) => [entry.id, entry]));
   for (const timestamp of bundle.attachments.timestamps) {
@@ -886,10 +1052,16 @@ async function validateTimestampConsistency(bundle) {
     if (!signature) {
       throw new Error(`attachments.timestamps targetRef is unknown: ${timestamp.targetRef}`);
     }
-    const signatureBytes = base64ToBytes(signature.signature);
+    validateLifecycleSignatureTargetEntry(signature, registry);
+    const signatureBytes = decodeLifecycleSignatureBytes(signature, `${signatureEntryField(signature)} entry`);
     const digest = toHex(await digestSha256(signatureBytes));
     if (timestamp.targetDigest.value !== digest) {
       throw new Error('attachments.timestamps targetDigest mismatch');
+    }
+    const proofBytes = base64ToBytes(timestamp.proof);
+    const parsedProof = parseOpenTimestampProof(proofBytes, { name: timestamp.id });
+    if (parsedProof.stampedDigestHex !== digest) {
+      throw new Error('attachments.timestamps proof digest mismatch');
     }
   }
 }
@@ -916,25 +1088,46 @@ async function validateLifecycleBundleSemantics(bundle) {
 
   assertUniqueIds(bundle.attachments.publicKeys, 'publicKey');
   assertUniqueIds(bundle.attachments.timestamps, 'timestamp');
-  const allSignatureEntries = [
-    ...bundle.attachments.archiveApprovalSignatures,
-    ...bundle.attachments.maintenanceSignatures,
-    ...bundle.attachments.sourceEvidenceSignatures,
-  ];
+  const allSignatureEntries = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(allSignatureEntries, 'detached signature');
+  const registry = buildLifecycleTargetRegistry(bundle);
+  validateSignatureTargetConsistency(bundle, registry);
 
   for (const signature of bundle.attachments.archiveApprovalSignatures) {
-    validateBundledPublicKeyCompatibility(signature, bundle.attachments.publicKeys, 'archiveApprovalSignatures');
+    const target = registry.archiveApprovalTarget;
+    if (signature.publicKeyRef) {
+      await assertDeclaredPublicKeyRefCompatibility(
+        signature,
+        bundle,
+        target.bytes,
+        'archiveApprovalSignatures'
+      );
+    }
   }
   for (const signature of bundle.attachments.maintenanceSignatures) {
-    validateBundledPublicKeyCompatibility(signature, bundle.attachments.publicKeys, 'maintenanceSignatures');
+    const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, 'maintenanceSignatures');
+    if (signature.publicKeyRef) {
+      await assertDeclaredPublicKeyRefCompatibility(
+        signature,
+        bundle,
+        target.bytes,
+        'maintenanceSignatures'
+      );
+    }
   }
   for (const signature of bundle.attachments.sourceEvidenceSignatures) {
-    validateBundledPublicKeyCompatibility(signature, bundle.attachments.publicKeys, 'sourceEvidenceSignatures');
+    const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, 'sourceEvidenceSignatures');
+    if (signature.publicKeyRef) {
+      await assertDeclaredPublicKeyRefCompatibility(
+        signature,
+        bundle,
+        target.bytes,
+        'sourceEvidenceSignatures'
+      );
+    }
   }
 
-  validateSignatureTargetConsistency(bundle);
-  await validateTimestampConsistency(bundle);
+  await validateTimestampConsistency(bundle, registry);
   return { lifecycleBundle: bundle };
 }
 

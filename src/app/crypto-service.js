@@ -9,6 +9,8 @@ import {
 } from '../core/crypto/index.js';
 import { buildQcontShards as buildShardSet } from '../core/crypto/qcont/build.js';
 import { attachManifestBundleToShards as attachShardBundle } from '../core/crypto/qcont/attach.js';
+import { attachLifecycleBundleToShards as attachLifecycleShardBundle } from '../core/crypto/qcont/lifecycle-attach.js';
+import { parseLifecycleShard as parseLifecycleQcontShardBytes } from '../core/crypto/qcont/lifecycle-shard.js';
 import { parseShard as parseQcontShardBytes, restoreFromShards as restoreShardSet } from '../core/crypto/qcont/restore.js';
 import { runSelfTest as runCoreSelfTest } from '../core/crypto/selftest.js';
 import {
@@ -49,8 +51,16 @@ export async function attachManifestBundleToShards(shards, options = {}) {
     return attachShardBundle(shards, options);
 }
 
+export async function attachLifecycleBundleToShards(shards, options = {}) {
+    return attachLifecycleShardBundle(shards, options);
+}
+
 export function parseShard(bytes, options = {}) {
     return parseQcontShardBytes(bytes, options);
+}
+
+export async function parseLifecycleShard(bytes, options = {}) {
+    return parseLifecycleQcontShardBytes(bytes, options);
 }
 
 export async function restoreFromShards(shards, options = {}) {
