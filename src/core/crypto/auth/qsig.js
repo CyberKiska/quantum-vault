@@ -660,7 +660,7 @@ export function verifyQsigAgainstBytes({
 
   const computedFileHash = sha3_512(messageBytes);
   if (!bytesEqual(computedFileHash, parsed.payloadDigest)) {
-    return fail('Signed SHA3-512 digest does not match canonical manifest bytes');
+    return fail('Signed SHA3-512 digest does not match the provided message bytes');
   }
 
   const unpackCandidateKey = (pqpkBytes, label, { optional = false, strictSuiteMatch = false } = {}) => {

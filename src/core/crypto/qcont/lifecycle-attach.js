@@ -1,6 +1,6 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { base64ToBytes, bytesToBase64, bytesEqual, digestSha256, toHex } from '../bytes.js';
-import { parseOpenTimestampProof, resolveOpenTimestampTarget } from '../auth/opentimestamps.js';
+import { parseOpenTimestampProof } from '../auth/opentimestamps.js';
 import { normalizePqPublicKeyPins, unpackPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
 import { getSignatureSuiteInfo } from '../auth/signature-suites.js';
@@ -171,7 +171,28 @@ function buildBundleSignaturePayloads(bundle) {
   ].map((signature) => ({
     id: signature.id,
     bytes: decodeLifecycleSignatureBytes(signature, 'detached signature'),
-  }));
+    }));
+}
+
+async function resolveLifecycleOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
+  const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
+  const matches = [];
+  for (const signature of signatures) {
+    if (!(signature?.bytes instanceof Uint8Array)) continue;
+    if (toHex(await digestSha256(signature.bytes)) === parsedProof.stampedDigestHex) {
+      matches.push(signature);
+    }
+  }
+  if (matches.length === 0) {
+    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} does not match any detached signature`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} matches multiple detached signatures`);
+  }
+  return {
+    targetRef: matches[0].id,
+    stampedDigestHex: parsedProof.stampedDigestHex,
+  };
 }
 
 function verifyQsigOrThrow(options, signatureName) {
@@ -447,7 +468,7 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
       if (!(timestamp?.bytes instanceof Uint8Array) || timestamp.bytes.length === 0) {
         throw new Error(`Invalid timestamp file: ${timestamp?.name || 'unknown'}`);
       }
-      const resolved = await resolveOpenTimestampTarget({
+      const resolved = await resolveLifecycleOpenTimestampTarget({
         timestampBytes: timestamp.bytes,
         timestampName: timestamp.name,
         signatures: signaturePayloads,

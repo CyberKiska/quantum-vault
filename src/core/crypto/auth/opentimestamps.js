@@ -54,6 +54,10 @@ export function decodeBundleSignatureBytes(signature) {
   return base64ToBytes(signature.signature);
 }
 
+// This helper supports legacy/reporting call sites that may already carry a
+// trusted cached SHA-256 for detached-signature bytes. Successor lifecycle
+// attachment code must resolve OTS targets from exact `signature.bytes`
+// directly and must not rely on `otsStampedDigestHex` shortcuts.
 export async function resolveOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
   const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
   const uniqueSignatures = [];

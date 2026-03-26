@@ -28,6 +28,7 @@ import {
   parseTransitionRecordBytes,
   parseSourceEvidenceBytes,
   parseLifecycleBundleBytes,
+  verifyLifecycleSignatureEntry,
 } from './lifecycle/artifacts.js';
 import {
   buildInitialManifestBundle,
@@ -261,6 +262,43 @@ async function buildLifecycleSampleArtifacts() {
     sourceEvidence,
     lifecycleBundle,
   };
+}
+
+function buildBundledMlDsaPublicKey(id, publicKeyBytes, { suite = 'mldsa-87' } = {}) {
+  return {
+    id,
+    kty: 'ml-dsa-public-key',
+    suite,
+    encoding: 'base64',
+    value: bytesToBase64(publicKeyBytes),
+  };
+}
+
+function buildLifecycleQsigEntry({
+  id,
+  signatureFamily,
+  targetType,
+  targetRef,
+  targetDigest,
+  qsigBytes,
+  publicKeyRef = '',
+  suite = 'mldsa-87',
+}) {
+  const entry = {
+    id,
+    signatureFamily,
+    format: 'qsig',
+    suite,
+    targetType,
+    targetRef,
+    targetDigest: { alg: 'SHA3-512', value: targetDigest },
+    signatureEncoding: 'base64',
+    signature: bytesToBase64(qsigBytes),
+  };
+  if (publicKeyRef) {
+    entry.publicKeyRef = publicKeyRef;
+  }
+  return entry;
 }
 
 const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
@@ -1886,6 +1924,290 @@ function buildCases() {
         await expectFailure(
           () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
           'lifecycle bundle unexpectedly accepted OTS evidence for different detached-signature bytes'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle accepts valid maintenance qsig entries and exact OTS linkage over transition-record bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const otsBytes = await buildOtsFixture(qsig.qsigBytes, { completeProof: true });
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-maint', qsig.signerPublicKey),
+        ];
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-maint',
+          }),
+        ];
+        mutated.attachments.timestamps = [
+          {
+            id: 'ots-maint-1',
+            type: 'opentimestamps',
+            targetRef: 'maint-sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(otsBytes),
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        assert(parsed.lifecycleBundle.attachments.maintenanceSignatures.length === 1, 'expected one maintenance signature');
+        assert(parsed.lifecycleBundle.attachments.timestamps.length === 1, 'expected one maintenance OTS attachment');
+        const verification = await verifyLifecycleSignatureEntry(
+          parsed.lifecycleBundle,
+          parsed.lifecycleBundle.attachments.maintenanceSignatures[0]
+        );
+        assert(verification.ok === true, 'expected maintenance signature verification to succeed');
+        assert(
+          verification.targetRef === `transition:sha3-512:${canonicalTransition.digest.value}`,
+          'maintenance verification resolved an unexpected targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects invalid maintenance family mappings',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted an invalid maintenance signatureFamily / targetType mapping'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects maintenance targetRef mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${'f'.repeat(128)}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a mismatched maintenance targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects maintenance targetDigest mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: '0'.repeat(128),
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a mismatched maintenance targetDigest'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects non-verifying maintenance publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const wrongKey = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-maint', wrongKey.signerPublicKey),
+        ];
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-maint',
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a non-verifying maintenance publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle accepts valid source-evidence qsig entries over source-evidence bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-source', qsig.signerPublicKey),
+        ];
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-source',
+          }),
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        assert(parsed.lifecycleBundle.attachments.sourceEvidenceSignatures.length === 1, 'expected one source-evidence signature');
+        const verification = await verifyLifecycleSignatureEntry(
+          parsed.lifecycleBundle,
+          parsed.lifecycleBundle.attachments.sourceEvidenceSignatures[0]
+        );
+        assert(verification.ok === true, 'expected source-evidence signature verification to succeed');
+        assert(
+          verification.targetRef === `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+          'source-evidence verification resolved an unexpected targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects invalid source-evidence family mappings',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted an invalid source-evidence signatureFamily / targetType mapping'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects source-evidence targetRef mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${'f'.repeat(128)}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a mismatched source-evidence targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects source-evidence targetDigest mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: '0'.repeat(128),
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a mismatched source-evidence targetDigest'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects non-verifying source-evidence publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const wrongKey = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-source', wrongKey.signerPublicKey),
+        ];
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-source',
+          }),
+        ];
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a non-verifying source-evidence publicKeyRef'
         );
       },
     },

@@ -785,8 +785,11 @@ function normalizeLifecycleBundleStructure(value) {
 
 function findUniquePublicKeyById(publicKeys, id) {
   const matches = publicKeys.filter((entry) => entry.id === id);
-  if (matches.length !== 1) {
+  if (matches.length === 0) {
     throw new Error(`attachments publicKeyRef is unknown: ${id}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`attachments publicKeyRef is ambiguous: ${id}`);
   }
   return matches[0];
 }
