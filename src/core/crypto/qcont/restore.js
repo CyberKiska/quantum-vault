@@ -415,6 +415,9 @@ function buildLifecycleVerificationCounts(results) {
     userPinnedValidTotal: 0,
     validArchiveApproval: 0,
     validArchiveApprovalStrongPq: 0,
+    archiveApprovalPinnedValidTotal: 0,
+    archiveApprovalBundlePinnedValidTotal: 0,
+    archiveApprovalUserPinnedValidTotal: 0,
     validMaintenance: 0,
     validSourceEvidence: 0,
   };
@@ -458,6 +461,9 @@ function buildLifecycleVerificationCounts(results) {
     if (entry.family === 'archive-approval') {
       counts.validArchiveApproval += 1;
       if (entry.strongPq) counts.validArchiveApprovalStrongPq += 1;
+      if (entry.signerPinned) counts.archiveApprovalPinnedValidTotal += 1;
+      if (entry.bundlePinned) counts.archiveApprovalBundlePinnedValidTotal += 1;
+      if (entry.userPinned) counts.archiveApprovalUserPinnedValidTotal += 1;
     } else if (entry.family === 'maintenance') {
       counts.validMaintenance += 1;
     } else if (entry.family === 'source-evidence') {
@@ -837,13 +843,12 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
           targetType: result.targetType,
         })),
       status: {
-        signatureVerified: counts.validArchiveApproval > 0,
         archiveApprovalSignatureVerified: counts.validArchiveApproval > 0,
         strongPqSignatureVerified: counts.validArchiveApprovalStrongPq > 0,
-        signerPinned: counts.pinnedValidTotal > 0,
-        signerIdentityPinned: counts.pinnedValidTotal > 0,
-        bundlePinned: counts.bundlePinnedValidTotal > 0,
-        userPinned: counts.userPinnedValidTotal > 0,
+        signerPinned: counts.archiveApprovalPinnedValidTotal > 0,
+        signerIdentityPinned: counts.archiveApprovalPinnedValidTotal > 0,
+        bundlePinned: counts.archiveApprovalBundlePinnedValidTotal > 0,
+        userPinned: counts.archiveApprovalUserPinnedValidTotal > 0,
         userPinProvided,
         maintenanceSignatureVerified: counts.validMaintenance > 0,
         sourceEvidenceSignatureVerified: counts.validSourceEvidence > 0,
@@ -1043,6 +1048,8 @@ async function evaluateCandidateAuthenticity(candidate, verificationOptions = {}
   };
 }
 
+// Legacy manifest/bundle restore heuristic only.
+// Successor QVqcont-7 restore must stay non-heuristic.
 function preferredBundleScore(item) {
   const verificationCounts = item?.authenticity?.verification?.counts || {};
   const attachments = item?.candidate?.bundle?.attachments || {};
@@ -1823,7 +1830,6 @@ async function restoreSuccessorFromShards(shards, options = {}) {
       status: {
         integrityVerified: true,
         archiveApprovalSignatureVerified: successorStatus.archiveApprovalSignatureVerified,
-        signatureVerified: successorStatus.archiveApprovalSignatureVerified,
         strongPqSignatureVerified: successorStatus.strongPqSignatureVerified,
         signerPinned: successorStatus.signerPinned,
         signerIdentityPinned: successorStatus.signerIdentityPinned,

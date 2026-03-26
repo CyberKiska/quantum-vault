@@ -634,7 +634,27 @@ async function restoreLiteShards() {
                     logWarning(`${signatureStatus.slice(0, -1)}; no signer pin is active.`, { isLiteMode: true });
                 }
             }
-            log(`Signature counts: valid=${verification.counts.validTotal}, strong-pq=${verification.counts.validStrongPq}, pinned=${verification.counts.pinnedValidTotal}, bundle-pinned=${verification.counts.bundlePinnedValidTotal}, user-pinned=${verification.counts.userPinnedValidTotal}`, { isLiteMode: true });
+            const counts = verification.counts || {};
+            const hasSuccessorCounts = (
+                Object.prototype.hasOwnProperty.call(counts, 'validArchiveApproval') ||
+                Object.prototype.hasOwnProperty.call(counts, 'validMaintenance') ||
+                Object.prototype.hasOwnProperty.call(counts, 'validSourceEvidence')
+            );
+            if (hasSuccessorCounts) {
+                log(
+                    `Archive-approval counts: valid=${counts.validArchiveApproval}, strong-pq=${counts.validArchiveApprovalStrongPq}, pinned=${counts.archiveApprovalPinnedValidTotal}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal}`,
+                    { isLiteMode: true }
+                );
+                log(
+                    `Detached signature totals across all families: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}, maintenance=${counts.validMaintenance}, source-evidence=${counts.validSourceEvidence}`,
+                    { isLiteMode: true }
+                );
+            } else {
+                log(
+                    `Signature counts: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}`,
+                    { isLiteMode: true }
+                );
+            }
             for (const item of verification.results || []) {
                 if (item.ok) {
                     logSuccess(`Signature OK: ${formatSignatureResultSummary(item)}`, { isLiteMode: true });

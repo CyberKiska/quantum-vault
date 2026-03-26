@@ -51,7 +51,21 @@ function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   if (!verification) return;
 
   const counts = verification.counts;
-  onLog(`Signature counts: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}.`);
+  const hasSuccessorCounts = (
+    Object.prototype.hasOwnProperty.call(counts, 'validArchiveApproval') ||
+    Object.prototype.hasOwnProperty.call(counts, 'validMaintenance') ||
+    Object.prototype.hasOwnProperty.call(counts, 'validSourceEvidence')
+  );
+  if (hasSuccessorCounts) {
+    onLog(
+      `Archive-approval counts: valid=${counts.validArchiveApproval}, strong-pq=${counts.validArchiveApprovalStrongPq}, pinned=${counts.archiveApprovalPinnedValidTotal}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal}.`
+    );
+    onLog(
+      `Detached signature totals across all families: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}, maintenance=${counts.validMaintenance}, source-evidence=${counts.validSourceEvidence}.`
+    );
+  } else {
+    onLog(`Signature counts: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}.`);
+  }
   for (const warning of verification.warnings || []) {
     onWarn(warning);
   }

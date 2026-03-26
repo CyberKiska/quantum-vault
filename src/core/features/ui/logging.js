@@ -117,9 +117,13 @@ export function formatSignatureResultSummary(result) {
 }
 
 export function formatAuthenticityStatusMessage(status = {}) {
-    if (status?.signatureVerified !== true) {
+    const signatureVerified = status?.archiveApprovalSignatureVerified ?? status?.signatureVerified;
+    if (signatureVerified !== true) {
         return '';
     }
+    const label = Object.prototype.hasOwnProperty.call(status, 'archiveApprovalSignatureVerified')
+        ? 'Archive-approval signatures verified'
+        : 'Signatures verified';
     const details = [];
     if (status?.strongPqSignatureVerified === true) {
         details.push('strong PQ present');
@@ -134,8 +138,8 @@ export function formatAuthenticityStatusMessage(status = {}) {
         details.push('signer pin active');
     }
     return details.length > 0
-        ? `Signatures verified (${details.join(', ')}).`
-        : 'Signatures verified.';
+        ? `${label} (${details.join(', ')}).`
+        : `${label}.`;
 }
 
 // Log hash with appropriate formatting based on mode

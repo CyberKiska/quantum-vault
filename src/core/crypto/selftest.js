@@ -2764,8 +2764,45 @@ function buildCases() {
         assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
         assert(restored.authenticity.verification.counts.validArchiveApproval === 1, 'only one archive-approval signature should count toward archive policy');
+        assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 1, 'only archive-approval pinning should drive archive trust status');
         assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
         assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
+        assert(restored.authenticity.verification.counts.pinnedValidTotal === 3, 'all verified detached signature families should still contribute to aggregate pinning counts');
+      },
+    },
+    {
+      name: 'successor restore does not let maintenance or source-evidence pinning imply archive-approval pinning',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-pinning-family-separation'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'integrity-only',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'maintenance',
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
+        assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === false, 'maintenance/source-evidence must not imply archive-approval verification');
+        assert(restored.authenticity.status.signerPinned === false, 'maintenance/source-evidence must not imply archive-approval signer pinning');
+        assert(restored.authenticity.status.bundlePinned === false, 'maintenance/source-evidence must not imply archive-approval bundle pinning');
+        assert(restored.authenticity.status.userPinned === false, 'maintenance/source-evidence must not imply archive-approval user pinning');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
+        assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
+        assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected OTS linkage reporting');
+        assert(restored.authenticity.status.policySatisfied === true, 'integrity-only policy should remain satisfied');
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'archive policy counting must remain archive-approval only');
+        assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 0, 'archive-approval pinning count must remain zero without archive-approval signatures');
+        assert(restored.authenticity.verification.counts.archiveApprovalBundlePinnedValidTotal === 0, 'archive-approval bundle pinning count must remain zero without archive-approval signatures');
+        assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
+        assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
+        assert(restored.authenticity.verification.counts.pinnedValidTotal === 2, 'aggregate detached-signature pinning may still reflect non-archive families');
       },
     },
     {
