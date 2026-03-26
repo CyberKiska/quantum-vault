@@ -3,7 +3,8 @@ import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fr
 import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
-import { attachLifecycleBundleToShards } from './qcont/lifecycle-attach.js';
+import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
+import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
 import { buildLifecycleQcontShards, parseLifecycleShard, reshareSameState, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
@@ -3233,6 +3234,50 @@ function buildCases() {
           () => rewriteLifecycleBundleSubset(sample.parsed, canonicalizeJsonToBytes(bundle)),
           'successor lifecycle bundle unexpectedly accepted archive-approval signatures created over lifecycle-bundle bytes'
         );
+      },
+    },
+    {
+      name: 'lifecycle Shamir combine uses copied zeroized share buffers (restore/reshare shared helper)',
+      fn: async () => {
+        const { splitSecret } = await import('./splitting/sss.js');
+        const secret = new Uint8Array(32);
+        secret.fill(0x37);
+        const shares = await splitSecret(secret, 5, 4);
+        const sortedShares = [0, 1, 2, 3].map((i) => ({ shardIndex: i, share: shares[i] }));
+        const before0 = shares[0].slice();
+        const before1 = shares[1].slice();
+        const { secret: recovered, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, 4);
+        assert(timingSafeEqual(shares[0], before0), 'original share 0 must not be mutated');
+        assert(timingSafeEqual(shares[1], before1), 'original share 1 must not be mutated');
+        assert(shareCopiesCleared === true, 'temporary share copies should be zeroized');
+        assert(timingSafeEqual(recovered, secret), 'reconstructed secret must match');
+      },
+    },
+    {
+      name: 'lifecycle attach merge rejects duplicate attachment id with differing content',
+      fn: async () => {
+        const a = {
+          id: 'key-a',
+          kty: 'ml-dsa-public-key',
+          suite: 'mldsa-87',
+          encoding: 'base64',
+          value: 'YQ==',
+        };
+        const b = {
+          id: 'key-a',
+          kty: 'ml-dsa-public-key',
+          suite: 'mldsa-87',
+          encoding: 'base64',
+          value: 'Yg==',
+        };
+        await expectFailure(
+          async () => {
+            mergeLifecycleAttachmentEntriesById([a], [b]);
+          },
+          'attach merge unexpectedly accepted conflicting duplicate ids'
+        );
+        const merged = mergeLifecycleAttachmentEntriesById([a], [cloneJson(a)]);
+        assert(merged.length === 1, 'duplicate identical entries should collapse to one row');
       },
     },
     {

@@ -1,3 +1,14 @@
+/**
+ * QCONT restore: successor lifecycle shards (QVqcont-7) and legacy manifest/bundle shards.
+ *
+ * Successor restore MUST NOT apply manifest-era bundle ranking heuristics. Ambiguous cohort or
+ * embedded lifecycle-bundle selection fails closed unless the operator supplies explicit
+ * lifecycle-bundle bytes, archive-state bytes, or selectedLifecycleBundleDigestHex
+ * (see resolveSuccessorArchiveContext).
+ *
+ * Legacy manifest restore may use score-based preference only when candidates share the same
+ * embedded manifest digest and identical manifest bytes (see selectPreferredSatisfyingCandidate).
+ */
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { hashBytes } from '../index.js';
 import { asciiBytes, base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
@@ -26,6 +37,8 @@ import {
 } from '../lifecycle/artifacts.js';
 import { validateContainerPolicyMetadata } from '../policy.js';
 import { resolveErasureRuntime } from '../erasure-runtime.js';
+import { mergeLifecycleShardIntoCohortGroups, normalizeHexString } from './lifecycle-cohort-shared.js';
+import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
 
 const QCONT_MAGIC = 'QVC1';
 const MAGIC_QSIG = asciiBytes('PQSG');
@@ -47,10 +60,6 @@ function ensureEqual(actual, expected, field) {
   if (actual !== expected) {
     throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
   }
-}
-
-function normalizeHexString(value) {
-  return String(value || '').trim().toLowerCase();
 }
 
 function bytesMatch(a, b) {
@@ -284,65 +293,10 @@ function verifySuccessorQsigWithPinnedKeys({
 function collectSuccessorCandidateCohorts(shards) {
   const byIdentity = new Map();
   for (const shard of shards) {
-    const archiveId = normalizeHexString(shard?.archiveState?.archiveId || shard?.metaJSON?.archiveId);
-    const stateId = normalizeHexString(shard?.stateId || shard?.metaJSON?.stateId);
-    const cohortId = normalizeHexString(shard?.cohortId || shard?.metaJSON?.cohortId);
-    if (!archiveId || !stateId || !cohortId) {
-      throw new Error('Successor shard is missing archive/state/cohort identity');
-    }
-    const key = `${archiveId}:${stateId}:${cohortId}`;
-    if (!byIdentity.has(key)) {
-      byIdentity.set(key, {
-        key,
-        archiveId,
-        stateId,
-        cohortId,
-        archiveStateBytes: shard.archiveStateBytes,
-        archiveStateDigestHex: normalizeHexString(shard.archiveStateDigestHex),
-        archiveState: shard.archiveState,
-        cohortBindingBytes: shard.cohortBindingBytes,
-        cohortBindingDigestHex: normalizeHexString(shard.cohortBindingDigestHex),
-        cohortBinding: shard.cohortBinding,
-        embeddedLifecycleBundles: new Map(),
-        shards: [],
-      });
-    }
-    const entry = byIdentity.get(key);
-    if (!bytesEqual(entry.archiveStateBytes, shard.archiveStateBytes)) {
-      throw new Error(`Exact archive-state byte mismatch inside candidate set ${key}`);
-    }
-    if (!bytesEqual(entry.cohortBindingBytes, shard.cohortBindingBytes)) {
-      throw new Error(`Exact cohort-binding byte mismatch inside candidate set ${key}`);
-    }
-    if (entry.archiveStateDigestHex !== normalizeHexString(shard.archiveStateDigestHex)) {
-      throw new Error(`archive-state digest mismatch inside candidate set ${key}`);
-    }
-    if (entry.cohortBindingDigestHex !== normalizeHexString(shard.cohortBindingDigestHex)) {
-      throw new Error(`cohort-binding digest mismatch inside candidate set ${key}`);
-    }
-    if (archiveId !== normalizeHexString(shard?.metaJSON?.archiveId || shard?.archiveState?.archiveId)) {
-      throw new Error(`Mixed archiveId values detected inside candidate set ${key}`);
-    }
-    if (stateId !== normalizeHexString(shard?.metaJSON?.stateId || shard?.stateId)) {
-      throw new Error(`Mixed stateId values detected inside candidate set ${key}`);
-    }
-    if (cohortId !== normalizeHexString(shard?.metaJSON?.cohortId || shard?.cohortId)) {
-      throw new Error(`Mixed cohortId values detected inside candidate set ${key}`);
-    }
-
-    const lifecycleBundleDigestHex = normalizeHexString(shard.lifecycleBundleDigestHex);
-    if (!entry.embeddedLifecycleBundles.has(lifecycleBundleDigestHex)) {
-      entry.embeddedLifecycleBundles.set(lifecycleBundleDigestHex, {
-        digestHex: lifecycleBundleDigestHex,
-        bytes: shard.lifecycleBundleBytes,
-        bundle: shard.lifecycleBundle,
-      });
-    }
-    const bundleEntry = entry.embeddedLifecycleBundles.get(lifecycleBundleDigestHex);
-    if (!bytesEqual(bundleEntry.bytes, shard.lifecycleBundleBytes)) {
-      throw new Error(`Lifecycle-bundle bytes mismatch inside candidate set ${key} for digest ${lifecycleBundleDigestHex}`);
-    }
-    entry.shards.push(shard);
+    mergeLifecycleShardIntoCohortGroups(byIdentity, shard, {
+      groupLabel: 'candidate set',
+      missingIdentityMessage: 'Successor shard is missing archive/state/cohort identity',
+    });
   }
   return [...byIdentity.values()];
 }
@@ -854,7 +808,13 @@ async function resolveLifecycleOpenTimestampTarget({ timestampBytes, timestampNa
   };
 }
 
-function dedupeLifecycleTimestampEvidence(entries) {
+/**
+ * Presentation-only: when multiple OTS evidence rows describe the same stamped digest
+ * (or share a fallback key), keep a single row for UI/reporting. Verification and
+ * archive policy are computed before this step from full signature results; this
+ * function MUST NOT influence policy outcomes.
+ */
+function dedupePresentationOnlyTimestampEvidence(entries) {
   const bestByDigest = new Map();
   for (const entry of entries) {
     const key = String(entry?.stampedDigestHex || entry?.targetRef || entry?.id || '').trim();
@@ -941,7 +901,7 @@ async function inspectSuccessorTimestampEvidence({
     };
   }));
 
-  return dedupeLifecycleTimestampEvidence([...embeddedEvidence, ...externalEvidence]);
+  return dedupePresentationOnlyTimestampEvidence([...embeddedEvidence, ...externalEvidence]);
 }
 
 async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verificationOptions = {}) {
@@ -1272,8 +1232,11 @@ async function evaluateCandidateAuthenticity(candidate, verificationOptions = {}
   };
 }
 
-// Legacy manifest/bundle restore heuristic only.
-// Successor QVqcont-7 restore must stay non-heuristic.
+/**
+ * Legacy manifest/bundle restore only: rank manifest-side bundle variants that already
+ * share the same embedded manifest digest and identical manifest bytes. Never used for
+ * successor lifecycle cohort or lifecycle-bundle selection (see resolveSuccessorArchiveContext).
+ */
 function preferredBundleScore(item) {
   const verificationCounts = item?.authenticity?.verification?.counts || {};
   const attachments = item?.candidate?.bundle?.attachments || {};
@@ -1294,6 +1257,12 @@ function compareScoreDesc(aScore, bScore) {
   return 0;
 }
 
+/**
+ * Legacy-only tie-break: pick one policy-satisfying manifest cohort when candidates are
+ * manifest-equivalent (same manifestDigestHex + manifest bytes) and scores differ.
+ * Returns null when ambiguous (ties), forcing the caller to fail closed without a winner.
+ * Not used for successor lifecycle restore.
+ */
 function selectPreferredSatisfyingCandidate(satisfying) {
   if (!Array.isArray(satisfying) || satisfying.length <= 1) return null;
   const firstManifestDigest = satisfying[0]?.candidate?.manifestDigestHex;
@@ -1893,9 +1862,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   }
 
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-  const selectedShares = sortedShares.slice(0, t).map((item) => item.share);
-  const { combineShares } = await import('../splitting/sss.js');
-  const privKey = await combineShares(selectedShares);
+  const { secret: privKey } = await combineSharesFromCopiedSlices(sortedShares, t);
 
   const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
   const cipherChunks = [];
@@ -2324,9 +2291,7 @@ export async function restoreFromShards(shards, options = {}) {
   }
 
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-  const selectedShares = sortedShares.slice(0, t).map((item) => item.share);
-  const { combineShares } = await import('../splitting/sss.js');
-  const privKey = await combineShares(selectedShares);
+  const { secret: privKey } = await combineSharesFromCopiedSlices(sortedShares, t);
 
   const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
   const cipherChunks = [];

@@ -24,6 +24,8 @@ import {
   parseLifecycleBundleBytes,
   REED_SOLOMON_CODEC_ID,
 } from '../lifecycle/artifacts.js';
+import { mergeLifecycleShardIntoCohortGroups, normalizeHexString } from './lifecycle-cohort-shared.js';
+import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
 
 export const LIFECYCLE_QCONT_MAGIC = 'QVC1';
 export const LIFECYCLE_QCONT_FORMAT_VERSION = 'QVqcont-7';
@@ -99,10 +101,6 @@ function ensureEqual(actual, expected, field) {
   if (actual !== expected) {
     throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
   }
-}
-
-function normalizeHexString(value) {
-  return String(value || '').trim().toLowerCase();
 }
 
 function isLifecycleParsedShard(shard) {
@@ -215,65 +213,10 @@ function assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON) {
 function collectSinglePredecessorCohort(preparedShards) {
   const byIdentity = new Map();
   for (const shard of preparedShards) {
-    const archiveId = normalizeHexString(shard?.archiveState?.archiveId || shard?.metaJSON?.archiveId);
-    const stateId = normalizeHexString(shard?.stateId || shard?.metaJSON?.stateId);
-    const cohortId = normalizeHexString(shard?.cohortId || shard?.metaJSON?.cohortId);
-    if (!archiveId || !stateId || !cohortId) {
-      throw new Error('Predecessor shard is missing archive/state/cohort identity');
-    }
-    const key = `${archiveId}:${stateId}:${cohortId}`;
-    if (!byIdentity.has(key)) {
-      byIdentity.set(key, {
-        key,
-        archiveId,
-        stateId,
-        cohortId,
-        archiveStateBytes: shard.archiveStateBytes,
-        archiveStateDigestHex: normalizeHexString(shard.archiveStateDigestHex),
-        archiveState: shard.archiveState,
-        cohortBindingBytes: shard.cohortBindingBytes,
-        cohortBindingDigestHex: normalizeHexString(shard.cohortBindingDigestHex),
-        cohortBinding: shard.cohortBinding,
-        embeddedLifecycleBundles: new Map(),
-        shards: [],
-      });
-    }
-    const entry = byIdentity.get(key);
-    if (!bytesEqual(entry.archiveStateBytes, shard.archiveStateBytes)) {
-      throw new Error(`Exact archive-state byte mismatch inside predecessor cohort ${key}`);
-    }
-    if (!bytesEqual(entry.cohortBindingBytes, shard.cohortBindingBytes)) {
-      throw new Error(`Exact cohort-binding byte mismatch inside predecessor cohort ${key}`);
-    }
-    if (entry.archiveStateDigestHex !== normalizeHexString(shard.archiveStateDigestHex)) {
-      throw new Error(`archive-state digest mismatch inside predecessor cohort ${key}`);
-    }
-    if (entry.cohortBindingDigestHex !== normalizeHexString(shard.cohortBindingDigestHex)) {
-      throw new Error(`cohort-binding digest mismatch inside predecessor cohort ${key}`);
-    }
-    if (archiveId !== normalizeHexString(shard?.metaJSON?.archiveId || shard?.archiveState?.archiveId)) {
-      throw new Error(`Mixed archiveId values detected inside predecessor cohort ${key}`);
-    }
-    if (stateId !== normalizeHexString(shard?.metaJSON?.stateId || shard?.stateId)) {
-      throw new Error(`Mixed stateId values detected inside predecessor cohort ${key}`);
-    }
-    if (cohortId !== normalizeHexString(shard?.metaJSON?.cohortId || shard?.cohortId)) {
-      throw new Error(`Mixed cohortId values detected inside predecessor cohort ${key}`);
-    }
-
-    const lifecycleBundleDigestHex = normalizeHexString(shard.lifecycleBundleDigestHex);
-    if (!entry.embeddedLifecycleBundles.has(lifecycleBundleDigestHex)) {
-      entry.embeddedLifecycleBundles.set(lifecycleBundleDigestHex, {
-        digestHex: lifecycleBundleDigestHex,
-        bytes: shard.lifecycleBundleBytes,
-        bundle: shard.lifecycleBundle,
-      });
-    }
-    const bundleEntry = entry.embeddedLifecycleBundles.get(lifecycleBundleDigestHex);
-    if (!bytesEqual(bundleEntry.bytes, shard.lifecycleBundleBytes)) {
-      throw new Error(`Lifecycle-bundle bytes mismatch inside predecessor cohort ${key} for digest ${lifecycleBundleDigestHex}`);
-    }
-    entry.shards.push(shard);
+    mergeLifecycleShardIntoCohortGroups(byIdentity, shard, {
+      groupLabel: 'predecessor cohort',
+      missingIdentityMessage: 'Predecessor shard is missing archive/state/cohort identity',
+    });
   }
 
   if (byIdentity.size !== 1) {
@@ -512,18 +455,7 @@ async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog
   }
 
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-  const selectedShareCopies = sortedShares.slice(0, t).map((item) => item.share.slice());
-  let shareCopiesCleared = false;
-  let privKey = null;
-  try {
-    const { combineShares } = await import('../splitting/sss.js');
-    privKey = await combineShares(selectedShareCopies);
-  } finally {
-    for (const share of selectedShareCopies) {
-      share.fill(0);
-    }
-    shareCopiesCleared = selectedShareCopies.every((share) => share.every((value) => value === 0));
-  }
+  const { secret: privKey, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, t);
 
   const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
   const cipherChunks = [];

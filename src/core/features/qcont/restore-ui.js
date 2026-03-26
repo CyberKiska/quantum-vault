@@ -173,6 +173,7 @@ export function initQcontRestoreUI() {
     }
 
     setButtonsDisabled(true);
+    let recoveredPrivKey = null;
     try {
       const allFiles = [...files];
       const verificationOptions = await readVerificationOptionsFromDom({
@@ -212,6 +213,7 @@ export function initQcontRestoreUI() {
       logVerificationSummary(result.authenticity, log, logWarning, logSuccess);
 
       const { qencBytes, privKey, containerId, containerHash, privateKeyHash, recoveredQencHash, recoveredPrivHash, qencOk, qkeyOk } = result;
+      recoveredPrivKey = privKey instanceof Uint8Array ? privKey : null;
       log(`Recovered .qenc SHA3-512=${recoveredQencHash} (expected ${containerHash})`);
       log(`Recovered .qkey SHA3-512=${recoveredPrivHash}${privateKeyHash ? ` (expected ${privateKeyHash})` : ''}`);
 
@@ -232,6 +234,10 @@ export function initQcontRestoreUI() {
     } catch (error) {
       logError(error);
     } finally {
+      // Best-effort only: JS runtimes do not guarantee overwriting secrets in memory.
+      if (recoveredPrivKey instanceof Uint8Array) {
+        recoveredPrivKey.fill(0);
+      }
       setButtonsDisabled(false);
     }
   });

@@ -124,13 +124,34 @@ function buildLifecycleStellarSignerAttachment(signer) {
   };
 }
 
-function mergeById(existingValues, nextValues) {
+function stableStringifyForAttachmentMerge(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringifyForAttachmentMerge).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringifyForAttachmentMerge(value[k])}`).join(',')}}`;
+}
+
+/**
+ * Merge lifecycle bundle attachment rows by `id`. Duplicate ids with identical content
+ * are skipped; duplicate ids with differing content fail closed.
+ */
+export function mergeLifecycleAttachmentEntriesById(existingValues, nextValues) {
   const out = [...existingValues];
-  const seen = new Set(existingValues.map((item) => item.id));
+  const byId = new Map(out.map((item) => [item.id, item]));
   for (const value of nextValues) {
-    if (seen.has(value.id)) continue;
+    if (byId.has(value.id)) {
+      const prev = byId.get(value.id);
+      if (stableStringifyForAttachmentMerge(prev) !== stableStringifyForAttachmentMerge(value)) {
+        throw new Error(`Lifecycle attachment merge conflict: duplicate id "${value.id}" with differing content`);
+      }
+      continue;
+    }
     out.push(value);
-    seen.add(value.id);
+    byId.set(value.id, value);
   }
   return out;
 }
@@ -450,8 +471,8 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
   const mergedBundle = {
     ...lifecycleBundle,
     attachments: {
-      publicKeys: mergeById(lifecycleBundle.attachments.publicKeys, importedPublicKeys),
-      archiveApprovalSignatures: mergeById(
+      publicKeys: mergeLifecycleAttachmentEntriesById(lifecycleBundle.attachments.publicKeys, importedPublicKeys),
+      archiveApprovalSignatures: mergeLifecycleAttachmentEntriesById(
         lifecycleBundle.attachments.archiveApprovalSignatures,
         importedArchiveApprovalSignatures
       ),
@@ -485,7 +506,7 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
         proof: bytesToBase64(timestamp.bytes),
       };
     }));
-    mergedBundle.attachments.timestamps = mergeById(mergedBundle.attachments.timestamps, importedTimestamps);
+    mergedBundle.attachments.timestamps = mergeLifecycleAttachmentEntriesById(mergedBundle.attachments.timestamps, importedTimestamps);
   }
 
   const canonicalBundle = await canonicalizeLifecycleBundle(mergedBundle);
