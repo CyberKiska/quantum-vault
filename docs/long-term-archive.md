@@ -46,7 +46,7 @@ Conformance and interpretation:
 Internal current-state grounding:
 
 - `docs/security-model.md`, `docs/trust-and-policy.md`, `docs/format-spec.md`, `docs/glossary.md`, and `README.md` for current implemented boundaries, terms, and artifact semantics
-- `src/core/crypto/qcont/restore.js`, `src/core/crypto/auth/opentimestamps.js`, `src/core/crypto/manifest/archive-manifest.js`, and `src/core/crypto/manifest/manifest-bundle.js` for the current evidence, restore, and archive-binding capabilities actually present in the repo
+- `src/core/crypto/qcont/restore.js`, `src/core/crypto/qcont/lifecycle-shard.js`, `src/core/crypto/lifecycle/artifacts.js`, `src/core/crypto/auth/opentimestamps.js`, `src/core/crypto/manifest/archive-manifest.js`, and `src/core/crypto/manifest/manifest-bundle.js` for the current evidence, restore, successor lifecycle, and archive-binding capabilities actually present in the repo
 
 External references already used elsewhere in the repository:
 
@@ -78,6 +78,12 @@ Not yet first-class in the current implementation:
 - repository or custodian governance objects
 - complete representation-information packaging or archival decoder distribution
 
+Current release status:
+
+- the shipped browser build/export flow still emits the legacy manifest/bundle shard family
+- the successor lifecycle family is implemented for attach, restore, and same-state resharing, and it is the target replacement track as the project phases legacy behavior out
+- future-only work such as RFC 4998-style renewal chains, state-changing continuity records, and governance objects remains explicitly deferred
+
 ## Future work and non-normative notes
 
 Statements explicitly labeled as target or recommended direction are non-normative.
@@ -95,7 +101,8 @@ This document applies to the current Quantum Vault archival surface:
 
 - `.qenc` containers
 - `.qcont` shard cohorts
-- canonical manifests and manifest bundles
+- canonical manifests and manifest bundles for the legacy track
+- archive-state descriptors, cohort bindings, lifecycle bundles, transition records, and source-evidence objects for the successor lifecycle track
 - detached signatures and signer-identity attachments
 - optional `.ots` timestamp evidence
 
@@ -135,7 +142,7 @@ Long-term archival evaluation must keep the following objectives separate:
 | Topic | Current posture | Long-term implication |
 | --- | --- | --- |
 | Confidentiality | Current design uses ML-KEM-1024 plus AES-256-GCM and key commitment | Strong current baseline, but future migration still needs crypto-agility and rewrap strategy |
-| Authenticity | Current system supports detached signatures over canonical manifest bytes | Good current provenance layer, but long-term authority semantics remain intentionally narrow |
+| Authenticity | Current system supports detached signatures over the current signable archive description: canonical manifest bytes for legacy archives and canonical archive-state descriptor bytes for successor archive approval | Good current provenance layer, but long-term authority semantics remain intentionally narrow |
 | Time evidence | Current `.ots` handling links evidence to detached signature bytes and reports status | Useful evidence add-on, but not a full renewable time-proof architecture |
 | Evidence renewal | No first-class evidence-record chain today | Required for serious multi-decade archival confidence |
 | Archive identity continuity | Successor lifecycle artifacts carry stable `archiveId` within one archive family, while legacy/current bindings still include `qencHash`, `containerId`, and manifest-level digests | Rewrap and reencryption continuity still need explicit state-changing transition records and renewal logic |
@@ -216,7 +223,7 @@ Current supported evidence behavior is intentionally narrow:
 Current detached-signature timestamping rationale:
 
 - the current witness target is the detached signature artifact, commonly `.qsig` in the PQ-signature workflow, rather than mutable bundle bytes
-- this choice uses the current binding chain already present in the artifact family: detached signature bytes target canonical manifest bytes, canonical manifest bytes bind the current archive description, and the manifest's `qencHash`, `containerId`, and shard bindings tie that description back to the current `.qenc` or shard cohort
+- this choice uses the current binding chain already present in the artifact family: detached signature bytes target the current signable archive description (canonical manifest bytes in the legacy track; canonical archive-state descriptor bytes in the successor track), and that signed object binds the current `.qenc` and shard cohort through the current track's fixity and shard-binding anchors
 - this means current `.ots` evidence is evidence for a signed archive description and its current binding chain, not a standalone proof about plaintext semantics
 - this is a current design choice, not the only possible archival strategy; future evidence objects may bind broader archival anchors directly
 
@@ -283,8 +290,9 @@ A minimally sufficient long-term Quantum Vault package should contain the follow
 | Component | Current availability | Long-term role |
 | --- | --- | --- |
 | `.qenc` or a full restorable `.qcont` cohort | Current | Core protected object or recovery carrier |
-| Canonical manifest | Current | Stable signable archive description |
-| Manifest bundle | Current | Carries policy and attached authenticity material |
+| Signable archive description (`*.qvmanifest.json` legacy or archive-state descriptor successor) | Current | Stable signable archive description |
+| Mutable authenticity bundle (`*.extended.qvmanifest.json` legacy or `QV-Lifecycle-Bundle` v1 successor) | Current | Carries policy and attached authenticity material |
+| Cohort binding / transition context (successor) | Partial | Preserves successor cohort identity and same-state maintenance lineage |
 | Detached signature set | Current | Provenance and signer-verifiable fixity evidence |
 | Timestamp/evidence set | Partial | Time evidence and future renewal anchor |
 | Representation information package | Partial | Lets future verifiers understand the format and validation rules |
@@ -317,7 +325,7 @@ The following event taxonomy is the current recommended baseline:
 | Event | Current meaning | Continuity consequence |
 | --- | --- | --- |
 | Create / split | Initial archive creation and package generation | Starts the archival record |
-| Sign / attach | Adds provenance material without changing canonical manifest bytes | Preserves the same archive description |
+| Sign / attach | Adds provenance material without changing the current signable archive description (legacy manifest or successor archive-state descriptor) | Preserves the same archive description |
 | Renew evidence | Future event type for successor witness material | Should preserve archival continuity |
 | Re-sign | Future or external event adding successor signatures | Should preserve archival continuity if it binds to the same archival anchor |
 | Reshard | Repackages shard distribution without changing the protected archive bytes | Intended to preserve continuity |
@@ -359,8 +367,8 @@ Current anchor set:
 
 Current binding chain for detached-signature-based provenance:
 
-- detached signatures bind canonical manifest bytes
-- canonical manifest bytes bind the current archive description
+- detached signatures bind the current signable archive description: canonical manifest bytes in the legacy track, canonical archive-state descriptor bytes for successor archive approval, or other declared successor lifecycle targets for maintenance and source-evidence signatures
+- the signable archive description binds the current archive description
 - the current archive description binds the current `.qenc` and shard cohort through `qencHash`, `containerId`, sharding metadata, and shard-binding material
 - `.ots` evidence then witnesses the detached signature artifact linked to that signed archive description
 
@@ -402,7 +410,7 @@ Current recommended stewardship boundary:
 
 | Actor | Current recommended responsibility | Why it matters |
 | --- | --- | --- |
-| Repository or archive-maintenance function | Preserve the complete archival package needed for the chosen archive class, including protected object or shard cohort, canonical manifest, bundle, detached signatures, evidence, and supporting documentation | Without the full package, long-term interpretability and provenance degrade even if ciphertext survives |
+| Repository or archive-maintenance function | Preserve the complete archival package needed for the chosen archive class, including the protected object or shard cohort, the current track's signable archive description, mutable bundle, detached signatures, evidence, and supporting documentation | Without the full package, long-term interpretability and provenance degrade even if ciphertext survives |
 | Repository or archive-maintenance function | Preserve software, specification, and representation information sufficient for later verification and interpretation | Long-term archives fail if future operators cannot interpret algorithms, canonicalization, or validation procedure |
 | Repository or archive-maintenance function | Record stewardship events such as re-signing, evidence renewal, resharding, rewrap, reencryption, export, or custody transfer | Continuity across decades depends on event history, not just static bytes |
 | Custodian | Preserve assigned `.qcont` shards and related detached artifacts verbatim, without mutating bytes or silently rewriting metadata | Recoverability and fixity depend on byte-preserving custody |

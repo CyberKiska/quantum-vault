@@ -476,10 +476,11 @@ async function createLiteShards() {
         }
         log(`Archive policy: ${authPolicyLevel}`, { isLiteMode: true });
         if (authPolicyLevel === 'integrity-only') {
-            log(`Saved ${manifestName}. This archive can be restored without signatures, but provenance will remain inauthentic unless you sign and attach the manifest bundle.`, { isLiteMode: true });
+            log(`Saved ${manifestName}. This current Build flow emits the legacy manifest/bundle shard family, so restore can proceed without signatures but provenance remains inauthentic unless you sign and attach the manifest bundle.`, { isLiteMode: true });
         } else {
-            log(`Saved ${manifestName}. Sign this file, then use Attach in Pro mode to emit an .extended.qvmanifest.json bundle and optionally rewrite the shards.`, { isLiteMode: true });
+            log(`Saved ${manifestName}. This current Build flow emits the legacy manifest/bundle shard family. Sign this file, then use Attach in Pro mode to emit an .extended.qvmanifest.json bundle and optionally rewrite the shards.`, { isLiteMode: true });
         }
+        log('Successor lifecycle archives use archive-state approval and are supported by Attach and Restore when successor shards are supplied.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
     } catch (error) {

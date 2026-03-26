@@ -775,9 +775,121 @@ Exit criteria:
 
 - source-evidence provenance is supported as a separate semantic layer
 
-## 12. Later Phases — Deferred But Architecturally Constrained
+## 12. Phase 7 — Full UI/UX Migration, Documentation Closure, And Legacy Retirement
 
-### 12.1 Later Phase A — State-changing migration continuity
+Objective:
+
+- make the successor lifecycle available on the normal regular-user surface
+- move both Lite and Pro workflows to the successor artifact family and successor shard containers
+- finish documentation of the current implementation state
+- retire the legacy manifest/bundle system as an active product path rather than leaving it as the default user experience
+
+Depends on:
+
+- Phase 6
+- publication-readiness correction of the current documentation set
+- release-hardening verification for successor build, attach, restore, and same-state resharing flows
+
+Important scope note:
+
+- this phase is about product cutover, documentation closure, and legacy retirement
+- it MUST preserve the frozen successor contracts and fail-closed restore semantics already established in Phases 0 through 6
+- it MUST NOT reopen Phase 0 wire decisions or substitute a new architecture
+
+Lite-mode migration tasks:
+
+- make Lite create new archives as successor archives by default, including successor shard output rather than legacy manifest/bundle-first output
+- export the correct successor signable artifact for external archive approval in Lite workflows
+- update Lite labels, help text, and guided steps so they describe:
+  - archive-state descriptor signing
+  - lifecycle-bundle attachment
+  - successor restore verification states
+  - same-state resharing as maintenance rather than re-approval
+- keep any temporary legacy import or restore affordance explicitly labeled as compatibility-only until final removal
+- ensure Lite never hides required explicit selection when multiple lifecycle bundles or same-state cohorts are present
+
+Pro-mode migration tasks:
+
+- move Pro build/export flows to the successor archive-state / cohort-binding / lifecycle-bundle model and successor shard container outputs
+- expose successor-specific operator controls where the implementation already requires explicit operator choice, including:
+  - archive/state/cohort selection
+  - lifecycle-bundle selection when one cohort carries multiple embedded bundle digests
+  - same-state resharing controls and resulting transition records
+- update Pro restore and inspection output so archive approval, maintenance signatures, source evidence, pinning, and OTS remain visibly separate
+- keep any temporary legacy tooling behind an explicit compatibility boundary until final retirement
+
+Container and artifact cutover tasks:
+
+- make successor containers and successor artifact exports the default downloadable outputs in the regular-user UI
+- ensure the signable archive-state descriptor, lifecycle bundle, and successor shard set can be exported and re-imported without falling back to legacy manifest assumptions
+- remove generation of new legacy manifest/bundle artifacts from the default build path once successor UI cutover is complete
+- preserve explicit compatibility parsing only as long as the documented phase-out window remains open
+
+Documentation-closure tasks:
+
+- update the current public and maintainer-facing documentation so it fully describes the current shipped state rather than the previously frozen implementation intent
+- explicitly document, separately for Lite and Pro:
+  - which successor workflows are available to regular users
+  - which successor workflows remain advanced or operator-facing
+  - which legacy affordances, if any, still exist during the phase-out window
+- verify that the following are fully current and mutually consistent:
+  - `README.md`
+  - `docs/README.md`
+  - `docs/format-spec.md`
+  - `docs/WHITEPAPER.md`
+  - `docs/security-model.md`
+  - `docs/trust-and-policy.md`
+  - `docs/long-term-archive.md`
+  - in-product Lite and Pro help text
+  - interoperability/vector appendices
+- remove or relocate any remaining outdated text that still describes:
+  - legacy manifest signing as the default path for new archives
+  - successor `archiveId` or successor artifact support as future work if it is already implemented
+  - deferred features as current capability
+- document any still-deferred areas explicitly as deferred, including:
+  - state-changing lifecycle continuity
+  - future `rewrap` / wrapped-DEK work
+  - RFC 4998-style renewable evidence
+  - governance or trust-root objects beyond the current implementation
+
+Legacy phase-out tasks:
+
+- define and publish the point at which legacy becomes compatibility-only rather than a normal creation path
+- stop offering legacy archive creation in Lite and Pro once successor build/export is available on the regular-user surface
+- migrate any remaining legacy-first UI wording, screenshots, examples, and walkthroughs to successor-first wording before release
+- after the compatibility window closes, remove user-facing legacy build, attach, and restore flows from the product surface
+- move any remaining legacy-only material to historical or archival documentation if it is retained for reference
+- remove legacy code paths only after successor replacements are shipped, documented, and covered by release-gate tests
+
+Test and release-gate tasks:
+
+- add release-gate coverage for regular-user successor build/export paths in Lite and Pro
+- add UI/regression coverage proving the product surface no longer defaults to legacy manifest/bundle semantics for new archives
+- keep explicit fail-closed regression coverage for:
+  - mixed legacy/successor inputs
+  - mixed same-state cohorts
+  - ambiguous lifecycle-bundle selection
+  - separation of archive approval, maintenance, source evidence, and OTS
+- keep legacy regression coverage only for as long as legacy compatibility support remains in the shipped product
+
+Security review points:
+
+- verify the UI cutover does not reintroduce heuristic restore or bundle-selection behavior
+- verify Lite simplification does not collapse archive approval, maintenance, source evidence, pinning, and policy into one generic “trusted” state
+- verify legacy retirement does not leave undocumented fallback paths or misleading help text
+- verify publication and product wording do not imply normal regular-user availability until the successor UI cutover is actually shipped
+
+Exit criteria:
+
+- regular users can create and work with successor archives in both Lite and Pro
+- successor containers and successor artifact exports are the default product path
+- the current documentation set is complete, current, and honest about implemented vs deferred capability
+- legacy creation and other legacy-first product flows are retired from the normal user surface
+- any remaining legacy compatibility support is explicitly documented as temporary or historical, or is removed entirely
+
+## 13. Later Phases — Deferred But Architecturally Constrained
+
+### 13.1 Later Phase A — State-changing migration continuity
 
 Not part of the first shipping wave.
 
@@ -795,7 +907,7 @@ Planned work:
 - continuity-preserving historical packaging
 - renewed archive-approval signatures and timestamps for new states
 
-### 12.2 Later Phase B — Envelope-DEK and future `rewrap`
+### 13.2 Later Phase B — Envelope-DEK and future `rewrap`
 
 Architecture-blocked until QV adopts a wrapped-DEK design.
 
@@ -805,7 +917,7 @@ Planned work:
 - new state semantics for `rewrap`
 - continuity rules for rewrap-capable states
 
-### 12.3 Later Phase C — Renewable evidence records
+### 13.3 Later Phase C — Renewable evidence records
 
 Future work only.
 
@@ -815,7 +927,7 @@ Planned work:
 - explicit renewal timing and witness strategy
 - RFC 4998-inspired lifecycle, without misrepresenting it as current capability
 
-### 12.4 Later Phase D — Distributed resharing
+### 13.4 Later Phase D — Distributed resharing
 
 Future research only.
 
@@ -827,7 +939,7 @@ Planned work:
 
 This branch must not leak server-coordinated or MPC assumptions into the Phase 1 browser-first model.
 
-## 13. Explicit Non-Goals For The First Shipping Wave
+## 14. Explicit Non-Goals For The First Shipping Wave
 
 - no mutation of current manifest/bundle schemas
 - no implicit grammar extension path
@@ -838,7 +950,7 @@ This branch must not leak server-coordinated or MPC assumptions into the Phase 1
 - no auto-winner selection for same-state cohort forks
 - no state-changing migration feature before predecessor-state preservation is designed and implemented
 
-## 14. Implementation Summary
+## 15. Implementation Summary
 
 The strict execution order is:
 
@@ -849,6 +961,7 @@ The strict execution order is:
 5. ship same-state resharing with required transition records
 6. add transition verification, maintenance signatures, and fork warnings
 7. optionally ship source-evidence authoring and verification
-8. defer migration continuity, `rewrap`, renewable evidence, and distributed resharing
+8. complete regular-user UI/UX cutover, documentation closure, and legacy retirement
+9. defer migration continuity, `rewrap`, renewable evidence, and distributed resharing
 
 That order keeps the implementation aligned with the current Quantum Vault baseline while solving the actual lifecycle contradiction instead of only renaming it.

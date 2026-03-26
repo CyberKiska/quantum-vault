@@ -198,7 +198,7 @@
             <div class="card full-width">
               <div class="dropzone-area" id="liteShardsDropzone">
                 <h3>Select Shards to Restore</h3>
-                <p class="muted-copy">Select restore files (.qcont, optional .qvmanifest.json, .qsig/.sig, .pqpk, .ots)</p>
+                <p class="muted-copy">Select restore files (.qcont, optional legacy .qvmanifest/.extended.qvmanifest, optional successor .archive-state/.lifecycle-bundle JSON, .qsig/.sig, .pqpk, .ots)</p>
                 <label for="liteShardsInput" class="visually-hidden">Select shard and verification files</label>
                 <input type="file" id="liteShardsInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple>
               </div>
@@ -360,7 +360,7 @@
                     <option value="strong-pq-signature" selected>Strong PQ signature required</option>
                     </select>
                   </label>
-                <small class="muted-copy">Build exports a signable canonical manifest. Attach later upgrades the same <code>.qvmanifest.json</code> into a self-contained bundle.</small>
+                <small class="muted-copy">This Build flow currently emits the legacy manifest/bundle shard family and exports a signable <code>.qvmanifest.json</code>. Attach and Restore also support successor lifecycle archives, where archive-approval signatures target canonical archive-state bytes.</small>
                 <small id="proAuthPolicyHelp" class="muted-copy">Without an external detached signature attached later, restore will block and the file will not be decrypted.</small>
               </div>
 
@@ -378,10 +378,10 @@
 
           <div class="panel-grid">
             <div class="card full-width">
-              <h3>Attach Artifacts Around the Canonical Manifest</h3>
+              <h3>Attach Artifacts Around the Archive Description</h3>
               <div class="form-group">
                 <label>Attach Inputs <input type="file" id="qcontAttachInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple></label>
-                <small class="muted-copy">Provide one archive cohort plus its canonical or bundled <code>.qvmanifest.json</code>, detached signatures, optional <code>.pqpk</code>, and optional <code>.ots</code>. The canonical manifest bytes remain unchanged.</small>
+                <small class="muted-copy">Provide one archive cohort plus its legacy manifest/bundle or successor archive-state/lifecycle-bundle JSON, detached signatures, optional <code>.pqpk</code>, and optional <code>.ots</code>. The signable bytes remain unchanged.</small>
               </div>
               <div class="form-group">
                 <label>Attach Behavior</label>
@@ -418,7 +418,7 @@
               <details class="verification-section">
                 <summary>Signer Pins (optional)</summary>
                 <div class="form-group verification-fields">
-                  <small class="muted-copy">Attach .qcont/.qvmanifest/.qsig/.sig/.pqpk/.ots in the main selector above. A manually supplied <code>.pqpk</code> file counts as a pinned PQ signer key; the field below is only for Ed25519 identity pinning.</small>
+                  <small class="muted-copy">Attach legacy or successor restore artifacts in the main selector above. A manually supplied <code>.pqpk</code> file counts as a pinned PQ signer key; the field below is only for Ed25519 identity pinning.</small>
                   <label>Expected Ed25519 signer (optional) <input type="text" id="restoreExpectedEdSigner" placeholder="G..."></label>
                 </div>
               </details>

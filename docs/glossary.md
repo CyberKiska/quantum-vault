@@ -76,10 +76,12 @@ Do not preload speculative roadmap terminology into the shared glossary before t
 | archive | The logical protected object and its authenticity and evidence context, not just a single file. | `docs/long-term-archive.md` |
 | payload | The original user content before `.qenc` containerization. | `docs/format-spec.md` |
 | container | The `.qenc` encrypted object. | `docs/format-spec.md` |
-| shard | One `.qcont` threshold fragment carrying part of the recovery state plus embedded manifest and bundle material. | `docs/format-spec.md` |
-| canonical manifest | The immutable signable archive description whose canonical bytes are the only detached-signature payload. | `docs/format-spec.md` |
-| manifest bundle | The mutable JSON package carrying the canonical manifest, `authPolicy`, and authenticity attachments. | `docs/format-spec.md` |
-| detached signature | A signature artifact stored separately from the canonical manifest bytes and verified over those bytes. | `docs/trust-and-policy.md` |
+| shard | One `.qcont` threshold fragment carrying part of the recovery state plus embedded authenticity material (**legacy:** manifest and manifest bundle; **successor:** archive-state descriptor, cohort binding, lifecycle bundle). | `docs/format-spec.md` |
+| canonical manifest | **Legacy:** immutable signable archive description; canonical bytes are the legacy detached-signature payload for manifest-bundle archives. | `docs/format-spec.md` |
+| archive-state descriptor | **Successor:** immutable signable archive state (`quantum-vault-archive-state-descriptor/v1`); canonical bytes are the archive-approval detached-signature payload for successor lifecycle archives. | `docs/format-spec.md`, `docs/trust-and-policy.md` |
+| manifest bundle | **Legacy:** the mutable JSON package carrying the canonical manifest, `authPolicy`, and authenticity attachments. | `docs/format-spec.md` |
+| lifecycle bundle | **Successor:** the mutable JSON package carrying archive-state and cohort-binding digests, `authPolicy`, and lifecycle attachment families. | `docs/format-spec.md`, `docs/trust-and-policy.md` |
+| detached signature | A signature artifact stored separately from the current signable archive description and verified over that path's declared canonical bytes. | `docs/trust-and-policy.md` |
 
 ## General cryptographic and operational terms
 
@@ -95,8 +97,8 @@ Do not preload speculative roadmap terminology into the shared glossary before t
 | Term | Current definition | Detailed owner |
 | --- | --- | --- |
 | integrity verified | Structural, digest, commitment, and reconstruction checks are internally consistent. | `docs/trust-and-policy.md` |
-| signature verified | At least one detached signature cryptographically verifies over the exact canonical manifest bytes. | `docs/trust-and-policy.md` |
-| archive authenticity policy | The restore and verify rule committed in the canonical manifest and carried concretely in the bundle as `authPolicy`. | `docs/trust-and-policy.md` |
+| signature verified | At least one detached signature cryptographically verifies over the exact signable canonical bytes for that path. | `docs/trust-and-policy.md` |
+| archive authenticity policy | The restore and verify rule committed in the current signable archive description and carried concretely in the relevant mutable bundle as `authPolicy`. | `docs/trust-and-policy.md` |
 | archive policy satisfied | The available verified signatures satisfy the archive authenticity policy. | `docs/trust-and-policy.md` |
 | signer pinning | Binding a valid signature to expected signer material from the bundle or from restore-time user input; distinct from policy satisfaction. | `docs/trust-and-policy.md` |
 | `bundlePinned` | At least one verified signature matched bundled signer material explicitly linked from the manifest bundle. | `docs/trust-and-policy.md` |
@@ -124,7 +126,7 @@ Do not preload speculative roadmap terminology into the shared glossary before t
 | --- | --- | --- |
 | archive creator | Party that creates the archive, chooses split parameters, and selects the archive authenticity policy during split. | `docs/trust-and-policy.md` |
 | auditor / source verifier | Party that verifies source data before archiving and bears provenance responsibility for confirming that "this is the data"; this role is operational today and is not automatically encoded by detached signatures alone. | `docs/trust-and-policy.md` |
-| signer | Party producing detached signatures over canonical manifest bytes. | `docs/trust-and-policy.md` |
+| signer | Party producing detached signatures over the current signable archive description or other declared lifecycle targets. | `docs/trust-and-policy.md` |
 | custodian | Holder of one or more `.qcont` shards or related detached artifacts. | `docs/trust-and-policy.md` |
 | restoration quorum | Operational set of custodians or participants able to supply enough consistent shards to satisfy the threshold required for restore; not a first-class policy or trust-root object in the current format family. | `docs/trust-and-policy.md` |
 | restore operator | Party supplying artifacts at restore time and possibly providing user pinning input. | `docs/trust-and-policy.md` |

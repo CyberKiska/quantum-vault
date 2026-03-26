@@ -2882,6 +2882,22 @@ function buildCases() {
       },
     },
     {
+      name: 'restore rejects mixed legacy and successor shard families',
+      fn: async () => {
+        const legacyPair = await generateKeyPair({ collectUserEntropy: false });
+        const legacyPayload = textBytes('mixed-legacy-successor-legacy');
+        const legacyQenc = await blobToBytes(await encryptFile(legacyPayload, legacyPair.publicKey, 'mixed-legacy-successor-legacy.bin'));
+        const legacySplit = await buildQcontShards(legacyQenc, legacyPair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const legacyParsed = await Promise.all(legacySplit.shards.slice(0, 2).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const successorSample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('mixed-legacy-successor-successor') });
+
+        await expectFailure(
+          () => restoreFromShards([...legacyParsed, successorSample.parsed[0]], { onLog: () => {}, onError: () => {} }),
+          'restore unexpectedly accepted mixed legacy and successor shard families'
+        );
+      },
+    },
+    {
       name: 'successor restore rejects mixed stateId candidate inputs without explicit selection',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-state') });
@@ -3181,6 +3197,42 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
         assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'source-evidence reporting must remain separate from archive approval');
         assert(restored.authenticity.verification.counts.pinnedValidTotal === 2, 'aggregate detached-signature pinning may still reflect non-archive families');
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects archive-approval signatures created over lifecycle-bundle bytes',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-policy-wrong-archive-approval-target'),
+          authPolicyLevel: 'any-signature',
+        });
+        const wrongTargetSig = buildQsigFixture(sample.split.lifecycleBundleBytes);
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments = {
+          publicKeys: [
+            buildBundledMlDsaPublicKey('pk-wrong-target', wrongTargetSig.signerPublicKey),
+          ],
+          archiveApprovalSignatures: [
+            buildLifecycleQsigEntry({
+              id: 'archive-approval-wrong-target',
+              signatureFamily: 'archive-approval',
+              targetType: 'archive-state',
+              targetRef: `state:${sample.split.stateId}`,
+              targetDigest: sample.split.stateId,
+              qsigBytes: wrongTargetSig.qsigBytes,
+              publicKeyRef: 'pk-wrong-target',
+            }),
+          ],
+          maintenanceSignatures: [],
+          sourceEvidenceSignatures: [],
+          timestamps: [],
+        };
+
+        await expectFailure(
+          () => rewriteLifecycleBundleSubset(sample.parsed, canonicalizeJsonToBytes(bundle)),
+          'successor lifecycle bundle unexpectedly accepted archive-approval signatures created over lifecycle-bundle bytes'
+        );
       },
     },
     {

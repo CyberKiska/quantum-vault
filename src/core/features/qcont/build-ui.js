@@ -62,10 +62,11 @@ export function initQcontBuildUI() {
             log(`Saved ${manifestName} (${result.manifestBytes.length} B) SHA3-512=${result.manifestDigestHex}`);
             log(`Archive policy: ${authPolicyLevel}`);
             if (authPolicyLevel === 'integrity-only') {
-                log('This archive can be restored without signatures, but provenance will remain inauthentic unless you sign and attach the manifest bundle.');
+                log('This current Build flow emits the legacy manifest/bundle shard family, so restore can proceed without signatures but provenance remains inauthentic unless you sign and attach the manifest bundle.');
             } else {
-                log('Sign this .qvmanifest.json file. Later, use Attach to emit a self-contained .extended.qvmanifest.json bundle.');
+                log('This current Build flow emits the legacy manifest/bundle shard family. Sign this .qvmanifest.json file, then use Attach to emit a self-contained .extended.qvmanifest.json bundle.');
             }
+            log('Successor lifecycle archives use archive-state approval and are supported by Attach and Restore when successor shards are supplied.');
             log('.qcont shards built. Distribute files across storage providers.');
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });

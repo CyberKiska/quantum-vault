@@ -31,6 +31,12 @@ Publication note:
 - `docs/internal/` and `examples/` are excluded from published releases via `.gitignore`
 - internal planning material has been absorbed into the published owner docs and is not referenced as required reading in the release surface
 
+Current release status:
+
+- the documentation set covers two coexisting artifact tracks: the legacy manifest/bundle family and the successor lifecycle family
+- the project is phasing out the legacy system in favor of the successor lifecycle family, but the current browser build/export flow still emits legacy manifest-based shards
+- current published docs MUST distinguish implemented now, shipped-but-legacy, and future-only material explicitly; deferred work such as RFC 4998-style renewal, state-changing continuity records, and governance objects MUST remain clearly non-current
+
 ## Control rules
 
 1. One topic, one home.
@@ -56,15 +62,16 @@ Publication note:
 | Topic | Working source now | Destination owner |
 | --- | --- | --- |
 | Product overview and workflow | `README.md` | `README.md` + `WHITEPAPER.md` |
-| Artifact formats, canonicalization, verifier flow | `format-spec.md` | `format-spec.md` |
+| Artifact formats, canonicalization, verifier flow (legacy manifest bundle and successor lifecycle) | `format-spec.md` | `format-spec.md` |
+| Successor lifecycle design history and Phase 0 frozen contracts (informative) | `docs/process/roadmap/lifecycle/` | Informative only; normative bytes/policy remain in `format-spec.md` and `trust-and-policy.md` |
 | Archive policy, proof counting, pinning, role semantics | `trust-and-policy.md` | `trust-and-policy.md` |
 | Threat model, assumptions, invariants, claim boundaries | `security-model.md` | `security-model.md` |
 | Archive classes, OAIS mapping, renewal, migration | `long-term-archive.md` | `long-term-archive.md` |
 | Shared vocabulary, key terminology, and status terms | `glossary.md` | `glossary.md` |
-| Format-compatibility appendices for canonicalization, detached artifact handling, and vectors | `appendices/` | `format-spec.md` owns the semantics; `docs/appendices/` carries active compatibility detail |
-| Contributor process and doc hygiene | `docs/README.md`, `process/DOCS-WRITING.md` | `docs/README.md` |
-| Cross-app engineering standards | `series/SERIES-STANDARTS.md` | `docs/series/` reference set |
-| Cross-app UX and interface terminology guidance | `series/UX-STYLE-SERIES.md` | `docs/series/` reference set; Quantum Vault-specific product terms remain owned by `glossary.md` and the product docs |
+| Format-compatibility appendices for canonicalization, detached artifact handling, and vectors | `docs/appendices/` | `format-spec.md` owns the semantics; `docs/appendices/` carries active compatibility detail |
+| Contributor process and doc hygiene | `docs/README.md`, `docs/process/DOCS-WRITING.md` | `docs/README.md` |
+| Cross-app engineering standards | `docs/series/SERIES-STANDARTS.md` | `docs/series/` reference set |
+| Cross-app UX and interface terminology guidance | `docs/series/UX-STYLE-SERIES.md` | `docs/series/` reference set; Quantum Vault-specific product terms remain owned by `glossary.md` and the product docs |
 
 ## Current document map
 
@@ -75,7 +82,8 @@ Publication note:
 | `docs/glossary.md` | Shared vocabulary and status-term baseline | Release Candidate |
 | `docs/WHITEPAPER.md` | Informative system-level design and rationale doc | Release Candidate |
 | `docs/format-spec.md` | Normative format/verifier doc | Release Candidate |
-| `docs/schema/` | Machine-readable JSON Schema grammar layer and fixture corpus for manifest-family artifacts | Release Candidate |
+| `docs/schema/` | Machine-readable JSON Schema grammar layer and fixture corpus for manifest-family and **successor lifecycle** artifacts (`qv-archive-state-descriptor-v1`, `qv-cohort-binding-v1`, `qv-lifecycle-bundle-v1`, `qv-transition-record-v1`, `qv-source-evidence-v1`, plus manifest schemas) | Release Candidate |
+| `docs/process/roadmap/lifecycle/` | Informative lifecycle roadmap, resharing design, implementation plan | Active; not normative for bytes |
 | `docs/appendices/canonicalization-profile.md` | Compatibility appendix for current manifest and bundle canonicalization labels | Release Candidate |
 | `docs/appendices/external-artifacts.md` | Compatibility appendix for detached artifact acceptance/linkage | Release Candidate |
 | `docs/appendices/interoperability-and-test-vectors.md` | Compatibility appendix for examples, vectors, and malformed coverage | Release Candidate |
@@ -102,8 +110,16 @@ docs/
     qv-common-types.schema.json
     qv-manifest-v3.schema.json
     qv-manifest-bundle-v2.schema.json
+    qv-archive-state-descriptor-v1.schema.json
+    qv-cohort-binding-v1.schema.json
+    qv-lifecycle-bundle-v1.schema.json
+    qv-transition-record-v1.schema.json
+    qv-source-evidence-v1.schema.json
     fixtures/
       index.json
+  process/roadmap/lifecycle/
+    resharing-design.md
+    implementation-plan-lifecycle.md
   appendices/
     canonicalization-profile.md
     external-artifacts.md
