@@ -460,7 +460,8 @@ function buildSuccessorTransitionReport(lifecycleBundle, signatureResults = []) 
 
   return {
     present: inspection.present,
-    verified: inspection.verified,
+    chainValid: inspection.chainValid,
+    validationScope: inspection.validationScope,
     count: records.length,
     signed: records.some((record) => record.maintenanceSignatureCount > 0),
     maintenanceSignatureVerified: records.some((record) => record.verifiedMaintenanceSignatureCount > 0),
@@ -975,7 +976,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
         userPinned: counts.archiveApprovalUserPinnedValidTotal > 0,
         userPinProvided,
         transitionRecordPresent: transitionReport.present,
-        transitionRecordsVerified: transitionReport.verified,
+        transitionChainValid: transitionReport.chainValid,
         maintenanceSignatureVerified: counts.validMaintenance > 0,
         sourceEvidenceSignatureVerified: counts.validSourceEvidence > 0,
         otsEvidenceLinked: timestampEvidence.length > 0,
@@ -1997,7 +1998,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
         userPinned: successorStatus.userPinned,
         userPinProvided: successorStatus.userPinProvided,
         transitionRecordPresent: transitionReport.present,
-        transitionRecordsVerified: transitionReport.verified,
+        transitionChainValid: transitionReport.chainValid,
         cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
         bundleCohortMixed,
         mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,

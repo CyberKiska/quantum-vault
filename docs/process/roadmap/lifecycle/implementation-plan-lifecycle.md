@@ -689,6 +689,11 @@ Transition-record tasks:
   - `operator-attestation`
   - `witness`
 
+Implementation note:
+
+- Phase 5 verification intentionally accepts only `same-state-resharing` transitions with `fromStateId === toStateId`; future state-changing transition types require explicit verifier extension.
+- Maintenance purpose labels are advisory allow-list metadata in the lifecycle verifier; unknown `actorHints` purpose strings are ignored and do not affect archive policy or maintenance-signature verification.
+
 Fork-handling tasks:
 
 - detect multiple valid `cohortId` values for one `archiveId` plus `stateId`

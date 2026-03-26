@@ -2331,6 +2331,94 @@ function buildCases() {
       },
     },
     {
+      name: 'successor lifecycle bundle rejects duplicate transition-record digests',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions.push(cloneJson(mutated.transitions[0]));
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /duplicate transition-record digest/i,
+          'lifecycle bundle unexpectedly accepted duplicate transition-record digests'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects transition chains whose predecessor references do not continue the prior record',
+      fn: async () => {
+        const initial = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-broken-chain-parse-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const firstReshare = await reshareSameState(initial.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:30:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-broken-chain-1' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+        const secondReshare = await reshareSameState(await parseResharedShardSet(firstReshare), { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:31:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-broken-chain-2' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const mutated = cloneJson(secondReshare.lifecycleBundle);
+        const brokenFromCohortBindingDigest = { alg: 'SHA3-512', value: 'aa'.repeat(64) };
+        mutated.transitions[1].fromCohortBindingDigest = brokenFromCohortBindingDigest;
+        mutated.transitions[1].fromCohortId = deriveCohortId({
+          archiveId: mutated.transitions[1].archiveId,
+          stateId: mutated.transitions[1].fromStateId,
+          cohortBindingDigest: brokenFromCohortBindingDigest,
+        });
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /does not continue the prior transition chain/i,
+          'lifecycle bundle unexpectedly accepted a broken transition chain'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects unsupported Phase 5 transition types',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions[0].transitionType = 'state-migration';
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /transitionType is not supported in Phase 5/i,
+          'lifecycle bundle unexpectedly accepted an unsupported Phase 5 transition type'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects state-changing transition records in Phase 5',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions[0].toStateId = 'ff'.repeat(64);
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /changes stateId, which is not supported in Phase 5/i,
+          'lifecycle bundle unexpectedly accepted a state-changing transition record in Phase 5'
+        );
+      },
+    },
+    {
       name: 'successor lifecycle bundle rejects non-verifying maintenance publicKeyRef entries',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
@@ -2867,13 +2955,14 @@ function buildCases() {
         assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
         assert(restored.authenticity.status.transitionRecordPresent === true, 'expected transition record presence reporting');
-        assert(restored.authenticity.status.transitionRecordsVerified === true, 'expected transition record verification');
+        assert(restored.authenticity.status.transitionChainValid === true, 'expected structural transition-chain validity reporting');
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
         assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
         assert(restored.lifecycleVerification.transitions.present === true, 'expected lifecycle transition reporting');
+        assert(restored.lifecycleVerification.transitions.chainValid === true, 'expected structural transition-chain validity in lifecycle reporting');
         assert(restored.lifecycleVerification.transitions.records.length === 1, 'expected one transition record in the lifecycle report');
         assert(restored.authenticity.verification.counts.validArchiveApproval === 1, 'only one archive-approval signature should count toward archive policy');
         assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 1, 'only archive-approval pinning should drive archive trust status');
@@ -3417,14 +3506,14 @@ function buildCases() {
           onError: () => {},
         });
         assert(restored.authenticity.status.transitionRecordPresent === true, 'unsigned resharing should still report a transition record');
-        assert(restored.authenticity.status.transitionRecordsVerified === true, 'unsigned resharing transition record should still verify semantically');
+        assert(restored.authenticity.status.transitionChainValid === true, 'unsigned resharing should still report structural transition-chain validity');
         assert(restored.authenticity.status.maintenanceSignatureVerified === false, 'unsigned resharing must not imply maintenance-signature verification');
         assert(restored.lifecycleVerification.transitions.records.length === 1, 'unsigned resharing should surface one transition record');
         assert(restored.lifecycleVerification.transitions.records[0].maintenanceSignatureCount === 0, 'unsigned resharing should report zero maintenance signatures on the transition');
       },
     },
     {
-      name: 'same-state resharing reports signed transition records and advisory maintenance purpose labels',
+      name: 'same-state resharing reports signed transition records and per-signature maintenance purpose labels',
       fn: async () => {
         const signatureId = 'maintenance-sig-phase5-purpose';
         const sample = await buildResharePredecessorSample({
@@ -3440,8 +3529,9 @@ function buildCases() {
             actorHints: {
               ceremony: 'phase5-signed-transition-record',
               maintenanceSignaturePurposes: {
-                [signatureId]: 'witness',
+                [signatureId]: ['maintenance-authorization', 'witness', 'unknown-purpose-label'],
               },
+              maintenanceSignaturePurpose: 'operator-attestation',
             },
             notes: null,
           },
@@ -3459,8 +3549,59 @@ function buildCases() {
         assert(restored.lifecycleVerification.transitions.records.length === 1, 'signed resharing should surface one transition record');
         assert(restored.lifecycleVerification.transitions.records[0].verifiedMaintenanceSignatureCount === 1, 'signed resharing should report one verified maintenance signature');
         assert(
+          restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('maintenance-authorization'),
+          'signed resharing should surface the per-signature maintenance-authorization label'
+        );
+        assert(
           restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('witness'),
-          'signed resharing should surface the advisory witness purpose label'
+          'signed resharing should surface the per-signature witness label'
+        );
+        assert(
+          !restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('operator-attestation'),
+          'per-signature maintenance purpose labels should take precedence over the global fallback'
+        );
+        assert(
+          !restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('unknown-purpose-label'),
+          'unknown maintenance purpose labels should be ignored outside the Phase 5 allow-list'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing falls back to the global maintenance purpose label when no per-signature label is present',
+      fn: async () => {
+        const signatureId = 'maintenance-sig-phase5-global-fallback';
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-global-maintenance-purpose-fallback'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:11:30.000Z',
+            operatorRole: 'operator',
+            actorHints: {
+              ceremony: 'phase5-global-maintenance-purpose-fallback',
+              maintenanceSignaturePurpose: 'operator-attestation',
+              maintenanceSignaturePurposes: {
+                [signatureId]: 'unsupported-purpose-label',
+              },
+            },
+            notes: null,
+          },
+          buildMaintenanceArtifacts: buildMaintenanceArtifactsFactory({ signatureId }),
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'global fallback coverage still expects a verified maintenance signature');
+        assert(
+          restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('operator-attestation'),
+          'global maintenance purpose label should be used when no per-signature allow-listed label is present'
         );
       },
     },
@@ -3500,7 +3641,7 @@ function buildCases() {
           onLog: () => {},
           onError: () => {},
         });
-        assert(restored.authenticity.status.transitionRecordsVerified === true, 'two-step resharing should verify a valid transition chain');
+        assert(restored.authenticity.status.transitionChainValid === true, 'two-step resharing should report a valid structural transition chain');
         assert(restored.lifecycleVerification.transitions.records.length === 2, 'two-step resharing should report two transition records');
         assert(
           restored.lifecycleVerification.transitions.records[0].toCohortId === restored.lifecycleVerification.transitions.records[1].fromCohortId,

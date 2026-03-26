@@ -119,6 +119,7 @@ function buildRestoreResultSummary(result, resultPanelId) {
   }
   if (hasSuccessorStates) {
     addItem(status.transitionRecordPresent === true, 'Transition record present', false);
+    addItem(status.transitionChainValid === true, 'Transition-chain references valid', false);
     addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
     addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
   }

@@ -831,6 +831,9 @@ function dedupeSortedStrings(values) {
 }
 
 function normalizeMaintenancePurposeLabels(value) {
+  // Purpose labels are advisory metadata, not policy inputs. Phase 5 exposes only the
+  // documented allow-list and silently ignores unknown actor-hint strings so the frozen
+  // wire shape does not need to change just to carry future local annotations.
   const source = Array.isArray(value) ? value : [value];
   const labels = [];
   for (const entry of source) {
@@ -850,8 +853,14 @@ function resolveTransitionMaintenancePurposeLabels(transitionRecord, signatureId
 
   const labels = [];
   const bySignature = actorHints.maintenanceSignaturePurposes;
-  if (signatureId && bySignature && typeof bySignature === 'object' && !Array.isArray(bySignature)) {
-    labels.push(...normalizeMaintenancePurposeLabels(bySignature[signatureId]));
+  if (bySignature && typeof bySignature === 'object' && !Array.isArray(bySignature)) {
+    if (signatureId) {
+      labels.push(...normalizeMaintenancePurposeLabels(bySignature[signatureId]));
+    } else {
+      for (const value of Object.values(bySignature)) {
+        labels.push(...normalizeMaintenancePurposeLabels(value));
+      }
+    }
   }
 
   if (labels.length === 0) {
@@ -890,6 +899,8 @@ export function inspectLifecycleTransitions(bundle) {
     if (transitionRecord.archiveId !== archiveId) {
       throw new Error(`${field}.archiveId mismatch`);
     }
+    // Phase 5 intentionally verifies only same-state resharing continuity. Any future
+    // state-changing transition types require explicit verifier extension.
     if (transitionRecord.transitionType !== TRANSITION_TYPE_DEFAULT) {
       throw new Error(`${field}.transitionType is not supported in Phase 5`);
     }
@@ -957,7 +968,8 @@ export function inspectLifecycleTransitions(bundle) {
 
   return {
     present: records.length > 0,
-    verified: true,
+    chainValid: records.length > 0,
+    validationScope: 'structural-referential',
     archiveId,
     stateId,
     currentCohortId,
@@ -1251,7 +1263,6 @@ async function validateLifecycleBundleSemantics(bundle) {
   assertUniqueIds(bundle.attachments.timestamps, 'timestamp');
   const allSignatureEntries = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(allSignatureEntries, 'detached signature');
-  inspectLifecycleTransitions(bundle);
   const registry = buildLifecycleTargetRegistry(bundle);
   validateSignatureTargetConsistency(bundle, registry);
 
