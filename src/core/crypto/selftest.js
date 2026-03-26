@@ -213,13 +213,19 @@ async function buildLifecycleSampleArtifacts() {
     stateId,
     cohortBindingDigest: canonicalCohortBinding.digest,
   });
+  const predecessorCohortBindingDigest = { alg: 'SHA3-512', value: '23'.repeat(64) };
+  const predecessorCohortId = deriveCohortId({
+    archiveId: archiveState.archiveId,
+    stateId,
+    cohortBindingDigest: predecessorCohortBindingDigest,
+  });
   const transitionRecord = buildTransitionRecord({
     archiveId: archiveState.archiveId,
     fromStateId: stateId,
     toStateId: stateId,
-    fromCohortId: '01'.repeat(32),
+    fromCohortId: predecessorCohortId,
     toCohortId: cohortId,
-    fromCohortBindingDigest: { alg: 'SHA3-512', value: '23'.repeat(64) },
+    fromCohortBindingDigest: predecessorCohortBindingDigest,
     toCohortBindingDigest: canonicalCohortBinding.digest,
     reasonCode: 'cohort-rotation',
     performedAt: '2026-03-25T12:34:56.000Z',
@@ -443,13 +449,19 @@ async function buildSuccessorVerificationBundle(split, {
 
   let transitionRecord = null;
   if (includeMaintenance || timestampTargetFamily === 'maintenance') {
+    const predecessorCohortBindingDigest = { alg: 'SHA3-512', value: '23'.repeat(64) };
+    const predecessorCohortId = deriveCohortId({
+      archiveId: split.archiveId,
+      stateId: split.stateId,
+      cohortBindingDigest: predecessorCohortBindingDigest,
+    });
     transitionRecord = buildTransitionRecord({
       archiveId: split.archiveId,
       fromStateId: split.stateId,
       toStateId: split.stateId,
-      fromCohortId: '01'.repeat(32),
+      fromCohortId: predecessorCohortId,
       toCohortId: split.cohortId,
-      fromCohortBindingDigest: { alg: 'SHA3-512', value: '23'.repeat(64) },
+      fromCohortBindingDigest: predecessorCohortBindingDigest,
       toCohortBindingDigest: split.cohortBindingDigestHex
         ? { alg: 'SHA3-512', value: split.cohortBindingDigestHex }
         : canonicalizeCohortBinding(split.cohortBinding).digest,
@@ -546,9 +558,9 @@ const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
   cohortBindingDigest: '711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c',
   cohortIdPreimageCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","cohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","type":"quantum-vault-cohort-id-preimage/v1"}',
   cohortId: 'd14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b',
-  transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"0101010101010101010101010101010101010101010101010101010101010101","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
+  transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"ebf832f7aff98cbe063b84b6835e58321ce5f932a211c888280511e614ae619b","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
   sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"mediaType":"application/json","relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-manifest-v3","version":1}',
-  lifecycleBundleDigest: '1ffa7e96eb0b05ae0f8b5e6bcb73927b82bd323f58cc5c9408c24f26de22804cbf52892381512a1f1d9fde4b1d848da78671eeca0a3e3d64a9c80950ddddebb6',
+  lifecycleBundleDigest: '1549dd052185327d8187bd9baad8c1a03a84539225a3336819d166c838a7c4cb9142a28c50ef6fb29920db4da5a4d37fef1d149b9ca53094a79415a3b8f248e8',
 });
 
 function assert(condition, message) {
@@ -567,6 +579,19 @@ async function expectFailure(fn, message) {
   if (!failed) {
     throw new Error(message);
   }
+}
+
+async function expectFailureWithMessage(fn, expectedPattern, message) {
+  try {
+    await fn();
+  } catch (error) {
+    const actualMessage = String(error?.message || error);
+    if (expectedPattern instanceof RegExp && !expectedPattern.test(actualMessage)) {
+      throw new Error(`${message}: received "${actualMessage}"`);
+    }
+    return actualMessage;
+  }
+  throw new Error(message);
 }
 
 function mutateTail(bytes, delta = 1) {
@@ -2285,6 +2310,27 @@ function buildCases() {
       },
     },
     {
+      name: 'successor lifecycle bundle rejects transition records whose successor cohort reference does not match the current cohort',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions[0].toCohortBindingDigest = {
+          alg: 'SHA3-512',
+          value: 'ff'.repeat(64),
+        };
+        mutated.transitions[0].toCohortId = deriveCohortId({
+          archiveId: mutated.transitions[0].archiveId,
+          stateId: mutated.transitions[0].toStateId,
+          cohortBindingDigest: mutated.transitions[0].toCohortBindingDigest,
+        });
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a transition record whose successor cohort reference does not match the current cohort'
+        );
+      },
+    },
+    {
       name: 'successor lifecycle bundle rejects non-verifying maintenance publicKeyRef entries',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
@@ -2721,6 +2767,8 @@ function buildCases() {
         });
         assert(restored.lifecycleBundleDigestHex === secondAttach.lifecycleBundleDigestHex, 'explicit lifecycle-bundle digest selection picked the wrong bundle');
         assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded lifecycle-bundle digests should be reported honestly');
+        assert(restored.authenticity.status.cohortForkDetected === false, 'mixed bundle variants within one cohort must not be reported as a cohort fork');
+        assert(restored.lifecycleVerification.cohorts.forkDetected === false, 'mixed bundle variants within one cohort must not be treated as a same-state fork');
       },
     },
     {
@@ -2818,11 +2866,15 @@ function buildCases() {
         const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
         assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
+        assert(restored.authenticity.status.transitionRecordPresent === true, 'expected transition record presence reporting');
+        assert(restored.authenticity.status.transitionRecordsVerified === true, 'expected transition record verification');
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
         assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+        assert(restored.lifecycleVerification.transitions.present === true, 'expected lifecycle transition reporting');
+        assert(restored.lifecycleVerification.transitions.records.length === 1, 'expected one transition record in the lifecycle report');
         assert(restored.authenticity.verification.counts.validArchiveApproval === 1, 'only one archive-approval signature should count toward archive policy');
         assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 1, 'only archive-approval pinning should drive archive trust status');
         assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
@@ -3338,6 +3390,170 @@ function buildCases() {
         });
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'optional maintenance signature should verify after resharing');
         assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'maintenance signatures must not count toward archive policy');
+      },
+    },
+    {
+      name: 'same-state resharing reports an unsigned transition record distinctly from maintenance-signature verification',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-unsigned-transition-record'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:10:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-unsigned-transition-record' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.transitionRecordPresent === true, 'unsigned resharing should still report a transition record');
+        assert(restored.authenticity.status.transitionRecordsVerified === true, 'unsigned resharing transition record should still verify semantically');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === false, 'unsigned resharing must not imply maintenance-signature verification');
+        assert(restored.lifecycleVerification.transitions.records.length === 1, 'unsigned resharing should surface one transition record');
+        assert(restored.lifecycleVerification.transitions.records[0].maintenanceSignatureCount === 0, 'unsigned resharing should report zero maintenance signatures on the transition');
+      },
+    },
+    {
+      name: 'same-state resharing reports signed transition records and advisory maintenance purpose labels',
+      fn: async () => {
+        const signatureId = 'maintenance-sig-phase5-purpose';
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-signed-transition-record'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:11:00.000Z',
+            operatorRole: 'operator',
+            actorHints: {
+              ceremony: 'phase5-signed-transition-record',
+              maintenanceSignaturePurposes: {
+                [signatureId]: 'witness',
+              },
+            },
+            notes: null,
+          },
+          buildMaintenanceArtifacts: buildMaintenanceArtifactsFactory({ signatureId }),
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.transitionRecordPresent === true, 'signed resharing should report a transition record');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'signed resharing should verify the maintenance signature');
+        assert(restored.lifecycleVerification.transitions.records.length === 1, 'signed resharing should surface one transition record');
+        assert(restored.lifecycleVerification.transitions.records[0].verifiedMaintenanceSignatureCount === 1, 'signed resharing should report one verified maintenance signature');
+        assert(
+          restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('witness'),
+          'signed resharing should surface the advisory witness purpose label'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing produces a valid same-state transition chain across multiple cohorts',
+      fn: async () => {
+        const initial = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-valid-transition-chain'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const firstReshare = await reshareSameState(initial.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:12:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-chain-1' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const secondReshare = await reshareSameState(await parseResharedShardSet(firstReshare), { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:13:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-chain-2' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(secondReshare), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.transitionRecordsVerified === true, 'two-step resharing should verify a valid transition chain');
+        assert(restored.lifecycleVerification.transitions.records.length === 2, 'two-step resharing should report two transition records');
+        assert(
+          restored.lifecycleVerification.transitions.records[0].toCohortId === restored.lifecycleVerification.transitions.records[1].fromCohortId,
+          'transition chain should link predecessor and successor cohortIds'
+        );
+        assert(
+          restored.lifecycleVerification.transitions.records[1].toCohortId === secondReshare.cohortId,
+          'final transition record should resolve to the selected current cohort'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects mixed same-state cohorts even when both cohorts are individually valid',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-same-state-fork'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const successor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:14:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-same-state-fork' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const successorParsed = await parseResharedShardSet(successor);
+        const predecessorOnly = await restoreFromShards(sample.parsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        const successorOnly = await restoreFromShards(successorParsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        assert(predecessorOnly.stateId === successorOnly.stateId, 'same-state fork setup should preserve one stateId');
+        assert(predecessorOnly.cohortId !== successorOnly.cohortId, 'same-state fork setup should produce distinct cohortIds');
+
+        const mixed = [
+          ...sample.parsed.slice(0, 4),
+          ...successorParsed.slice(0, 4),
+        ];
+
+        const rejectionMessage = await expectFailureWithMessage(
+          () => restoreFromShards(mixed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { lifecycleBundleBytes: successor.lifecycleBundleBytes },
+          }),
+          /Multiple valid cohorts were detected[\s\S]*will not auto-select a winner/i,
+          'successor restore unexpectedly accepted mixed same-state cohorts'
+        );
+        assert(rejectionMessage.includes(predecessorOnly.cohortId), 'same-state fork rejection should report the predecessor cohortId');
+        assert(rejectionMessage.includes(successorOnly.cohortId), 'same-state fork rejection should report the successor cohortId');
       },
     },
     {

@@ -17,6 +17,7 @@ import {
   canonicalizeArchiveStateDescriptor,
   canonicalizeCohortBinding,
   decodeLifecycleSignatureBytes,
+  inspectLifecycleTransitions,
   parseArchiveStateDescriptorBytes,
   parseLifecycleBundleBytes,
   resolveLifecycleSignatureTarget,
@@ -345,6 +346,49 @@ function collectSuccessorCandidateCohorts(shards) {
   return [...byIdentity.values()];
 }
 
+function analyzeSameStateSuccessorCohorts(candidates) {
+  const byState = new Map();
+  for (const candidate of candidates) {
+    const key = `${candidate.archiveId}:${candidate.stateId}`;
+    if (!byState.has(key)) {
+      byState.set(key, {
+        archiveId: candidate.archiveId,
+        stateId: candidate.stateId,
+        candidates: [],
+      });
+    }
+    byState.get(key).candidates.push(candidate);
+  }
+
+  const states = [...byState.values()].map((entry) => ({
+    archiveId: entry.archiveId,
+    stateId: entry.stateId,
+    candidates: entry.candidates,
+    cohortIds: [...new Set(entry.candidates.map((candidate) => candidate.cohortId))].sort(),
+    mixedLifecycleBundleVariantCohorts: entry.candidates
+      .filter((candidate) => candidate.embeddedLifecycleBundles.size > 1)
+      .map((candidate) => candidate.cohortId)
+      .sort(),
+  })).map((entry) => ({
+    ...entry,
+    forkDetected: entry.cohortIds.length > 1,
+  }));
+
+  return {
+    states,
+    byState: new Map(states.map((entry) => [`${entry.archiveId}:${entry.stateId}`, entry])),
+  };
+}
+
+function buildSameStateForkRejectionMessage(stateAnalysis) {
+  return [
+    `Multiple valid cohorts were detected for archive ${stateAnalysis.archiveId} state ${stateAnalysis.stateId}.`,
+    `Cohort IDs: ${stateAnalysis.cohortIds.join(', ')}.`,
+    'Restore rejects mixed same-state cohorts; provide shards from exactly one internally consistent cohort.',
+    'Quantum Vault will not auto-select a winner by timestamp, attachment count, or lexical identifier order.',
+  ].join(' ');
+}
+
 function collectSortedUniqueLifecycleBundleDigests(shards) {
   return [...new Set(
     (Array.isArray(shards) ? shards : [])
@@ -358,6 +402,75 @@ function buildMixedLifecycleBundleVariantWarning(embeddedLifecycleBundleDigestsU
     return '';
   }
   return `Payload reconstruction used shards carrying multiple embedded lifecycle-bundle digests (${embeddedLifecycleBundleDigestsUsed.join(', ')}); authenticity and policy were evaluated against selected lifecycle bundle ${selectedLifecycleBundleDigestHex}.`;
+}
+
+function buildSuccessorTransitionReport(lifecycleBundle, signatureResults = []) {
+  const inspection = inspectLifecycleTransitions(lifecycleBundle);
+  const maintenanceByDigest = new Map();
+
+  for (const result of Array.isArray(signatureResults) ? signatureResults : []) {
+    if (String(result?.family || '') !== 'maintenance') continue;
+    const digestHex = normalizeHexString(result?.targetDigest?.value);
+    if (!digestHex) continue;
+    if (!maintenanceByDigest.has(digestHex)) {
+      maintenanceByDigest.set(digestHex, {
+        signatureIds: [],
+        verifiedSignatureIds: [],
+        purposeLabels: [],
+      });
+    }
+    const entry = maintenanceByDigest.get(digestHex);
+    const signatureId = result?.artifactId || result?.name || '';
+    if (signatureId) {
+      entry.signatureIds.push(signatureId);
+      if (result?.ok === true) {
+        entry.verifiedSignatureIds.push(signatureId);
+      }
+    }
+    entry.purposeLabels.push(...(Array.isArray(result?.maintenancePurposeLabels) ? result.maintenancePurposeLabels : []));
+  }
+
+  const records = inspection.records.map((record) => {
+    const maintenance = maintenanceByDigest.get(record.digest.value) || {
+      signatureIds: [],
+      verifiedSignatureIds: [],
+      purposeLabels: [],
+    };
+    return {
+      index: record.index,
+      digestHex: record.digest.value,
+      transitionType: record.transitionRecord.transitionType,
+      archiveId: record.transitionRecord.archiveId,
+      fromStateId: record.transitionRecord.fromStateId,
+      toStateId: record.transitionRecord.toStateId,
+      fromCohortId: record.transitionRecord.fromCohortId,
+      toCohortId: record.transitionRecord.toCohortId,
+      fromCohortBindingDigest: record.transitionRecord.fromCohortBindingDigest,
+      toCohortBindingDigest: record.transitionRecord.toCohortBindingDigest,
+      maintenanceSignatureIds: [...new Set(maintenance.signatureIds)].sort(),
+      verifiedMaintenanceSignatureIds: [...new Set(maintenance.verifiedSignatureIds)].sort(),
+      maintenanceSignatureCount: [...new Set(maintenance.signatureIds)].length,
+      verifiedMaintenanceSignatureCount: [...new Set(maintenance.verifiedSignatureIds)].length,
+      maintenancePurposeLabels: [...new Set([
+        ...(Array.isArray(record.maintenancePurposeLabels) ? record.maintenancePurposeLabels : []),
+        ...maintenance.purposeLabels,
+      ])].sort(),
+    };
+  });
+
+  return {
+    present: inspection.present,
+    verified: inspection.verified,
+    count: records.length,
+    signed: records.some((record) => record.maintenanceSignatureCount > 0),
+    maintenanceSignatureVerified: records.some((record) => record.verifiedMaintenanceSignatureCount > 0),
+    maintenancePurposeLabels: [...new Set(records.flatMap((record) => record.maintenancePurposeLabels))].sort(),
+    currentArchiveId: inspection.archiveId,
+    currentStateId: inspection.stateId,
+    currentCohortId: inspection.currentCohortId,
+    currentCohortBindingDigestHex: inspection.currentCohortBindingDigest.value,
+    records,
+  };
 }
 
 function buildLifecycleBundleVerifierInputs(publicKey) {
@@ -564,6 +677,10 @@ async function verifySuccessorBundledSignature({
       targetType: baseline.targetType,
       targetRef: baseline.targetRef,
       targetDigest: baseline.targetDigest,
+      transitionIndex: Number.isInteger(baseline.transitionIndex) ? baseline.transitionIndex : null,
+      maintenancePurposeLabels: Array.isArray(baseline.maintenancePurposeLabels)
+        ? [...baseline.maintenancePurposeLabels]
+        : [],
       signatureBytes: baseline.signatureBytes,
       publicKeyRef: signature?.publicKeyRef || '',
     });
@@ -586,6 +703,7 @@ async function verifySuccessorBundledSignature({
         targetRef: signature?.targetRef || '',
       }),
       signatureBytes: decodedSignatureBytes,
+      maintenancePurposeLabels: [],
       publicKeyRef: signature?.publicKeyRef || '',
     });
   }
@@ -635,6 +753,7 @@ async function verifySuccessorExternalSignature({
     targetType: 'archive-state',
     targetRef: `state:${stateId}`,
     targetDigest: { alg: 'SHA3-512', value: stateId },
+    maintenancePurposeLabels: [],
     signatureBytes: signature.bytes,
   });
 }
@@ -807,6 +926,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     externalTimestamps: Array.isArray(verificationOptions.timestamps) ? verificationOptions.timestamps : [],
     signatureResults: results.filter((item) => item.signatureBytes instanceof Uint8Array),
   });
+  const transitionReport = buildSuccessorTransitionReport(lifecycleBundle, results);
 
   const userPinProvided = (
     normalizedPinnedPqPins.length > 0 ||
@@ -841,6 +961,10 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
           otsStampedDigestHex: result.otsStampedDigestHex,
           targetRef: result.targetRef,
           targetType: result.targetType,
+          transitionIndex: Number.isInteger(result.transitionIndex) ? result.transitionIndex : null,
+          maintenancePurposeLabels: Array.isArray(result.maintenancePurposeLabels)
+            ? [...result.maintenancePurposeLabels]
+            : [],
         })),
       status: {
         archiveApprovalSignatureVerified: counts.validArchiveApproval > 0,
@@ -850,6 +974,8 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
         bundlePinned: counts.archiveApprovalBundlePinnedValidTotal > 0,
         userPinned: counts.archiveApprovalUserPinnedValidTotal > 0,
         userPinProvided,
+        transitionRecordPresent: transitionReport.present,
+        transitionRecordsVerified: transitionReport.verified,
         maintenanceSignatureVerified: counts.validMaintenance > 0,
         sourceEvidenceSignatureVerified: counts.validSourceEvidence > 0,
         otsEvidenceLinked: timestampEvidence.length > 0,
@@ -857,6 +983,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     },
     policy,
     timestampEvidence,
+    transitionReport,
     warnings: [],
   };
 }
@@ -868,6 +995,7 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
   }
 
   let candidates = rawCandidates;
+  let candidateStateAnalysis = analyzeSameStateSuccessorCohorts(candidates);
   let selectionSource = 'embedded';
   let uploadedArchiveState = null;
 
@@ -877,6 +1005,7 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     if (candidates.length === 0) {
       throw new Error('Provided archive-state descriptor does not match any shard archive/state candidate');
     }
+    candidateStateAnalysis = analyzeSameStateSuccessorCohorts(candidates);
     selectionSource = 'uploaded-archive-state';
   }
 
@@ -913,6 +1042,9 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     selectionSource = 'uploaded-lifecycle-bundle';
   } else {
     if (candidates.length > 1) {
+      if (candidateStateAnalysis.states.length === 1 && candidateStateAnalysis.states[0].forkDetected) {
+        throw new Error(buildSameStateForkRejectionMessage(candidateStateAnalysis.states[0]));
+      }
       if (uploadedArchiveState) {
         throw new Error('Selected archive-state descriptor matches multiple shard cohorts. Provide the lifecycle bundle to select one cohort.');
       }
@@ -942,6 +1074,17 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     }
   }
 
+  const selectedStateAnalysis = candidateStateAnalysis.byState.get(`${candidate.archiveId}:${candidate.stateId}`) || {
+    archiveId: candidate.archiveId,
+    stateId: candidate.stateId,
+    cohortIds: [candidate.cohortId],
+    forkDetected: false,
+    mixedLifecycleBundleVariantCohorts: candidate.embeddedLifecycleBundles.size > 1 ? [candidate.cohortId] : [],
+  };
+  if (selectedStateAnalysis.forkDetected) {
+    throw new Error(buildSameStateForkRejectionMessage(selectedStateAnalysis));
+  }
+
   const authenticity = await evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verificationOptions);
   authenticity.warnings = [...new Set((authenticity.warnings || []).filter(Boolean))];
   if (!authenticity.policy.satisfied) {
@@ -956,6 +1099,11 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     selectionSource,
     lifecycleBundleSource,
     availableLifecycleBundleDigests: [...candidate.embeddedLifecycleBundles.keys()].sort(),
+    cohortSelection: {
+      sameStateForkDetected: selectedStateAnalysis.forkDetected,
+      knownCohortIdsForState: [...selectedStateAnalysis.cohortIds],
+      mixedLifecycleBundleVariantCohorts: [...selectedStateAnalysis.mixedLifecycleBundleVariantCohorts],
+    },
     authenticity,
   };
 }
@@ -1795,6 +1943,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   }
 
   const successorStatus = archiveContext.authenticity.verification.status;
+  const transitionReport = archiveContext.authenticity.transitionReport;
   return {
     qencBytes,
     privKey,
@@ -1823,9 +1972,20 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     manifestSource: archiveContext.selectionSource,
     selectionSource: archiveContext.selectionSource,
     lifecycleBundleSource: archiveContext.lifecycleBundleSource,
+    lifecycleVerification: {
+      transitions: transitionReport,
+      cohorts: {
+        forkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
+        knownCohortIdsForState: [...archiveContext.cohortSelection.knownCohortIdsForState],
+        mixedLifecycleBundleVariantsWithinSelectedCohort: bundleCohortMixed,
+        mixedLifecycleBundleVariantCohorts: [...archiveContext.cohortSelection.mixedLifecycleBundleVariantCohorts],
+        availableLifecycleBundleDigests: [...archiveContext.availableLifecycleBundleDigests],
+      },
+    },
     authenticity: {
       policy: archiveContext.authenticity.policy,
       verification: archiveContext.authenticity.verification,
+      transitionReport,
       warnings: [...new Set(authenticityWarnings.filter(Boolean))],
       status: {
         integrityVerified: true,
@@ -1836,7 +1996,11 @@ async function restoreSuccessorFromShards(shards, options = {}) {
         bundlePinned: successorStatus.bundlePinned,
         userPinned: successorStatus.userPinned,
         userPinProvided: successorStatus.userPinProvided,
+        transitionRecordPresent: transitionReport.present,
+        transitionRecordsVerified: transitionReport.verified,
+        cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
         bundleCohortMixed,
+        mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,
         maintenanceSignatureVerified: successorStatus.maintenanceSignatureVerified,
         sourceEvidenceSignatureVerified: successorStatus.sourceEvidenceSignatureVerified,
         otsEvidenceLinked: successorStatus.otsEvidenceLinked,

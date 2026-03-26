@@ -83,6 +83,11 @@ const PUBLIC_KEY_ENCODINGS = new Set(['base64', 'stellar-address']);
 const SIGNATURE_FORMATS = new Set(['qsig', 'stellar-sig']);
 const SIGNATURE_FAMILIES = new Set(['archive-approval', 'maintenance', 'source-evidence']);
 const TARGET_TYPES = new Set(['archive-state', 'transition-record', 'source-evidence']);
+const MAINTENANCE_SIGNATURE_PURPOSE_LABELS = new Set([
+  'maintenance-authorization',
+  'operator-attestation',
+  'witness',
+]);
 const BODY_DEFINITION_INCLUDES = Object.freeze(['fragment-len32-stream']);
 const BODY_DEFINITION_EXCLUDES = Object.freeze([
   'qcont-header',
@@ -821,8 +826,149 @@ function listLifecycleSignatureEntries(bundle) {
   ];
 }
 
+function dedupeSortedStrings(values) {
+  return [...new Set((Array.isArray(values) ? values : []).filter(Boolean))].sort();
+}
+
+function normalizeMaintenancePurposeLabels(value) {
+  const source = Array.isArray(value) ? value : [value];
+  const labels = [];
+  for (const entry of source) {
+    const text = typeof entry === 'string' ? entry.trim() : '';
+    if (MAINTENANCE_SIGNATURE_PURPOSE_LABELS.has(text)) {
+      labels.push(text);
+    }
+  }
+  return dedupeSortedStrings(labels);
+}
+
+function resolveTransitionMaintenancePurposeLabels(transitionRecord, signatureId = '') {
+  const actorHints = transitionRecord?.actorHints;
+  if (!actorHints || typeof actorHints !== 'object' || Array.isArray(actorHints)) {
+    return [];
+  }
+
+  const labels = [];
+  const bySignature = actorHints.maintenanceSignaturePurposes;
+  if (signatureId && bySignature && typeof bySignature === 'object' && !Array.isArray(bySignature)) {
+    labels.push(...normalizeMaintenancePurposeLabels(bySignature[signatureId]));
+  }
+
+  if (labels.length === 0) {
+    labels.push(...normalizeMaintenancePurposeLabels(actorHints.maintenanceSignaturePurpose));
+  }
+
+  return dedupeSortedStrings(labels);
+}
+
+export function inspectLifecycleTransitions(bundle) {
+  const canonicalArchiveState = canonicalizeArchiveStateDescriptor(bundle.archiveState);
+  const canonicalCurrentCohortBinding = canonicalizeCohortBinding(bundle.currentCohortBinding);
+  const archiveId = canonicalArchiveState.archiveState.archiveId;
+  const stateId = canonicalArchiveState.stateId;
+  const currentCohortBindingDigest = canonicalCurrentCohortBinding.digest;
+  const currentCohortId = deriveCohortId({
+    archiveId,
+    stateId,
+    cohortBindingDigest: currentCohortBindingDigest,
+  });
+  const records = [];
+  const seenDigests = new Set();
+  let priorRecord = null;
+
+  for (let index = 0; index < bundle.transitions.length; index += 1) {
+    const transitionRecord = bundle.transitions[index];
+    const canonicalTransition = canonicalizeTransitionRecord(transitionRecord);
+    const digestHex = canonicalTransition.digest.value;
+    const field = `lifecycleBundle.transitions[${index}]`;
+
+    if (seenDigests.has(digestHex)) {
+      throw new Error(`${field} duplicate transition-record digest`);
+    }
+    seenDigests.add(digestHex);
+
+    if (transitionRecord.archiveId !== archiveId) {
+      throw new Error(`${field}.archiveId mismatch`);
+    }
+    if (transitionRecord.transitionType !== TRANSITION_TYPE_DEFAULT) {
+      throw new Error(`${field}.transitionType is not supported in Phase 5`);
+    }
+    if (transitionRecord.fromStateId !== transitionRecord.toStateId) {
+      throw new Error(`${field} changes stateId, which is not supported in Phase 5`);
+    }
+    if (transitionRecord.fromStateId !== stateId || transitionRecord.toStateId !== stateId) {
+      throw new Error(`${field} does not reference the current lifecycle bundle stateId`);
+    }
+
+    const expectedFromCohortId = deriveCohortId({
+      archiveId,
+      stateId: transitionRecord.fromStateId,
+      cohortBindingDigest: transitionRecord.fromCohortBindingDigest,
+    });
+    if (transitionRecord.fromCohortId !== expectedFromCohortId) {
+      throw new Error(`${field}.fromCohortId mismatch`);
+    }
+
+    const expectedToCohortId = deriveCohortId({
+      archiveId,
+      stateId: transitionRecord.toStateId,
+      cohortBindingDigest: transitionRecord.toCohortBindingDigest,
+    });
+    if (transitionRecord.toCohortId !== expectedToCohortId) {
+      throw new Error(`${field}.toCohortId mismatch`);
+    }
+    if (transitionRecord.fromCohortId === transitionRecord.toCohortId) {
+      throw new Error(`${field} does not change cohortId`);
+    }
+
+    if (priorRecord) {
+      if (priorRecord.transitionRecord.toCohortId !== transitionRecord.fromCohortId) {
+        throw new Error(`${field}.fromCohortId does not continue the prior transition chain`);
+      }
+      if (
+        priorRecord.transitionRecord.toCohortBindingDigest.value !==
+        transitionRecord.fromCohortBindingDigest.value
+      ) {
+        throw new Error(`${field}.fromCohortBindingDigest does not continue the prior transition chain`);
+      }
+    }
+
+    const record = {
+      index,
+      transitionRecord,
+      canonical: canonicalTransition.canonical,
+      bytes: canonicalTransition.bytes,
+      digest: canonicalTransition.digest,
+      maintenancePurposeLabels: resolveTransitionMaintenancePurposeLabels(transitionRecord, ''),
+    };
+    records.push(record);
+    priorRecord = record;
+  }
+
+  if (records.length > 0) {
+    const lastRecord = records[records.length - 1];
+    if (lastRecord.transitionRecord.toCohortId !== currentCohortId) {
+      throw new Error('lifecycleBundle.transitions final toCohortId does not match lifecycleBundle.currentCohortBinding');
+    }
+    if (lastRecord.transitionRecord.toCohortBindingDigest.value !== currentCohortBindingDigest.value) {
+      throw new Error('lifecycleBundle.transitions final toCohortBindingDigest does not match lifecycleBundle.currentCohortBindingDigest');
+    }
+  }
+
+  return {
+    present: records.length > 0,
+    verified: true,
+    archiveId,
+    stateId,
+    currentCohortId,
+    currentCohortBindingDigest,
+    records,
+  };
+}
+
 function buildLifecycleTargetRegistry(bundle) {
   const canonicalArchiveState = canonicalizeArchiveStateDescriptor(bundle.archiveState);
+  const transitionInspection = inspectLifecycleTransitions(bundle);
   const archiveApprovalTarget = {
     signatureFamily: 'archive-approval',
     targetType: 'archive-state',
@@ -831,14 +977,16 @@ function buildLifecycleTargetRegistry(bundle) {
     bytes: canonicalArchiveState.bytes,
   };
   const transitionTargets = new Map();
-  for (const transition of bundle.transitions) {
-    const canonicalTransition = canonicalizeTransitionRecord(transition);
-    transitionTargets.set(canonicalTransition.digest.value, {
+  for (const record of transitionInspection.records) {
+    transitionTargets.set(record.digest.value, {
       signatureFamily: 'maintenance',
       targetType: 'transition-record',
-      targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
-      digest: canonicalTransition.digest,
-      bytes: canonicalTransition.bytes,
+      targetRef: `transition:sha3-512:${record.digest.value}`,
+      digest: record.digest,
+      bytes: record.bytes,
+      transitionRecord: record.transitionRecord,
+      transitionIndex: record.index,
+      maintenancePurposeLabels: record.maintenancePurposeLabels,
     });
   }
   const sourceEvidenceTargets = new Map();
@@ -1021,6 +1169,11 @@ export async function verifyLifecycleSignatureEntry(bundle, signature, options =
       targetDigest: target.digest,
       targetRef: target.targetRef,
       targetType: target.targetType,
+      transitionRecord: target.transitionRecord || null,
+      transitionIndex: Number.isInteger(target.transitionIndex) ? target.transitionIndex : null,
+      maintenancePurposeLabels: target.targetType === 'transition-record'
+        ? resolveTransitionMaintenancePurposeLabels(target.transitionRecord, signature?.id || '')
+        : [],
       signatureBytes,
       publicKey: declaredVerification?.publicKey || null,
     };
@@ -1041,6 +1194,11 @@ export async function verifyLifecycleSignatureEntry(bundle, signature, options =
     targetDigest: target.digest,
     targetRef: target.targetRef,
     targetType: target.targetType,
+    transitionRecord: target.transitionRecord || null,
+    transitionIndex: Number.isInteger(target.transitionIndex) ? target.transitionIndex : null,
+    maintenancePurposeLabels: target.targetType === 'transition-record'
+      ? resolveTransitionMaintenancePurposeLabels(target.transitionRecord, signature?.id || '')
+      : [],
     signatureBytes,
     publicKey: declaredVerification?.publicKey || null,
   };
@@ -1093,6 +1251,7 @@ async function validateLifecycleBundleSemantics(bundle) {
   assertUniqueIds(bundle.attachments.timestamps, 'timestamp');
   const allSignatureEntries = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(allSignatureEntries, 'detached signature');
+  inspectLifecycleTransitions(bundle);
   const registry = buildLifecycleTargetRegistry(bundle);
   validateSignatureTargetConsistency(bundle, registry);
 

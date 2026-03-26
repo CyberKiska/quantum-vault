@@ -112,12 +112,13 @@ function buildRestoreResultSummary(result, resultPanelId) {
   addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', archiveApprovalVerified === true && status.strongPqSignatureVerified !== true);
   addItem(status.bundlePinned === true, 'Bundle signer pinned', archiveApprovalVerified === true && status.bundlePinned !== true);
   if (status.bundleCohortMixed === true) {
-    addItem(false, 'Mixed embedded bundle cohort used', true);
+    addItem(false, 'Mixed embedded lifecycle-bundle variants used', true);
   }
   if (status.userPinProvided === true || status.userPinned === true) {
     addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
   }
   if (hasSuccessorStates) {
+    addItem(status.transitionRecordPresent === true, 'Transition record present', false);
     addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
     addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
   }
