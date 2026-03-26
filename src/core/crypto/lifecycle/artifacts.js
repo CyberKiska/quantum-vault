@@ -100,6 +100,10 @@ const BODY_DEFINITION_EXCLUDES = Object.freeze([
   'external-signatures',
 ]);
 const SOURCE_DIGEST_ALLOWED_ALGS = new Set([SHA3_512_ALG, SHA3_256_ALG, SHA_256_ALG]);
+// This allow-list only covers optional descriptive fields under the Phase 6
+// privacy-preserving profile. Core v1 semantic fields such as sourceEvidenceType,
+// relationType, and sourceObjectType remain operator-controlled strings and are
+// not part of descriptiveFieldOptIn.
 const SOURCE_EVIDENCE_ALLOWED_DESCRIPTIVE_FIELDS = Object.freeze(['mediaType']);
 const PQ_PUBLIC_KEY_LENGTHS = Object.freeze({
   'mldsa-44': ml_dsa44.lengths.publicKey,
@@ -1734,6 +1738,8 @@ export function buildSourceEvidence(params) {
 
   // The Phase 6 privacy-preserving default profile emits only digests and relation metadata
   // unless the caller explicitly opts in to specific allow-listed descriptive fields.
+  // In the current implementation that means mediaType only; the required free-form
+  // semantic strings above are not treated as descriptive-field opt-ins.
   if (descriptiveFieldOptIn.has('mediaType') && params.mediaType != null) {
     sourceEvidence.mediaType = ensureString(params.mediaType, 'mediaType');
   }

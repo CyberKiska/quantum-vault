@@ -3207,6 +3207,30 @@ function buildCases() {
       },
     },
     {
+      name: 'successor restore does not let source-evidence-only signatures satisfy archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-policy-source-evidence-only'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: false,
+          includeSourceEvidence: true,
+          timestampTargetFamily: null,
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} }),
+          /archive-approval signature satisfies archive policy/i,
+          'successor restore unexpectedly let source-evidence-only signatures satisfy archive policy'
+        );
+      },
+    },
+    {
       name: 'successor restore fails closed on unresolved publicKeyRef in an uploaded lifecycle bundle',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({
