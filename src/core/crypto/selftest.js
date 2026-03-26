@@ -4,7 +4,7 @@ import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
 import { attachLifecycleBundleToShards } from './qcont/lifecycle-attach.js';
-import { buildLifecycleQcontShards, parseLifecycleShard, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
+import { buildLifecycleQcontShards, parseLifecycleShard, reshareSameState, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import {
@@ -338,6 +338,66 @@ async function rewriteLifecycleBundleSubset(parsedShards, lifecycleBundleBytes, 
     const rewritten = rewriteLifecycleBundleInShard(shard, lifecycleBundleBytes);
     return parseLifecycleShard(await blobToBytes(rewritten.blob));
   }));
+}
+
+async function buildResharePredecessorSample({
+  payloadBytes = textBytes('same-state-reshare-predecessor'),
+  authPolicyLevel = 'integrity-only',
+  minValidSignatures = 1,
+  bundleVariantOptions = null,
+} = {}) {
+  const sample = await buildSuccessorRestoreSample({
+    payloadBytes,
+    authPolicyLevel,
+    minValidSignatures,
+  });
+  if (!bundleVariantOptions) {
+    return {
+      ...sample,
+      predecessorLifecycleBundle: sample.split.lifecycleBundle,
+      predecessorLifecycleBundleBytes: sample.split.lifecycleBundleBytes,
+      predecessorLifecycleBundleDigestHex: sample.split.lifecycleBundleDigestHex,
+    };
+  }
+
+  const bundleVariant = await buildSuccessorVerificationBundle(sample.split, bundleVariantOptions);
+  const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+  return {
+    ...sample,
+    parsed: rewritten,
+    predecessorLifecycleBundle: bundleVariant.bundle,
+    predecessorLifecycleBundleBytes: bundleVariant.bundleBytes,
+    predecessorLifecycleBundleDigestHex: bundleVariant.digestHex,
+    bundleVariant,
+  };
+}
+
+async function parseResharedShardSet(reshareResult) {
+  return Promise.all(
+    reshareResult.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob)))
+  );
+}
+
+function buildMaintenanceArtifactsFactory({ keyId = 'pk-maintenance', signatureId = 'maintenance-sig-reshare' } = {}) {
+  return async ({ transitionRecordBytes, transitionRecordDigest, targetRef }) => {
+    const qsig = buildQsigFixture(transitionRecordBytes);
+    return {
+      publicKeys: [
+        buildBundledMlDsaPublicKey(keyId, qsig.signerPublicKey),
+      ],
+      maintenanceSignatures: [
+        buildLifecycleQsigEntry({
+          id: signatureId,
+          signatureFamily: 'maintenance',
+          targetType: 'transition-record',
+          targetRef,
+          targetDigest: transitionRecordDigest.value,
+          qsigBytes: qsig.qsigBytes,
+          publicKeyRef: keyId,
+        }),
+      ],
+    };
+  };
 }
 
 async function buildSuccessorVerificationBundle(split, {
@@ -2903,6 +2963,262 @@ function buildCases() {
           }),
           'successor restore unexpectedly accepted mismatched OTS linkage during restore'
         );
+      },
+    },
+    {
+      name: 'same-state resharing keeps the archive state unchanged while emitting a new cohort and required transition record',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-same-state-reshare-valid'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:30:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-valid-reshare' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.archiveId === sample.split.archiveId, 'reshare archiveId changed unexpectedly');
+        assert(reshared.stateId === sample.split.stateId, 'reshare stateId changed unexpectedly');
+        assert(reshared.predecessorCohortId === sample.split.cohortId, 'reshare predecessor cohortId mismatch');
+        assert(reshared.cohortId !== sample.split.cohortId, 'reshare should emit a fresh successor cohortId');
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'reshare changed archive-state bytes');
+        assert(reshared.archiveStateDigestHex === sample.split.archiveStateDigestHex, 'reshare changed archive-state digest');
+        assert(reshared.archiveState.qenc.qencHash === sample.split.archiveState.qenc.qencHash, 'reshare changed qencHash');
+        assert(reshared.archiveState.qenc.containerId === sample.split.archiveState.qenc.containerId, 'reshare changed containerId');
+        assert(reshared.transitionRecord.fromStateId === sample.split.stateId, 'transition fromStateId mismatch');
+        assert(reshared.transitionRecord.toStateId === sample.split.stateId, 'transition toStateId mismatch');
+        assert(reshared.transitionRecord.fromCohortId === sample.split.cohortId, 'transition fromCohortId mismatch');
+        assert(reshared.transitionRecord.toCohortId === reshared.cohortId, 'transition toCohortId mismatch');
+        assert(reshared.lifecycleBundle.transitions.length === sample.predecessorLifecycleBundle.transitions.length + 1, 'reshare did not append exactly one transition record');
+        assert(reshared.maintenanceSignatureCountAdded === 0, 'reshare should not require maintenance signatures by default');
+        assert(reshared.lifecycleBundle.attachments.maintenanceSignatures.length === sample.predecessorLifecycleBundle.attachments.maintenanceSignatures.length, 'unexpected maintenance signature carry-forward delta');
+        assert(reshared.zeroization.attempted === true, 'reshare should attempt best-effort zeroization');
+        assert(reshared.zeroization.privateKeyBytesCleared === true, 'reshare should clear reconstructed private key bytes');
+        assert(reshared.semantics.sameStateAvailabilityMaintenance === true, 'reshare should report availability-maintenance semantics');
+        assert(reshared.semantics.archiveReapprovalPerformed === false, 'reshare must not report archive re-approval');
+        assert(reshared.semantics.plaintextDecrypted === false, 'reshare must not report plaintext decryption');
+        assert(reshared.semantics.sourceEvidenceCreated === false, 'reshare must not report fresh source evidence');
+        assert(reshared.semantics.compromiseRepairClaimed === false, 'reshare must not claim compromise repair');
+        assert(
+          reshared.operationalWarnings.some((warning) => warning.includes('cannot be proven')),
+          'reshare should warn that predecessor shard destruction cannot be proven'
+        );
+        assert(
+          reshared.operationalWarnings.some((warning) => warning.includes('does not revoke leaked predecessor quorum material')),
+          'reshare should warn that same-state resharing does not repair old-quorum leakage'
+        );
+
+        const reparsed = await parseResharedShardSet(reshared);
+        assert(reparsed.length === 5, 'expected five reshared successor shards');
+        assert(reparsed.every((shard) => shard.stateId === sample.split.stateId), 'reshared shard stateId mismatch');
+        assert(reparsed.every((shard) => shard.cohortId === reshared.cohortId), 'reshared shard cohortId mismatch');
+      },
+    },
+    {
+      name: 'same-state resharing allows changed n/k/t while keeping codecId frozen under the v1 schema',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-same-state-reshare-nkt-change'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 7, k: 5 }, {
+          transition: {
+            reasonCode: 'capacity-adjustment',
+            performedAt: '2026-03-26T09:31:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-nkt-change' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.stateId === sample.split.stateId, 'changed n/k/t resharing changed stateId unexpectedly');
+        assert(reshared.cohortBinding.sharding.reedSolomon.n === 7, 'successor n mismatch');
+        assert(reshared.cohortBinding.sharding.reedSolomon.k === 5, 'successor k mismatch');
+        assert(reshared.cohortBinding.sharding.reedSolomon.parity === 2, 'successor parity mismatch');
+        assert(reshared.cohortBinding.sharding.shamir.threshold === 6, 'successor t mismatch');
+        assert(reshared.cohortBinding.sharding.reedSolomon.codecId === 'QV-RS-ErasureCodes-v1', 'successor codecId should remain schema-frozen');
+        assert(reshared.cohortBinding.sharding.shamir.threshold !== sample.split.cohortBinding.sharding.shamir.threshold, 'successor threshold should differ from predecessor threshold');
+      },
+    },
+    {
+      name: 'same-state resharing rejects mixed predecessor cohorts',
+      fn: async () => {
+        const sampleA = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-mixed-predecessor-a'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const sampleB = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-mixed-predecessor-b'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const mixed = [
+          ...sampleA.parsed.slice(0, 3),
+          ...sampleB.parsed.slice(0, 2),
+        ];
+
+        await expectFailure(
+          () => reshareSameState(mixed, { n: 5, k: 3 }, { onLog: () => {}, onWarn: () => {} }),
+          'same-state resharing unexpectedly accepted mixed predecessor cohorts'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects archive-state mutation attempts',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-archive-state-mutation-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        await expectFailure(
+          () => reshareSameState(sample.parsed, {
+            n: 5,
+            k: 3,
+            archiveId: 'aa'.repeat(32),
+          }, { onLog: () => {}, onWarn: () => {} }),
+          'same-state resharing unexpectedly accepted an archiveId override'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects forbidden state-level field overrides',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-forbidden-state-field-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        await expectFailure(
+          () => reshareSameState(sample.parsed, {
+            n: 5,
+            k: 3,
+            qencHash: 'ff'.repeat(64),
+          }, { onLog: () => {}, onWarn: () => {} }),
+          'same-state resharing unexpectedly accepted a qencHash override'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing preserves archive-approval signatures across resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-archive-approval-survives'),
+          authPolicyLevel: 'any-signature',
+          bundleVariantOptions: {
+            authPolicyLevel: 'any-signature',
+            minValidSignatures: 1,
+            includeArchiveApproval: true,
+            includeMaintenance: false,
+            includeSourceEvidence: false,
+          },
+        });
+
+        const predecessorSignature = sample.predecessorLifecycleBundle.attachments.archiveApprovalSignatures[0];
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:32:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-archive-approval' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.lifecycleBundle.attachments.archiveApprovalSignatures.length === 1, 'archive-approval signature should carry forward exactly once');
+        assert(
+          reshared.lifecycleBundle.attachments.archiveApprovalSignatures[0].signature === predecessorSignature.signature,
+          'archive-approval signature bytes changed unexpectedly during resharing'
+        );
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should remain valid after resharing');
+        assert(restored.authenticity.status.policySatisfied === true, 'archive policy should still be satisfied after resharing');
+      },
+    },
+    {
+      name: 'same-state resharing preserves prior OTS linkage over archive-approval signatures',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-archive-approval-ots-survives'),
+          authPolicyLevel: 'any-signature',
+          bundleVariantOptions: {
+            authPolicyLevel: 'any-signature',
+            minValidSignatures: 1,
+            includeArchiveApproval: true,
+            includeMaintenance: false,
+            includeSourceEvidence: false,
+            timestampTargetFamily: 'archive-approval',
+          },
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:33:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-archive-approval-ots' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should still verify after resharing');
+        assert(restored.authenticity.status.otsEvidenceLinked === true, 'archive-approval OTS linkage should remain valid after resharing');
+      },
+    },
+    {
+      name: 'same-state resharing emits a required transition record and supports optional maintenance signatures',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-transition-record-and-maintenance'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:34:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-maintenance-signature' },
+            notes: null,
+          },
+          buildMaintenanceArtifacts: buildMaintenanceArtifactsFactory(),
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.lifecycleBundle.transitions.length === sample.predecessorLifecycleBundle.transitions.length + 1, 'reshare should always emit one new transition record');
+        assert(reshared.maintenanceSignatureCountAdded === 1, 'reshare should report the added maintenance signature');
+        assert(reshared.lifecycleBundle.attachments.maintenanceSignatures.length === 1, 'reshare should embed the new maintenance signature');
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'optional maintenance signature should verify after resharing');
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'maintenance signatures must not count toward archive policy');
       },
     },
     {

@@ -10,7 +10,10 @@ import {
 import { buildQcontShards as buildShardSet } from '../core/crypto/qcont/build.js';
 import { attachManifestBundleToShards as attachShardBundle } from '../core/crypto/qcont/attach.js';
 import { attachLifecycleBundleToShards as attachLifecycleShardBundle } from '../core/crypto/qcont/lifecycle-attach.js';
-import { parseLifecycleShard as parseLifecycleQcontShardBytes } from '../core/crypto/qcont/lifecycle-shard.js';
+import {
+    parseLifecycleShard as parseLifecycleQcontShardBytes,
+    reshareSameState as reshareSameStateShardSet,
+} from '../core/crypto/qcont/lifecycle-shard.js';
 import { parseShard as parseQcontShardBytes, restoreFromShards as restoreShardSet } from '../core/crypto/qcont/restore.js';
 import { runSelfTest as runCoreSelfTest } from '../core/crypto/selftest.js';
 import {
@@ -76,6 +79,11 @@ export function parseShard(bytes, options = {}) {
 
 export async function parseLifecycleShard(bytes, options = {}) {
     return parseLifecycleQcontShardBytes(bytes, options);
+}
+
+export async function reshareSameState(shards, params, options = {}) {
+    const erasureRuntime = requireErasureRuntime();
+    return reshareSameStateShardSet(shards, params, { ...options, erasureRuntime });
 }
 
 export async function parseShardForRestore(bytes, options = {}) {
