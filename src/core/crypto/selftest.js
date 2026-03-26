@@ -91,6 +91,19 @@ function textBytes(value) {
   return new TextEncoder().encode(value);
 }
 
+function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, options = {}) {
+  const familyByField = {
+    archiveApprovalSignatures: 'archive-approval',
+    maintenanceSignatures: 'maintenance',
+    sourceEvidenceSignatures: 'source-evidence',
+  };
+  return verifyLifecycleSignatureEntry(bundle, bundle.attachments[field][index], {
+    ...options,
+    expectedFamily: familyByField[field],
+    expectedField: field,
+  });
+}
+
 function legacyCanonicalizeQvC14n(value) {
   function serializeNumber(numberValue) {
     if (!Number.isFinite(numberValue)) {
@@ -2054,7 +2067,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor lifecycle bundle fails closed on unknown publicKeyRef',
+      name: 'successor lifecycle bundle parser accepts structurally valid entries with unknown publicKeyRef and defers rejection to verifier time',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const mutated = cloneJson(sample.lifecycleBundle);
@@ -2073,9 +2086,10 @@ function buildCases() {
           },
         ];
 
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted an unknown publicKeyRef'
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'archiveApprovalSignatures'),
+          'lifecycle signature verifier unexpectedly accepted an unknown publicKeyRef'
         );
       },
     },
@@ -2132,7 +2146,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor lifecycle bundle rejects invalid archive-approval family mappings',
+      name: 'successor archive-approval verification rejects invalid family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2151,14 +2165,15 @@ function buildCases() {
           },
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted an invalid signatureFamily / targetType mapping'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects archive-approval targetRef mismatches',
+      name: 'successor archive-approval verification rejects targetRef mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2177,14 +2192,15 @@ function buildCases() {
           },
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a mismatched targetRef'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted a mismatched targetRef'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects archive-approval targetDigest mismatches',
+      name: 'successor archive-approval verification rejects targetDigest mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2203,14 +2219,15 @@ function buildCases() {
           },
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a mismatched targetDigest'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted a mismatched targetDigest'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects incompatible publicKeyRef entries',
+      name: 'successor archive-approval verification rejects incompatible publicKeyRef entries',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2240,14 +2257,15 @@ function buildCases() {
           },
         ];
 
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted an incompatible publicKeyRef'
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted an incompatible publicKeyRef'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects non-verifying publicKeyRef entries',
+      name: 'successor archive-approval verification rejects non-verifying publicKeyRef entries',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2277,14 +2295,15 @@ function buildCases() {
           },
         ];
 
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a non-verifying publicKeyRef'
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted a non-verifying publicKeyRef'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects OTS proofs that do not stamp the exact detached-signature bytes',
+      name: 'successor lifecycle bundle parser preserves OTS entries even when detached-signature linkage is wrong',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2314,10 +2333,8 @@ function buildCases() {
           },
         ];
 
-        await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted OTS evidence for different detached-signature bytes'
-        );
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        assert(canonicalBundle.lifecycleBundle.attachments.timestamps.length === 1, 'expected one deferred-invalid OTS attachment');
       },
     },
     {
@@ -2368,7 +2385,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor lifecycle bundle rejects invalid maintenance family mappings',
+      name: 'successor maintenance verification rejects invalid family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2385,14 +2402,15 @@ function buildCases() {
           }),
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted an invalid maintenance signatureFamily / targetType mapping'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects maintenance targetRef mismatches',
+      name: 'successor maintenance verification rejects targetRef mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2409,14 +2427,15 @@ function buildCases() {
           }),
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a mismatched maintenance targetRef'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted a mismatched targetRef'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects maintenance targetDigest mismatches',
+      name: 'successor maintenance verification rejects targetDigest mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2433,9 +2452,10 @@ function buildCases() {
           }),
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a mismatched maintenance targetDigest'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted a mismatched targetDigest'
         );
       },
     },
@@ -2549,7 +2569,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor lifecycle bundle rejects non-verifying maintenance publicKeyRef entries',
+      name: 'successor maintenance verification rejects non-verifying publicKeyRef entries',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2571,9 +2591,10 @@ function buildCases() {
           }),
         ];
 
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a non-verifying maintenance publicKeyRef'
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted a non-verifying publicKeyRef'
         );
       },
     },
@@ -2628,7 +2649,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor lifecycle bundle rejects invalid source-evidence family mappings',
+      name: 'successor source-evidence verification rejects invalid family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2645,14 +2666,15 @@ function buildCases() {
           }),
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted an invalid source-evidence signatureFamily / targetType mapping'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects source-evidence targetRef mismatches',
+      name: 'successor source-evidence verification rejects targetRef mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2669,14 +2691,15 @@ function buildCases() {
           }),
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a mismatched source-evidence targetRef'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted a mismatched targetRef'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects source-evidence targetDigest mismatches',
+      name: 'successor source-evidence verification rejects targetDigest mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2693,14 +2716,15 @@ function buildCases() {
           }),
         ];
 
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a mismatched source-evidence targetDigest'
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted a mismatched targetDigest'
         );
       },
     },
     {
-      name: 'successor lifecycle bundle rejects non-verifying source-evidence publicKeyRef entries',
+      name: 'successor source-evidence verification rejects non-verifying publicKeyRef entries',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2722,9 +2746,10 @@ function buildCases() {
           }),
         ];
 
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
         await expectFailure(
-          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
-          'lifecycle bundle unexpectedly accepted a non-verifying source-evidence publicKeyRef'
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted a non-verifying publicKeyRef'
         );
       },
     },
@@ -3201,7 +3226,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor lifecycle bundle rejects archive-approval signatures created over lifecycle-bundle bytes',
+      name: 'successor restore ignores archive-approval signatures created over lifecycle-bundle bytes and still enforces archive policy',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({
           payloadBytes: textBytes('successor-policy-wrong-archive-approval-target'),
@@ -3230,9 +3255,11 @@ function buildCases() {
           timestamps: [],
         };
 
-        await expectFailure(
-          () => rewriteLifecycleBundleSubset(sample.parsed, canonicalizeJsonToBytes(bundle)),
-          'successor lifecycle bundle unexpectedly accepted archive-approval signatures created over lifecycle-bundle bytes'
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, canonicalizeJsonToBytes(bundle));
+        await expectFailureWithMessage(
+          () => restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} }),
+          /no verified archive-approval signature satisfies archive policy/i,
+          'successor restore unexpectedly satisfied policy with archive-approval signatures created over lifecycle-bundle bytes'
         );
       },
     },
@@ -3328,10 +3355,62 @@ function buildCases() {
       },
     },
     {
-      name: 'successor restore fails closed on unresolved publicKeyRef in an uploaded lifecycle bundle',
+      name: 'successor restore reports and ignores unresolved publicKeyRef entries when another archive-approval signature satisfies policy',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({
           payloadBytes: textBytes('successor-restore-publickeyref-fail-closed'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const validQsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-valid', validQsig.signerPublicKey),
+        ];
+        bundle.attachments.archiveApprovalSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'archive-approval-valid',
+            signatureFamily: 'archive-approval',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: sample.split.stateId,
+            qsigBytes: validQsig.qsigBytes,
+            publicKeyRef: 'pk-valid',
+          }),
+          {
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.split.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'missing-public-key',
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+        });
+        assert(restored.authenticity.status.policySatisfied === true, 'valid archive-approval signature should still satisfy policy');
+        assert(restored.authenticity.verification.results.some((item) => item.ok === false), 'expected one invalid archive-approval result');
+        assert(
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('did not verify and were ignored')),
+          'expected unresolved publicKeyRef entry to produce an ignore warning'
+        );
+      },
+    },
+    {
+      name: 'successor restore still fails when unresolved publicKeyRef entries leave archive policy unsatisfied',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-publickeyref-policy-required'),
           authPolicyLevel: 'any-signature',
         });
         const qsig = buildQsigFixture(sample.split.archiveStateBytes);
@@ -3352,18 +3431,19 @@ function buildCases() {
           },
         ];
 
-        await expectFailure(
+        await expectFailureWithMessage(
           () => restoreFromShards(sample.parsed, {
             onLog: () => {},
             onError: () => {},
             verification: { lifecycleBundleBytes: canonicalizeJsonToBytes(bundle) },
           }),
-          'successor restore unexpectedly accepted an uploaded lifecycle bundle with an unresolved publicKeyRef'
+          /no verified archive-approval signature satisfies archive policy/i,
+          'successor restore unexpectedly satisfied policy with only an unresolved publicKeyRef entry'
         );
       },
     },
     {
-      name: 'successor restore fails closed on mismatched OTS linkage in an uploaded lifecycle bundle',
+      name: 'successor restore reports and ignores mismatched OTS linkage in an uploaded lifecycle bundle',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({
           payloadBytes: textBytes('successor-restore-ots-fail-closed'),
@@ -3394,13 +3474,17 @@ function buildCases() {
           },
         ];
 
-        await expectFailure(
-          () => restoreFromShards(sample.parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: { lifecycleBundleBytes: canonicalizeJsonToBytes(bundle) },
-          }),
-          'successor restore unexpectedly accepted mismatched OTS linkage during restore'
+        const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+        });
+        assert(restored.authenticity.status.policySatisfied === true, 'mismatched OTS linkage must not block archive policy');
+        assert(restored.authenticity.timestampEvidence.length === 0, 'mismatched OTS linkage should be ignored for evidence reporting');
+        assert(
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('did not link cleanly and was ignored')),
+          'expected mismatched OTS linkage to produce an explicit warning'
         );
       },
     },
@@ -3952,7 +4036,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor restore rejects mixed same-state cohorts even when both cohorts are individually valid',
+      name: 'successor restore accepts an explicitly selected same-state cohort while warning about known forks',
       fn: async () => {
         const sample = await buildResharePredecessorSample({
           payloadBytes: textBytes('phase5-same-state-fork'),
@@ -3982,17 +4066,25 @@ function buildCases() {
           ...successorParsed.slice(0, 4),
         ];
 
-        const rejectionMessage = await expectFailureWithMessage(
-          () => restoreFromShards(mixed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: { lifecycleBundleBytes: successor.lifecycleBundleBytes },
-          }),
-          /Multiple valid cohorts were detected[\s\S]*will not auto-select a winner/i,
-          'successor restore unexpectedly accepted mixed same-state cohorts'
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: successor.lifecycleBundleBytes },
+        });
+        assert(restored.cohortId === successorOnly.cohortId, 'explicit lifecycle-bundle selection should restore the selected cohort');
+        assert(restored.lifecycleVerification.cohorts.forkDetected === true, 'same-state fork should still be reported');
+        assert(
+          restored.lifecycleVerification.cohorts.knownCohortIdsForState.includes(predecessorOnly.cohortId),
+          'fork reporting should include the predecessor cohortId'
         );
-        assert(rejectionMessage.includes(predecessorOnly.cohortId), 'same-state fork rejection should report the predecessor cohortId');
-        assert(rejectionMessage.includes(successorOnly.cohortId), 'same-state fork rejection should report the successor cohortId');
+        assert(
+          restored.lifecycleVerification.cohorts.knownCohortIdsForState.includes(successorOnly.cohortId),
+          'fork reporting should include the successor cohortId'
+        );
+        assert(
+          restored.authenticity.warnings.some((warning) => warning.includes('did not auto-select a winner')),
+          'explicit fork selection should still warn that no winner was auto-selected'
+        );
       },
     },
     {

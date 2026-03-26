@@ -1,7 +1,7 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { bytesEqual, bytesToUtf8, toHex } from '../bytes.js';
 import { parseJsonBytesStrict } from '../manifest/strict-json.js';
-import { buildQencHeader, parseQencHeader } from '../qenc/format.js';
+import { parseQencHeader } from '../qenc/format.js';
 import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL } from '../constants.js';
 import { DEFAULT_CRYPTO_PROFILE, getNonceContractForAeadMode } from '../policy.js';
 import { decapsulate } from '../mlkem.js';
@@ -24,8 +24,11 @@ import {
   parseLifecycleBundleBytes,
   REED_SOLOMON_CODEC_ID,
 } from '../lifecycle/artifacts.js';
-import { mergeLifecycleShardIntoCohortGroups, normalizeHexString } from './lifecycle-cohort-shared.js';
-import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
+import {
+  mergeLifecycleShardIntoCohortGroups,
+  normalizeHexString,
+  reconstructLifecycleCohortMaterial,
+} from './lifecycle-cohort-shared.js';
 
 export const LIFECYCLE_QCONT_MAGIC = 'QVC1';
 export const LIFECYCLE_QCONT_FORMAT_VERSION = 'QVqcont-7';
@@ -282,302 +285,32 @@ async function selectPredecessorLifecycleBundle(candidate, options = {}) {
 }
 
 async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog, onWarn }) {
-  const archiveState = candidate.archiveState;
-  const cohortBinding = candidate.cohortBinding;
-  const group = candidate.shards.slice();
-
-  const shamir = cohortBinding?.sharding?.shamir || {};
-  const reedSolomon = cohortBinding?.sharding?.reedSolomon || {};
-  const n = ensurePositiveInteger(Number(reedSolomon.n), 'cohortBinding.sharding.reedSolomon.n', 2);
-  const k = ensurePositiveInteger(Number(reedSolomon.k), 'cohortBinding.sharding.reedSolomon.k', 2);
-  const m = ensurePositiveInteger(Number(reedSolomon.parity), 'cohortBinding.sharding.reedSolomon.parity', 0);
-  const t = ensurePositiveInteger(Number(shamir.threshold), 'cohortBinding.sharding.shamir.threshold', 2);
-  const shareCount = ensurePositiveInteger(Number(shamir.shareCount), 'cohortBinding.sharding.shamir.shareCount', 2);
-  if (shareCount !== n) {
-    throw new Error(`Invalid cohort binding: Shamir shareCount ${shareCount} must equal RS n ${n}`);
-  }
-  if ((m % 2) !== 0) {
-    throw new Error('Invalid cohort binding: RS parity must be even');
-  }
-  if (k >= n) {
-    throw new Error('Invalid cohort binding: expected k < n');
-  }
-
-  const allowedFailures = m / 2;
-  const expectedThreshold = k + allowedFailures;
-  if (t !== expectedThreshold) {
-    throw new Error(`Invalid cohort threshold: expected ${expectedThreshold}, got ${t}`);
-  }
-
-  const qenc = archiveState.qenc || {};
-  const chunkSize = ensurePositiveInteger(Number(qenc.chunkSize), 'archiveState.qenc.chunkSize', 1);
-  const chunkCount = ensurePositiveInteger(Number(qenc.chunkCount), 'archiveState.qenc.chunkCount', 1);
-  const payloadLength = ensurePositiveInteger(Number(qenc.payloadLength), 'archiveState.qenc.payloadLength', 1);
-  const containerId = String(qenc.containerId || '');
-  if (containerId.length === 0) {
-    throw new Error('Archive-state descriptor is missing qenc.containerId');
-  }
-
-  if (group.length < t) {
-    throw new Error(`Need at least ${t} predecessor shards from one cohort, got ${group.length}`);
-  }
-
-  const base = group[0];
-  if (!(base.keyCommit instanceof Uint8Array) || base.keyCommit.length !== KEY_COMMITMENT_LEN) {
-    throw new Error('Predecessor shard is missing required key commitment');
-  }
-
-  const shardByIndex = new Map();
-  for (const shard of group) {
-    if (!Number.isInteger(shard.shardIndex) || shard.shardIndex < 0 || shard.shardIndex >= n) {
-      throw new Error(`Invalid shardIndex ${shard.shardIndex}`);
-    }
-    if (shardByIndex.has(shard.shardIndex)) {
-      throw new Error(`Duplicate shardIndex ${shard.shardIndex} detected`);
-    }
-    shardByIndex.set(shard.shardIndex, shard);
-
-    ensureEqual(normalizeHexString(shard.metaJSON?.archiveId), candidate.archiveId, 'archiveId');
-    ensureEqual(normalizeHexString(shard.metaJSON?.stateId), candidate.stateId, 'stateId');
-    ensureEqual(normalizeHexString(shard.metaJSON?.cohortId), candidate.cohortId, 'cohortId');
-    ensureEqual(shard.archiveStateDigestHex, candidate.archiveStateDigestHex, 'archiveStateDigest');
-    ensureEqual(shard.cohortBindingDigestHex, candidate.cohortBindingDigestHex, 'cohortBindingDigest');
-    ensureEqual(shard.archiveStateDigestHex, candidate.stateId, 'stateId');
-
-    ensureEqual(shard.metaJSON?.containerId, containerId, 'containerId');
-    ensureEqual(Number(shard.metaJSON?.n), n, 'n');
-    ensureEqual(Number(shard.metaJSON?.k), k, 'k');
-    ensureEqual(Number(shard.metaJSON?.m), m, 'm');
-    ensureEqual(Number(shard.metaJSON?.t), t, 't');
-
-    if (!bytesEqual(shard.archiveStateBytes, candidate.archiveStateBytes)) {
-      throw new Error('Exact archive-state byte mismatch inside predecessor cohort');
-    }
-    if (!bytesEqual(shard.cohortBindingBytes, candidate.cohortBindingBytes)) {
-      throw new Error('Exact cohort-binding byte mismatch inside predecessor cohort');
-    }
-    if (!bytesEqual(shard.encapsulatedKey, base.encapsulatedKey)) {
-      throw new Error(`Shard header mismatch: encapsulatedKey differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.iv, base.iv)) {
-      throw new Error(`Shard header mismatch: iv differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.salt, base.salt)) {
-      throw new Error(`Shard header mismatch: salt differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.qencMetaBytes, base.qencMetaBytes)) {
-      throw new Error(`Shard header mismatch: qenc metadata differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.keyCommit, base.keyCommit)) {
-      throw new Error(`Shard header mismatch: key commitment differs for shard ${shard.shardIndex}`);
-    }
-  }
-
-  const missingIndices = new Set();
-  for (let i = 0; i < n; i += 1) {
-    if (!shardByIndex.has(i)) missingIndices.add(i);
-  }
-
-  const qencMetaJSON = base.qencMetaJSON;
-  assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON);
-
-  const ciphertextLength = ensurePositiveInteger(Number(base.metaJSON?.ciphertextLength), 'ciphertextLength', 1);
-  for (const shard of group) {
-    ensureEqual(Number(shard.metaJSON?.ciphertextLength), ciphertextLength, 'ciphertextLength');
-    ensureEqual(Number(shard.metaJSON?.chunkCount), chunkCount, 'chunkCount');
-    ensureEqual(Number(shard.metaJSON?.chunkSize), chunkSize, 'chunkSize');
-  }
-
-  const isPerChunkMode = qencMetaJSON.aead_mode === 'per-chunk-aead';
-  if (!isPerChunkMode && qencMetaJSON.aead_mode !== 'single-container-aead') {
-    throw new Error(`Unsupported AEAD mode: ${qencMetaJSON.aead_mode ?? 'unknown'}`);
-  }
-
-  const expectedCiphertextLength = isPerChunkMode
-    ? (payloadLength + (16 * chunkCount))
-    : ciphertextLength;
-  if (isPerChunkMode && ciphertextLength !== expectedCiphertextLength) {
-    throw new Error(`Ciphertext length mismatch for per-chunk mode (expected ${expectedCiphertextLength}, got ${ciphertextLength})`);
-  }
-
-  const encapHash = computeDigestHex(base.encapsulatedKey);
-  if (normalizeHexString(base.metaJSON?.encapBlobHash) !== normalizeHexString(encapHash)) {
-    throw new Error('encapBlobHash mismatch');
-  }
-
-  const shareCommitments = cohortBinding?.shareCommitments || null;
-  const fragmentBodyHashes = cohortBinding?.shardBodyHashes || null;
-
-  let validShareShards = group;
-  const invalidShareIndices = new Set();
-  if (Array.isArray(shareCommitments)) {
-    if (shareCommitments.length !== n) {
-      throw new Error('Invalid shareCommitments length');
-    }
-    validShareShards = [];
-    for (const shard of group) {
-      const expected = normalizeHexString(shareCommitments[shard.shardIndex]);
-      const actual = normalizeHexString(computeDigestHex(shard.share));
-      if (!expected || actual !== expected) {
-        onWarn(`Share commitment verification failed for predecessor shard ${shard.shardIndex}. Share will be skipped.`);
-        invalidShareIndices.add(shard.shardIndex);
-        continue;
-      }
-      validShareShards.push(shard);
-    }
-    if (validShareShards.length < t) {
-      throw new Error(`Not enough valid predecessor shards for Shamir reconstruction: need ${t}, have ${validShareShards.length}`);
-    }
-    onLog(invalidShareIndices.size > 0 ? `Predecessor share commitment failures: ${invalidShareIndices.size} shard(s) rejected.` : 'Predecessor share commitments verified.');
-  }
-
-  const corruptedShardIndices = new Set();
-  if (Array.isArray(fragmentBodyHashes)) {
-    if (fragmentBodyHashes.length !== n) {
-      throw new Error('Invalid shardBodyHashes length');
-    }
-    for (const shard of group) {
-      const expected = normalizeHexString(fragmentBodyHashes[shard.shardIndex]);
-      const actual = normalizeHexString(computeDigestHex(shard.fragments));
-      if (expected && actual !== expected) {
-        onWarn(`Shard body hash verification failed for predecessor shard ${shard.shardIndex}. Treating as erasure.`);
-        corruptedShardIndices.add(shard.shardIndex);
-      }
-    }
-    if (corruptedShardIndices.size === 0) {
-      onLog('Predecessor shard body hashes verified.');
-    }
-  }
-
-  const totalBad = missingIndices.size + corruptedShardIndices.size;
-  if (totalBad > allowedFailures) {
-    throw new Error(`Too many missing/corrupted predecessor shards for RS reconstruction: allowed ${allowedFailures}, got ${totalBad}`);
-  }
-
-  const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-  const { secret: privKey, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, t);
-
-  const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
-  const cipherChunks = [];
-  const shardOffsets = new Array(n).fill(0);
-
-  for (let i = 0; i < chunkCount; i += 1) {
-    const plainLen = Math.min(chunkSize, payloadLength - (i * chunkSize));
-    const thisLen = isPerChunkMode ? (plainLen + 16) : ciphertextLength;
-
-    const encodeSize = Math.floor(rsEncodeBase / n) * n;
-    if (encodeSize === 0) throw new Error('RS parameters too large');
-    const inputSize = (encodeSize * k) / n;
-    const symbolSize = inputSize / k;
-    const blocks = Math.ceil(thisLen / inputSize);
-    const expectedFragLen = blocks * symbolSize;
-
-    const encoded = new Array(n);
-    for (let j = 0; j < n; j += 1) {
-      const shard = shardByIndex.get(j);
-      const fragStream = (shard && !corruptedShardIndices.has(j)) ? shard.fragments : null;
-      if (!fragStream) {
-        encoded[j] = new Uint8Array(expectedFragLen);
-        continue;
-      }
-
-      const streamOffset = shardOffsets[j];
-      if (streamOffset + 4 > fragStream.length) {
-        throw new Error('Fragment stream underflow');
-      }
-
-      const dvFrag = new DataView(fragStream.buffer, fragStream.byteOffset + streamOffset);
-      const fragLen = dvFrag.getUint32(0, false);
-      const fragStart = streamOffset + 4;
-      const fragEnd = fragStart + fragLen;
-      if (fragEnd > fragStream.length) {
-        throw new Error('Fragment length overflow');
-      }
-
-      let fragment = fragStream.subarray(fragStart, fragEnd);
-      if (fragment.length < expectedFragLen) {
-        const padded = new Uint8Array(expectedFragLen);
-        padded.set(fragment);
-        fragment = padded;
-      } else if (fragment.length > expectedFragLen) {
-        fragment = fragment.subarray(0, expectedFragLen);
-      }
-
-      encoded[j] = fragment;
-      shardOffsets[j] = fragEnd;
-    }
-
-    let recombined;
-    try {
-      recombined = erasureRuntime.recombine(encoded, thisLen, k, m / 2, rsEncodeBase);
-    } catch (error) {
-      throw new Error(`RS recombination failed on chunk ${i}: ${error?.message ?? error}`);
-    }
-
-    cipherChunks.push(recombined);
-    if (!isPerChunkMode) break;
-  }
-
-  for (let j = 0; j < n; j += 1) {
-    if (corruptedShardIndices.has(j)) continue;
-    const shard = shardByIndex.get(j);
-    if (!shard) continue;
-    if (shardOffsets[j] !== shard.fragments.length) {
-      throw new Error(`Fragment stream has trailing or missing data in predecessor shard ${j}`);
-    }
-  }
-
-  const ciphertext = isPerChunkMode
-    ? (() => {
-        const total = cipherChunks.reduce((sum, item) => sum + item.length, 0);
-        const out = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of cipherChunks) {
-          out.set(chunk, offset);
-          offset += chunk.length;
-        }
-        return out;
-      })()
-    : cipherChunks[0];
-
-  if (!(ciphertext instanceof Uint8Array) || ciphertext.length !== ciphertextLength) {
-    throw new Error('Reconstructed ciphertext length mismatch');
-  }
-
-  const header = buildQencHeader({
-    encapsulatedKey: base.encapsulatedKey,
-    containerNonce: base.iv,
-    kdfSalt: base.salt,
-    metaBytes: base.qencMetaBytes,
-    keyCommitment: base.keyCommit,
+  return reconstructLifecycleCohortMaterial(candidate, {
+    erasureRuntime,
+    onLog,
+    onWarn,
+    keyCommitmentLength: KEY_COMMITMENT_LEN,
+    digestHex: async (bytes) => computeDigestHex(bytes),
+    validateQencMeta: (archiveState, qencMetaJSON) => {
+      assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON);
+    },
+    messages: {
+      needThreshold: (threshold, count) => `Need at least ${threshold} predecessor shards from one cohort, got ${count}`,
+      missingKeyCommitment: 'Predecessor shard is missing required key commitment',
+      archiveStateMismatch: 'Exact archive-state byte mismatch inside predecessor cohort',
+      cohortBindingMismatch: 'Exact cohort-binding byte mismatch inside predecessor cohort',
+      shareCommitmentFailure: (index) => `Share commitment verification failed for predecessor shard ${index}. Share will be skipped.`,
+      notEnoughValidShares: (threshold, count) => `Not enough valid predecessor shards for Shamir reconstruction: need ${threshold}, have ${count}`,
+      shareCommitmentSummary: (count) => `Predecessor share commitment failures: ${count} shard(s) rejected.`,
+      shareCommitmentVerified: 'Predecessor share commitments verified.',
+      shardBodyFailure: (index) => `Shard body hash verification failed for predecessor shard ${index}. Treating as erasure.`,
+      shardBodyVerified: 'Predecessor shard body hashes verified.',
+      tooManyMissingCorrupted: (allowed, total) => `Too many missing/corrupted predecessor shards for RS reconstruction: allowed ${allowed}, got ${total}`,
+      fragmentStreamTrailing: (index) => `Fragment stream has trailing or missing data in predecessor shard ${index}`,
+      qencHashMismatch: 'Reconstructed .qenc hash does not match predecessor archive-state descriptor',
+      privateKeyHashMismatch: 'Recovered predecessor secret key hash does not match predecessor shard metadata.',
+    },
   });
-
-  const qencBytes = new Uint8Array(header.length + ciphertext.length);
-  qencBytes.set(header, 0);
-  qencBytes.set(ciphertext, header.length);
-
-  const recoveredQencHash = normalizeHexString(computeDigestHex(qencBytes));
-  const expectedQencHash = normalizeHexString(qenc.qencHash);
-  if (recoveredQencHash !== expectedQencHash) {
-    throw new Error('Reconstructed .qenc hash does not match predecessor archive-state descriptor');
-  }
-
-  const recoveredPrivHash = normalizeHexString(computeDigestHex(privKey));
-  const privateKeyHash = normalizeHexString(base.metaJSON?.privateKeyHash || '');
-  const privateKeyHashMatchesMetadata = privateKeyHash ? (privateKeyHash === recoveredPrivHash) : true;
-  if (!privateKeyHashMatchesMetadata) {
-    onWarn('Recovered predecessor secret key hash does not match predecessor shard metadata.');
-  }
-
-  return {
-    qencBytes,
-    privKey,
-    invalidShareIndices: [...invalidShareIndices].sort((a, b) => a - b),
-    corruptedShardIndices: [...corruptedShardIndices].sort((a, b) => a - b),
-    missingShardIndices: [...missingIndices].sort((a, b) => a - b),
-    privateKeyHashMatchesMetadata,
-    shareCopiesCleared,
-  };
 }
 
 function assertSameStatePreserved(predecessor, successorSplit) {

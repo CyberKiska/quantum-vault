@@ -1,6 +1,6 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { base64ToBytes, bytesToBase64, bytesEqual, digestSha256, toHex } from '../bytes.js';
-import { parseOpenTimestampProof } from '../auth/opentimestamps.js';
+import { bytesToBase64, bytesEqual, toHex } from '../bytes.js';
+import { resolveOpenTimestampTarget } from '../auth/opentimestamps.js';
 import { normalizePqPublicKeyPins, unpackPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
 import { getSignatureSuiteInfo } from '../auth/signature-suites.js';
@@ -10,6 +10,7 @@ import {
   canonicalizeCohortBinding,
   canonicalizeLifecycleBundle,
   decodeLifecycleSignatureBytes,
+  LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS,
   parseArchiveStateDescriptorBytes,
   parseLifecycleBundleBytes,
   verifyLifecycleSignatureEntry,
@@ -156,64 +157,24 @@ export function mergeLifecycleAttachmentEntriesById(existingValues, nextValues) 
   return out;
 }
 
-async function assertLifecycleBundleEntriesValid(bundle, expectedEd25519Signer = '') {
-  const signatureGroups = [
-    ...bundle.attachments.archiveApprovalSignatures,
-    ...bundle.attachments.maintenanceSignatures,
-    ...bundle.attachments.sourceEvidenceSignatures,
-  ];
-  for (const signature of signatureGroups) {
-    await verifyLifecycleSignatureEntry(bundle, signature, { expectedEd25519Signer });
-  }
-
-  const signaturesById = new Map(signatureGroups.map((signature) => [signature.id, signature]));
-  for (const timestamp of bundle.attachments.timestamps) {
-    const signature = signaturesById.get(timestamp.targetRef);
-    if (!signature) {
-      throw new Error(`attachments.timestamps targetRef is unknown: ${timestamp.targetRef}`);
-    }
-    const signatureBytes = decodeLifecycleSignatureBytes(signature, 'detached signature');
-    const digestHex = toHex(await digestSha256(signatureBytes));
-    if (timestamp.targetDigest.value !== digestHex) {
-      throw new Error('attachments.timestamps targetDigest mismatch');
-    }
-    const parsedProof = parseOpenTimestampProof(base64ToBytes(timestamp.proof), { name: timestamp.id });
-    if (parsedProof.stampedDigestHex !== digestHex) {
-      throw new Error('attachments.timestamps proof digest mismatch');
-    }
+async function assertImportedArchiveApprovalEntriesValid(bundle, signatures, expectedEd25519Signer = '') {
+  const descriptor = LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.find((entry) => entry.family === 'archive-approval');
+  for (const signature of Array.isArray(signatures) ? signatures : []) {
+    await verifyLifecycleSignatureEntry(bundle, signature, {
+      expectedEd25519Signer,
+      expectedFamily: descriptor.family,
+      expectedField: descriptor.field,
+    });
   }
 }
 
 function buildBundleSignaturePayloads(bundle) {
-  return [
-    ...bundle.attachments.archiveApprovalSignatures,
-    ...bundle.attachments.maintenanceSignatures,
-    ...bundle.attachments.sourceEvidenceSignatures,
-  ].map((signature) => ({
+  return LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.flatMap((descriptor) => (
+    Array.isArray(bundle?.attachments?.[descriptor.field]) ? bundle.attachments[descriptor.field] : []
+  )).map((signature) => ({
     id: signature.id,
     bytes: decodeLifecycleSignatureBytes(signature, 'detached signature'),
-    }));
-}
-
-async function resolveLifecycleOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
-  const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
-  const matches = [];
-  for (const signature of signatures) {
-    if (!(signature?.bytes instanceof Uint8Array)) continue;
-    if (toHex(await digestSha256(signature.bytes)) === parsedProof.stampedDigestHex) {
-      matches.push(signature);
-    }
-  }
-  if (matches.length === 0) {
-    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} does not match any detached signature`);
-  }
-  if (matches.length > 1) {
-    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} matches multiple detached signatures`);
-  }
-  return {
-    targetRef: matches[0].id,
-    stampedDigestHex: parsedProof.stampedDigestHex,
-  };
+  }));
 }
 
 function verifyQsigOrThrow(options, signatureName) {
@@ -425,8 +386,6 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
     embeddedLifecycleBundleDigests,
   } = await resolveLifecycleAttachContext(shards, options);
 
-  await assertLifecycleBundleEntriesValid(lifecycleBundle, expectedEd25519Signer);
-
   const pqPublicKeyFileBytesList = Array.isArray(options.pqPublicKeyFileBytesList)
     ? options.pqPublicKeyFileBytesList.filter((item) => item instanceof Uint8Array)
     : [];
@@ -489,7 +448,7 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
       if (!(timestamp?.bytes instanceof Uint8Array) || timestamp.bytes.length === 0) {
         throw new Error(`Invalid timestamp file: ${timestamp?.name || 'unknown'}`);
       }
-      const resolved = await resolveLifecycleOpenTimestampTarget({
+      const resolved = await resolveOpenTimestampTarget({
         timestampBytes: timestamp.bytes,
         timestampName: timestamp.name,
         signatures: signaturePayloads,
@@ -510,7 +469,11 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
   }
 
   const canonicalBundle = await canonicalizeLifecycleBundle(mergedBundle);
-  await assertLifecycleBundleEntriesValid(canonicalBundle.lifecycleBundle, expectedEd25519Signer);
+  await assertImportedArchiveApprovalEntriesValid(
+    canonicalBundle.lifecycleBundle,
+    importedArchiveApprovalSignatures,
+    expectedEd25519Signer
+  );
 
   const canonicalArchiveState = canonicalizeArchiveStateDescriptor(canonicalBundle.lifecycleBundle.archiveState);
   if (!bytesEqual(canonicalArchiveState.bytes, archiveStateBytes)) {

@@ -6,8 +6,7 @@ import {
   slh_dsa_shake_256s,
 } from '@noble/post-quantum/slh-dsa.js';
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
-import { base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
-import { parseOpenTimestampProof } from '../auth/opentimestamps.js';
+import { base64ToBytes, bytesEqual, toHex } from '../bytes.js';
 import { packPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import { getSignatureSuiteInfo, normalizeSignatureSuite } from '../auth/signature-suites.js';
 import { verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
@@ -114,6 +113,29 @@ const PQ_PUBLIC_KEY_LENGTHS = Object.freeze({
   'slhdsa-shake-256s': slh_dsa_shake_256s.lengths.publicKey,
   'slhdsa-shake-256f': slh_dsa_shake_256f.lengths.publicKey,
 });
+export const LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS = Object.freeze([
+  Object.freeze({
+    family: 'archive-approval',
+    field: 'archiveApprovalSignatures',
+    targetType: 'archive-state',
+  }),
+  Object.freeze({
+    family: 'maintenance',
+    field: 'maintenanceSignatures',
+    targetType: 'transition-record',
+  }),
+  Object.freeze({
+    family: 'source-evidence',
+    field: 'sourceEvidenceSignatures',
+    targetType: 'source-evidence',
+  }),
+]);
+const LIFECYCLE_SIGNATURE_FAMILY_BY_NAME = new Map(
+  LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.map((descriptor) => [descriptor.family, descriptor])
+);
+const LIFECYCLE_SIGNATURE_FAMILY_BY_FIELD = new Map(
+  LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.map((descriptor) => [descriptor.field, descriptor])
+);
 const STELLAR_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const STRKEY_VERSION_ED25519_PUBLIC = 6 << 3;
 
@@ -909,11 +931,9 @@ function validateBundledPublicKeyCompatibility(signature, publicKeys, field) {
 }
 
 function listLifecycleSignatureEntries(bundle) {
-  return [
-    ...bundle.attachments.archiveApprovalSignatures,
-    ...bundle.attachments.maintenanceSignatures,
-    ...bundle.attachments.sourceEvidenceSignatures,
-  ];
+  return LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.flatMap((descriptor) => (
+    Array.isArray(bundle?.attachments?.[descriptor.field]) ? bundle.attachments[descriptor.field] : []
+  ));
 }
 
 function dedupeSortedStrings(values) {
@@ -1115,18 +1135,31 @@ function buildLifecycleTargetRegistry(bundle) {
   };
 }
 
-function resolveLifecycleSignatureTargetFromRegistry(signature, registry, field) {
-  if (signature.signatureFamily === 'archive-approval') {
+function resolveLifecycleSignatureFamilyDescriptor(options = {}) {
+  if (typeof options.expectedFamily === 'string' && options.expectedFamily) {
+    return LIFECYCLE_SIGNATURE_FAMILY_BY_NAME.get(options.expectedFamily) || null;
+  }
+  if (typeof options.expectedField === 'string' && options.expectedField) {
+    return LIFECYCLE_SIGNATURE_FAMILY_BY_FIELD.get(options.expectedField) || null;
+  }
+  if (typeof options.signatureFamily === 'string' && options.signatureFamily) {
+    return LIFECYCLE_SIGNATURE_FAMILY_BY_NAME.get(options.signatureFamily) || null;
+  }
+  return null;
+}
+
+function resolveLifecycleSignatureTargetFromRegistry(signature, registry, field, signatureFamily = signature.signatureFamily) {
+  if (signatureFamily === 'archive-approval') {
     return registry.archiveApprovalTarget;
   }
-  if (signature.signatureFamily === 'maintenance') {
+  if (signatureFamily === 'maintenance') {
     const target = registry.transitionTargets.get(signature.targetDigest.value);
     if (!target) {
       throw new Error(`${field} targetDigest mismatch`);
     }
     return target;
   }
-  if (signature.signatureFamily === 'source-evidence') {
+  if (signatureFamily === 'source-evidence') {
     const target = registry.sourceEvidenceTargets.get(signature.targetDigest.value);
     if (!target) {
       throw new Error(`${field} targetDigest mismatch`);
@@ -1136,25 +1169,37 @@ function resolveLifecycleSignatureTargetFromRegistry(signature, registry, field)
   throw new Error(`${field} has unsupported signatureFamily`);
 }
 
-function signatureEntryField(signature) {
-  if (signature.signatureFamily === 'archive-approval') return 'archiveApprovalSignatures';
-  if (signature.signatureFamily === 'maintenance') return 'maintenanceSignatures';
-  if (signature.signatureFamily === 'source-evidence') return 'sourceEvidenceSignatures';
+function signatureEntryField(signature, options = {}) {
+  const descriptor = resolveLifecycleSignatureFamilyDescriptor({
+    expectedFamily: options.expectedFamily,
+    expectedField: options.expectedField,
+    signatureFamily: signature?.signatureFamily,
+  });
+  if (descriptor) return descriptor.field;
   return 'detachedSignature';
 }
 
-function validateDeclaredSignatureFamily(signature, field, expectedFamily, expectedTargetType) {
-  if (signature.signatureFamily !== expectedFamily) {
+function validateDeclaredSignatureFamily(signature, descriptor, field) {
+  if (!descriptor) {
+    throw new Error(`${field} has unsupported signatureFamily`);
+  }
+  if (signature.signatureFamily !== descriptor.family) {
     throw new Error(`${field} entry has wrong signatureFamily`);
   }
-  if (signature.targetType !== expectedTargetType) {
+  if (signature.targetType !== descriptor.targetType) {
     throw new Error(`${field} entry has wrong targetType`);
   }
 }
 
-function validateLifecycleSignatureTargetEntry(signature, registry) {
-  const field = signatureEntryField(signature);
-  const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, field);
+function validateLifecycleSignatureTargetEntry(signature, registry, options = {}) {
+  const descriptor = resolveLifecycleSignatureFamilyDescriptor({
+    expectedFamily: options.expectedFamily,
+    expectedField: options.expectedField,
+    signatureFamily: signature?.signatureFamily,
+  });
+  const field = options.expectedField || signatureEntryField(signature, options);
+  validateDeclaredSignatureFamily(signature, descriptor, field);
+  const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, field, descriptor.family);
   if (signature.targetType !== target.targetType) {
     throw new Error(`${field} entry has wrong targetType`);
   }
@@ -1165,21 +1210,6 @@ function validateLifecycleSignatureTargetEntry(signature, registry) {
     throw new Error(`${field} targetDigest mismatch`);
   }
   return { field, target };
-}
-
-function validateSignatureTargetConsistency(bundle, registry = buildLifecycleTargetRegistry(bundle)) {
-  for (const signature of bundle.attachments.archiveApprovalSignatures) {
-    validateDeclaredSignatureFamily(signature, 'archiveApprovalSignatures', 'archive-approval', 'archive-state');
-    validateLifecycleSignatureTargetEntry(signature, registry);
-  }
-  for (const signature of bundle.attachments.maintenanceSignatures) {
-    validateDeclaredSignatureFamily(signature, 'maintenanceSignatures', 'maintenance', 'transition-record');
-    validateLifecycleSignatureTargetEntry(signature, registry);
-  }
-  for (const signature of bundle.attachments.sourceEvidenceSignatures) {
-    validateDeclaredSignatureFamily(signature, 'sourceEvidenceSignatures', 'source-evidence', 'source-evidence');
-    validateLifecycleSignatureTargetEntry(signature, registry);
-  }
 }
 
 export function decodeLifecycleSignatureBytes(signature, field = 'detached signature') {
@@ -1241,7 +1271,15 @@ async function assertDeclaredPublicKeyRefCompatibility(signature, bundle, target
 
 export function resolveLifecycleSignatureTarget(bundle, signature, options = {}) {
   const registry = options.registry || buildLifecycleTargetRegistry(bundle);
-  const { field, target } = validateLifecycleSignatureTargetEntry(signature, registry);
+  const descriptor = resolveLifecycleSignatureFamilyDescriptor({
+    expectedFamily: options.expectedFamily,
+    expectedField: options.expectedField,
+    signatureFamily: signature?.signatureFamily,
+  });
+  const { field, target } = validateLifecycleSignatureTargetEntry(signature, registry, {
+    expectedFamily: descriptor?.family,
+    expectedField: options.expectedField || descriptor?.field,
+  });
   return {
     ...target,
     field,
@@ -1251,7 +1289,11 @@ export function resolveLifecycleSignatureTarget(bundle, signature, options = {})
 export async function verifyLifecycleSignatureEntry(bundle, signature, options = {}) {
   const expectedEd25519Signer = String(options.expectedEd25519Signer || '').trim();
   const registry = options.registry || buildLifecycleTargetRegistry(bundle);
-  const target = resolveLifecycleSignatureTarget(bundle, signature, { registry });
+  const target = resolveLifecycleSignatureTarget(bundle, signature, {
+    registry,
+    expectedFamily: options.expectedFamily,
+    expectedField: options.expectedField,
+  });
   const { field } = target;
   const declaredVerification = await assertDeclaredPublicKeyRefCompatibility(
     signature,
@@ -1312,29 +1354,6 @@ export async function verifyLifecycleSignatureEntry(bundle, signature, options =
   };
 }
 
-async function validateTimestampConsistency(bundle, registry = buildLifecycleTargetRegistry(bundle)) {
-  const signatures = listLifecycleSignatureEntries(bundle);
-  assertUniqueIds(signatures, 'detached signature');
-  const signaturesById = new Map(signatures.map((entry) => [entry.id, entry]));
-  for (const timestamp of bundle.attachments.timestamps) {
-    const signature = signaturesById.get(timestamp.targetRef);
-    if (!signature) {
-      throw new Error(`attachments.timestamps targetRef is unknown: ${timestamp.targetRef}`);
-    }
-    validateLifecycleSignatureTargetEntry(signature, registry);
-    const signatureBytes = decodeLifecycleSignatureBytes(signature, `${signatureEntryField(signature)} entry`);
-    const digest = toHex(await digestSha256(signatureBytes));
-    if (timestamp.targetDigest.value !== digest) {
-      throw new Error('attachments.timestamps targetDigest mismatch');
-    }
-    const proofBytes = base64ToBytes(timestamp.proof);
-    const parsedProof = parseOpenTimestampProof(proofBytes, { name: timestamp.id });
-    if (parsedProof.stampedDigestHex !== digest) {
-      throw new Error('attachments.timestamps proof digest mismatch');
-    }
-  }
-}
-
 async function validateLifecycleBundleSemantics(bundle) {
   if (bundle.version !== LIFECYCLE_BUNDLE_VERSION) {
     throw new Error('Unsupported lifecycleBundle.version');
@@ -1359,44 +1378,7 @@ async function validateLifecycleBundleSemantics(bundle) {
   assertUniqueIds(bundle.attachments.timestamps, 'timestamp');
   const allSignatureEntries = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(allSignatureEntries, 'detached signature');
-  const registry = buildLifecycleTargetRegistry(bundle);
-  validateSignatureTargetConsistency(bundle, registry);
-
-  for (const signature of bundle.attachments.archiveApprovalSignatures) {
-    const target = registry.archiveApprovalTarget;
-    if (signature.publicKeyRef) {
-      await assertDeclaredPublicKeyRefCompatibility(
-        signature,
-        bundle,
-        target.bytes,
-        'archiveApprovalSignatures'
-      );
-    }
-  }
-  for (const signature of bundle.attachments.maintenanceSignatures) {
-    const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, 'maintenanceSignatures');
-    if (signature.publicKeyRef) {
-      await assertDeclaredPublicKeyRefCompatibility(
-        signature,
-        bundle,
-        target.bytes,
-        'maintenanceSignatures'
-      );
-    }
-  }
-  for (const signature of bundle.attachments.sourceEvidenceSignatures) {
-    const target = resolveLifecycleSignatureTargetFromRegistry(signature, registry, 'sourceEvidenceSignatures');
-    if (signature.publicKeyRef) {
-      await assertDeclaredPublicKeyRefCompatibility(
-        signature,
-        bundle,
-        target.bytes,
-        'sourceEvidenceSignatures'
-      );
-    }
-  }
-
-  await validateTimestampConsistency(bundle, registry);
+  buildLifecycleTargetRegistry(bundle);
   return { lifecycleBundle: bundle };
 }
 

@@ -19,7 +19,11 @@ import {
   assertAuthPolicyCommitment,
   parseManifestBundleBytes,
 } from '../manifest/manifest-bundle.js';
-import { assertManifestBundleTimestamps, inspectTimestampEvidence, parseOpenTimestampProof } from '../auth/opentimestamps.js';
+import {
+  assertManifestBundleTimestamps,
+  inspectTimestampEvidence,
+  resolveOpenTimestampTarget,
+} from '../auth/opentimestamps.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
 import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import { verifyManifestSignatures } from '../auth/verify-signatures.js';
@@ -30,14 +34,18 @@ import {
   canonicalizeSourceEvidence,
   decodeLifecycleSignatureBytes,
   inspectLifecycleTransitions,
+  LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS,
   parseArchiveStateDescriptorBytes,
   parseLifecycleBundleBytes,
-  resolveLifecycleSignatureTarget,
   verifyLifecycleSignatureEntry,
 } from '../lifecycle/artifacts.js';
 import { validateContainerPolicyMetadata } from '../policy.js';
 import { resolveErasureRuntime } from '../erasure-runtime.js';
-import { mergeLifecycleShardIntoCohortGroups, normalizeHexString } from './lifecycle-cohort-shared.js';
+import {
+  mergeLifecycleShardIntoCohortGroups,
+  normalizeHexString,
+  reconstructLifecycleCohortMaterial,
+} from './lifecycle-cohort-shared.js';
 import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
 
 const QCONT_MAGIC = 'QVC1';
@@ -116,6 +124,10 @@ function evaluateArchivePolicy(authPolicy, verification) {
 
 function dedupeWarnings(warnings) {
   return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))];
+}
+
+function findLifecycleSignatureFamilyDescriptor(family) {
+  return LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.find((descriptor) => descriptor.family === family) || null;
 }
 
 function decodeJsonBytes(bytes) {
@@ -676,9 +688,14 @@ async function verifySuccessorBundledSignature({
   expectedEd25519Signer,
 }) {
   const name = signature?.id || `${family}-signature`;
+  const descriptor = findLifecycleSignatureFamilyDescriptor(family);
   let decodedSignatureBytes = null;
   try {
-    const baseline = await verifyLifecycleSignatureEntry(bundle, signature, { expectedEd25519Signer });
+    const baseline = await verifyLifecycleSignatureEntry(bundle, signature, {
+      expectedEd25519Signer,
+      expectedFamily: descriptor?.family || family,
+      expectedField: descriptor?.field || '',
+    });
     const verifierInputs = buildLifecycleBundleVerifierInputs(baseline.publicKey);
     const verification = signature.format === 'qsig'
       ? verifySuccessorQsigWithPinnedKeys({
@@ -785,29 +802,6 @@ async function verifySuccessorExternalSignature({
   });
 }
 
-async function resolveLifecycleOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
-  const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
-  const matches = [];
-  for (const signature of signatures) {
-    if (!(signature?.signatureBytes instanceof Uint8Array)) continue;
-    if (toHex(await digestSha256(signature.signatureBytes)) === parsedProof.stampedDigestHex) {
-      matches.push(signature);
-    }
-  }
-  if (matches.length === 0) {
-    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} does not match any detached signature`);
-  }
-  if (matches.length > 1) {
-    throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} matches multiple detached signatures`);
-  }
-  return {
-    signature: matches[0],
-    stampedDigestHex: parsedProof.stampedDigestHex,
-    apparentlyComplete: parsedProof.appearsComplete,
-    completeProof: parsedProof.completeProof,
-  };
-}
-
 /**
  * Presentation-only: when multiple OTS evidence rows describe the same stamped digest
  * (or share a fallback key), keep a single row for UI/reporting. Verification and
@@ -849,59 +843,97 @@ async function inspectSuccessorTimestampEvidence({
   const signatureById = new Map(signatureResults
     .filter((entry) => entry?.source === 'bundle')
     .map((entry) => [entry.artifactId || entry.name, entry]));
-  const embeddedEvidence = await Promise.all((bundle?.attachments?.timestamps || []).map(async (timestamp) => {
-    if (timestamp?.proofEncoding !== 'base64') {
-      throw new Error(`Unsupported OpenTimestamps proof encoding: ${timestamp?.proofEncoding ?? 'unknown'}`);
-    }
-    const signature = signatureById.get(timestamp.targetRef);
-    if (!signature) {
-      throw new Error(`OpenTimestamps targetRef is unknown: ${timestamp?.targetRef ?? 'unknown'}`);
-    }
-    const resolved = await resolveLifecycleOpenTimestampTarget({
-      timestampBytes: base64ToBytes(timestamp.proof),
-      timestampName: timestamp.id,
-      signatures: [signature],
-    });
-    return {
-      id: timestamp.id,
-      targetRef: signature.targetRef || timestamp.targetRef,
-      targetName: signature.name || signature.artifactId || timestamp.targetRef,
-      targetSource: signature.source || 'bundle',
-      targetVerified: signature.ok === true,
-      linked: true,
-      apparentlyComplete: resolved.apparentlyComplete,
-      completeProof: resolved.completeProof,
-      stampedDigestHex: resolved.stampedDigestHex,
-      linkLabel: 'OTS evidence linked to signature',
-      completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
-    };
-  }));
+  const warnings = [];
+  const signatureArtifacts = signatureResults
+    .filter((entry) => entry?.signatureBytes instanceof Uint8Array)
+    .map((entry) => ({
+      id: entry.artifactId || entry.name,
+      name: entry.name,
+      source: entry.source,
+      ok: entry.ok === true,
+      bytes: entry.signatureBytes,
+      otsStampedDigestHex: entry.otsStampedDigestHex,
+      targetRef: entry.targetRef,
+    }));
 
-  const externalEvidence = await Promise.all((Array.isArray(externalTimestamps) ? externalTimestamps : []).map(async (timestamp, index) => {
-    if (!(timestamp?.bytes instanceof Uint8Array) || timestamp.bytes.length === 0) {
-      throw new Error(`Invalid OpenTimestamps proof: ${timestamp?.name || `timestamp-${index + 1}`}`);
+  const embeddedEvidence = [];
+  for (const timestamp of bundle?.attachments?.timestamps || []) {
+    try {
+      if (timestamp?.proofEncoding !== 'base64') {
+        throw new Error(`Unsupported OpenTimestamps proof encoding: ${timestamp?.proofEncoding ?? 'unknown'}`);
+      }
+      const signature = signatureById.get(timestamp.targetRef);
+      if (!signature) {
+        throw new Error(`OpenTimestamps targetRef is unknown: ${timestamp?.targetRef ?? 'unknown'}`);
+      }
+      const resolved = await resolveOpenTimestampTarget({
+        timestampBytes: base64ToBytes(timestamp.proof),
+        timestampName: timestamp.id,
+        signatures: [{
+          id: signature.artifactId || signature.name,
+          name: signature.name,
+          source: signature.source,
+          ok: signature.ok === true,
+          bytes: signature.signatureBytes,
+          otsStampedDigestHex: signature.otsStampedDigestHex,
+        }],
+      });
+      embeddedEvidence.push({
+        id: timestamp.id,
+        targetRef: signature.targetRef || timestamp.targetRef,
+        targetName: signature.name || signature.artifactId || timestamp.targetRef,
+        targetSource: resolved.targetSource,
+        targetVerified: resolved.targetVerified,
+        linked: true,
+        apparentlyComplete: resolved.apparentlyComplete,
+        completeProof: resolved.completeProof,
+        stampedDigestHex: resolved.stampedDigestHex,
+        linkLabel: 'OTS evidence linked to signature',
+        completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
+      });
+    } catch (error) {
+      warnings.push(`OpenTimestamps evidence ${timestamp?.id || 'unknown'} did not link cleanly and was ignored: ${error?.message || error}`);
     }
-    const resolved = await resolveLifecycleOpenTimestampTarget({
-      timestampBytes: timestamp.bytes,
-      timestampName: timestamp.name || `timestamp-${index + 1}`,
-      signatures: signatureResults,
-    });
-    return {
-      id: timestamp.name || `timestamp-${index + 1}`,
-      targetRef: resolved.signature.targetRef || resolved.signature.artifactId || resolved.signature.name,
-      targetName: resolved.signature.name || resolved.signature.artifactId,
-      targetSource: resolved.signature.source || 'bundle',
-      targetVerified: resolved.signature.ok === true,
-      linked: true,
-      apparentlyComplete: resolved.apparentlyComplete,
-      completeProof: resolved.completeProof,
-      stampedDigestHex: resolved.stampedDigestHex,
-      linkLabel: 'External OTS evidence linked to signature',
-      completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
-    };
-  }));
+  }
 
-  return dedupePresentationOnlyTimestampEvidence([...embeddedEvidence, ...externalEvidence]);
+  const externalEvidence = [];
+  for (let index = 0; index < (Array.isArray(externalTimestamps) ? externalTimestamps.length : 0); index += 1) {
+    const timestamp = externalTimestamps[index];
+    const timestampName = timestamp?.name || `timestamp-${index + 1}`;
+    try {
+      if (!(timestamp?.bytes instanceof Uint8Array) || timestamp.bytes.length === 0) {
+        throw new Error(`Invalid OpenTimestamps proof: ${timestampName}`);
+      }
+      const resolved = await resolveOpenTimestampTarget({
+        timestampBytes: timestamp.bytes,
+        timestampName,
+        signatures: signatureArtifacts,
+      });
+      const matchingSignature = signatureResults.find((entry) => (
+        (entry.artifactId || entry.name) === resolved.targetRef
+      )) || null;
+      externalEvidence.push({
+        id: timestampName,
+        targetRef: matchingSignature?.targetRef || resolved.targetRef,
+        targetName: resolved.targetName,
+        targetSource: resolved.targetSource,
+        targetVerified: resolved.targetVerified,
+        linked: true,
+        apparentlyComplete: resolved.apparentlyComplete,
+        completeProof: resolved.completeProof,
+        stampedDigestHex: resolved.stampedDigestHex,
+        linkLabel: 'External OTS evidence linked to signature',
+        completionLabel: resolved.apparentlyComplete ? 'OTS proof appears complete' : 'OTS proof appears incomplete',
+      });
+    } catch (error) {
+      warnings.push(`OpenTimestamps evidence ${timestampName} did not link cleanly and was ignored: ${error?.message || error}`);
+    }
+  }
+
+  return {
+    evidence: dedupePresentationOnlyTimestampEvidence([...embeddedEvidence, ...externalEvidence]),
+    warnings: dedupeWarnings(warnings),
+  };
 }
 
 async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verificationOptions = {}) {
@@ -916,11 +948,10 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
   });
   const expectedEd25519Signer = String(verificationOptions.expectedEd25519Signer || '').trim();
   const results = [];
-  const familyEntries = [
-    ['archive-approval', lifecycleBundle?.attachments?.archiveApprovalSignatures || []],
-    ['maintenance', lifecycleBundle?.attachments?.maintenanceSignatures || []],
-    ['source-evidence', lifecycleBundle?.attachments?.sourceEvidenceSignatures || []],
-  ];
+  const familyEntries = LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.map((descriptor) => [
+    descriptor.family,
+    lifecycleBundle?.attachments?.[descriptor.field] || [],
+  ]);
 
   for (const [family, signatures] of familyEntries) {
     for (const signature of signatures) {
@@ -954,11 +985,12 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
   warnings.push(...duplicateWarnings);
 
   const policy = evaluateSuccessorArchivePolicy(lifecycleBundle.authPolicy, { counts });
-  const timestampEvidence = await inspectSuccessorTimestampEvidence({
+  const timestampInspection = await inspectSuccessorTimestampEvidence({
     bundle: lifecycleBundle,
     externalTimestamps: Array.isArray(verificationOptions.timestamps) ? verificationOptions.timestamps : [],
     signatureResults: results.filter((item) => item.signatureBytes instanceof Uint8Array),
   });
+  warnings.push(...(timestampInspection.warnings || []));
   const transitionReport = buildSuccessorTransitionReport(lifecycleBundle, results);
   const sourceEvidenceReport = buildSuccessorSourceEvidenceReport(lifecycleBundle, results);
 
@@ -1013,14 +1045,14 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
         sourceEvidencePresent: sourceEvidenceReport.present,
         maintenanceSignatureVerified: counts.validMaintenance > 0,
         sourceEvidenceSignatureVerified: counts.validSourceEvidence > 0,
-        otsEvidenceLinked: timestampEvidence.length > 0,
+        otsEvidenceLinked: timestampInspection.evidence.length > 0,
       },
     },
     policy,
-    timestampEvidence,
+    timestampEvidence: timestampInspection.evidence,
     transitionReport,
     sourceEvidenceReport,
-    warnings: [],
+    warnings: dedupeWarnings(warnings),
   };
 }
 
@@ -1117,12 +1149,20 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     forkDetected: false,
     mixedLifecycleBundleVariantCohorts: candidate.embeddedLifecycleBundles.size > 1 ? [candidate.cohortId] : [],
   };
-  if (selectedStateAnalysis.forkDetected) {
+  const explicitlySelectedLifecycleBundle = lifecycleBundleSource === 'uploaded-lifecycle-bundle';
+  if (selectedStateAnalysis.forkDetected && !explicitlySelectedLifecycleBundle) {
     throw new Error(buildSameStateForkRejectionMessage(selectedStateAnalysis));
   }
 
   const authenticity = await evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verificationOptions);
-  authenticity.warnings = [...new Set((authenticity.warnings || []).filter(Boolean))];
+  if (selectedStateAnalysis.forkDetected && explicitlySelectedLifecycleBundle) {
+    authenticity.warnings = dedupeWarnings([
+      ...(authenticity.warnings || []),
+      `Multiple valid cohorts remain known for archive ${candidate.archiveId} state ${candidate.stateId}. Proceeding with explicitly selected cohort ${candidate.cohortId}; known cohort IDs: ${selectedStateAnalysis.cohortIds.join(', ')}. Quantum Vault did not auto-select a winner.`,
+    ]);
+  } else {
+    authenticity.warnings = dedupeWarnings(authenticity.warnings || []);
+  }
   if (!authenticity.policy.satisfied) {
     throw new Error(authenticity.policy.reason);
   }
@@ -1692,291 +1732,44 @@ async function restoreSuccessorFromShards(shards, options = {}) {
       normalizeHexString(shard?.metaJSON?.cohortId) !== candidate.cohortId
     ))
     .map((shard) => shard.inputShardIndex);
-
-  const shamir = cohortBinding?.sharding?.shamir || {};
-  const reedSolomon = cohortBinding?.sharding?.reedSolomon || {};
-  const n = ensurePositiveInteger(Number(reedSolomon.n), 'cohortBinding.sharding.reedSolomon.n', 2);
-  const k = ensurePositiveInteger(Number(reedSolomon.k), 'cohortBinding.sharding.reedSolomon.k', 2);
-  const m = ensurePositiveInteger(Number(reedSolomon.parity), 'cohortBinding.sharding.reedSolomon.parity', 0);
-  const t = ensurePositiveInteger(Number(shamir.threshold), 'cohortBinding.sharding.shamir.threshold', 2);
-  const shareCount = ensurePositiveInteger(Number(shamir.shareCount), 'cohortBinding.sharding.shamir.shareCount', 2);
-  if (shareCount !== n) {
-    throw new Error(`Invalid cohort binding: Shamir shareCount ${shareCount} must equal RS n ${n}`);
-  }
-  if ((m % 2) !== 0) {
-    throw new Error('Invalid cohort binding: RS parity must be even');
-  }
-  if (k >= n) {
-    throw new Error('Invalid cohort binding: expected k < n');
-  }
-
-  const allowedFailures = m / 2;
-  const expectedThreshold = k + allowedFailures;
-  if (t !== expectedThreshold) {
-    throw new Error(`Invalid cohort threshold: expected ${expectedThreshold}, got ${t}`);
-  }
-
   const qenc = archiveState.qenc || {};
-  const chunkSize = ensurePositiveInteger(Number(qenc.chunkSize), 'archiveState.qenc.chunkSize', 1);
-  const chunkCount = ensurePositiveInteger(Number(qenc.chunkCount), 'archiveState.qenc.chunkCount', 1);
-  const payloadLength = ensurePositiveInteger(Number(qenc.payloadLength), 'archiveState.qenc.payloadLength', 1);
   const containerId = String(qenc.containerId || '');
-  if (containerId.length === 0) {
-    throw new Error('Archive-state descriptor is missing qenc.containerId');
-  }
-
-  const base = group[0];
-  if (!(base.keyCommit instanceof Uint8Array) || base.keyCommit.length !== KEY_COMMITMENT_MAX_LEN) {
-    throw new Error('Successor shard is missing required key commitment');
-  }
-  const shardByIndex = new Map();
-
-  for (const shard of group) {
-    if (!Number.isInteger(shard.shardIndex) || shard.shardIndex < 0 || shard.shardIndex >= n) {
-      throw new Error(`Invalid shardIndex ${shard.shardIndex}`);
-    }
-    if (shardByIndex.has(shard.shardIndex)) {
-      throw new Error(`Duplicate shardIndex ${shard.shardIndex} detected`);
-    }
-    shardByIndex.set(shard.shardIndex, shard);
-
-    ensureEqual(normalizeHexString(shard.metaJSON?.archiveId), candidate.archiveId, 'archiveId');
-    ensureEqual(normalizeHexString(shard.metaJSON?.stateId), candidate.stateId, 'stateId');
-    ensureEqual(normalizeHexString(shard.metaJSON?.cohortId), candidate.cohortId, 'cohortId');
-    ensureEqual(shard.archiveStateDigestHex, candidate.archiveStateDigestHex, 'archiveStateDigest');
-    ensureEqual(shard.cohortBindingDigestHex, candidate.cohortBindingDigestHex, 'cohortBindingDigest');
-    ensureEqual(shard.archiveStateDigestHex, candidate.stateId, 'stateId');
-
-    ensureEqual(shard.metaJSON?.containerId, containerId, 'containerId');
-    ensureEqual(Number(shard.metaJSON?.n), n, 'n');
-    ensureEqual(Number(shard.metaJSON?.k), k, 'k');
-    ensureEqual(Number(shard.metaJSON?.m), m, 'm');
-    ensureEqual(Number(shard.metaJSON?.t), t, 't');
-
-    if (!bytesEqual(shard.archiveStateBytes, candidate.archiveStateBytes)) {
-      throw new Error('Exact archive-state byte mismatch inside selected successor cohort');
-    }
-    if (!bytesEqual(shard.cohortBindingBytes, candidate.cohortBindingBytes)) {
-      throw new Error('Exact cohort-binding byte mismatch inside selected successor cohort');
-    }
-    if (!bytesEqual(shard.encapsulatedKey, base.encapsulatedKey)) {
-      throw new Error(`Shard header mismatch: encapsulatedKey differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.iv, base.iv)) {
-      throw new Error(`Shard header mismatch: iv differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.salt, base.salt)) {
-      throw new Error(`Shard header mismatch: salt differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.qencMetaBytes, base.qencMetaBytes)) {
-      throw new Error(`Shard header mismatch: qenc metadata differs for shard ${shard.shardIndex}`);
-    }
-    if (!bytesEqual(shard.keyCommit, base.keyCommit)) {
-      throw new Error(`Shard header mismatch: key commitment differs for shard ${shard.shardIndex}`);
-    }
-  }
-
-  const missingIndices = new Set();
-  for (let i = 0; i < n; i += 1) {
-    if (!shardByIndex.has(i)) missingIndices.add(i);
-  }
-
-  const qencMetaJSON = base.qencMetaJSON;
-  validateContainerPolicyMetadata(qencMetaJSON, { allowLegacyWithoutProfile: false });
-  assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON);
-
-  const ciphertextLength = ensurePositiveInteger(Number(base.metaJSON?.ciphertextLength), 'ciphertextLength', 1);
-  for (const shard of group) {
-    ensureEqual(Number(shard.metaJSON?.ciphertextLength), ciphertextLength, 'ciphertextLength');
-    ensureEqual(Number(shard.metaJSON?.chunkCount), chunkCount, 'chunkCount');
-    ensureEqual(Number(shard.metaJSON?.chunkSize), chunkSize, 'chunkSize');
-  }
-
-  const isPerChunkMode = qencMetaJSON.aead_mode === 'per-chunk-aead';
-  if (!isPerChunkMode && qencMetaJSON.aead_mode !== 'single-container-aead') {
-    throw new Error(`Unsupported AEAD mode: ${qencMetaJSON.aead_mode ?? 'unknown'}`);
-  }
-
-  const expectedCiphertextLength = isPerChunkMode
-    ? (payloadLength + (16 * chunkCount))
-    : ciphertextLength;
-  if (isPerChunkMode && ciphertextLength !== expectedCiphertextLength) {
-    throw new Error(`Ciphertext length mismatch for per-chunk mode (expected ${expectedCiphertextLength}, got ${ciphertextLength})`);
-  }
-
-  const encapHash = await hashBytes(base.encapsulatedKey);
-  if (normalizeHexString(base.metaJSON?.encapBlobHash) !== normalizeHexString(encapHash)) {
-    throw new Error('encapBlobHash mismatch');
-  }
-  if (group.length < t) {
-    throw new Error(`Need at least ${t} matching shards for selected archive/state/cohort, got ${group.length}`);
-  }
-
-  const shareCommitments = cohortBinding?.shareCommitments || null;
-  const fragmentBodyHashes = cohortBinding?.shardBodyHashes || null;
-
-  let validShareShards = group;
-  if (Array.isArray(shareCommitments)) {
-    if (shareCommitments.length !== n) {
-      throw new Error('Invalid shareCommitments length');
-    }
-    validShareShards = [];
-    const invalidShareIndices = new Set();
-    for (const shard of group) {
-      const expected = normalizeHexString(shareCommitments[shard.shardIndex]);
-      const actual = normalizeHexString(await hashBytes(shard.share));
-      if (!expected || actual !== expected) {
-        onWarn(`Share commitment verification failed for shard ${shard.shardIndex}. Share will be skipped.`);
-        invalidShareIndices.add(shard.shardIndex);
-        continue;
-      }
-      validShareShards.push(shard);
-    }
-    if (validShareShards.length < t) {
-      throw new Error(`Not enough valid shards for Shamir reconstruction: need ${t}, have ${validShareShards.length}`);
-    }
-    onLog(invalidShareIndices.size > 0 ? `Share commitment failures: ${invalidShareIndices.size} shard(s) rejected.` : 'Share commitments verified.');
-  }
-
-  const corruptedShardIndices = new Set();
-  if (Array.isArray(fragmentBodyHashes)) {
-    if (fragmentBodyHashes.length !== n) {
-      throw new Error('Invalid shardBodyHashes length');
-    }
-    for (const shard of group) {
-      const expected = normalizeHexString(fragmentBodyHashes[shard.shardIndex]);
-      const actual = normalizeHexString(await hashBytes(shard.fragments));
-      if (expected && actual !== expected) {
-        onWarn(`Fragment integrity check failed for shard ${shard.shardIndex}. Treating as erasure.`);
-        corruptedShardIndices.add(shard.shardIndex);
-      }
-    }
-    if (corruptedShardIndices.size === 0) {
-      onLog('Shard body hashes verified.');
-    }
-  }
-
-  const totalBad = missingIndices.size + corruptedShardIndices.size;
-  if (totalBad > allowedFailures) {
-    throw new Error(`Too many missing/corrupted shards for RS reconstruction: allowed ${allowedFailures}, got ${totalBad}`);
-  }
-
-  const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
-  const { secret: privKey } = await combineSharesFromCopiedSlices(sortedShares, t);
-
-  const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
-  const cipherChunks = [];
-  const shardOffsets = new Array(n).fill(0);
-
-  for (let i = 0; i < chunkCount; i += 1) {
-    const plainLen = Math.min(chunkSize, payloadLength - (i * chunkSize));
-    const thisLen = isPerChunkMode ? (plainLen + 16) : ciphertextLength;
-
-    const encodeSize = Math.floor(rsEncodeBase / n) * n;
-    if (encodeSize === 0) throw new Error('RS parameters too large');
-    const inputSize = (encodeSize * k) / n;
-    const symbolSize = inputSize / k;
-    const blocks = Math.ceil(thisLen / inputSize);
-    const expectedFragLen = blocks * symbolSize;
-
-    const encoded = new Array(n);
-    for (let j = 0; j < n; j += 1) {
-      const shard = shardByIndex.get(j);
-      const fragStream = (shard && !corruptedShardIndices.has(j)) ? shard.fragments : null;
-      if (!fragStream) {
-        encoded[j] = new Uint8Array(expectedFragLen);
-        continue;
-      }
-
-      const streamOffset = shardOffsets[j];
-      if (streamOffset + 4 > fragStream.length) {
-        throw new Error('Fragment stream underflow');
-      }
-
-      const dvFrag = new DataView(fragStream.buffer, fragStream.byteOffset + streamOffset);
-      const fragLen = dvFrag.getUint32(0, false);
-      const fragStart = streamOffset + 4;
-      const fragEnd = fragStart + fragLen;
-      if (fragEnd > fragStream.length) {
-        throw new Error('Fragment length overflow');
-      }
-
-      let fragment = fragStream.subarray(fragStart, fragEnd);
-      if (fragment.length < expectedFragLen) {
-        const padded = new Uint8Array(expectedFragLen);
-        padded.set(fragment);
-        fragment = padded;
-      } else if (fragment.length > expectedFragLen) {
-        fragment = fragment.subarray(0, expectedFragLen);
-      }
-
-      encoded[j] = fragment;
-      shardOffsets[j] = fragEnd;
-    }
-
-    let recombined;
-    try {
-      recombined = erasureRuntime.recombine(encoded, thisLen, k, m / 2, rsEncodeBase);
-    } catch (error) {
-      throw new Error(`RS recombination failed on chunk ${i}: ${error?.message ?? error}`);
-    }
-
-    cipherChunks.push(recombined);
-    if (!isPerChunkMode) break;
-  }
-
-  for (let j = 0; j < n; j += 1) {
-    if (corruptedShardIndices.has(j)) continue;
-    const shard = shardByIndex.get(j);
-    if (!shard) continue;
-    if (shardOffsets[j] !== shard.fragments.length) {
-      throw new Error(`Fragment stream has trailing or missing data in shard ${j}`);
-    }
-  }
-
-  const ciphertext = isPerChunkMode
-    ? (() => {
-        const total = cipherChunks.reduce((sum, item) => sum + item.length, 0);
-        const out = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of cipherChunks) {
-          out.set(chunk, offset);
-          offset += chunk.length;
-        }
-        return out;
-      })()
-    : cipherChunks[0];
-
-  if (!(ciphertext instanceof Uint8Array) || ciphertext.length !== ciphertextLength) {
-    throw new Error('Reconstructed ciphertext length mismatch');
-  }
-
-  const header = buildQencHeader({
-    encapsulatedKey: base.encapsulatedKey,
-    containerNonce: base.iv,
-    kdfSalt: base.salt,
-    metaBytes: base.qencMetaBytes,
-    keyCommitment: base.keyCommit,
+  const reconstructed = await reconstructLifecycleCohortMaterial(candidate, {
+    erasureRuntime,
+    onLog,
+    onWarn,
+    keyCommitmentLength: KEY_COMMITMENT_MAX_LEN,
+    digestHex: async (bytes) => hashBytes(bytes),
+    validateQencMeta: (currentArchiveState, qencMetaJSON) => {
+      validateContainerPolicyMetadata(qencMetaJSON, { allowLegacyWithoutProfile: false });
+      assertArchiveStateMatchesQencMetadata(currentArchiveState, qencMetaJSON);
+    },
+    messages: {
+      needThreshold: (threshold, count) => `Need at least ${threshold} matching shards for selected archive/state/cohort, got ${count}`,
+      missingKeyCommitment: 'Successor shard is missing required key commitment',
+      archiveStateMismatch: 'Exact archive-state byte mismatch inside selected successor cohort',
+      cohortBindingMismatch: 'Exact cohort-binding byte mismatch inside selected successor cohort',
+      shareCommitmentFailure: (index) => `Share commitment verification failed for shard ${index}. Share will be skipped.`,
+      notEnoughValidShares: (threshold, count) => `Not enough valid shards for Shamir reconstruction: need ${threshold}, have ${count}`,
+      shareCommitmentSummary: (count) => `Share commitment failures: ${count} shard(s) rejected.`,
+      shareCommitmentVerified: 'Share commitments verified.',
+      shardBodyFailure: (index) => `Fragment integrity check failed for shard ${index}. Treating as erasure.`,
+      shardBodyVerified: 'Shard body hashes verified.',
+      tooManyMissingCorrupted: (allowed, total) => `Too many missing/corrupted shards for RS reconstruction: allowed ${allowed}, got ${total}`,
+      qencHashMismatch: 'Reconstructed .qenc hash does not match archive-state descriptor',
+      privateKeyHashMismatch: 'Recovered secret key hash does not match shard metadata.',
+    },
   });
 
-  const qencBytes = new Uint8Array(header.length + ciphertext.length);
-  qencBytes.set(header, 0);
-  qencBytes.set(ciphertext, header.length);
-
+  const qencBytes = reconstructed.qencBytes;
+  const privKey = reconstructed.privKey;
   const recoveredQencHash = normalizeHexString(await hashBytes(qencBytes));
   const expectedQencHash = normalizeHexString(qenc.qencHash);
-  if (recoveredQencHash !== expectedQencHash) {
-    throw new Error('Reconstructed .qenc hash does not match archive-state descriptor');
-  }
-
   const recoveredPrivHash = normalizeHexString(await hashBytes(privKey));
-  const privateKeyHash = normalizeHexString(base.metaJSON?.privateKeyHash || '');
-  const qkeyOk = privateKeyHash ? (privateKeyHash === recoveredPrivHash) : true;
-  if (!qkeyOk) {
-    onWarn('Recovered secret key hash does not match shard metadata.');
-  }
+  const privateKeyHash = normalizeHexString(group[0]?.metaJSON?.privateKeyHash || '');
+  const qkeyOk = reconstructed.privateKeyHashMatchesMetadata;
 
-  const authenticityWarnings = [];
+  const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
   const mixedBundleWarning = buildMixedLifecycleBundleVariantWarning(
     embeddedLifecycleBundleDigestsUsed,
     lifecycleBundleDigestHex
