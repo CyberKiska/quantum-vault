@@ -241,7 +241,6 @@ async function buildLifecycleSampleArtifacts() {
       { alg: 'SHA-256', value: '67'.repeat(32) },
     ],
     externalSourceSignatureRefs: ['sig:external-1'],
-    mediaType: 'application/json',
   });
   const lifecycleBundle = await buildLifecycleBundle({
     archiveState,
@@ -499,7 +498,6 @@ async function buildSuccessorVerificationBundle(split, {
         { alg: 'SHA-256', value: '67'.repeat(32) },
       ],
       externalSourceSignatureRefs: ['sig:external-restore-phase3'],
-      mediaType: 'application/json',
     });
     bundle.sourceEvidence = [sourceEvidence];
     const canonicalSourceEvidence = canonicalizeSourceEvidence(sourceEvidence);
@@ -559,8 +557,8 @@ const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
   cohortIdPreimageCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","cohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","type":"quantum-vault-cohort-id-preimage/v1"}',
   cohortId: 'd14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b',
   transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"ebf832f7aff98cbe063b84b6835e58321ce5f932a211c888280511e614ae619b","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
-  sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"mediaType":"application/json","relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-manifest-v3","version":1}',
-  lifecycleBundleDigest: '1549dd052185327d8187bd9baad8c1a03a84539225a3336819d166c838a7c4cb9142a28c50ef6fb29920db4da5a4d37fef1d149b9ca53094a79415a3b8f248e8',
+  sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-manifest-v3","version":1}',
+  lifecycleBundleDigest: '87a7d082a65713b689c441fadfdc51f41166945cbf9619a03a6806ee3542e37a31593c4e25ba4fc021d334ea7a979a37bd7b169e451f32fc5c886b74a729dda3',
 });
 
 function assert(condition, message) {
@@ -1805,6 +1803,68 @@ function buildCases() {
       },
     },
     {
+      name: 'successor source-evidence builder omits descriptive fields by default and preserves external signature refs',
+      fn: async () => {
+        const sourceEvidence = buildSourceEvidence({
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-manifest-v3',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '90'.repeat(64) },
+            { alg: 'SHA-256', value: '12'.repeat(32) },
+          ],
+          externalSourceSignatureRefs: ['sig:external-default-profile'],
+          mediaType: 'application/json',
+        });
+
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'mediaType'), 'default profile must omit mediaType');
+        assert(
+          Array.isArray(sourceEvidence.externalSourceSignatureRefs) &&
+          sourceEvidence.externalSourceSignatureRefs.length === 1 &&
+          sourceEvidence.externalSourceSignatureRefs[0] === 'sig:external-default-profile',
+          'external source-signature refs must be preserved'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence builder allows explicit opt-in for mediaType',
+      fn: async () => {
+        const sourceEvidence = buildSourceEvidence({
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-manifest-v3',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '13'.repeat(64) },
+            { alg: 'SHA-256', value: '24'.repeat(32) },
+          ],
+          descriptiveFieldOptIn: ['mediaType'],
+          mediaType: 'application/json',
+        });
+
+        assert(sourceEvidence.mediaType === 'application/json', 'explicit descriptive-field opt-in must preserve mediaType');
+      },
+    },
+    {
+      name: 'successor source-evidence builder suppresses sensitive descriptive inputs by default',
+      fn: async () => {
+        const sourceEvidence = buildSourceEvidence({
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-manifest-v3',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '35'.repeat(64) },
+            { alg: 'SHA-256', value: '46'.repeat(32) },
+          ],
+          localPath: '/Users/alice/private/source.json',
+          username: 'alice',
+          email: 'alice@example.com',
+          operatorNotes: 'internal review notes',
+        });
+
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'localPath'), 'default profile must suppress local paths');
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'username'), 'default profile must suppress usernames');
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'email'), 'default profile must suppress email addresses');
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'operatorNotes'), 'default profile must suppress operator notes');
+      },
+    },
+    {
       name: 'successor lifecycle bundle digest and embedded links remain stable',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
@@ -1884,6 +1944,75 @@ function buildCases() {
           () => Promise.resolve(parseSourceEvidenceBytes(textBytes(duplicateText))),
           'source-evidence parser unexpectedly accepted duplicate object keys'
         );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects non-canonical bytes on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const nonCanonical = `{\n  "version": 1,\n  "schema": "${sample.sourceEvidence.schema}",\n  "sourceEvidenceType": "${sample.sourceEvidence.sourceEvidenceType}",\n  "canonicalization": "${sample.sourceEvidence.canonicalization}",\n  "relationType": "${sample.sourceEvidence.relationType}",\n  "sourceObjectType": "${sample.sourceEvidence.sourceObjectType}",\n  "sourceDigests": ${JSON.stringify(sample.sourceEvidence.sourceDigests)},\n  "externalSourceSignatureRefs": ${JSON.stringify(sample.sourceEvidence.externalSourceSignatureRefs)}\n}`;
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseSourceEvidenceBytes(textBytes(nonCanonical))),
+          /canonical json/i,
+          'source-evidence parser unexpectedly accepted non-canonical bytes'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects duplicate digest algorithms',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = {
+          ...cloneJson(sample.sourceEvidence),
+          sourceDigests: [
+            { alg: 'SHA3-512', value: 'aa'.repeat(64) },
+            { alg: 'SHA3-512', value: 'bb'.repeat(64) },
+          ],
+        };
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseSourceEvidenceBytes(canonicalizeJsonToBytes(mutated))),
+          /sourceDigests\.alg/i,
+          'source-evidence parser unexpectedly accepted duplicate digest algorithms'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects duplicate external signature refs',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = {
+          ...cloneJson(sample.sourceEvidence),
+          externalSourceSignatureRefs: ['sig:external-1', 'sig:external-1'],
+        };
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseSourceEvidenceBytes(canonicalizeJsonToBytes(mutated))),
+          /externalSourceSignatureRefs/i,
+          'source-evidence parser unexpectedly accepted duplicate external signature refs'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects privacy-sensitive wire fields',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const privacyFields = {
+          localPath: '/Users/alice/private/source.json',
+          username: 'alice',
+          email: 'alice@example.com',
+          operatorNotes: 'internal note',
+        };
+
+        for (const [field, value] of Object.entries(privacyFields)) {
+          const mutated = { ...cloneJson(sample.sourceEvidence), [field]: value };
+          await expectFailureWithMessage(
+            () => Promise.resolve(parseSourceEvidenceBytes(canonicalizeJsonToBytes(mutated))),
+            new RegExp(field, 'i'),
+            `source-evidence parser unexpectedly accepted privacy-sensitive field ${field}`
+          );
+        }
       },
     },
     {
@@ -2483,6 +2612,21 @@ function buildCases() {
       },
     },
     {
+      name: 'successor lifecycle bundle rejects duplicate source-evidence digests',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const duplicate = cloneJson(sample.sourceEvidence);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.sourceEvidence = [cloneJson(sample.sourceEvidence), duplicate];
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /duplicate source-evidence digest/i,
+          'lifecycle bundle unexpectedly accepted duplicate source-evidence digests'
+        );
+      },
+    },
+    {
       name: 'successor lifecycle bundle rejects invalid source-evidence family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
@@ -2580,6 +2724,29 @@ function buildCases() {
         await expectFailure(
           () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
           'lifecycle bundle unexpectedly accepted a non-verifying source-evidence publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence signature verification rejects detached signatures over the wrong bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const wrongBytes = textBytes('not-the-canonical-source-evidence-bytes');
+        const qsig = buildQsigFixture(wrongBytes);
+        const signature = buildLifecycleQsigEntry({
+          id: 'source-sig-1',
+          signatureFamily: 'source-evidence',
+          targetType: 'source-evidence',
+          targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+          targetDigest: canonicalSourceEvidence.digest.value,
+          qsigBytes: qsig.qsigBytes,
+        });
+
+        await expectFailureWithMessage(
+          () => verifyLifecycleSignatureEntry(sample.lifecycleBundle, signature),
+          /did not verify detached signature|verification failed/i,
+          'source-evidence signature verification unexpectedly accepted detached signature bytes over the wrong target'
         );
       },
     },
@@ -2956,6 +3123,7 @@ function buildCases() {
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
         assert(restored.authenticity.status.transitionRecordPresent === true, 'expected transition record presence reporting');
         assert(restored.authenticity.status.transitionChainValid === true, 'expected structural transition-chain validity reporting');
+        assert(restored.authenticity.status.sourceEvidencePresent === true, 'expected source-evidence presence reporting');
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
@@ -2964,6 +3132,13 @@ function buildCases() {
         assert(restored.lifecycleVerification.transitions.present === true, 'expected lifecycle transition reporting');
         assert(restored.lifecycleVerification.transitions.chainValid === true, 'expected structural transition-chain validity in lifecycle reporting');
         assert(restored.lifecycleVerification.transitions.records.length === 1, 'expected one transition record in the lifecycle report');
+        assert(restored.lifecycleVerification.sourceEvidence.present === true, 'expected source-evidence reporting');
+        assert(restored.lifecycleVerification.sourceEvidence.count === 1, 'expected one source-evidence object in lifecycle reporting');
+        assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'expected verified source-evidence reporting');
+        assert(
+          restored.lifecycleVerification.sourceEvidence.records[0].externalSourceSignatureRefs[0] === 'sig:external-restore-phase3',
+          'expected external source-signature refs to be preserved in reporting'
+        );
         assert(restored.authenticity.verification.counts.validArchiveApproval === 1, 'only one archive-approval signature should count toward archive policy');
         assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 1, 'only archive-approval pinning should drive archive trust status');
         assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
@@ -2994,6 +3169,7 @@ function buildCases() {
         assert(restored.authenticity.status.signerPinned === false, 'maintenance/source-evidence must not imply archive-approval signer pinning');
         assert(restored.authenticity.status.bundlePinned === false, 'maintenance/source-evidence must not imply archive-approval bundle pinning');
         assert(restored.authenticity.status.userPinned === false, 'maintenance/source-evidence must not imply archive-approval user pinning');
+        assert(restored.authenticity.status.sourceEvidencePresent === true, 'expected source-evidence presence reporting');
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected OTS linkage reporting');
@@ -3003,6 +3179,7 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.archiveApprovalBundlePinnedValidTotal === 0, 'archive-approval bundle pinning count must remain zero without archive-approval signatures');
         assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
         assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
+        assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'source-evidence reporting must remain separate from archive approval');
         assert(restored.authenticity.verification.counts.pinnedValidTotal === 2, 'aggregate detached-signature pinning may still reflect non-archive families');
       },
     },

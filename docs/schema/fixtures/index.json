@@ -232,10 +232,40 @@
       }
     },
     {
+      "id": "source-evidence-v1-valid-precursor-object",
+      "schema": "qv-source-evidence-v1.schema.json",
+      "file": "fixtures/qv-source-evidence-v1.valid.precursor-object.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "source-evidence",
+        "expectParseSuccess": true
+      }
+    },
+    {
+      "id": "source-evidence-v1-valid-media-type-opt-in",
+      "schema": "qv-source-evidence-v1.schema.json",
+      "file": "fixtures/qv-source-evidence-v1.valid.media-type-opt-in.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "source-evidence",
+        "expectParseSuccess": true
+      }
+    },
+    {
       "id": "source-evidence-v1-schema-valid-semantic-invalid-digest-length",
       "schema": "qv-source-evidence-v1.schema.json",
       "file": "fixtures/qv-source-evidence-v1.schema-valid.semantic-invalid.digest-length.json",
       "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "source-evidence",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "source-evidence-v1-invalid-local-path-field",
+      "schema": "qv-source-evidence-v1.schema.json",
+      "file": "fixtures/qv-source-evidence-v1.invalid.local-path-field.json",
+      "expectSchemaValid": false,
       "runtime": {
         "artifact": "source-evidence",
         "expectParseSuccess": false

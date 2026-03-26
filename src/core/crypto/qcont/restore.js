@@ -16,6 +16,7 @@ import { normalizePqPublicKeyPins, packPqpk, verifyQsigAgainstBytes } from '../a
 import {
   canonicalizeArchiveStateDescriptor,
   canonicalizeCohortBinding,
+  canonicalizeSourceEvidence,
   decodeLifecycleSignatureBytes,
   inspectLifecycleTransitions,
   parseArchiveStateDescriptorBytes,
@@ -474,6 +475,77 @@ function buildSuccessorTransitionReport(lifecycleBundle, signatureResults = []) 
   };
 }
 
+function buildSuccessorSourceEvidenceReport(lifecycleBundle, signatureResults = []) {
+  const sourceEvidenceByDigest = new Map();
+
+  for (const result of Array.isArray(signatureResults) ? signatureResults : []) {
+    if (String(result?.family || '') !== 'source-evidence') continue;
+    const digestHex = normalizeHexString(result?.targetDigest?.value);
+    if (!digestHex) continue;
+    if (!sourceEvidenceByDigest.has(digestHex)) {
+      sourceEvidenceByDigest.set(digestHex, {
+        signatureIds: [],
+        verifiedSignatureIds: [],
+      });
+    }
+    const entry = sourceEvidenceByDigest.get(digestHex);
+    const signatureId = result?.artifactId || result?.name || '';
+    if (signatureId) {
+      entry.signatureIds.push(signatureId);
+      if (result?.ok === true) {
+        entry.verifiedSignatureIds.push(signatureId);
+      }
+    }
+  }
+
+  const records = (Array.isArray(lifecycleBundle?.sourceEvidence) ? lifecycleBundle.sourceEvidence : []).map((sourceEvidence, index) => {
+    const canonicalSourceEvidence = canonicalizeSourceEvidence(sourceEvidence);
+    const digestHex = canonicalSourceEvidence.digest.value;
+    const signatures = sourceEvidenceByDigest.get(digestHex) || {
+      signatureIds: [],
+      verifiedSignatureIds: [],
+    };
+    const signatureIds = [...new Set(signatures.signatureIds)].sort();
+    const verifiedSignatureIds = [...new Set(signatures.verifiedSignatureIds)].sort();
+    const externalSourceSignatureRefs = Array.isArray(sourceEvidence.externalSourceSignatureRefs)
+      ? [...sourceEvidence.externalSourceSignatureRefs]
+      : [];
+    const descriptiveFieldNames = typeof sourceEvidence.mediaType === 'string' && sourceEvidence.mediaType.length > 0
+      ? ['mediaType']
+      : [];
+
+    return {
+      index,
+      digestHex,
+      targetRef: `source-evidence:sha3-512:${digestHex}`,
+      relationType: sourceEvidence.relationType,
+      sourceObjectType: sourceEvidence.sourceObjectType,
+      sourceDigests: sourceEvidence.sourceDigests.map((digest) => ({ ...digest })),
+      externalSourceSignatureRefs,
+      externalSourceSignatureRefCount: externalSourceSignatureRefs.length,
+      descriptiveFieldNames,
+      mediaType: sourceEvidence.mediaType || null,
+      sourceEvidenceSignatureIds: signatureIds,
+      verifiedSourceEvidenceSignatureIds: verifiedSignatureIds,
+      sourceEvidenceSignatureCount: signatureIds.length,
+      verifiedSourceEvidenceSignatureCount: verifiedSignatureIds.length,
+    };
+  });
+
+  return {
+    present: records.length > 0,
+    count: records.length,
+    signed: records.some((record) => record.sourceEvidenceSignatureCount > 0),
+    signatureVerified: records.some((record) => record.verifiedSourceEvidenceSignatureCount > 0),
+    sourceEvidenceSignatureCount: records.reduce((sum, record) => sum + record.sourceEvidenceSignatureCount, 0),
+    verifiedSourceEvidenceSignatureCount: records.reduce((sum, record) => sum + record.verifiedSourceEvidenceSignatureCount, 0),
+    externalSourceSignatureRefCount: records.reduce((sum, record) => sum + record.externalSourceSignatureRefCount, 0),
+    externalSourceSignatureRefsPresent: records.some((record) => record.externalSourceSignatureRefCount > 0),
+    descriptiveFieldNames: [...new Set(records.flatMap((record) => record.descriptiveFieldNames))].sort(),
+    records,
+  };
+}
+
 function buildLifecycleBundleVerifierInputs(publicKey) {
   if (!publicKey) {
     return {
@@ -928,6 +1000,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     signatureResults: results.filter((item) => item.signatureBytes instanceof Uint8Array),
   });
   const transitionReport = buildSuccessorTransitionReport(lifecycleBundle, results);
+  const sourceEvidenceReport = buildSuccessorSourceEvidenceReport(lifecycleBundle, results);
 
   const userPinProvided = (
     normalizedPinnedPqPins.length > 0 ||
@@ -977,6 +1050,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
         userPinProvided,
         transitionRecordPresent: transitionReport.present,
         transitionChainValid: transitionReport.chainValid,
+        sourceEvidencePresent: sourceEvidenceReport.present,
         maintenanceSignatureVerified: counts.validMaintenance > 0,
         sourceEvidenceSignatureVerified: counts.validSourceEvidence > 0,
         otsEvidenceLinked: timestampEvidence.length > 0,
@@ -985,6 +1059,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     policy,
     timestampEvidence,
     transitionReport,
+    sourceEvidenceReport,
     warnings: [],
   };
 }
@@ -1945,6 +2020,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
 
   const successorStatus = archiveContext.authenticity.verification.status;
   const transitionReport = archiveContext.authenticity.transitionReport;
+  const sourceEvidenceReport = archiveContext.authenticity.sourceEvidenceReport;
   return {
     qencBytes,
     privKey,
@@ -1975,6 +2051,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     lifecycleBundleSource: archiveContext.lifecycleBundleSource,
     lifecycleVerification: {
       transitions: transitionReport,
+      sourceEvidence: sourceEvidenceReport,
       cohorts: {
         forkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
         knownCohortIdsForState: [...archiveContext.cohortSelection.knownCohortIdsForState],
@@ -1987,6 +2064,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
       policy: archiveContext.authenticity.policy,
       verification: archiveContext.authenticity.verification,
       transitionReport,
+      sourceEvidenceReport,
       warnings: [...new Set(authenticityWarnings.filter(Boolean))],
       status: {
         integrityVerified: true,
@@ -1999,6 +2077,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
         userPinProvided: successorStatus.userPinProvided,
         transitionRecordPresent: transitionReport.present,
         transitionChainValid: transitionReport.chainValid,
+        sourceEvidencePresent: sourceEvidenceReport.present,
         cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
         bundleCohortMixed,
         mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,

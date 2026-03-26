@@ -26,6 +26,7 @@ function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   const policy = authenticity?.policy;
   const verification = authenticity?.verification;
   const status = authenticity?.status;
+  const sourceEvidenceReport = authenticity?.sourceEvidenceReport;
 
   if (policy) {
     onLog(`Archive policy: ${policy.level} (min signatures ${policy.minValidSignatures})`);
@@ -47,6 +48,14 @@ function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   }
   for (const evidence of authenticity?.timestampEvidence || []) {
     onLog(`${evidence.linkLabel}: ${evidence.targetRef}. ${evidence.completionLabel}.`);
+  }
+  if (sourceEvidenceReport?.present) {
+    const descriptiveFieldCount = Array.isArray(sourceEvidenceReport.descriptiveFieldNames)
+      ? sourceEvidenceReport.descriptiveFieldNames.length
+      : 0;
+    onLog(
+      `Source evidence: objects=${sourceEvidenceReport.count}, signed=${sourceEvidenceReport.sourceEvidenceSignatureCount}, verified=${sourceEvidenceReport.verifiedSourceEvidenceSignatureCount}, external-source-signature-refs=${sourceEvidenceReport.externalSourceSignatureRefCount}, descriptive-fields=${descriptiveFieldCount}.`
+    );
   }
   if (!verification) return;
 
@@ -121,6 +130,9 @@ function buildRestoreResultSummary(result, resultPanelId) {
     addItem(status.transitionRecordPresent === true, 'Transition record present', false);
     addItem(status.transitionChainValid === true, 'Transition-chain references valid', false);
     addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
+    if (status.sourceEvidencePresent === true) {
+      addItem(true, 'Source-evidence object present', false);
+    }
     addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
   }
   addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);

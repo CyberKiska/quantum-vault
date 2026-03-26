@@ -121,8 +121,7 @@
       ],
       "externalSourceSignatureRefs": [
         "sig:external-1"
-      ],
-      "mediaType": "application/json"
+      ]
     }
   ],
   "transitions": [

@@ -11,9 +11,7 @@
     "canonicalization",
     "relationType",
     "sourceObjectType",
-    "sourceDigests",
-    "externalSourceSignatureRefs",
-    "mediaType"
+    "sourceDigests"
   ],
   "properties": {
     "schema": {
@@ -43,12 +41,13 @@
     },
     "externalSourceSignatureRefs": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
       }
     },
     "mediaType": {
-      "$ref": "qv-common-types.schema.json#/$defs/nullableString"
+      "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
     }
   },
   "$defs": {

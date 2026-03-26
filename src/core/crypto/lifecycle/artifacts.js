@@ -100,6 +100,7 @@ const BODY_DEFINITION_EXCLUDES = Object.freeze([
   'external-signatures',
 ]);
 const SOURCE_DIGEST_ALLOWED_ALGS = new Set([SHA3_512_ALG, SHA3_256_ALG, SHA_256_ALG]);
+const SOURCE_EVIDENCE_ALLOWED_DESCRIPTIVE_FIELDS = Object.freeze(['mediaType']);
 const PQ_PUBLIC_KEY_LENGTHS = Object.freeze({
   'mldsa-44': ml_dsa44.lengths.publicKey,
   'mldsa-65': ml_dsa65.lengths.publicKey,
@@ -158,6 +159,10 @@ function ensureArray(value, field) {
   return value;
 }
 
+function hasOwn(source, key) {
+  return Object.prototype.hasOwnProperty.call(source, key);
+}
+
 function ensureBase64String(value, field) {
   const text = ensureString(value, field);
   if (!BASE64_RE.test(text)) {
@@ -213,6 +218,67 @@ function normalizeDigestArray(value, field) {
 function normalizeJsonObject(value, field) {
   const obj = ensureObject(value, field);
   return obj;
+}
+
+function normalizeOptionalStringArrayProperty(source, key, field, { minItems = 0 } = {}) {
+  if (!hasOwn(source, key)) return undefined;
+  const arr = ensureArray(source[key], field).map((entry, index) => ensureString(entry, `${field}[${index}]`));
+  if (arr.length < minItems) {
+    throw new Error(`Invalid ${field}`);
+  }
+  return arr;
+}
+
+function normalizeOptionalStringProperty(source, key, field) {
+  if (!hasOwn(source, key)) return undefined;
+  return ensureString(source[key], field);
+}
+
+function assertUniqueStringValues(values, field) {
+  const seen = new Set();
+  for (const value of values) {
+    if (seen.has(value)) {
+      throw new Error(`Duplicate ${field} value`);
+    }
+    seen.add(value);
+  }
+}
+
+function assertUniqueSourceDigests(digests, field) {
+  const seenEntries = new Set();
+  const seenAlgorithms = new Set();
+  for (const digest of digests) {
+    const entryKey = `${digest.alg}:${digest.value}`;
+    if (seenEntries.has(entryKey)) {
+      throw new Error(`Duplicate ${field} entry`);
+    }
+    if (seenAlgorithms.has(digest.alg)) {
+      throw new Error(`Duplicate ${field}.alg`);
+    }
+    seenEntries.add(entryKey);
+    seenAlgorithms.add(digest.alg);
+  }
+}
+
+function normalizeSourceEvidenceDescriptiveFieldOptIn(value) {
+  if (value == null || value === false) {
+    return new Set();
+  }
+  if (value === true) {
+    return new Set(SOURCE_EVIDENCE_ALLOWED_DESCRIPTIVE_FIELDS);
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('Invalid descriptiveFieldOptIn');
+  }
+  const optIn = new Set();
+  for (let index = 0; index < value.length; index += 1) {
+    const fieldName = ensureString(value[index], `descriptiveFieldOptIn[${index}]`);
+    if (!SOURCE_EVIDENCE_ALLOWED_DESCRIPTIVE_FIELDS.includes(fieldName)) {
+      throw new Error(`Unsupported descriptiveFieldOptIn[${index}]`);
+    }
+    optIn.add(fieldName);
+  }
+  return optIn;
 }
 
 function crc16Xmodem(bytes) {
@@ -685,10 +751,12 @@ function normalizeSourceEvidenceStructure(value) {
     'relationType',
     'sourceObjectType',
     'sourceDigests',
+  ], [
     'externalSourceSignatureRefs',
     'mediaType',
-  ], [], 'sourceEvidence');
-  return {
+  ], 'sourceEvidence');
+
+  const sourceEvidence = {
     schema: ensureExactString(source.schema, 'sourceEvidence.schema', SOURCE_EVIDENCE_SCHEMA),
     version: ensureInteger(source.version, 'sourceEvidence.version', 1, Number.MAX_SAFE_INTEGER),
     sourceEvidenceType: ensureString(source.sourceEvidenceType, 'sourceEvidence.sourceEvidenceType'),
@@ -700,16 +768,34 @@ function normalizeSourceEvidenceStructure(value) {
     relationType: ensureString(source.relationType, 'sourceEvidence.relationType'),
     sourceObjectType: ensureString(source.sourceObjectType, 'sourceEvidence.sourceObjectType'),
     sourceDigests: normalizeDigestArray(source.sourceDigests, 'sourceEvidence.sourceDigests'),
-    externalSourceSignatureRefs: ensureArray(source.externalSourceSignatureRefs, 'sourceEvidence.externalSourceSignatureRefs')
-      .map((entry, index) => ensureString(entry, `sourceEvidence.externalSourceSignatureRefs[${index}]`)),
-    mediaType: ensureNullableString(source.mediaType, 'sourceEvidence.mediaType'),
   };
+
+  const externalSourceSignatureRefs = normalizeOptionalStringArrayProperty(
+    source,
+    'externalSourceSignatureRefs',
+    'sourceEvidence.externalSourceSignatureRefs',
+    { minItems: 1 }
+  );
+  if (externalSourceSignatureRefs) {
+    sourceEvidence.externalSourceSignatureRefs = externalSourceSignatureRefs;
+  }
+
+  const mediaType = normalizeOptionalStringProperty(source, 'mediaType', 'sourceEvidence.mediaType');
+  if (mediaType !== undefined) {
+    sourceEvidence.mediaType = mediaType;
+  }
+
+  return sourceEvidence;
 }
 
 function validateSourceEvidenceSemantics(value) {
   const sourceEvidence = normalizeSourceEvidenceStructure(value);
   if (sourceEvidence.version !== SOURCE_EVIDENCE_VERSION) {
     throw new Error('Unsupported sourceEvidence.version');
+  }
+  assertUniqueSourceDigests(sourceEvidence.sourceDigests, 'sourceEvidence.sourceDigests');
+  if (Array.isArray(sourceEvidence.externalSourceSignatureRefs)) {
+    assertUniqueStringValues(sourceEvidence.externalSourceSignatureRefs, 'sourceEvidence.externalSourceSignatureRefs');
   }
   return { sourceEvidence };
 }
@@ -1002,14 +1088,20 @@ function buildLifecycleTargetRegistry(bundle) {
     });
   }
   const sourceEvidenceTargets = new Map();
-  for (const evidence of bundle.sourceEvidence) {
+  for (let index = 0; index < bundle.sourceEvidence.length; index += 1) {
+    const evidence = bundle.sourceEvidence[index];
     const canonicalSourceEvidence = canonicalizeSourceEvidence(evidence);
+    if (sourceEvidenceTargets.has(canonicalSourceEvidence.digest.value)) {
+      throw new Error(`lifecycleBundle.sourceEvidence[${index}] duplicate source-evidence digest`);
+    }
     sourceEvidenceTargets.set(canonicalSourceEvidence.digest.value, {
       signatureFamily: 'source-evidence',
       targetType: 'source-evidence',
       targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
       digest: canonicalSourceEvidence.digest,
       bytes: canonicalSourceEvidence.bytes,
+      sourceEvidence: evidence,
+      sourceEvidenceIndex: index,
     });
   }
   return {
@@ -1617,6 +1709,7 @@ export function buildTransitionRecord(params) {
 }
 
 export function buildSourceEvidence(params) {
+  const descriptiveFieldOptIn = normalizeSourceEvidenceDescriptiveFieldOptIn(params.descriptiveFieldOptIn);
   const sourceEvidence = {
     schema: SOURCE_EVIDENCE_SCHEMA,
     version: SOURCE_EVIDENCE_VERSION,
@@ -1625,10 +1718,26 @@ export function buildSourceEvidence(params) {
     relationType: ensureString(params.relationType, 'relationType'),
     sourceObjectType: ensureString(params.sourceObjectType, 'sourceObjectType'),
     sourceDigests: normalizeDigestArray(params.sourceDigests, 'sourceDigests'),
-    externalSourceSignatureRefs: ensureArray(params.externalSourceSignatureRefs || [], 'externalSourceSignatureRefs')
-      .map((entry, index) => ensureString(entry, `externalSourceSignatureRefs[${index}]`)),
-    mediaType: ensureNullableString(params.mediaType, 'mediaType'),
   };
+
+  if (params.externalSourceSignatureRefs != null) {
+    const externalSourceSignatureRefs = normalizeOptionalStringArrayProperty(
+      { externalSourceSignatureRefs: params.externalSourceSignatureRefs },
+      'externalSourceSignatureRefs',
+      'externalSourceSignatureRefs',
+      { minItems: 1 }
+    );
+    if (externalSourceSignatureRefs) {
+      sourceEvidence.externalSourceSignatureRefs = externalSourceSignatureRefs;
+    }
+  }
+
+  // The Phase 6 privacy-preserving default profile emits only digests and relation metadata
+  // unless the caller explicitly opts in to specific allow-listed descriptive fields.
+  if (descriptiveFieldOptIn.has('mediaType') && params.mediaType != null) {
+    sourceEvidence.mediaType = ensureString(params.mediaType, 'mediaType');
+  }
+
   return validateSourceEvidenceObject(sourceEvidence).sourceEvidence;
 }
 

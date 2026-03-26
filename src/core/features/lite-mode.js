@@ -537,6 +537,9 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
         addItem(status.transitionRecordPresent === true, 'Transition record present', false);
         addItem(status.transitionChainValid === true, 'Transition-chain references valid', false);
         addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
+        if (status.sourceEvidencePresent === true) {
+            addItem(true, 'Source-evidence object present', false);
+        }
         addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
     }
     addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
@@ -625,6 +628,16 @@ async function restoreLiteShards() {
         }
         for (const evidence of result.authenticity?.timestampEvidence || []) {
             log(`${evidence.linkLabel}: ${evidence.targetRef}. ${evidence.completionLabel}.`, { isLiteMode: true });
+        }
+        const sourceEvidenceReport = result.authenticity?.sourceEvidenceReport;
+        if (sourceEvidenceReport?.present) {
+            const descriptiveFieldCount = Array.isArray(sourceEvidenceReport.descriptiveFieldNames)
+                ? sourceEvidenceReport.descriptiveFieldNames.length
+                : 0;
+            log(
+                `Source evidence: objects=${sourceEvidenceReport.count}, signed=${sourceEvidenceReport.sourceEvidenceSignatureCount}, verified=${sourceEvidenceReport.verifiedSourceEvidenceSignatureCount}, external-source-signature-refs=${sourceEvidenceReport.externalSourceSignatureRefCount}, descriptive-fields=${descriptiveFieldCount}.`,
+                { isLiteMode: true }
+            );
         }
         if (result.authenticity?.verification) {
             const verification = result.authenticity.verification;
