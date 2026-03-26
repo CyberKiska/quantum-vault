@@ -4,7 +4,7 @@ import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
 import { attachLifecycleBundleToShards } from './qcont/lifecycle-attach.js';
-import { buildLifecycleQcontShards, parseLifecycleShard } from './qcont/lifecycle-shard.js';
+import { buildLifecycleQcontShards, parseLifecycleShard, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import {
@@ -299,6 +299,184 @@ function buildLifecycleQsigEntry({
     entry.publicKeyRef = publicKeyRef;
   }
   return entry;
+}
+
+async function buildSuccessorRestoreSample({
+  payloadBytes = textBytes('successor-restore-sample'),
+  filename = 'successor-restore-sample.bin',
+  authPolicyLevel = 'integrity-only',
+  minValidSignatures = 1,
+} = {}) {
+  const pair = await generateKeyPair({ collectUserEntropy: false });
+  const qencBytes = await blobToBytes(await encryptFile(payloadBytes, pair.publicKey, filename));
+  const split = await buildLifecycleQcontShards(
+    qencBytes,
+    pair.secretKey,
+    { n: 5, k: 3 },
+    { authPolicyLevel, minValidSignatures }
+  );
+  const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+  return {
+    pair,
+    payloadBytes,
+    qencBytes,
+    split,
+    parsed,
+  };
+}
+
+async function rewriteLifecycleBundleSubset(parsedShards, lifecycleBundleBytes, selectedIndices = []) {
+  const selected = new Set(
+    selectedIndices.length > 0
+      ? selectedIndices
+      : parsedShards.map((shard) => shard.shardIndex)
+  );
+  return Promise.all(parsedShards.map(async (shard) => {
+    if (!selected.has(shard.shardIndex)) {
+      return shard;
+    }
+    const rewritten = rewriteLifecycleBundleInShard(shard, lifecycleBundleBytes);
+    return parseLifecycleShard(await blobToBytes(rewritten.blob));
+  }));
+}
+
+async function buildSuccessorVerificationBundle(split, {
+  authPolicyLevel = split.lifecycleBundle.authPolicy.level,
+  minValidSignatures = split.lifecycleBundle.authPolicy.minValidSignatures,
+  includeArchiveApproval = true,
+  includeMaintenance = false,
+  includeSourceEvidence = false,
+  timestampTargetFamily = '',
+} = {}) {
+  const bundle = cloneJson(split.lifecycleBundle);
+  bundle.authPolicy = {
+    level: authPolicyLevel,
+    minValidSignatures,
+  };
+  bundle.sourceEvidence = [];
+  bundle.transitions = [];
+  bundle.attachments = {
+    publicKeys: [],
+    archiveApprovalSignatures: [],
+    maintenanceSignatures: [],
+    sourceEvidenceSignatures: [],
+    timestamps: [],
+  };
+
+  const fixtures = {};
+  if (includeArchiveApproval || timestampTargetFamily === 'archive-approval') {
+    const qsig = buildQsigFixture(split.archiveStateBytes);
+    fixtures.archiveApproval = qsig;
+    bundle.attachments.publicKeys.push(buildBundledMlDsaPublicKey('pk-archive', qsig.signerPublicKey));
+    if (includeArchiveApproval) {
+      bundle.attachments.archiveApprovalSignatures.push(buildLifecycleQsigEntry({
+        id: 'archive-approval-sig-1',
+        signatureFamily: 'archive-approval',
+        targetType: 'archive-state',
+        targetRef: `state:${split.stateId}`,
+        targetDigest: split.stateId,
+        qsigBytes: qsig.qsigBytes,
+        publicKeyRef: 'pk-archive',
+      }));
+    }
+  }
+
+  let transitionRecord = null;
+  if (includeMaintenance || timestampTargetFamily === 'maintenance') {
+    transitionRecord = buildTransitionRecord({
+      archiveId: split.archiveId,
+      fromStateId: split.stateId,
+      toStateId: split.stateId,
+      fromCohortId: '01'.repeat(32),
+      toCohortId: split.cohortId,
+      fromCohortBindingDigest: { alg: 'SHA3-512', value: '23'.repeat(64) },
+      toCohortBindingDigest: split.cohortBindingDigestHex
+        ? { alg: 'SHA3-512', value: split.cohortBindingDigestHex }
+        : canonicalizeCohortBinding(split.cohortBinding).digest,
+      reasonCode: 'cohort-rotation',
+      performedAt: '2026-03-25T12:34:56.000Z',
+      operatorRole: 'operator',
+      actorHints: { ceremony: 'restore-phase3' },
+      notes: null,
+    });
+    bundle.transitions = [transitionRecord];
+    const canonicalTransition = canonicalizeTransitionRecord(transitionRecord);
+    const qsig = buildQsigFixture(canonicalTransition.bytes);
+    fixtures.maintenance = qsig;
+    bundle.attachments.publicKeys.push(buildBundledMlDsaPublicKey('pk-maintenance', qsig.signerPublicKey));
+    if (includeMaintenance) {
+      bundle.attachments.maintenanceSignatures.push(buildLifecycleQsigEntry({
+        id: 'maintenance-sig-1',
+        signatureFamily: 'maintenance',
+        targetType: 'transition-record',
+        targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+        targetDigest: canonicalTransition.digest.value,
+        qsigBytes: qsig.qsigBytes,
+        publicKeyRef: 'pk-maintenance',
+      }));
+    }
+  }
+
+  let sourceEvidence = null;
+  if (includeSourceEvidence || timestampTargetFamily === 'source-evidence') {
+    sourceEvidence = buildSourceEvidence({
+      relationType: 'reviewed-source',
+      sourceObjectType: 'archive-manifest-v3',
+      sourceDigests: [
+        { alg: 'SHA3-512', value: '45'.repeat(64) },
+        { alg: 'SHA-256', value: '67'.repeat(32) },
+      ],
+      externalSourceSignatureRefs: ['sig:external-restore-phase3'],
+      mediaType: 'application/json',
+    });
+    bundle.sourceEvidence = [sourceEvidence];
+    const canonicalSourceEvidence = canonicalizeSourceEvidence(sourceEvidence);
+    const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+    fixtures.sourceEvidence = qsig;
+    bundle.attachments.publicKeys.push(buildBundledMlDsaPublicKey('pk-source-evidence', qsig.signerPublicKey));
+    if (includeSourceEvidence) {
+      bundle.attachments.sourceEvidenceSignatures.push(buildLifecycleQsigEntry({
+        id: 'source-evidence-sig-1',
+        signatureFamily: 'source-evidence',
+        targetType: 'source-evidence',
+        targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+        targetDigest: canonicalSourceEvidence.digest.value,
+        qsigBytes: qsig.qsigBytes,
+        publicKeyRef: 'pk-source-evidence',
+      }));
+    }
+  }
+
+  if (timestampTargetFamily) {
+    const targetByFamily = {
+      'archive-approval': { id: 'archive-approval-sig-1', qsigBytes: fixtures.archiveApproval?.qsigBytes },
+      maintenance: { id: 'maintenance-sig-1', qsigBytes: fixtures.maintenance?.qsigBytes },
+      'source-evidence': { id: 'source-evidence-sig-1', qsigBytes: fixtures.sourceEvidence?.qsigBytes },
+    };
+    const target = targetByFamily[timestampTargetFamily];
+    if (!(target?.qsigBytes instanceof Uint8Array)) {
+      throw new Error(`No detached signature bytes are available for timestampTargetFamily=${timestampTargetFamily}`);
+    }
+    const otsBytes = await buildOtsFixture(target.qsigBytes, { completeProof: true });
+    bundle.attachments.timestamps.push({
+      id: `ots-${timestampTargetFamily}`,
+      type: 'opentimestamps',
+      targetRef: target.id,
+      targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(target.qsigBytes)) },
+      proofEncoding: 'base64',
+      proof: bytesToBase64(otsBytes),
+    });
+  }
+
+  const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(bundle));
+  return {
+    bundle: parsed.lifecycleBundle,
+    bundleBytes: parsed.bytes,
+    digestHex: parsed.digest.value,
+    fixtures,
+    transitionRecord,
+    sourceEvidence,
+  };
 }
 
 const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
@@ -2324,6 +2502,370 @@ function buildCases() {
             'embedded lifecycle bundle bytes changed unexpectedly'
           );
         }
+      },
+    },
+    {
+      name: 'successor restore rejects mixed archiveId candidate inputs without explicit selection',
+      fn: async () => {
+        const sampleA = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-archive-a') });
+        const sampleB = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-archive-b') });
+        const mixed = [
+          ...sampleA.parsed.slice(0, 3),
+          sampleB.parsed[0],
+        ];
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted mixed archiveId candidates without explicit selection'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects mixed stateId candidate inputs without explicit selection',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-state') });
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? {
+                ...shard,
+                stateId: 'aa'.repeat(64),
+                metaJSON: { ...shard.metaJSON, stateId: 'aa'.repeat(64) },
+              }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted mixed stateId candidates without explicit selection'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects mixed cohortId candidate inputs without explicit selection',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-cohort') });
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? {
+                ...shard,
+                cohortId: 'bb'.repeat(32),
+                metaJSON: { ...shard.metaJSON, cohortId: 'bb'.repeat(32) },
+              }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted mixed cohortId candidates without explicit selection'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects exact archive-state byte mismatches inside one candidate set',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-archive-state-byte-mismatch') });
+        const mutatedBytes = sample.parsed[0].archiveStateBytes.slice();
+        mutatedBytes[mutatedBytes.length - 1] ^= 0x01;
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? { ...shard, archiveStateBytes: mutatedBytes }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted an exact archive-state byte mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects exact cohort-binding byte mismatches inside one candidate set',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-cohort-binding-byte-mismatch') });
+        const mutatedBytes = sample.parsed[0].cohortBindingBytes.slice();
+        mutatedBytes[mutatedBytes.length - 1] ^= 0x01;
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? { ...shard, cohortBindingBytes: mutatedBytes }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted an exact cohort-binding byte mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor restore accepts a valid same-cohort shard set with one lifecycle-bundle digest',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-single-bundle'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sig = buildQsigFixture(sample.split.archiveStateBytes);
+        const attached = await attachLifecycleBundleToShards(sample.parsed, {
+          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+        const parsedAttached = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const restored = await restoreFromShards(parsedAttached, { onLog: () => {}, onError: () => {} });
+        assert(restored.archiveId === sample.split.archiveId, 'successor restore archiveId mismatch');
+        assert(restored.stateId === sample.split.stateId, 'successor restore stateId mismatch');
+        assert(restored.cohortId === sample.split.cohortId, 'successor restore cohortId mismatch');
+        assert(restored.lifecycleBundleDigestHex === attached.lifecycleBundleDigestHex, 'successor restore picked the wrong lifecycle-bundle digest');
+        assert(
+          Array.isArray(restored.embeddedLifecycleBundleDigestsUsed) &&
+          restored.embeddedLifecycleBundleDigestsUsed.length === 1 &&
+          restored.embeddedLifecycleBundleDigestsUsed[0] === attached.lifecycleBundleDigestHex,
+          'successor restore should report exactly one embedded lifecycle-bundle digest'
+        );
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
+        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled key material');
+        assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+      },
+    },
+    {
+      name: 'successor restore requires explicit lifecycle-bundle selection when one cohort carries multiple bundle digests',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-multi-bundle'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sigA = buildQsigFixture(sample.split.archiveStateBytes);
+        const firstAttach = await attachLifecycleBundleToShards(sample.parsed, {
+          signatures: [{ name: 'archive-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigB = buildQsigFixture(sample.split.archiveStateBytes);
+        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
+          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'archive-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+        const parsedSubset = await Promise.all(secondAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        const mixed = [...parsedSubset, ...parsedFirstAttach.slice(2)];
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly auto-selected one lifecycle-bundle variant from a mixed-digest cohort'
+        );
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { selectedLifecycleBundleDigestHex: secondAttach.lifecycleBundleDigestHex },
+        });
+        assert(restored.lifecycleBundleDigestHex === secondAttach.lifecycleBundleDigestHex, 'explicit lifecycle-bundle digest selection picked the wrong bundle');
+        assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded lifecycle-bundle digests should be reported honestly');
+      },
+    },
+    {
+      name: 'successor restore accepts an uploaded lifecycle bundle only when its digests match the selected state and cohort',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-uploaded-lifecycle-bundle-accept'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sig = buildQsigFixture(sample.split.archiveStateBytes);
+        const attached = await attachLifecycleBundleToShards(sample.parsed, {
+          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+        const parsedAttached = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const restored = await restoreFromShards(parsedAttached, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: attached.lifecycleBundleBytes },
+        });
+        assert(restored.selectionSource === 'uploaded-lifecycle-bundle', `unexpected successor selection source: ${restored.selectionSource}`);
+        assert(restored.lifecycleBundleDigestHex === attached.lifecycleBundleDigestHex, 'uploaded lifecycle bundle should drive the selected digest');
+      },
+    },
+    {
+      name: 'successor restore rejects an uploaded lifecycle bundle whose digests do not match the selected state and cohort',
+      fn: async () => {
+        const sampleA = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-uploaded-lifecycle-bundle-a'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sampleB = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-uploaded-lifecycle-bundle-b'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sigA = buildQsigFixture(sampleA.split.archiveStateBytes);
+        const attachedA = await attachLifecycleBundleToShards(sampleA.parsed, {
+          signatures: [{ name: 'archive-approval-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const sigB = buildQsigFixture(sampleB.split.archiveStateBytes);
+        const attachedB = await attachLifecycleBundleToShards(sampleB.parsed, {
+          signatures: [{ name: 'archive-approval-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+        const parsedAttachedA = await Promise.all(attachedA.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        await expectFailure(
+          () => restoreFromShards(parsedAttachedA, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { lifecycleBundleBytes: attachedB.lifecycleBundleBytes },
+          }),
+          'successor restore unexpectedly accepted an uploaded lifecycle bundle from a different state/cohort'
+        );
+      },
+    },
+    {
+      name: 'successor restore uses an uploaded archive-state descriptor to disambiguate mixed candidate inputs',
+      fn: async () => {
+        const sampleA = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-uploaded-archive-state-a') });
+        const sampleB = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-uploaded-archive-state-b') });
+        const mixed = [
+          ...sampleA.parsed.slice(0, 4),
+          sampleB.parsed[0],
+        ];
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { archiveStateBytes: sampleA.split.archiveStateBytes },
+        });
+        assert(restored.archiveId === sampleA.split.archiveId, 'uploaded archive-state should select the intended archiveId');
+        assert(restored.selectionSource === 'uploaded-archive-state', `unexpected selection source: ${restored.selectionSource}`);
+      },
+    },
+    {
+      name: 'successor restore keeps archive approval, maintenance, source evidence, pinning, policy, and OTS as distinct states',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-state-separation'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: true,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'maintenance',
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
+        assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
+        assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
+        assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
+        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
+        assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 1, 'only one archive-approval signature should count toward archive policy');
+        assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
+        assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
+      },
+    },
+    {
+      name: 'successor restore does not let maintenance, source-evidence, or OTS satisfy archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-policy-archive-approval-only'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'maintenance',
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        await expectFailure(
+          () => restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly let maintenance/source-evidence/OTS satisfy archive policy'
+        );
+      },
+    },
+    {
+      name: 'successor restore fails closed on unresolved publicKeyRef in an uploaded lifecycle bundle',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-publickeyref-fail-closed'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.archiveApprovalSignatures = [
+          {
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.split.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'missing-public-key',
+          },
+        ];
+
+        await expectFailure(
+          () => restoreFromShards(sample.parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { lifecycleBundleBytes: canonicalizeJsonToBytes(bundle) },
+          }),
+          'successor restore unexpectedly accepted an uploaded lifecycle bundle with an unresolved publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor restore fails closed on mismatched OTS linkage in an uploaded lifecycle bundle',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-ots-fail-closed'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const wrongOts = await buildOtsFixture(textBytes('wrong-detached-signature-bytes'), { completeProof: true });
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.archiveApprovalSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: sample.split.stateId,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+        bundle.attachments.timestamps = [
+          {
+            id: 'ots-1',
+            type: 'opentimestamps',
+            targetRef: 'archive-approval-sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(wrongOts),
+          },
+        ];
+
+        await expectFailure(
+          () => restoreFromShards(sample.parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { lifecycleBundleBytes: canonicalizeJsonToBytes(bundle) },
+          }),
+          'successor restore unexpectedly accepted mismatched OTS linkage during restore'
+        );
       },
     },
     {

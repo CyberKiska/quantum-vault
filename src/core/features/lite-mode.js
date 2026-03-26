@@ -7,7 +7,7 @@ import {
     generateKeyPair,
     hashBytes,
     buildQcontShards,
-    parseShard,
+    parseShardForRestore,
     restoreFromShards,
     assessShardSelection,
 } from '../../app/crypto-service.js';
@@ -518,14 +518,24 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
     }
 
     const status = result.authenticity?.status || {};
-    addItem(status.signatureVerified === true, 'Signature verified', status.signatureVerified !== true);
-    addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', status.signatureVerified === true && status.strongPqSignatureVerified !== true);
-    addItem(status.bundlePinned === true, 'Bundle signer pinned', status.signatureVerified === true && status.bundlePinned !== true);
+    const archiveApprovalVerified = status.archiveApprovalSignatureVerified ?? status.signatureVerified;
+    const hasSuccessorStates = (
+        'archiveApprovalSignatureVerified' in status ||
+        'maintenanceSignatureVerified' in status ||
+        'sourceEvidenceSignatureVerified' in status
+    );
+    addItem(archiveApprovalVerified === true, hasSuccessorStates ? 'Archive-approval signature verified' : 'Signature verified', archiveApprovalVerified !== true);
+    addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', archiveApprovalVerified === true && status.strongPqSignatureVerified !== true);
+    addItem(status.bundlePinned === true, 'Bundle signer pinned', archiveApprovalVerified === true && status.bundlePinned !== true);
     if (status.bundleCohortMixed === true) {
         addItem(false, 'Mixed embedded bundle cohort used', true);
     }
     if (status.userPinProvided === true || status.userPinned === true) {
         addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
+    }
+    if (hasSuccessorStates) {
+        addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
+        addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
     }
     addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
 
@@ -579,7 +589,7 @@ async function restoreLiteShards() {
 
         // Parse shards using shared function
         const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-        const shards = shardBytesArr.map((arr) => parseShard(arr, { strict: true }));
+        const shards = await Promise.all(shardBytesArr.map((arr) => parseShardForRestore(arr, { strict: true })));
         
         // Log restoration start
         const containerId = shards[0]?.metaJSON?.containerId;
@@ -593,10 +603,17 @@ async function restoreLiteShards() {
             verification: verificationOptions,
         });
 
-        log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
-        log(`Selected bundle digest: ${result.bundleDigestHex}`, { isLiteMode: true });
-        if (Array.isArray(result.embeddedBundleDigestsUsed) && result.embeddedBundleDigestsUsed.length > 0) {
-            log(`Embedded shard bundle digests used: ${result.embeddedBundleDigestsUsed.join(', ')}`, { isLiteMode: true });
+        if (result.archiveId) {
+            log(`Selected archiveId: ${result.archiveId}`, { isLiteMode: true });
+            log(`Selected stateId: ${result.stateId}`, { isLiteMode: true });
+            log(`Selected cohortId: ${result.cohortId}`, { isLiteMode: true });
+        } else {
+            log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
+        }
+        log(`Selected bundle digest: ${result.lifecycleBundleDigestHex || result.bundleDigestHex}`, { isLiteMode: true });
+        const embeddedDigests = result.embeddedLifecycleBundleDigestsUsed || result.embeddedBundleDigestsUsed;
+        if (Array.isArray(embeddedDigests) && embeddedDigests.length > 0) {
+            log(`Embedded shard bundle digests used: ${embeddedDigests.join(', ')}`, { isLiteMode: true });
         }
         if (result.authenticity?.policy) {
             log(`Archive policy: ${result.authenticity.policy.level}`, { isLiteMode: true });

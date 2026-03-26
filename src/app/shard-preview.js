@@ -2,7 +2,9 @@
 // Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
 import { LEGACY_QCONT_FORMAT_VERSION, QCONT_FORMAT_VERSION } from '../core/crypto/constants.js';
+import { parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
 import { parseManifestBundleBytesPreviewOnly } from '../core/crypto/manifest/manifest-bundle.js';
+import { LIFECYCLE_QCONT_FORMAT_VERSION } from '../core/crypto/qcont/lifecycle-shard.js';
 
 export async function parseQcontShardPreviewFile(file) {
   const decoder = new TextDecoder();
@@ -35,31 +37,61 @@ export async function parseQcontShardPreviewFile(file) {
   if (metaJSON?.alg?.fmt === LEGACY_QCONT_FORMAT_VERSION) {
     throw new Error('Legacy shard format is not supported');
   }
-  if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION) {
-    throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}`);
+  if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION && metaJSON?.alg?.fmt !== LIFECYCLE_QCONT_FORMAT_VERSION) {
+    throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION} or ${LIFECYCLE_QCONT_FORMAT_VERSION}`);
   }
   if (metaJSON?.hasKeyCommitment !== true) {
     throw new Error('Shard metadata must indicate hasKeyCommitment=true');
   }
   offset += metaLen;
 
-  await ensureBytes(offset + 4);
-  const manifestLen = dv.getUint32(offset, false);
-  if (manifestLen <= 0 || manifestLen > MAX_MANIFEST_LEN) {
-    throw new Error('Invalid embedded manifest length');
-  }
-  offset += 4 + manifestLen + DIGEST_LEN;
+  let authPolicyLevel;
+  if (metaJSON?.alg?.fmt === LIFECYCLE_QCONT_FORMAT_VERSION) {
+    await ensureBytes(offset + 4);
+    const archiveStateLen = dv.getUint32(offset, false);
+    if (archiveStateLen <= 0 || archiveStateLen > MAX_MANIFEST_LEN) {
+      throw new Error('Invalid embedded archive-state length');
+    }
+    offset += 4 + archiveStateLen + DIGEST_LEN;
 
-  await ensureBytes(offset + 4);
-  const bundleLen = dv.getUint32(offset, false);
-  if (bundleLen <= 0 || bundleLen > MAX_BUNDLE_LEN) {
-    throw new Error('Invalid embedded bundle length');
+    await ensureBytes(offset + 4);
+    const cohortBindingLen = dv.getUint32(offset, false);
+    if (cohortBindingLen <= 0 || cohortBindingLen > MAX_MANIFEST_LEN) {
+      throw new Error('Invalid embedded cohort-binding length');
+    }
+    offset += 4 + cohortBindingLen + DIGEST_LEN;
+
+    await ensureBytes(offset + 4);
+    const lifecycleBundleLen = dv.getUint32(offset, false);
+    if (lifecycleBundleLen <= 0 || lifecycleBundleLen > MAX_BUNDLE_LEN) {
+      throw new Error('Invalid embedded lifecycle-bundle length');
+    }
+    offset += 4;
+    await ensureBytes(offset + lifecycleBundleLen + DIGEST_LEN + 4);
+    const lifecycleBundleBytes = bytes.subarray(offset, offset + lifecycleBundleLen);
+    const parsedLifecycleBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
+    authPolicyLevel = parsedLifecycleBundle.lifecycleBundle.authPolicy.level;
+    offset += lifecycleBundleLen + DIGEST_LEN;
+  } else {
+    await ensureBytes(offset + 4);
+    const manifestLen = dv.getUint32(offset, false);
+    if (manifestLen <= 0 || manifestLen > MAX_MANIFEST_LEN) {
+      throw new Error('Invalid embedded manifest length');
+    }
+    offset += 4 + manifestLen + DIGEST_LEN;
+
+    await ensureBytes(offset + 4);
+    const bundleLen = dv.getUint32(offset, false);
+    if (bundleLen <= 0 || bundleLen > MAX_BUNDLE_LEN) {
+      throw new Error('Invalid embedded bundle length');
+    }
+    offset += 4;
+    await ensureBytes(offset + bundleLen + DIGEST_LEN + 4);
+    const bundleBytes = bytes.subarray(offset, offset + bundleLen);
+    const parsedBundle = parseManifestBundleBytesPreviewOnly(bundleBytes);
+    authPolicyLevel = parsedBundle.bundle.authPolicy.level;
+    offset += bundleLen + DIGEST_LEN;
   }
-  offset += 4;
-  await ensureBytes(offset + bundleLen + DIGEST_LEN + 4);
-  const bundleBytes = bytes.subarray(offset, offset + bundleLen);
-  const parsedBundle = parseManifestBundleBytesPreviewOnly(bundleBytes);
-  offset += bundleLen + DIGEST_LEN;
 
   await ensureBytes(offset + 4);
   const encapLen = dv.getUint32(offset, false);
@@ -89,7 +121,7 @@ export async function parseQcontShardPreviewFile(file) {
     n: metaJSON.n,
     t: metaJSON.t,
     shardIndex,
-    authPolicyLevel: parsedBundle.bundle.authPolicy.level,
+    authPolicyLevel,
     hasEmbeddedBundle: true,
   };
 }
