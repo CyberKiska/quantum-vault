@@ -81,8 +81,9 @@ The following decisions are treated as frozen inputs for engineering work in thi
 ### 3.3 State/cohort boundary
 
 - The archive-state descriptor carries stable archive-state, ciphertext, and policy identity.
-- Concrete `n/k/t/codecId` are **cohort-level**, not state-level.
-- Same-state resharing MAY change concrete cohort parameters without changing `stateId`.
+- Concrete sharding parameters are **cohort-level**, not state-level.
+- In the frozen v1 implementation surface, same-state resharing MAY change `n` and `k`, with `t` derived from the RS parity relation under `QV-RS-ErasureCodes-v1`; `codecId` and shard body-definition details remain schema-frozen in v1.
+- This does not freeze one universal numeric `n/k/m/t` tuple: Lite, Pro, or operator-selected workflows may choose different valid tuples, so long as they remain compatible with the current builder and restore semantics.
 - Any state change creates a new `stateId`.
 - Because cohort bindings are state-bound, any new `stateId` also requires a new cohort-binding object and a new `cohortId`.
 
@@ -317,7 +318,7 @@ Disposition 1: frozen field set preserves current ciphertext/policy interpretati
   - KDF interpretation fields carried by `kdfTreeId`
   - crypto-profile identity carried by `cryptoProfileId`
   - policy commitment carried by `authPolicyCommitment`
-- concrete `n/k/t/codecId`, shard hashes, and custodian logistics remain outside archive-state identity and therefore do not weaken ciphertext/policy interpretation
+- cohort-level sharding details, shard hashes, and custodian logistics remain outside archive-state identity and therefore do not weaken ciphertext/policy interpretation
 
 Disposition 2: lifecycle-bundle v1 contents do not weaken closed-schema discipline.
 
@@ -604,14 +605,16 @@ Allowed changes in same-state resharing:
 
 - `n`
 - `k`
-- `t`
-- `codecId`
-- `bodyDefinitionId`
-- `bodyDefinition`
+- derived `t` under the frozen `QV-RS-ErasureCodes-v1` parity rule
 - `shareCommitments[]`
 - `shardBodyHashes[]`
 - custodian assignment
 - embedded lifecycle-bundle bytes
+
+Current v1 limitation:
+
+- the shipped successor implementation keeps `codecId`, `bodyDefinitionId`, and `bodyDefinition` frozen to the closed v1 schema and artifact contracts
+- broader cohort-level flexibility remains design direction, not current v1 behavior
 
 Forbidden changes in same-state resharing:
 
@@ -648,9 +651,11 @@ Operational tasks:
 Test-vector tasks:
 
 - same-state resharing with unchanged archive state and changed cohort
-- resharing with changed `n/k/t/codecId`
+- resharing with changed `n/k`, with successor `t` derived under the frozen v1 codec/body-definition surface
 - rejection of accidental archive-state mutation
 - rejection of mixed predecessor cohorts
+- rejection of ambiguous predecessor lifecycle-bundle selection without explicit disambiguation
+- rejection when predecessor share commitments or shard-body hashes fail beyond tolerance
 - regression vectors proving archive-approval signatures survive resharing
 
 Security review points:

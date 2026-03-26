@@ -257,8 +257,10 @@ Status: Frozen architecture
 
 This document chooses **Option 2** and freezes it:
 
-- concrete `n/k/t/codecId` are cohort-level
-- same-state resharing MAY change them
+- concrete sharding parameters are cohort-level rather than archive-state-level
+- same-state resharing MAY change supported cohort-level parameters without changing `stateId`
+- current v1 implementation keeps `codecId`, `bodyDefinitionId`, and `bodyDefinition` schema-frozen and derives `t` from the RS parity relation
+- this is not one universal numeric `n/k/m/t` constant; different workflows may choose different valid tuples as long as they preserve the current reconstruction and threshold-safety contract
 - therefore they are not part of the archive-state approval signature target
 
 ### 5.1 Why this is the preferred QV boundary
@@ -285,8 +287,7 @@ Changes that preserve `stateId`:
 Changes that require a new `cohortId` but preserve `stateId`:
 
 - fresh resharing with new share commitments
-- changing concrete `n/k/t/codecId`
-- changing body-definition details
+- changing supported cohort-level sharding parameters
 - changing shard-body hashes
 
 Changes that require a new `stateId`:
@@ -484,7 +485,7 @@ Archive-state descriptor
 Cohort binding
   ├── archiveId
   ├── stateId
-  ├── concrete n/k/t/codecId
+  ├── concrete cohort-level sharding parameters
   ├── bodyDefinition
   ├── shareCommitments[]
   └── shardBodyHashes[]
@@ -849,9 +850,8 @@ It does not require:
 7. Choose new cohort parameters:
    - `n'`
    - `k'`
-   - `t'`
-   - `codecId'`
-   - body-definition changes that remain cohort-level
+   - `t'`, if it remains valid under the frozen v1 RS parity relation
+   - current v1 keeps `codecId'` and body-definition details fixed to the predecessor-compatible schema surface
 8. Generate a fresh cohort with fresh share randomness.
 9. Build the successor cohort-binding object, compute `cohortBindingDigest`, and derive the new `cohortId`.
 10. Build successor shards embedding:
@@ -868,12 +868,17 @@ It does not require:
 Allowed in same-state resharing:
 
 - `cohortId`
-- concrete `n/k/t/codecId`
-- body-definition details
+- supported cohort-level sharding parameters
 - `shareCommitments[]`
 - `shardBodyHashes[]`
 - custodian assignment
 - embedded lifecycle-bundle digest
+
+Current v1 implementation subset:
+
+- `n` and `k` may change
+- `t` is derived from the RS parity relation enforced by restore and shard-building semantics
+- `codecId`, `bodyDefinitionId`, and `bodyDefinition` remain frozen to the closed v1 schema
 
 Forbidden in same-state resharing:
 
@@ -1173,7 +1178,7 @@ Status: Frozen conclusion
 The preferred Quantum Vault lifecycle architecture is:
 
 - a successor archive-state descriptor as the long-lived archive-approval signature target
-- a separate cohort binding for distribution-specific material, including concrete `n/k/t/codecId`
+- a separate cohort binding for distribution-specific material, including cohort-level sharding parameters
 - a self-contained shard model carrying archive-state, cohort-binding, and lifecycle-bundle bytes
 - lifecycle-bundle v1 carrying auth policy, source evidence, transition records, bundled key material, detached signatures, and timestamps
 - required transition records for QV-produced same-state resharing

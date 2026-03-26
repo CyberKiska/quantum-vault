@@ -47,7 +47,8 @@ The preferred architecture is:
 - transition records as required maintenance records for QV-produced same-state resharing
 - optional but first-class source-evidence objects for source-review claims
 
-Concrete `n/k/t/codecId` are frozen as **cohort-level**, not archive-state-level.
+Concrete sharding parameters are frozen as **cohort-level**, not archive-state-level.
+The shipped v1 surface keeps `codecId` and body-definition details fixed, and derives `t` from the RS parity relation.
 
 ## 3. Successor-Family Cutover Strategy
 
@@ -82,7 +83,7 @@ The roadmap assumes the following are already frozen:
 
 - archive-state descriptor is the long-lived archive-approval target
 - archive-state descriptor v1 has an exact closed field set with no additional v1 members
-- concrete `n/k/t/codecId` are cohort-level
+- concrete sharding parameters are cohort-level
 - `stateId` is derived-only from canonical archive-state descriptor bytes and MUST NOT appear inside those bytes
 - `cohortId` is derived-only from a frozen preimage rooted in `archiveId`, `stateId`, and `cohortBindingDigest`
 - successor shards remain self-contained and embed archive-state, cohort-binding, and lifecycle-bundle bytes plus digests
@@ -109,7 +110,7 @@ Required outputs:
 
 - archive-state descriptor selected as long-lived signable object
 - cohort binding selected as the distribution-specific object
-- concrete `n/k/t/codecId` frozen as cohort-level
+- concrete sharding parameters frozen as cohort-level
 - successor-family artifact list frozen
 - derived-only `stateId` semantics frozen
 - exact `cohortId` preimage frozen
@@ -352,7 +353,7 @@ Status: Strict compatibility and consequence matrix for the successor family
 | Add source-evidence objects or source-evidence signatures only | Yes | Yes | Yes | No | Yes | No |
 | Add maintenance signatures to existing transition records only | Yes | Yes | Yes | No | Yes | No |
 | Same-state resharing with new cohort only | Yes | Yes | No | No | Yes | Yes |
-| Change concrete `n/k/t/codecId` during same-state resharing | Yes | Yes | No | No | Yes | Yes |
+| Change supported cohort-level sharding parameters during same-state resharing | Yes | Yes | No | No | Yes | Yes |
 | Change `authPolicyCommitment` | Yes | No | No | Yes | Old OTS remains historical only for the predecessor state | Yes once state-changing transitions exist |
 | Reencryption / crypto-profile migration | Yes | No | No | Yes | Old OTS remains historical only for the predecessor state | Yes once migration exists |
 | Future `rewrap` under envelope-DEK | Yes | No | No | Yes | Old OTS remains historical only for the predecessor state | Yes once migration exists |

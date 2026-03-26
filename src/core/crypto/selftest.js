@@ -3002,6 +3002,7 @@ function buildCases() {
         assert(reshared.lifecycleBundle.attachments.maintenanceSignatures.length === sample.predecessorLifecycleBundle.attachments.maintenanceSignatures.length, 'unexpected maintenance signature carry-forward delta');
         assert(reshared.zeroization.attempted === true, 'reshare should attempt best-effort zeroization');
         assert(reshared.zeroization.privateKeyBytesCleared === true, 'reshare should clear reconstructed private key bytes');
+        assert(reshared.zeroization.shareCopiesCleared === true, 'reshare should report cleared in-memory predecessor share copies');
         assert(reshared.semantics.sameStateAvailabilityMaintenance === true, 'reshare should report availability-maintenance semantics');
         assert(reshared.semantics.archiveReapprovalPerformed === false, 'reshare must not report archive re-approval');
         assert(reshared.semantics.plaintextDecrypted === false, 'reshare must not report plaintext decryption');
@@ -3023,7 +3024,7 @@ function buildCases() {
       },
     },
     {
-      name: 'same-state resharing allows changed n/k/t while keeping codecId frozen under the v1 schema',
+      name: 'same-state resharing allows changed n/k with derived successor t while keeping codecId frozen under the v1 schema',
       fn: async () => {
         const sample = await buildResharePredecessorSample({
           payloadBytes: textBytes('phase4-same-state-reshare-nkt-change'),
@@ -3071,6 +3072,124 @@ function buildCases() {
         await expectFailure(
           () => reshareSameState(mixed, { n: 5, k: 3 }, { onLog: () => {}, onWarn: () => {} }),
           'same-state resharing unexpectedly accepted mixed predecessor cohorts'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing fails closed on mixed predecessor lifecycle-bundle digests unless explicitly disambiguated',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-predecessor-bundle-disambiguation'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'integrity-only',
+          minValidSignatures: 1,
+          includeArchiveApproval: true,
+          includeMaintenance: false,
+          includeSourceEvidence: false,
+        });
+        const mixed = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes, [0, 1]);
+
+        await expectFailure(
+          () => reshareSameState(mixed, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:35:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-predecessor-bundle-mixed' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          'same-state resharing unexpectedly accepted mixed predecessor lifecycle-bundle digests without explicit selection'
+        );
+
+        const resharedByDigest = await reshareSameState(mixed, { n: 5, k: 3 }, {
+          selectedLifecycleBundleDigestHex: bundleVariant.digestHex,
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:36:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-predecessor-bundle-selected-digest' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+        assert(resharedByDigest.predecessorLifecycleBundleDigestHex === bundleVariant.digestHex, 'digest-selected predecessor bundle mismatch');
+
+        const resharedByBytes = await reshareSameState(mixed, { n: 5, k: 3 }, {
+          lifecycleBundleBytes: sample.predecessorLifecycleBundleBytes,
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:37:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-predecessor-bundle-selected-bytes' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+        assert(resharedByBytes.predecessorLifecycleBundleDigestHex === sample.predecessorLifecycleBundleDigestHex, 'byte-selected predecessor bundle mismatch');
+      },
+    },
+    {
+      name: 'same-state resharing rejects predecessor share-commitment failure when too few valid shares remain',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-share-commitment-failure'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = sample.parsed.map((shard, index) => (
+          index < 2
+            ? { ...shard, share: mutateTail(shard.share) }
+            : shard
+        ));
+
+        await expectFailure(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:38:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-share-commitment-failure' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          'same-state resharing unexpectedly accepted too few valid predecessor shares after share-commitment filtering'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects predecessor shard-body hash failure beyond RS tolerance',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-shard-body-hash-failure'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = sample.parsed.map((shard, index) => (
+          index < 2
+            ? { ...shard, fragments: mutateTail(shard.fragments) }
+            : shard
+        ));
+
+        await expectFailure(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:39:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-shard-body-hash-failure' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          'same-state resharing unexpectedly accepted too many corrupted predecessor shard bodies'
         );
       },
     },

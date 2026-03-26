@@ -513,6 +513,7 @@ async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog
 
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
   const selectedShareCopies = sortedShares.slice(0, t).map((item) => item.share.slice());
+  let shareCopiesCleared = false;
   let privKey = null;
   try {
     const { combineShares } = await import('../splitting/sss.js');
@@ -521,6 +522,7 @@ async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog
     for (const share of selectedShareCopies) {
       share.fill(0);
     }
+    shareCopiesCleared = selectedShareCopies.every((share) => share.every((value) => value === 0));
   }
 
   const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
@@ -642,6 +644,7 @@ async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog
     corruptedShardIndices: [...corruptedShardIndices].sort((a, b) => a - b),
     missingShardIndices: [...missingIndices].sort((a, b) => a - b),
     privateKeyHashMatchesMetadata,
+    shareCopiesCleared,
   };
 }
 
@@ -1396,7 +1399,7 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
   const zeroization = {
     attempted: false,
     privateKeyBytesCleared: false,
-    shareCopiesCleared: true,
+    shareCopiesCleared: false,
   };
 
   try {
@@ -1406,6 +1409,7 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
       onWarn,
     });
     reconstructedPrivKey = reconstructed.privKey;
+    zeroization.shareCopiesCleared = reconstructed.shareCopiesCleared === true;
 
     const successorSplit = await buildLifecycleQcontShards(
       reconstructed.qencBytes,
