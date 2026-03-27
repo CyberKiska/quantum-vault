@@ -510,17 +510,26 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
     header.textContent = 'Restore Result';
     panel.appendChild(header);
 
-    const addItem = (ok, text, warn) => {
+    const addPolar = (ok, okText, failText, warnOnFail = false) => {
         const item = document.createElement('div');
-        item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-        item.textContent = `${warn ? '⚠' : (ok ? '✓' : '✗')} ${text}`;
+        const useWarn = !ok && warnOnFail;
+        item.className = `restore-result-item ${useWarn ? 'warn' : (ok ? 'ok' : 'fail')}`;
+        const icon = ok ? '✓' : (useWarn ? '⚠' : '✗');
+        item.textContent = `${icon} ${ok ? okText : failText}`;
         panel.appendChild(item);
     };
 
-    addItem(result.qencOk, `Container integrity${result.qencOk ? ' verified' : ' FAILED'}`);
-    addItem(result.qkeyOk, `Secret key integrity${result.qkeyOk ? ' verified' : ' FAILED'}`);
+    const addNeutral = (text) => {
+        const item = document.createElement('div');
+        item.className = 'restore-result-item neutral';
+        item.textContent = `· ${text}`;
+        panel.appendChild(item);
+    };
+
+    addPolar(result.qencOk, 'Container integrity verified', 'Container integrity check failed');
+    addPolar(result.qkeyOk, 'Secret key integrity verified', 'Secret key integrity check failed');
     if (containerOk) {
-        addItem(decryptOk, `Decryption & file integrity${decryptOk ? ' verified' : ' FAILED'}`);
+        addPolar(decryptOk, 'Decryption and file integrity verified', 'Decryption or file integrity check failed');
     }
 
     const status = result.authenticity?.status || {};
@@ -530,36 +539,78 @@ function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
         'maintenanceSignatureVerified' in status ||
         'sourceEvidenceSignatureVerified' in status
     );
-    addItem(archiveApprovalVerified === true, hasSuccessorStates ? 'Archive-approval signature verified' : 'Signature verified', archiveApprovalVerified !== true);
-    addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', archiveApprovalVerified === true && status.strongPqSignatureVerified !== true);
-    addItem(status.bundlePinned === true, 'Bundle signer pinned', archiveApprovalVerified === true && status.bundlePinned !== true);
+    addPolar(
+        archiveApprovalVerified === true,
+        hasSuccessorStates ? 'Archive-approval signature verified' : 'Detached signature verified (canonical manifest)',
+        hasSuccessorStates ? 'No verified archive-approval signature over archive-state' : 'No verified detached signature over canonical manifest',
+    );
+    addPolar(
+        status.strongPqSignatureVerified === true,
+        hasSuccessorStates ? 'Strong PQ archive-approval signature verified' : 'Strong PQ detached signature verified',
+        hasSuccessorStates ? 'Strong PQ archive-approval signature not present' : 'Strong PQ detached signature not present',
+        archiveApprovalVerified === true && status.strongPqSignatureVerified !== true,
+    );
+    addPolar(
+        status.bundlePinned === true,
+        hasSuccessorStates ? 'Bundle signer pinned (lifecycle bundle signer material)' : 'Bundle signer pinned (manifest bundle signer material)',
+        'Bundle signer not pinned',
+        archiveApprovalVerified === true && status.bundlePinned !== true,
+    );
     if (status.bundleCohortMixed === true) {
-        addItem(false, 'Mixed embedded lifecycle-bundle variants used', true);
+        addPolar(false, '', 'Mixed embedded lifecycle-bundle variants were used in this cohort', true);
     }
     if (status.userPinProvided === true || status.userPinned === true) {
-        addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
+        addPolar(
+            status.userPinned === true,
+            'User-supplied signer pin matched',
+            status.userPinProvided === true ? 'User-supplied pin did not match a verifying signer' : 'User signer not pinned',
+            status.userPinProvided === true && status.userPinned !== true,
+        );
     }
     if (hasSuccessorStates) {
-        addItem(status.transitionRecordPresent === true, 'Transition record present', false);
-        addItem(status.transitionChainValid === true, 'Transition-chain references valid', false);
-        addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
-        if (status.sourceEvidencePresent === true) {
-            addItem(true, 'Source-evidence object present', false);
+        if (status.transitionRecordPresent !== true) {
+            addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
+        } else {
+            addPolar(true, 'Transition record present', 'Transition record missing');
+            addPolar(
+                status.transitionChainValid === true,
+                'Transition-chain references valid',
+                'Transition-chain references invalid or broken',
+            );
+            addPolar(
+                status.maintenanceSignatureVerified === true,
+                'Maintenance signature verified',
+                'No verified maintenance signature on transition record(s)',
+            );
         }
-        addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
+        if (status.sourceEvidencePresent !== true) {
+            addNeutral('No source-evidence objects on this archive (optional provenance).');
+        } else {
+            addPolar(
+                status.sourceEvidenceSignatureVerified === true,
+                'Source-evidence signature verified',
+                'Source-evidence present but no verified signature',
+            );
+        }
     }
-    addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
+    addPolar(status.policySatisfied === true, 'Archive policy satisfied', 'Archive policy not satisfied');
 
     const timestampEvidence = Array.isArray(result.authenticity?.timestampEvidence) ? result.authenticity.timestampEvidence : [];
     if (timestampEvidence.length > 0) {
         const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
         const incompleteCount = timestampEvidence.length - completeCount;
-        addItem(true, `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`);
+        const appendStatusLine = (ok, text, warn = false) => {
+            const item = document.createElement('div');
+            item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
+            item.textContent = `${ok ? '✓' : (warn ? '⚠' : '✗')} ${text}`;
+            panel.appendChild(item);
+        };
+        appendStatusLine(true, `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`);
         if (completeCount > 0) {
-            addItem(true, `OTS proof appears complete (${completeCount})`);
+            appendStatusLine(true, `OTS proof complete (${completeCount})`);
         }
         if (incompleteCount > 0) {
-            addItem(false, `OTS proof appears incomplete (${incompleteCount})`, true);
+            appendStatusLine(false, `OTS proof not yet complete (${incompleteCount}) — calendars may still be pending`, true);
         }
     }
 

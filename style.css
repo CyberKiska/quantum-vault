@@ -490,6 +490,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 .restore-result-item.ok { color: var(--accent-success); }
 .restore-result-item.fail { color: var(--accent-danger); }
 .restore-result-item.warn { color: var(--accent-warning); }
+.restore-result-item.neutral { color: var(--text-muted); font-style: normal; }
 
 /* Missing UI blocks used by current markup */
 .mode-section {
