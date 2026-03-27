@@ -8,9 +8,9 @@ import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams } 
 
 function describeAuthPolicyHelp(authPolicyLevel) {
     if (authPolicyLevel === 'integrity-only') {
-        return 'Without an external signature, restore will verify integrity only, not archive authenticity.';
+        return 'Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.';
     }
-    return 'Without an external detached signature attached later, restore will block and the file will not be decrypted.';
+    return 'Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.';
 }
 
 export function initQcontBuildUI() {
@@ -57,16 +57,22 @@ export function initQcontBuildUI() {
                 download(blob, name);
                 log(`Saved ${name} (${blob.size} B)`);
             });
-            const manifestName = `${baseName}.qvmanifest.json`;
-            download(new Blob([result.manifestBytes], { type: 'application/json' }), manifestName);
-            log(`Saved ${manifestName} (${result.manifestBytes.length} B) SHA3-512=${result.manifestDigestHex}`);
+            const archiveStateName = `${baseName}.archive-state.json`;
+            download(new Blob([result.archiveStateBytes], { type: 'application/json' }), archiveStateName);
+            log(`Saved ${archiveStateName} (${result.archiveStateBytes.length} B) SHA3-512=${result.archiveStateDigestHex}`);
+            const cohortBindingName = `${baseName}.cohort-binding.json`;
+            download(new Blob([result.cohortBindingBytes], { type: 'application/json' }), cohortBindingName);
+            log(`Saved ${cohortBindingName} (${result.cohortBindingBytes.length} B) SHA3-512=${result.cohortBindingDigestHex}`);
+            const lifecycleBundleName = `${baseName}.lifecycle-bundle.json`;
+            download(new Blob([result.lifecycleBundleBytes], { type: 'application/json' }), lifecycleBundleName);
+            log(`Saved ${lifecycleBundleName} (${result.lifecycleBundleBytes.length} B) SHA3-512=${result.lifecycleBundleDigestHex}`);
             log(`Archive policy: ${authPolicyLevel}`);
             if (authPolicyLevel === 'integrity-only') {
-                log('This current Build flow emits the legacy manifest/bundle shard family, so restore can proceed without signatures but provenance remains inauthentic unless you sign and attach the manifest bundle.');
+                log('This successor archive does not require archive-approval signatures for restore, but archive approval remains absent until a detached signature over the archive-state descriptor is attached.');
             } else {
-                log('This current Build flow emits the legacy manifest/bundle shard family. Sign this .qvmanifest.json file, then use Attach to emit a self-contained .extended.qvmanifest.json bundle.');
+                log('Sign the exported .archive-state.json file externally, then use Attach to merge the detached archive-approval signature into the lifecycle bundle without changing the signed bytes.');
             }
-            log('Successor lifecycle archives use archive-state approval and are supported by Attach and Restore when successor shards are supplied.');
+            log('Same-state resharing later emits maintenance transition records and preserves archive-approval signatures because the archive-state descriptor bytes stay unchanged.');
             log('.qcont shards built. Distribute files across storage providers.');
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });

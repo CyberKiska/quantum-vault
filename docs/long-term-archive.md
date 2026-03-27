@@ -80,8 +80,10 @@ Not yet first-class in the current implementation:
 
 Current release status:
 
-- the shipped browser build/export flow still emits the legacy manifest/bundle shard family
-- the successor lifecycle family is implemented for attach, restore, and same-state resharing, and it is the target replacement track as the project phases legacy behavior out
+- the shipped Lite and Pro product surface now emits the successor lifecycle shard family by default
+- beginning with v1.5.3, legacy manifest/bundle creation is compatibility-only rather than a normal Lite or Pro creation path
+- the successor lifecycle family is implemented for create, attach, restore, and same-state resharing on the shipped surface
+- legacy manifest/bundle material remains compatibility-only for previously created archives during the documented phase-out window
 - future-only work such as RFC 4998-style renewal chains, state-changing continuity records, and governance objects remains explicitly deferred
 
 ## Future work and non-normative notes

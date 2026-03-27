@@ -8,7 +8,7 @@
 
 ## Abstract
 
-Quantum Vault is a client-only archival containerization system that combines post-quantum confidentiality, threshold recoverability, and detached provenance into a long-lived artifact family. The legacy track uses a canonical signable manifest plus mutable manifest bundle. The successor lifecycle track uses a canonical archive-state descriptor, cohort binding, and `QV-Lifecycle-Bundle` v1, with archive-approval signatures bound to canonical archive-state bytes. The current repository implements both tracks: the shipped browser build/export flow still emits legacy shard sets, while successor attach, restore, and same-state resharing are implemented and the project is phasing the legacy path out in favor of successor-family semantics. Across both tracks, mutable evidence — signatures, signer identity material, and timestamp proofs — can evolve without invalidating previously computed approval signatures. Restoration is gated by an explicit archive authenticity policy committed at creation time. The current implementation executes entirely within the browser with no runtime network cryptographic service. This paper describes the system's design rationale, cryptographic construction, canonicality and binding model, security invariants, and long-term archival direction, and identifies the limitations and open risks that remain.
+Quantum Vault is a client-only archival containerization system that combines post-quantum confidentiality, threshold recoverability, and detached provenance into a long-lived artifact family. The legacy track uses a canonical signable manifest plus mutable manifest bundle. The successor lifecycle track uses a canonical archive-state descriptor, cohort binding, and `QV-Lifecycle-Bundle` v1, with archive-approval signatures bound to canonical archive-state bytes. The current repository implements both tracks, but the shipped Lite and Pro surface now creates successor shard sets by default; beginning with v1.5.3, legacy manifest/bundle creation became compatibility-only during the documented phase-out window. Across both tracks, mutable evidence — signatures, signer identity material, and timestamp proofs — can evolve without invalidating previously computed approval signatures. Restoration is gated by an explicit archive authenticity policy committed at creation time. The current implementation executes entirely within the browser with no runtime network cryptographic service. This paper describes the system's design rationale, cryptographic construction, canonicality and binding model, security invariants, and long-term archival direction, and identifies the limitations and open risks that remain.
 
 ---
 
@@ -96,7 +96,7 @@ The archive lifecycle proceeds through the following stages:
 
 2. **Encryption.** The payload is encrypted into a `.qenc` container. ML-KEM encapsulates a shared secret; KMAC256 derives encryption and IV-derivation keys; AES-256-GCM provides authenticated encryption. A key commitment (SHA3-256 over the encryption key) is embedded in the header.
 
-3. **Split.** The `.qenc` container is split into `.qcont` shards. The ML-KEM private key is split using Shamir secret sharing; the ciphertext is split using Reed–Solomon erasure coding. The current browser build/export flow emits legacy `QVqcont-6` shards, a canonical manifest, and an initial manifest bundle. The successor lifecycle core path uses archive-state descriptors, cohort bindings, and lifecycle bundles.
+3. **Split.** The `.qenc` container is split into `.qcont` shards. The ML-KEM private key is split using Shamir secret sharing; the ciphertext is split using Reed–Solomon erasure coding. The shipped regular-user flow emits successor `QVqcont-7` shards plus an archive-state descriptor, cohort binding, and lifecycle bundle. Legacy `QVqcont-6` creation remains compatibility-only for previously created archives.
 
 4. **Sign (external).** An external signer tool produces detached signatures (`.qsig` or `.sig`) over the current signable archive description: canonical manifest bytes in the legacy track or canonical archive-state bytes for successor archive approval.
 
@@ -106,7 +106,7 @@ The archive lifecycle proceeds through the following stages:
 
 7. **Decrypt.** The restored `.qenc` container is decrypted using the reconstructed private key.
 
-**Successor lifecycle track (current implementation):** For **`QVqcont-7`** shards, embedded objects replace the manifest/bundle pair with an **archive-state descriptor**, **cohort binding**, and **`QV-Lifecycle-Bundle` v1**. Detached **archive-approval** signatures target canonical **archive-state** bytes, separating cohort-level sharding from the stable approval object. The **legacy** manifest-based flow remains **supported** and is still the current browser build/export path, but the project is phasing legacy behavior out in favor of the successor model. Normative details: `docs/format-spec.md`, `docs/trust-and-policy.md`; design history: `docs/process/roadmap/lifecycle/resharing-design.md`.
+**Successor lifecycle track (current implementation):** For **`QVqcont-7`** shards, embedded objects replace the manifest/bundle pair with an **archive-state descriptor**, **cohort binding**, and **`QV-Lifecycle-Bundle` v1**. Detached **archive-approval** signatures target canonical **archive-state** bytes, separating cohort-level sharding from the stable approval object. The shipped regular-user surface now uses this successor flow by default. The **legacy** manifest-based flow remains **supported** only as a compatibility path for existing archives while the project phases legacy behavior out. Normative details: `docs/format-spec.md`, `docs/trust-and-policy.md`; design history: `docs/process/roadmap/lifecycle/resharing-design.md`.
 
 ---
 
@@ -203,7 +203,7 @@ Current archive authenticity policy recognizes three signature-strength suites a
 ## 5. Canonicality, Mutability, and Binding Model
 
 This section describes one of the most important architectural patterns in Quantum Vault: the separation between an immutable canonical manifest and a mutable manifest bundle.
-That description is the current browser build/export path. In the successor lifecycle track, the same separation is preserved between the immutable archive-state descriptor and the mutable `QV-Lifecycle-Bundle` v1; normative successor details live in `docs/format-spec.md` and `docs/trust-and-policy.md`.
+That legacy pattern remains relevant for compatibility analysis. The shipped regular-user surface now uses the successor variant of the same pattern: an immutable archive-state descriptor plus a mutable `QV-Lifecycle-Bundle` v1. Normative successor details live in `docs/format-spec.md` and `docs/trust-and-policy.md`.
 
 ### 5.1 Canonical Manifest
 

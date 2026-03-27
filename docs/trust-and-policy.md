@@ -581,7 +581,7 @@ Quantum Vault implements a **successor lifecycle** artifact family **alongside**
 
 Quantum Vault is **phasing out** the **legacy** model in favor of the **successor lifecycle** model: archive-state-centric approval, `QV-Lifecycle-Bundle` v1, and `QVqcont-7` shards.
 
-The **legacy** model (`quantum-vault-archive-manifest/v3`, `QV-Manifest-Bundle` v2, `QVqcont-6`) remains **supported** for **compatibility** with existing archives and tooling, and it is still the current browser build/export path. Legacy is **not** removed from the implementation.
+The **legacy** model (`quantum-vault-archive-manifest/v3`, `QV-Manifest-Bundle` v2, `QVqcont-6`) remains **supported** for **compatibility** with existing archives and tooling, but it is no longer the normal creation path on the shipped Lite or Pro UI surface. Beginning with release **v1.5.3**, legacy creation became compatibility-only on the regular-user surface. Legacy is **not** removed from the implementation while the documented compatibility window remains open.
 
 | Track | Signable approval object | Mutable bundle | Typical shard metadata `alg.fmt` |
 | --- | --- | --- | --- |

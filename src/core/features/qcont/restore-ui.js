@@ -1,6 +1,8 @@
 import { parseShardForRestore, restoreFromShards } from '../../../app/crypto-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
-import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
+import { download, readFileAsUint8Array, setButtonsDisabled, shortenHash } from '../../../utils.js';
+import { parseArchiveStateDescriptorBytes } from '../../crypto/lifecycle/artifacts.js';
+import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
 import {
   formatAuthenticityStatusMessage,
   formatSignatureResultSummary,
@@ -11,14 +13,387 @@ import {
 } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 
+const successorSelectionState = new Map();
+
+function getSuccessorSelectionElements(prefix = 'restore') {
+  return {
+    container: document.getElementById(`${prefix}SuccessorSelection`),
+    summary: document.getElementById(`${prefix}SuccessorSelectionSummary`),
+    help: document.getElementById(`${prefix}SuccessorSelectionHelp`),
+    stateGroup: document.getElementById(`${prefix}StateSelectionGroup`),
+    stateSelect: document.getElementById(`${prefix}StateSelection`),
+    cohortGroup: document.getElementById(`${prefix}CohortSelectionGroup`),
+    cohortSelect: document.getElementById(`${prefix}CohortSelection`),
+    bundleGroup: document.getElementById(`${prefix}BundleSelectionGroup`),
+    bundleSelect: document.getElementById(`${prefix}BundleSelection`),
+  };
+}
+
+function buildStateSelectionKey(archiveId, stateId) {
+  return `${archiveId}:${stateId}`;
+}
+
+function describeStateOption(state) {
+  return `Archive ${shortenHash(state.archiveId)} / State ${shortenHash(state.stateId)} (${state.cohorts.length} cohort${state.cohorts.length === 1 ? '' : 's'})`;
+}
+
+function describeCohortOption(cohort) {
+  const bundleVariantCount = cohort.bundleDigests.length;
+  const bundleLabel = bundleVariantCount === 1
+    ? '1 embedded lifecycle bundle'
+    : `${bundleVariantCount} embedded lifecycle bundles`;
+  return `Cohort ${shortenHash(cohort.cohortId)} (${cohort.shardCount}/${cohort.n} shards loaded, threshold ${cohort.t}, ${bundleLabel})`;
+}
+
+function populateSelectionOptions(select, options, selectedValue, placeholder) {
+  if (!select) return;
+  select.replaceChildren();
+  if (placeholder) {
+    const placeholderOption = document.createElement('option');
+    placeholderOption.value = '';
+    placeholderOption.textContent = placeholder;
+    select.appendChild(placeholderOption);
+  }
+  for (const option of options) {
+    const optionEl = document.createElement('option');
+    optionEl.value = option.value;
+    optionEl.textContent = option.label;
+    select.appendChild(optionEl);
+  }
+  select.value = selectedValue || '';
+}
+
+function setRestoreActionAvailability(prefix, actionButton) {
+  if (!actionButton) return;
+  const state = successorSelectionState.get(prefix);
+  const readyForThreshold = state?.assessment?.ready === true;
+  const readyForSelection = state?.selectionComplete !== false;
+  actionButton.disabled = !(readyForThreshold && readyForSelection);
+}
+
+function clearSuccessorSelectionUi(prefix, actionButton) {
+  const elements = getSuccessorSelectionElements(prefix);
+  if (elements.container) {
+    elements.container.style.display = 'none';
+    elements.container.className = 'verification-section initially-hidden';
+  }
+  if (elements.summary) elements.summary.textContent = '';
+  if (elements.help) elements.help.textContent = '';
+  [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
+    if (group) group.style.display = 'none';
+  });
+  successorSelectionState.set(prefix, {
+    mode: 'none',
+    assessment: successorSelectionState.get(prefix)?.assessment || null,
+    actionButton,
+    files: [],
+    selectionRequired: false,
+    selectionComplete: true,
+    selectedArchiveId: null,
+    selectedStateId: null,
+    selectedCohortId: null,
+    selectedLifecycleBundleDigestHex: null,
+  });
+  setRestoreActionAvailability(prefix, actionButton);
+}
+
+export function buildSuccessorSelectionModel(parsedShards = []) {
+  const byIdentity = new Map();
+  for (const shard of parsedShards) {
+    mergeLifecycleShardIntoCohortGroups(byIdentity, shard, {
+      groupLabel: 'restore candidate set',
+      missingIdentityMessage: 'Successor shard is missing archive/state/cohort identity',
+    });
+  }
+
+  const statesByKey = new Map();
+  for (const candidate of byIdentity.values()) {
+    const key = buildStateSelectionKey(candidate.archiveId, candidate.stateId);
+    if (!statesByKey.has(key)) {
+      statesByKey.set(key, {
+        key,
+        archiveId: candidate.archiveId,
+        stateId: candidate.stateId,
+        cohorts: [],
+      });
+    }
+    const firstShard = candidate.shards[0];
+    statesByKey.get(key).cohorts.push({
+      archiveId: candidate.archiveId,
+      stateId: candidate.stateId,
+      cohortId: candidate.cohortId,
+      bundleDigests: [...candidate.embeddedLifecycleBundles.keys()].sort(),
+      shardCount: candidate.shards.length,
+      n: Number(firstShard?.metaJSON?.n || 0),
+      t: Number(firstShard?.metaJSON?.t || 0),
+    });
+  }
+
+  const states = [...statesByKey.values()]
+    .map((state) => ({
+      ...state,
+      cohorts: state.cohorts.sort((a, b) => a.cohortId.localeCompare(b.cohortId)),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  return {
+    states,
+    hasAmbiguity: states.length > 1 || states.some((state) => (
+      state.cohorts.length > 1 || state.cohorts.some((cohort) => cohort.bundleDigests.length > 1)
+    )),
+  };
+}
+
+export async function refreshSuccessorSelectionUi(prefix = 'restore', files = [], actionButton = null, assessment = null) {
+  const elements = getSuccessorSelectionElements(prefix);
+  const previous = successorSelectionState.get(prefix) || {};
+  const nextState = {
+    ...previous,
+    files,
+    assessment,
+    actionButton,
+    mode: 'none',
+    selectionRequired: false,
+    selectionComplete: true,
+    selectedArchiveId: null,
+    selectedStateId: null,
+    selectedCohortId: null,
+    selectedLifecycleBundleDigestHex: null,
+  };
+
+  successorSelectionState.set(prefix, nextState);
+  if (!elements.container || !elements.summary || !elements.help) {
+    return nextState;
+  }
+  if (!files.length) {
+    clearSuccessorSelectionUi(prefix, actionButton);
+    return successorSelectionState.get(prefix);
+  }
+
+  try {
+    const classified = await classifyRestoreInputFiles(files);
+    if (!classified.shardFiles.length) {
+      clearSuccessorSelectionUi(prefix, actionButton);
+      return successorSelectionState.get(prefix);
+    }
+
+    const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
+    const parsed = await Promise.all(shardBytes.map((bytes) => parseShardForRestore(bytes, { strict: true })));
+    const successorShards = parsed.filter((shard) => (
+      shard?.archiveStateBytes instanceof Uint8Array &&
+      shard?.cohortBindingBytes instanceof Uint8Array &&
+      shard?.lifecycleBundleBytes instanceof Uint8Array
+    ));
+    const legacyCount = parsed.length - successorShards.length;
+
+    if (!successorShards.length) {
+      clearSuccessorSelectionUi(prefix, actionButton);
+      return successorSelectionState.get(prefix);
+    }
+
+    elements.container.style.display = 'block';
+    elements.container.className = 'verification-section successor-selection';
+
+    if (legacyCount > 0) {
+      elements.summary.textContent = 'Selected files mix legacy and successor shard families.';
+      elements.help.textContent = 'Restore remains blocked until the input contains only one artifact family. Legacy restore is compatibility-only on the current product surface.';
+      [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
+        if (group) group.style.display = 'none';
+      });
+      successorSelectionState.set(prefix, {
+        ...nextState,
+        mode: 'mixed',
+        selectionRequired: true,
+        selectionComplete: false,
+      });
+      setRestoreActionAvailability(prefix, actionButton);
+      return successorSelectionState.get(prefix);
+    }
+
+    const model = buildSuccessorSelectionModel(successorShards);
+    const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
+      ? parseArchiveStateDescriptorBytes(classified.archiveStateBytes)
+      : null;
+    const lifecycleBundleProvided = classified.lifecycleBundleBytes instanceof Uint8Array;
+    const uploadedStateKey = uploadedArchiveState
+      ? buildStateSelectionKey(uploadedArchiveState.archiveState.archiveId, uploadedArchiveState.digest.value)
+      : null;
+
+    let selectedStateKey = uploadedStateKey;
+    if (!selectedStateKey && model.states.length === 1) {
+      selectedStateKey = model.states[0].key;
+    }
+    if (!selectedStateKey && model.states.some((state) => state.key === previous.selectedStateKey)) {
+      selectedStateKey = previous.selectedStateKey;
+    }
+    if (!selectedStateKey && model.states.some((state) => state.key === elements.stateSelect?.value)) {
+      selectedStateKey = elements.stateSelect.value;
+    }
+
+    const selectedState = model.states.find((state) => state.key === selectedStateKey) || null;
+
+    let selectedCohortId = null;
+    if (!lifecycleBundleProvided && selectedState?.cohorts.length === 1) {
+      selectedCohortId = selectedState.cohorts[0].cohortId;
+    }
+    if (!selectedCohortId && selectedState?.cohorts.some((cohort) => cohort.cohortId === previous.selectedCohortId)) {
+      selectedCohortId = previous.selectedCohortId;
+    }
+    if (!selectedCohortId && selectedState?.cohorts.some((cohort) => cohort.cohortId === elements.cohortSelect?.value)) {
+      selectedCohortId = elements.cohortSelect.value;
+    }
+
+    const selectedCohort = selectedState?.cohorts.find((cohort) => cohort.cohortId === selectedCohortId) || null;
+
+    let selectedLifecycleBundleDigestHex = null;
+    if (!lifecycleBundleProvided && selectedCohort?.bundleDigests.length === 1) {
+      selectedLifecycleBundleDigestHex = selectedCohort.bundleDigests[0];
+    }
+    if (
+      !selectedLifecycleBundleDigestHex &&
+      selectedCohort?.bundleDigests.includes(previous.selectedLifecycleBundleDigestHex)
+    ) {
+      selectedLifecycleBundleDigestHex = previous.selectedLifecycleBundleDigestHex;
+    }
+    if (
+      !selectedLifecycleBundleDigestHex &&
+      selectedCohort?.bundleDigests.includes(elements.bundleSelect?.value)
+    ) {
+      selectedLifecycleBundleDigestHex = elements.bundleSelect.value;
+    }
+
+    const stateChoiceRequired = !lifecycleBundleProvided && !uploadedArchiveState && model.states.length > 1;
+    const cohortChoiceRequired = !lifecycleBundleProvided && !!selectedState && selectedState.cohorts.length > 1;
+    const bundleChoiceRequired = !lifecycleBundleProvided && !!selectedCohort && selectedCohort.bundleDigests.length > 1;
+    const selectionRequired = stateChoiceRequired || cohortChoiceRequired || bundleChoiceRequired;
+    const selectionComplete = (
+      (!stateChoiceRequired || Boolean(selectedState)) &&
+      (!cohortChoiceRequired || Boolean(selectedCohortId)) &&
+      (!bundleChoiceRequired || Boolean(selectedLifecycleBundleDigestHex))
+    );
+
+    populateSelectionOptions(
+      elements.stateSelect,
+      model.states.map((state) => ({ value: state.key, label: describeStateOption(state) })),
+      stateChoiceRequired ? selectedStateKey : '',
+      stateChoiceRequired ? 'Choose one archive/state' : null
+    );
+    if (elements.stateGroup) {
+      elements.stateGroup.style.display = stateChoiceRequired ? 'block' : 'none';
+    }
+
+    populateSelectionOptions(
+      elements.cohortSelect,
+      selectedState
+        ? selectedState.cohorts.map((cohort) => ({ value: cohort.cohortId, label: describeCohortOption(cohort) }))
+        : [],
+      cohortChoiceRequired ? selectedCohortId : '',
+      cohortChoiceRequired ? 'Choose one same-state cohort' : null
+    );
+    if (elements.cohortGroup) {
+      elements.cohortGroup.style.display = cohortChoiceRequired ? 'block' : 'none';
+    }
+
+    populateSelectionOptions(
+      elements.bundleSelect,
+      selectedCohort
+        ? selectedCohort.bundleDigests.map((digestHex) => ({
+            value: digestHex,
+            label: `Lifecycle bundle ${shortenHash(digestHex)}`,
+          }))
+        : [],
+      bundleChoiceRequired ? selectedLifecycleBundleDigestHex : '',
+      bundleChoiceRequired ? 'Choose one embedded lifecycle bundle' : null
+    );
+    if (elements.bundleGroup) {
+      elements.bundleGroup.style.display = bundleChoiceRequired ? 'block' : 'none';
+    }
+
+    const totalCohorts = model.states.reduce((acc, state) => acc + state.cohorts.length, 0);
+    const totalBundleVariants = model.states.reduce((acc, state) => (
+      acc + state.cohorts.reduce((innerAcc, cohort) => innerAcc + cohort.bundleDigests.length, 0)
+    ), 0);
+    elements.summary.textContent = `Successor restore candidates: ${model.states.length} archive-state candidate${model.states.length === 1 ? '' : 's'}, ${totalCohorts} cohort${totalCohorts === 1 ? '' : 's'}, ${totalBundleVariants} embedded lifecycle-bundle variant${totalBundleVariants === 1 ? '' : 's'}.`;
+    if (lifecycleBundleProvided) {
+      elements.help.textContent = 'An uploaded lifecycle bundle already fixes the archive/state/cohort selection. Any same-state fork remains reported, but Quantum Vault will not auto-select a winner if the uploaded bundle is absent.';
+    } else if (uploadedArchiveState) {
+      elements.help.textContent = selectionRequired
+        ? 'The uploaded archive-state descriptor fixed the archive state. Choose the exact cohort and embedded lifecycle bundle below whenever more than one valid successor option remains.'
+        : 'The uploaded archive-state descriptor fixed the archive state. No additional successor selection is required for this restore set.';
+    } else if (selectionRequired) {
+      elements.help.textContent = 'Quantum Vault requires an explicit operator choice for every ambiguous successor restore step. It will not auto-select across same-state cohorts or embedded lifecycle-bundle variants.';
+    } else {
+      elements.help.textContent = 'One successor archive/state/cohort path is available from the selected shard set. Archive approval, maintenance signatures, source evidence, pinning, and OTS remain separate verification states.';
+    }
+
+    const stateForRestore = stateChoiceRequired && selectedState
+      ? { selectedArchiveId: selectedState.archiveId, selectedStateId: selectedState.stateId }
+      : { selectedArchiveId: null, selectedStateId: null };
+    successorSelectionState.set(prefix, {
+      ...nextState,
+      mode: 'successor',
+      model,
+      selectedStateKey,
+      selectedArchiveId: stateForRestore.selectedArchiveId,
+      selectedStateId: stateForRestore.selectedStateId,
+      selectedCohortId: cohortChoiceRequired ? selectedCohortId : null,
+      selectedLifecycleBundleDigestHex: bundleChoiceRequired ? selectedLifecycleBundleDigestHex : null,
+      selectionRequired,
+      selectionComplete,
+    });
+  } catch (error) {
+    elements.container.style.display = 'block';
+    elements.container.className = 'verification-section successor-selection';
+    elements.summary.textContent = 'Successor restore selection could not be derived from the selected files.';
+    elements.help.textContent = error?.message || String(error);
+    [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
+      if (group) group.style.display = 'none';
+    });
+    successorSelectionState.set(prefix, {
+      ...nextState,
+      mode: 'invalid',
+      selectionRequired: true,
+      selectionComplete: false,
+    });
+  }
+
+  const current = successorSelectionState.get(prefix);
+  if (elements.stateSelect) {
+    elements.stateSelect.onchange = () => {
+      const latest = successorSelectionState.get(prefix);
+      void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
+    };
+  }
+  if (elements.cohortSelect) {
+    elements.cohortSelect.onchange = () => {
+      const latest = successorSelectionState.get(prefix);
+      void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
+    };
+  }
+  if (elements.bundleSelect) {
+    elements.bundleSelect.onchange = () => {
+      const latest = successorSelectionState.get(prefix);
+      void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
+    };
+  }
+  setRestoreActionAvailability(prefix, actionButton);
+  return current;
+}
+
 async function readVerificationOptionsFromDom({
+  prefix = 'restore',
   allFiles = [],
   expectedSignerInput,
 }) {
   const classified = await classifyRestoreInputFiles(allFiles);
+  const selected = successorSelectionState.get(prefix) || {};
   return {
     ...classified,
     expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+    selectedArchiveId: selected.selectedArchiveId || null,
+    selectedStateId: selected.selectedStateId || null,
+    selectedCohortId: selected.selectedCohortId || null,
+    selectedLifecycleBundleDigestHex: selected.selectedLifecycleBundleDigestHex || null,
   };
 }
 
@@ -100,6 +475,13 @@ function buildRestoreResultSummary(result, resultPanelId) {
   header.textContent = 'Restore Result';
   panel.appendChild(header);
 
+  const addSection = (title) => {
+    const section = document.createElement('div');
+    section.className = 'restore-result-section';
+    section.textContent = title;
+    panel.appendChild(section);
+  };
+
   const addItem = (ok, text, warn = false) => {
     const item = document.createElement('div');
     item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
@@ -107,6 +489,7 @@ function buildRestoreResultSummary(result, resultPanelId) {
     panel.appendChild(item);
   };
 
+  addSection('Integrity');
   addItem(qencOk, `Container integrity${qencOk ? ' verified' : ' FAILED'}`);
   addItem(qkeyOk, `Secret key integrity${qkeyOk ? ' verified' : ' FAILED'}`);
 
@@ -117,26 +500,24 @@ function buildRestoreResultSummary(result, resultPanelId) {
     'maintenanceSignatureVerified' in status ||
     'sourceEvidenceSignatureVerified' in status
   );
+  const cohortInspection = result.lifecycleVerification?.cohorts || {};
+  addSection('Archive Approval');
   addItem(archiveApprovalVerified === true, hasSuccessorStates ? 'Archive-approval signature verified' : 'Signature verified', archiveApprovalVerified !== true);
   addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', archiveApprovalVerified === true && status.strongPqSignatureVerified !== true);
-  addItem(status.bundlePinned === true, 'Bundle signer pinned', archiveApprovalVerified === true && status.bundlePinned !== true);
-  if (status.bundleCohortMixed === true) {
-    addItem(false, 'Mixed embedded lifecycle-bundle variants used', true);
+  addSection('Selection');
+  if (cohortInspection.forkDetected === true) {
+    addItem(false, 'Same-state cohort fork remains known for this archive state', true);
   }
+  if (status.bundleCohortMixed === true) {
+    addItem(false, 'Mixed embedded lifecycle-bundle variants were present in the selected cohort', true);
+  } else if (hasSuccessorStates) {
+    addItem(true, 'One lifecycle-bundle variant selected for policy evaluation', false);
+  }
+  addSection('Pinning & Evidence');
+  addItem(status.bundlePinned === true, 'Bundle signer pinned', archiveApprovalVerified === true && status.bundlePinned !== true);
   if (status.userPinProvided === true || status.userPinned === true) {
     addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
   }
-  if (hasSuccessorStates) {
-    addItem(status.transitionRecordPresent === true, 'Transition record present', false);
-    addItem(status.transitionChainValid === true, 'Transition-chain references valid', false);
-    addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
-    if (status.sourceEvidencePresent === true) {
-      addItem(true, 'Source-evidence object present', false);
-    }
-    addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
-  }
-  addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
-
   const timestampEvidence = Array.isArray(authenticity?.timestampEvidence) ? authenticity.timestampEvidence : [];
   if (timestampEvidence.length > 0) {
     const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
@@ -149,6 +530,18 @@ function buildRestoreResultSummary(result, resultPanelId) {
       addItem(false, `OTS proof appears incomplete (${incompleteCount})`, true);
     }
   }
+  if (hasSuccessorStates) {
+    addSection('Maintenance & Provenance');
+    addItem(status.transitionRecordPresent === true, 'Transition record present', false);
+    addItem(status.transitionChainValid === true, 'Transition-chain references valid', false);
+    addItem(status.maintenanceSignatureVerified === true, 'Maintenance signature verified', false);
+    if (status.sourceEvidencePresent === true) {
+      addItem(true, 'Source-evidence object present', false);
+    }
+    addItem(status.sourceEvidenceSignatureVerified === true, 'Source-evidence signature verified', false);
+  }
+  addSection('Policy');
+  addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
 
   panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
 }
@@ -177,6 +570,7 @@ export function initQcontRestoreUI() {
     try {
       const allFiles = [...files];
       const verificationOptions = await readVerificationOptionsFromDom({
+        prefix: 'restore',
         allFiles,
         expectedSignerInput: restoreExpectedEdSigner,
       });
@@ -247,6 +641,7 @@ export async function collectRestoreVerificationOptions(prefix = 'restore', file
   const expectedSignerInput = document.getElementById(`${prefix}ExpectedEdSigner`);
 
   return readVerificationOptionsFromDom({
+    prefix,
     allFiles: files,
     expectedSignerInput,
   });

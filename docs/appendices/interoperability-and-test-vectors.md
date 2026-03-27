@@ -50,7 +50,7 @@ Not yet first-class in the current implementation:
 Current release boundary:
 
 - the repository currently ships selftest-backed coverage for both legacy manifest/bundle artifacts and successor lifecycle artifacts
-- the shipped browser build/export flow still emits the legacy manifest/bundle shard family, while successor attach, restore, and same-state resharing are implemented in code and covered here
+- the shipped Lite and Pro build/export flow now emits successor lifecycle shards by default, while legacy manifest/bundle coverage is retained only for the compatibility window
 - a standalone externally versioned vector corpus is future work and MUST NOT be implied by the current release surface
 
 ## Future work and non-normative notes

@@ -124,6 +124,8 @@ async function classifyAttachFiles(files) {
 function stripArchiveVariantSuffix(name) {
   return String(name || 'archive')
     .replace(/\.archive-state\.json$/i, '')
+    .replace(/\.cohort-binding\.json$/i, '')
+    .replace(/\.transition-record\.json$/i, '')
     .replace(/\.lifecycle-bundle\.json$/i, '')
     .replace(/\.signable\.qvmanifest\.json$/i, '')
     .replace(/\.extended\.qvmanifest\.json$/i, '')
@@ -319,8 +321,8 @@ function deriveAttachPlan(classified, shards, mode) {
         }
       : {
           embedIntoShards: false,
-          modeLabel: 'Manifest-side bundle only',
-          hint: 'No shard files are loaded. Attach will update only the manifest-side bundle.',
+          modeLabel: 'Legacy compatibility bundle only',
+          hint: 'No shard files are loaded. Attach will update only the legacy manifest-side bundle during the compatibility window.',
           warning: false,
         };
   }
@@ -364,16 +366,16 @@ function deriveAttachPlan(classified, shards, mode) {
   if (uniqueIndices.size === expectedShardCount) {
     return {
       embedIntoShards: true,
-      modeLabel: 'Embed into selected shards',
-      hint: `Full shard cohort detected (${uniqueIndices.size}/${expectedShardCount}). Attach will rewrite the selected shard files and update the manifest-side bundle.`,
+      modeLabel: 'Embed into selected legacy shards (compatibility-only)',
+      hint: `Full legacy shard cohort detected (${uniqueIndices.size}/${expectedShardCount}). Attach will rewrite the selected shard files and update the manifest-side bundle during the compatibility window.`,
       warning: false,
     };
   }
 
   return {
     embedIntoShards: false,
-    modeLabel: 'Manifest-side bundle only',
-    hint: `Only ${uniqueIndices.size}/${expectedShardCount} shard files are loaded. Attach cannot rewrite every shard, so only the manifest-side bundle will be updated.`,
+    modeLabel: 'Legacy compatibility bundle only',
+    hint: `Only ${uniqueIndices.size}/${expectedShardCount} legacy shard files are loaded. Attach cannot rewrite every shard, so only the manifest-side bundle will be updated during the compatibility window.`,
     warning: true,
   };
 }

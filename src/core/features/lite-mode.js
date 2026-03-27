@@ -12,7 +12,7 @@ import {
     assessShardSelection,
 } from '../../app/crypto-service.js';
 import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
-import { collectRestoreVerificationOptions } from './qcont/restore-ui.js';
+import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
@@ -43,9 +43,9 @@ let unregisterLiteSessionWipe = null;
 
 function describeAuthPolicyHelp(authPolicyLevel) {
     if (authPolicyLevel === 'integrity-only') {
-        return 'Without an external signature, restore will verify integrity only, not archive authenticity.';
+        return 'Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.';
     }
-    return 'Without an external detached signature attached later, restore will block and the file will not be decrypted.';
+    return 'Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.';
 }
 
 function wipeLiteKeyPair(keyPair) {
@@ -313,13 +313,15 @@ async function updateShardsStatus() {
     
     const files = [...(shardsInput.files || [])];
     const requestId = ++liteShardsStatusSeq;
-    await updateShardSelectionStatus({
+    const assessment = await updateShardSelectionStatus({
         files,
         statusDiv,
         statusText,
         actionButton: restoreBtn,
         isCurrent: () => requestId === liteShardsStatusSeq
     });
+    if (requestId !== liteShardsStatusSeq) return;
+    await refreshSuccessorSelectionUi('liteRestore', files, restoreBtn, assessment || { ready: false });
 }
 
 // Update create shards button state
@@ -463,8 +465,10 @@ async function createLiteShards() {
             const shardName = `${baseName}.part${index + 1}-of-${qconts.length}.qcont`;
             download(blob, shardName);
         });
-        const manifestName = `${baseName}.qvmanifest.json`;
-        download(new Blob([splitResult.manifestBytes], { type: 'application/json' }), manifestName);
+        const archiveStateName = `${baseName}.archive-state.json`;
+        download(new Blob([splitResult.archiveStateBytes], { type: 'application/json' }), archiveStateName);
+        const lifecycleBundleName = `${baseName}.lifecycle-bundle.json`;
+        download(new Blob([splitResult.lifecycleBundleBytes], { type: 'application/json' }), lifecycleBundleName);
         
         // Log shard creation
         logShardCreation(qconts.length, params, payloadLabel, { isLiteMode: true });
@@ -476,11 +480,12 @@ async function createLiteShards() {
         }
         log(`Archive policy: ${authPolicyLevel}`, { isLiteMode: true });
         if (authPolicyLevel === 'integrity-only') {
-            log(`Saved ${manifestName}. This current Build flow emits the legacy manifest/bundle shard family, so restore can proceed without signatures but provenance remains inauthentic unless you sign and attach the manifest bundle.`, { isLiteMode: true });
+            log(`Saved ${archiveStateName}. Restore can proceed without detached archive approval for integrity-only archives, but archive approval remains absent unless you sign the archive-state descriptor and attach that signature to the lifecycle bundle.`, { isLiteMode: true });
         } else {
-            log(`Saved ${manifestName}. This current Build flow emits the legacy manifest/bundle shard family. Sign this file, then use Attach in Pro mode to emit an .extended.qvmanifest.json bundle and optionally rewrite the shards.`, { isLiteMode: true });
+            log(`Saved ${archiveStateName}. Sign this file externally for archive approval, then attach the detached signature to ${lifecycleBundleName} without changing the signed archive-state bytes.`, { isLiteMode: true });
         }
-        log('Successor lifecycle archives use archive-state approval and are supported by Attach and Restore when successor shards are supplied.', { isLiteMode: true });
+        log(`Saved ${lifecycleBundleName}. This mutable lifecycle bundle carries archive approval, maintenance signatures, source evidence, pinning material, and OTS evidence separately.`, { isLiteMode: true });
+        log('Same-state resharing later is maintenance, not archive re-approval, because the archive-state descriptor stays unchanged while a new cohort and transition record are emitted.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
     } catch (error) {

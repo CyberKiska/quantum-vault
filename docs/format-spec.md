@@ -27,7 +27,7 @@ Quantum Vault maintains **two coexisting format tracks**:
 - **Legacy track:** canonical manifest (`quantum-vault-archive-manifest/v3`), mutable `QV-Manifest-Bundle` v2, and **QVqcont-6** shards that embed manifest and bundle bytes.
 - **Successor lifecycle track:** archive-state descriptor (`quantum-vault-archive-state-descriptor/v1`), cohort binding (`quantum-vault-cohort-binding/v1`), `QV-Lifecycle-Bundle` v1, transition and source-evidence artifacts as applicable, and **QVqcont-7** shards that embed lifecycle objects (see Section 8).
 
-The project is **phasing out** the **legacy** track in favor of the **successor** lifecycle track. The **legacy** track remains **supported** for compatibility with existing material and for the current browser build/export flow.
+The project is **phasing out** the **legacy** track in favor of the **successor** lifecycle track. The shipped Lite and Pro build/export surface now emits **successor** artifacts by default. Beginning with release **v1.5.3**, legacy manifest/bundle creation is no longer part of the normal regular-user creation path. The **legacy** track remains **supported** only for compatibility with existing material during the documented phase-out window.
 
 JSON Schema files under `docs/schema/` are the **grammar layer** for each artifact shape; they do not define canonical bytes, derived identifiers, or policy semantics (see Section 2).
 
@@ -74,6 +74,7 @@ Implemented now:
 - the supported versions, schema IDs, and artifact boundaries listed in Section 1 (legacy and successor)
 - canonical manifest export and embedding under `QV-JSON-RFC8785-v1` (legacy)
 - canonical bundle export under `QV-BUNDLE-JSON-v1` (legacy manifest bundle and successor lifecycle bundle)
+- regular-user build/export defaults to **QVqcont-7** successor shards plus successor archive-state, cohort-binding, and lifecycle-bundle artifacts; new legacy manifest/bundle creation is retired from the normal product path
 - successor lifecycle artifacts: `quantum-vault-archive-state-descriptor/v1`, `quantum-vault-cohort-binding/v1`, `quantum-vault-transition-record/v1`, `quantum-vault-source-evidence/v1`, and `QV-Lifecycle-Bundle` v1 with closed attachment arrays; canonical signable JSON for lifecycle objects uses `QV-JSON-RFC8785-v1` unless the bundle label specifies `QV-BUNDLE-JSON-v1` for the bundle wrapper (see `src/core/crypto/lifecycle/artifacts.js`)
 - **QVqcont-7** successor `.qcont` shards embedding archive-state, cohort-binding, and lifecycle-bundle bytes plus digests (`src/core/crypto/qcont/lifecycle-shard.js`)
 - JSON Schema draft 2020-12 files under `docs/schema/` for structural grammar plus a checked-in fixture corpus validated in JavaScript CI by a checked-in validator that covers the active repository keyword subset, not the full draft 2020-12 vocabulary
@@ -244,7 +245,7 @@ Not yet present as a first-class artifact:
 The canonical manifest uses canonical JSON `QV-JSON-RFC8785-v1`.
 Current behavior is:
 
-- the same canonical bytes are exported as `*.qvmanifest.json`
+- for legacy compatibility material, the same canonical bytes are exported as `*.qvmanifest.json`
 - the same canonical bytes are embedded into every `.qcont` shard
 - the same canonical bytes are embedded inside every manifest bundle
 - detached signatures are always computed over those canonical bytes
@@ -448,8 +449,8 @@ The current top-level structure is:
 
 Naming behavior:
 
-- split exports canonical signable manifest as `*.qvmanifest.json`
-- attach exports the self-contained bundle as `*.extended.qvmanifest.json`
+- legacy compatibility split exports canonical signable manifest as `*.qvmanifest.json`
+- legacy compatibility attach exports the self-contained bundle as `*.extended.qvmanifest.json`
 - extracting a signable manifest from an existing bundle may use `*.signable.qvmanifest.json`
 
 ### 6.1.1 Current top-level bundle fields

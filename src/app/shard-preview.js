@@ -46,7 +46,16 @@ export async function parseQcontShardPreviewFile(file) {
   offset += metaLen;
 
   let authPolicyLevel;
+  let artifactFamily = 'legacy';
+  let archiveId = null;
+  let stateId = null;
+  let cohortId = null;
+  let lifecycleBundleDigestHex = null;
   if (metaJSON?.alg?.fmt === LIFECYCLE_QCONT_FORMAT_VERSION) {
+    artifactFamily = 'successor';
+    archiveId = String(metaJSON.archiveId || '');
+    stateId = String(metaJSON.stateId || '');
+    cohortId = String(metaJSON.cohortId || '');
     await ensureBytes(offset + 4);
     const archiveStateLen = dv.getUint32(offset, false);
     if (archiveStateLen <= 0 || archiveStateLen > MAX_MANIFEST_LEN) {
@@ -71,6 +80,7 @@ export async function parseQcontShardPreviewFile(file) {
     const lifecycleBundleBytes = bytes.subarray(offset, offset + lifecycleBundleLen);
     const parsedLifecycleBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
     authPolicyLevel = parsedLifecycleBundle.lifecycleBundle.authPolicy.level;
+    lifecycleBundleDigestHex = parsedLifecycleBundle.digest.value;
     offset += lifecycleBundleLen + DIGEST_LEN;
   } else {
     await ensureBytes(offset + 4);
@@ -117,7 +127,12 @@ export async function parseQcontShardPreviewFile(file) {
   }
 
   return {
+    artifactFamily,
     containerId: metaJSON.containerId,
+    archiveId,
+    stateId,
+    cohortId,
+    lifecycleBundleDigestHex,
     n: metaJSON.n,
     t: metaJSON.t,
     shardIndex,
@@ -184,6 +199,15 @@ export async function assessShardSelection(files) {
     };
   }
 
+  const artifactFamilies = new Set(parsed.map((item) => item.artifactFamily));
+  if (artifactFamilies.size > 1) {
+    return {
+      state: 'invalid',
+      ready: false,
+      message: 'Selected shards mix legacy and successor artifact families.',
+    };
+  }
+
   const base = parsed[0];
   const uniqueIndices = new Set(parsed.map((item) => item.shardIndex));
   const uniqueCount = uniqueIndices.size;
@@ -194,6 +218,38 @@ export async function assessShardSelection(files) {
     ? `Ready: ${uniqueCount}/${base.n} unique shards selected (need >=${base.t}).`
     : `Insufficient: ${uniqueCount}/${base.n} unique shards selected (need >=${base.t}).`;
   message += ` Policy: ${base.authPolicyLevel}.`;
+
+  if (base.artifactFamily === 'successor') {
+    const states = new Map();
+    for (const item of parsed) {
+      const stateKey = `${item.archiveId}:${item.stateId}`;
+      if (!states.has(stateKey)) {
+        states.set(stateKey, {
+          cohortIds: new Set(),
+          bundleDigestsByCohort: new Map(),
+        });
+      }
+      const entry = states.get(stateKey);
+      entry.cohortIds.add(item.cohortId);
+      if (!entry.bundleDigestsByCohort.has(item.cohortId)) {
+        entry.bundleDigestsByCohort.set(item.cohortId, new Set());
+      }
+      entry.bundleDigestsByCohort.get(item.cohortId).add(item.lifecycleBundleDigestHex);
+    }
+    if (states.size > 1) {
+      message += ' Explicit successor archive/state selection is still required below.';
+    } else {
+      const [onlyState] = [...states.values()];
+      if (onlyState?.cohortIds.size > 1) {
+        message += ' Explicit same-state cohort selection is still required below.';
+      } else {
+        const [onlyCohortDigests] = [...(onlyState?.bundleDigestsByCohort?.values() || [])];
+        if (onlyCohortDigests && onlyCohortDigests.size > 1) {
+          message += ' Explicit lifecycle-bundle selection is still required below.';
+        }
+      }
+    }
+  }
 
   if (duplicateCount > 0) {
     message += ` ${duplicateCount} duplicate shard(s) skipped.`;

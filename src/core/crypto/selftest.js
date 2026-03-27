@@ -55,7 +55,10 @@ import {
 } from './manifest/jcs.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
 import { buildAttachedArtifactExports } from '../features/qcont/attach-ui.js';
+import { buildSuccessorSelectionModel } from '../features/qcont/restore-ui.js';
 import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
+import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
+import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
 import { verifyManifestSignatures } from './auth/verify-signatures.js';
 import { unpackPqpk, unpackQsig } from './auth/qsig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
@@ -161,8 +164,17 @@ function toArrayBufferView(bytes) {
 function fileLike(name, bytes) {
   return {
     name,
+    size: bytes.length,
     async arrayBuffer() {
       return toArrayBufferView(bytes);
+    },
+    slice(start = 0, end = bytes.length) {
+      const sliced = bytes.slice(start, end);
+      return {
+        async arrayBuffer() {
+          return toArrayBufferView(sliced);
+        },
+      };
     },
   };
 }
@@ -4084,6 +4096,199 @@ function buildCases() {
         assert(
           restored.authenticity.warnings.some((warning) => warning.includes('did not auto-select a winner')),
           'explicit fork selection should still warn that no winner was auto-selected'
+        );
+      },
+    },
+    {
+      name: 'successor restore accepts explicit selectedCohortId for same-state fork disambiguation',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase7-selected-cohort-restore'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const successor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:05:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selected-cohort-restore' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const successorParsed = await parseResharedShardSet(successor);
+        const successorOnly = await restoreFromShards(successorParsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        const mixed = [
+          ...sample.parsed.slice(0, 4),
+          ...successorParsed.slice(0, 4),
+        ];
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { selectedCohortId: successorOnly.cohortId },
+        });
+
+        assert(restored.cohortId === successorOnly.cohortId, 'explicit selectedCohortId should restore the chosen cohort');
+        assert(restored.lifecycleVerification.cohorts.forkDetected === true, 'same-state fork should still be reported after explicit cohort selection');
+        assert(
+          restored.authenticity.warnings.some((warning) => warning.includes('did not auto-select a winner')),
+          'explicit cohort selection should still warn that no winner was auto-selected'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing accepts explicit selectedCohortId for predecessor fork disambiguation',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase7-selected-cohort-reshare'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const firstSuccessor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:15:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selected-cohort-reshare-1' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const firstSuccessorParsed = await parseResharedShardSet(firstSuccessor);
+        const selectedPredecessor = await restoreFromShards(firstSuccessorParsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        const mixed = [
+          ...sample.parsed.slice(0, 4),
+          ...firstSuccessorParsed.slice(0, 4),
+        ];
+
+        const secondSuccessor = await reshareSameState(mixed, { n: 5, k: 3 }, {
+          selectedCohortId: selectedPredecessor.cohortId,
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:16:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selected-cohort-reshare-2' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(secondSuccessor.predecessorCohortId === selectedPredecessor.cohortId, 'explicit selectedCohortId should choose the intended predecessor cohort');
+        assert(secondSuccessor.cohortId !== selectedPredecessor.cohortId, 'resharing should still emit a fresh successor cohort');
+      },
+    },
+    {
+      name: 'regular-user build service defaults to successor lifecycle shard exports',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('phase7-regular-user-successor-build');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-regular-user-successor-build.bin'));
+
+        const split = await buildRegularUserShardSet(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+          authPolicyLevel: 'strong-pq-signature',
+        });
+
+        assert(split.formatVersion === 'QVqcont-7', 'regular-user build service should default to successor shard format');
+        assert(split.archiveStateBytes instanceof Uint8Array, 'regular-user build should export archive-state bytes');
+        assert(split.cohortBindingBytes instanceof Uint8Array, 'regular-user build should export cohort-binding bytes');
+        assert(split.lifecycleBundleBytes instanceof Uint8Array, 'regular-user build should export lifecycle-bundle bytes');
+        assert(!(split.manifestBytes instanceof Uint8Array), 'regular-user build should not default to legacy manifest exports');
+
+        const parsed = await parseLifecycleShard(await blobToBytes(split.shards[0].blob));
+        assert(parsed.metaJSON.alg.fmt === 'QVqcont-7', 'regular-user build should emit successor qcont shards');
+      },
+    },
+    {
+      name: 'regular-user build service retains explicit legacy compatibility builds only when requested',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('phase7-explicit-legacy-build');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-explicit-legacy-build.bin'));
+
+        const split = await buildRegularUserShardSet(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+          artifactFamily: 'legacy',
+          authPolicyLevel: 'integrity-only',
+        });
+
+        assert(split.formatVersion === 'QVqcont-6', 'explicit legacy compatibility builds should still emit legacy shard format');
+        assert(split.manifestBytes instanceof Uint8Array, 'explicit legacy compatibility builds should still export canonical manifest bytes');
+      },
+    },
+    {
+      name: 'successor selection model surfaces same-state cohorts for explicit operator choice',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase7-selection-model-cohort'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const successor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:25:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selection-model-cohort' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const successorParsed = await parseResharedShardSet(successor);
+        const model = buildSuccessorSelectionModel([
+          ...sample.parsed.slice(0, 4),
+          ...successorParsed.slice(0, 4),
+        ]);
+
+        assert(model.states.length === 1, 'same-state fork selection model should keep one archive/state entry');
+        assert(model.states[0].cohorts.length === 2, 'same-state fork selection model should surface both cohorts');
+        assert(model.hasAmbiguity === true, 'same-state fork selection model should require explicit operator choice');
+      },
+    },
+    {
+      name: 'successor shard assessment reports lifecycle-bundle selection requirements for mixed embedded bundle variants',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-selection-status.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigA = buildQsigFixture(split.archiveStateBytes);
+        const firstAttach = await attachLifecycleBundleToShards(parsedOriginal, {
+          signatures: [{ name: 'phase7-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigB = buildQsigFixture(firstAttach.archiveStateBytes);
+        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
+          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'phase7-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+
+        const mixedFiles = [
+          ...await Promise.all(secondAttach.shards.map(async (item, index) => (
+            fileLike(`phase7-mixed-${index + 1}.qcont`, await blobToBytes(item.blob))
+          ))),
+          ...await Promise.all(firstAttach.shards.slice(2).map(async (item, index) => (
+            fileLike(`phase7-original-${index + 3}.qcont`, await blobToBytes(item.blob))
+          ))),
+        ];
+
+        const assessment = await assessShardSelectionPreview(mixedFiles);
+        assert(assessment.ready === true, 'mixed bundle-variant assessment should still report threshold readiness');
+        assert(
+          assessment.message.includes('Explicit lifecycle-bundle selection is still required below.'),
+          'successor shard assessment should report explicit lifecycle-bundle selection requirements'
         );
       },
     },

@@ -7,6 +7,7 @@ import { log, logError, logSuccess, logWarning } from './logging.js';
 import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
+import { refreshSuccessorSelectionUi } from '../qcont/restore-ui.js';
 
 // Pro mode state
 let collectedUserEntropy = null;
@@ -158,13 +159,15 @@ export function initUI() {
         if (!statusDiv || !statusText || !qcontShardsInput) return;
         const files = [...(qcontShardsInput.files || [])];
         const requestId = ++proShardsStatusSeq;
-        await updateShardSelectionStatus({
+        const assessment = await updateShardSelectionStatus({
             files,
             statusDiv,
             statusText,
             actionButton: restoreQcontBtn,
             isCurrent: () => requestId === proShardsStatusSeq
         });
+        if (requestId !== proShardsStatusSeq) return;
+        await refreshSuccessorSelectionUi('restore', files, restoreQcontBtn, assessment || { ready: false });
     }
 
     async function updateSidebarFingerprintsFromInputs() {
@@ -587,6 +590,7 @@ export function initUI() {
             proTabEncryption: 'proViewEncryption',
             proTabDistribution: 'proViewDistribution',
             proTabAttach: 'proViewAttach',
+            proTabReshare: 'proViewReshare',
             proTabRestore: 'proViewRestore'
         };
         const tabIds = Object.keys(tabs);

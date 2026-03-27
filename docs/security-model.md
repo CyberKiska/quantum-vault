@@ -66,6 +66,7 @@ Implemented now:
 - best-effort in-memory secret wiping and no intended persistent secret storage
 - explicit separation among integrity, signature validity, pinning, and policy satisfaction
 - **Successor lifecycle** artifacts (QVqcont-7 shards, `QV-Lifecycle-Bundle` v1) with archive-state–centric approval and fail-closed restore selection rules described in `format-spec.md` Section 8
+- successor-default regular-user creation in Lite and Pro, with legacy manifest/bundle handling retained only as a compatibility surface for existing archives
 
 Not yet provided by the current implementation:
 

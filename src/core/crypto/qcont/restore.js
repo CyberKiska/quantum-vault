@@ -3,7 +3,8 @@
  *
  * Successor restore MUST NOT apply manifest-era bundle ranking heuristics. Ambiguous cohort or
  * embedded lifecycle-bundle selection fails closed unless the operator supplies explicit
- * lifecycle-bundle bytes, archive-state bytes, or selectedLifecycleBundleDigestHex
+ * lifecycle-bundle bytes, archive-state bytes, selected archive/state/cohort identity,
+ * or selectedLifecycleBundleDigestHex
  * (see resolveSuccessorArchiveContext).
  *
  * Legacy manifest restore may use score-based preference only when candidates share the same
@@ -1063,9 +1064,23 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
   }
 
   let candidates = rawCandidates;
-  let candidateStateAnalysis = analyzeSameStateSuccessorCohorts(candidates);
   let selectionSource = 'embedded';
   let uploadedArchiveState = null;
+  let stateScopedAnalysis = analyzeSameStateSuccessorCohorts(candidates);
+  const selectedArchiveId = normalizeHexString(verificationOptions.selectedArchiveId);
+  const selectedStateId = normalizeHexString(verificationOptions.selectedStateId);
+  const selectedCohortId = normalizeHexString(verificationOptions.selectedCohortId);
+
+  const applyExplicitCandidateFilter = (field, selectedValue, label, sourceLabel) => {
+    if (!selectedValue) return;
+    candidates = candidates.filter((candidate) => normalizeHexString(candidate?.[field]) === selectedValue);
+    if (candidates.length === 0) {
+      throw new Error(`Selected ${label} ${selectedValue} does not match any successor shard candidate.`);
+    }
+    selectionSource = sourceLabel;
+  };
+
+  applyExplicitCandidateFilter('archiveId', selectedArchiveId, 'archiveId', 'selected-archive-id');
 
   if (verificationOptions.archiveStateBytes instanceof Uint8Array) {
     uploadedArchiveState = parseArchiveStateDescriptorBytes(verificationOptions.archiveStateBytes);
@@ -1073,9 +1088,12 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     if (candidates.length === 0) {
       throw new Error('Provided archive-state descriptor does not match any shard archive/state candidate');
     }
-    candidateStateAnalysis = analyzeSameStateSuccessorCohorts(candidates);
     selectionSource = 'uploaded-archive-state';
   }
+
+  applyExplicitCandidateFilter('stateId', selectedStateId, 'stateId', 'selected-state-id');
+  stateScopedAnalysis = analyzeSameStateSuccessorCohorts(candidates);
+  applyExplicitCandidateFilter('cohortId', selectedCohortId, 'cohortId', 'selected-cohort-id');
 
   let lifecycleBundle;
   let lifecycleBundleBytes;
@@ -1110,13 +1128,17 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     selectionSource = 'uploaded-lifecycle-bundle';
   } else {
     if (candidates.length > 1) {
-      if (candidateStateAnalysis.states.length === 1 && candidateStateAnalysis.states[0].forkDetected) {
-        throw new Error(buildSameStateForkRejectionMessage(candidateStateAnalysis.states[0]));
+      if (stateScopedAnalysis.states.length === 1 && stateScopedAnalysis.states[0].forkDetected) {
+        throw new Error(buildSameStateForkRejectionMessage(stateScopedAnalysis.states[0]));
       }
-      if (uploadedArchiveState) {
-        throw new Error('Selected archive-state descriptor matches multiple shard cohorts. Provide the lifecycle bundle to select one cohort.');
+      if (uploadedArchiveState || selectedArchiveId || selectedStateId) {
+        throw new Error(
+          'Selected successor archive/state still matches multiple shard cohorts. Provide the lifecycle bundle or explicitly select one cohort.'
+        );
       }
-      throw new Error('Multiple successor archive/state/cohort candidate sets were found. Provide the archive-state descriptor or lifecycle bundle to disambiguate.');
+      throw new Error(
+        'Multiple successor archive/state/cohort candidate sets were found. Provide the archive-state descriptor, lifecycle bundle, or explicit archive/state/cohort selection to disambiguate.'
+      );
     }
     candidate = candidates[0];
     const embeddedDigests = [...candidate.embeddedLifecycleBundles.keys()].sort();
@@ -1142,20 +1164,24 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     }
   }
 
-  const selectedStateAnalysis = candidateStateAnalysis.byState.get(`${candidate.archiveId}:${candidate.stateId}`) || {
+  const selectedStateAnalysis = stateScopedAnalysis.byState.get(`${candidate.archiveId}:${candidate.stateId}`) || {
     archiveId: candidate.archiveId,
     stateId: candidate.stateId,
     cohortIds: [candidate.cohortId],
     forkDetected: false,
     mixedLifecycleBundleVariantCohorts: candidate.embeddedLifecycleBundles.size > 1 ? [candidate.cohortId] : [],
   };
-  const explicitlySelectedLifecycleBundle = lifecycleBundleSource === 'uploaded-lifecycle-bundle';
-  if (selectedStateAnalysis.forkDetected && !explicitlySelectedLifecycleBundle) {
+  const explicitlySelectedLifecycleBundle = (
+    lifecycleBundleSource === 'uploaded-lifecycle-bundle' ||
+    lifecycleBundleSource === 'embedded-selected-lifecycle-bundle-digest'
+  );
+  const explicitlySelectedCohort = selectedCohortId === candidate.cohortId;
+  if (selectedStateAnalysis.forkDetected && !explicitlySelectedLifecycleBundle && !explicitlySelectedCohort) {
     throw new Error(buildSameStateForkRejectionMessage(selectedStateAnalysis));
   }
 
   const authenticity = await evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verificationOptions);
-  if (selectedStateAnalysis.forkDetected && explicitlySelectedLifecycleBundle) {
+  if (selectedStateAnalysis.forkDetected && (explicitlySelectedLifecycleBundle || explicitlySelectedCohort)) {
     authenticity.warnings = dedupeWarnings([
       ...(authenticity.warnings || []),
       `Multiple valid cohorts remain known for archive ${candidate.archiveId} state ${candidate.stateId}. Proceeding with explicitly selected cohort ${candidate.cohortId}; known cohort IDs: ${selectedStateAnalysis.cohortIds.join(', ')}. Quantum Vault did not auto-select a winner.`,
@@ -1179,6 +1205,8 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
       sameStateForkDetected: selectedStateAnalysis.forkDetected,
       knownCohortIdsForState: [...selectedStateAnalysis.cohortIds],
       mixedLifecycleBundleVariantCohorts: [...selectedStateAnalysis.mixedLifecycleBundleVariantCohorts],
+      explicitlySelectedCohort,
+      explicitlySelectedLifecycleBundle,
     },
     authenticity,
   };

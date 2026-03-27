@@ -213,7 +213,7 @@ function assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON) {
   ensureEqual(qencMetaJSON.aadPolicyId, archiveState.aadPolicyId, 'aadPolicyId');
 }
 
-function collectSinglePredecessorCohort(preparedShards) {
+function collectSinglePredecessorCohort(preparedShards, options = {}) {
   const byIdentity = new Map();
   for (const shard of preparedShards) {
     mergeLifecycleShardIntoCohortGroups(byIdentity, shard, {
@@ -222,11 +222,28 @@ function collectSinglePredecessorCohort(preparedShards) {
     });
   }
 
-  if (byIdentity.size !== 1) {
-    throw new Error('Same-state resharing requires shards from exactly one predecessor archive/state/cohort set.');
+  let candidates = [...byIdentity.values()];
+  const selectedArchiveId = normalizeHexString(options.selectedArchiveId);
+  const selectedStateId = normalizeHexString(options.selectedStateId);
+  const selectedCohortId = normalizeHexString(options.selectedCohortId);
+
+  const applyExplicitSelection = (field, selectedValue, label) => {
+    if (!selectedValue) return;
+    candidates = candidates.filter((candidate) => normalizeHexString(candidate?.[field]) === selectedValue);
+    if (candidates.length === 0) {
+      throw new Error(`Selected predecessor ${label} ${selectedValue} is not present in the loaded shard set.`);
+    }
+  };
+
+  applyExplicitSelection('archiveId', selectedArchiveId, 'archiveId');
+  applyExplicitSelection('stateId', selectedStateId, 'stateId');
+  applyExplicitSelection('cohortId', selectedCohortId, 'cohortId');
+
+  if (candidates.length !== 1) {
+    throw new Error('Same-state resharing requires shards from exactly one predecessor archive/state/cohort set. Provide explicit predecessor selection or reduce the input set.');
   }
 
-  return [...byIdentity.values()][0];
+  return candidates[0];
 }
 
 async function selectPredecessorLifecycleBundle(candidate, options = {}) {
@@ -1053,7 +1070,7 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
   const onWarn = options.onWarn || options.onError || (() => {});
   const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
   const prepared = preparePredecessorShards(predecessorShards);
-  const predecessorCandidate = collectSinglePredecessorCohort(prepared);
+  const predecessorCandidate = collectSinglePredecessorCohort(prepared, options);
   const predecessorBundleSelection = await selectPredecessorLifecycleBundle(predecessorCandidate, options);
   const predecessorLifecycleBundle = predecessorBundleSelection.lifecycleBundle;
   const targetParams = validateReshareTargetParams(params, predecessorCandidate.cohortBinding);

@@ -47,7 +47,7 @@
 
         <!-- Lite Mode Nav -->
         <nav class="nav-menu" role="tablist" aria-label="Lite workflow tabs" id="liteNav">
-          <button id="liteTabProtect" class="nav-item active" role="tab" aria-selected="true" aria-controls="liteViewProtect" tabindex="0" type="button"><span class="icon">🛡️</span> Encrypt & Split</button>
+          <button id="liteTabProtect" class="nav-item active" role="tab" aria-selected="true" aria-controls="liteViewProtect" tabindex="0" type="button"><span class="icon">🛡️</span> Create Archive</button>
           <button id="liteTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="liteViewRestore" tabindex="-1" type="button"><span class="icon">♻️</span> Restore</button>
         </nav>
 
@@ -57,6 +57,7 @@
           <button id="proTabEncryption" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewEncryption" tabindex="-1" type="button"><span class="icon">🔒</span> Encryption</button>
           <button id="proTabDistribution" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewDistribution" tabindex="-1" type="button"><span class="icon">🧩</span> Split</button>
           <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button"><span class="icon">🪢</span> Attach</button>
+          <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button"><span class="icon">🔁</span> Reshare</button>
           <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button"><span class="icon">♻️</span> Restore</button>
         </nav>
       </div>
@@ -95,7 +96,7 @@
         <!-- Lite View: Protect -->
         <div id="liteViewProtect" class="tab-panel module-panel active" role="tabpanel" aria-labelledby="liteTabProtect">
           <header class="section-header">
-            <h2>Encrypt & Split</h2>
+            <h2>Create Archive</h2>
           </header>
           
           <div class="visual-pipeline-container">
@@ -159,13 +160,16 @@
                       <option value="strong-pq-signature">Strong PQ signature required</option>
                     </select>
                   </label>
-                  <small class="muted-copy">This policy is fixed at archive creation time and enforced during restore.</small>
-                  <small id="liteAuthPolicyHelp" class="muted-copy">Without an external signature, restore will verify integrity only, not archive authenticity.</small>
+                  <small class="muted-copy">Lite now creates successor lifecycle archives by default and exports successor <code>.qcont</code> shards, a signable <code>.archive-state.json</code>, and a mutable <code>.lifecycle-bundle.json</code>. Since v1.5.3, legacy creation is compatibility-only.</small>
+                  <small id="liteAuthPolicyHelp" class="muted-copy">Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.</small>
+                </div>
+                <div class="operation-warning">
+                  <small>Archive approval signs the archive-state descriptor. Later same-state resharing is maintenance in Pro mode: it emits a new cohort and transition record, and it does not replace archive approval while the archive state stays unchanged.</small>
                 </div>
               </div>
 
               <div class="button-group">
-                <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Shards</button>
+                <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Successor Shards</button>
               </div>
             </div>
           </div>
@@ -198,7 +202,7 @@
             <div class="card full-width">
               <div class="dropzone-area" id="liteShardsDropzone">
                 <h3>Select Shards to Restore</h3>
-                <p class="muted-copy">Select restore files (.qcont, optional legacy .qvmanifest/.extended.qvmanifest, optional successor .archive-state/.lifecycle-bundle JSON, .qsig/.sig, .pqpk, .ots)</p>
+                <p class="muted-copy">Select restore files (.qcont, optional successor .archive-state/.lifecycle-bundle JSON, .qsig/.sig, .pqpk, .ots). Since v1.5.3, legacy <code>.qvmanifest</code> files are compatibility-only during the documented phase-out window.</p>
                 <label for="liteShardsInput" class="visually-hidden">Select shard and verification files</label>
                 <input type="file" id="liteShardsInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple>
               </div>
@@ -212,8 +216,27 @@
               <div id="shardsStatus" class="shards-status initially-hidden">
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
+              <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
+                <small id="liteRestoreSuccessorSelectionSummary" class="muted-copy"></small>
+                <small id="liteRestoreSuccessorSelectionHelp" class="muted-copy"></small>
+                <div id="liteRestoreStateSelectionGroup" class="form-group initially-hidden">
+                  <label>Archive / state selection
+                    <select id="liteRestoreStateSelection"></select>
+                  </label>
+                </div>
+                <div id="liteRestoreCohortSelectionGroup" class="form-group initially-hidden">
+                  <label>Same-state cohort selection
+                    <select id="liteRestoreCohortSelection"></select>
+                  </label>
+                </div>
+                <div id="liteRestoreBundleSelectionGroup" class="form-group initially-hidden">
+                  <label>Lifecycle-bundle selection
+                    <select id="liteRestoreBundleSelection"></select>
+                  </label>
+                </div>
+              </div>
               <div class="button-group">
-                <button id="liteRestoreBtn" class="button primary" disabled type="button">♻️ Restore Original Files</button>
+                <button id="liteRestoreBtn" class="button primary" disabled type="button">♻️ Restore Selected Archive</button>
               </div>
               <div id="liteRestoreResult" class="restore-result-panel initially-hidden"></div>
             </div>
@@ -298,7 +321,7 @@
         <!-- Pro View: Distribution -->
         <div id="proViewDistribution" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
-            <h2>Split (Sharding)</h2>
+            <h2>Split Into Successor Shards</h2>
           </header>
 
           <div class="panel-grid">
@@ -360,12 +383,12 @@
                     <option value="strong-pq-signature" selected>Strong PQ signature required</option>
                     </select>
                   </label>
-                <small class="muted-copy">This Build flow currently emits the legacy manifest/bundle shard family and exports a signable <code>.qvmanifest.json</code>. Attach and Restore also support successor lifecycle archives, where archive-approval signatures target canonical archive-state bytes.</small>
-                <small id="proAuthPolicyHelp" class="muted-copy">Without an external detached signature attached later, restore will block and the file will not be decrypted.</small>
+                <small class="muted-copy">Regular-user build/export now emits successor <code>QVqcont-7</code> shards plus <code>.archive-state.json</code>, <code>.cohort-binding.json</code>, and <code>.lifecycle-bundle.json</code>. Since v1.5.3, legacy manifest/bundle creation is retired from the normal product path and remains compatibility-only.</small>
+                <small id="proAuthPolicyHelp" class="muted-copy">Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.</small>
               </div>
 
               <div class="button-group">
-                <button id="buildQcontBtn" class="button primary" disabled type="button">Build Shards</button>
+                <button id="buildQcontBtn" class="button primary" disabled type="button">Build Successor Shards</button>
               </div>
             </div>
           </div>
@@ -381,24 +404,90 @@
               <h3>Attach Artifacts Around the Archive Description</h3>
               <div class="form-group">
                 <label>Attach Inputs <input type="file" id="qcontAttachInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple></label>
-                <small class="muted-copy">Provide one archive cohort plus its legacy manifest/bundle or successor archive-state/lifecycle-bundle JSON, detached signatures, optional <code>.pqpk</code>, and optional <code>.ots</code>. The signable bytes remain unchanged.</small>
+                <small class="muted-copy">Provide one archive cohort plus successor archive-state/lifecycle-bundle JSON, detached signatures, optional <code>.pqpk</code>, and optional <code>.ots</code>. Legacy manifest/bundle inputs remain compatibility-only during the documented phase-out window. The signable bytes remain unchanged.</small>
               </div>
               <div class="form-group">
                 <label>Attach Behavior</label>
-                <small id="attachModeHint" class="muted-copy">If all shard files for one archive cohort are loaded, Attach rewrites them. Otherwise it updates only the manifest-side bundle.</small>
+                <small id="attachModeHint" class="muted-copy">If all shard files for one successor cohort are loaded, Attach rewrites them. Otherwise it updates the selected lifecycle bundle only. Legacy manifest-side bundle updates remain compatibility-only.</small>
               </div>
               <div class="form-group">
                 <label>Expected Ed25519 signer for import (optional) <input type="text" id="attachExpectedEdSigner" placeholder="G..."></label>
               </div>
               <div class="button-group">
                 <button id="attachQcontBtn" class="button primary" type="button">Attach Artifacts</button>
-                <button id="exportSignableManifestBtn" class="button secondary" type="button">Extract Canonical Manifest</button>
+                <button id="exportSignableManifestBtn" class="button secondary" type="button">Export Signable Artifact</button>
                 <button id="exportAttachedArtifactsBtn" class="button secondary" type="button">Export Attached Artifacts</button>
               </div>
               <div id="attachStatus" class="shards-status initially-hidden">
                 <span id="attachStatusText">0 attach files selected</span>
                 <small id="attachStatusHint" class="muted-copy"></small>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="proViewReshare" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabReshare">
+          <header class="section-header">
+            <h2>Same-State Resharing</h2>
+          </header>
+
+          <div class="panel-grid">
+            <div class="card full-width">
+              <h3>Maintenance Resharing</h3>
+              <div class="form-group">
+                <label>Predecessor Successor Shards <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple></label>
+                <small class="muted-copy">Select successor <code>.qcont</code> shards for one predecessor archive/state/cohort set. An optional <code>.lifecycle-bundle.json</code> can explicitly choose one embedded lifecycle-bundle digest when needed. This surface does not create legacy material.</small>
+              </div>
+              <div class="operation-warning">
+                <small>Same-state resharing is maintenance, not archive re-approval. It preserves archive-state bytes and archive-approval signatures, then emits a new cohort plus a required transition record for the new lifecycle bundle.</small>
+              </div>
+              <div id="proReshareStatus" class="shards-status initially-hidden">
+                <span id="proReshareStatusText">0 shards selected</span>
+              </div>
+              <div id="reshareSuccessorSelection" class="verification-section successor-selection initially-hidden">
+                <small id="reshareSuccessorSelectionSummary" class="muted-copy"></small>
+                <small id="reshareSuccessorSelectionHelp" class="muted-copy"></small>
+                <div id="reshareStateSelectionGroup" class="form-group initially-hidden">
+                  <label>Archive / state selection
+                    <select id="reshareStateSelection"></select>
+                  </label>
+                </div>
+                <div id="reshareCohortSelectionGroup" class="form-group initially-hidden">
+                  <label>Predecessor cohort selection
+                    <select id="reshareCohortSelection"></select>
+                  </label>
+                </div>
+                <div id="reshareBundleSelectionGroup" class="form-group initially-hidden">
+                  <label>Lifecycle-bundle selection
+                    <select id="reshareBundleSelection"></select>
+                  </label>
+                </div>
+              </div>
+              <div class="rs-controls">
+                <label>Successor Shards (n) <input type="number" id="reshareN" value="5" min="5"></label>
+                <label>Successor Data Shards (k) <input type="number" id="reshareK" value="3" min="2"></label>
+              </div>
+              <div class="split-grid">
+                <div class="form-group">
+                  <label>Transition Reason
+                    <input type="text" id="reshareReasonCode" value="cohort-rotation">
+                  </label>
+                </div>
+                <div class="form-group">
+                  <label>Operator Role
+                    <input type="text" id="reshareOperatorRole" value="operator">
+                  </label>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Transition Notes
+                  <textarea id="reshareNotes" rows="3" placeholder="Optional maintenance note for the transition record"></textarea>
+                </label>
+              </div>
+              <div class="button-group">
+                <button id="reshareQcontBtn" class="button primary" disabled type="button">Emit Successor Cohort</button>
+              </div>
+              <div id="proReshareResult" class="restore-result-panel initially-hidden"></div>
             </div>
           </div>
         </div>
@@ -414,19 +503,39 @@
               <h3>Restore Container</h3>
               <div class="form-group">
                  <label>Input Restore Files <input type="file" id="qcontShardsInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple></label>
+                <small class="muted-copy">Successor restore is the regular-user path. Since v1.5.3, legacy manifest/bundle files remain compatibility-only while the documented phase-out window is open.</small>
               </div>
               <details class="verification-section">
                 <summary>Signer Pins (optional)</summary>
                 <div class="form-group verification-fields">
-                  <small class="muted-copy">Attach legacy or successor restore artifacts in the main selector above. A manually supplied <code>.pqpk</code> file counts as a pinned PQ signer key; the field below is only for Ed25519 identity pinning.</small>
+                  <small class="muted-copy">Attach successor restore artifacts in the main selector above. A manually supplied <code>.pqpk</code> file counts as a pinned PQ signer key; the field below is only for Ed25519 identity pinning. Legacy inputs remain compatibility-only.</small>
                   <label>Expected Ed25519 signer (optional) <input type="text" id="restoreExpectedEdSigner" placeholder="G..."></label>
                 </div>
               </details>
               <div id="proShardsStatus" class="shards-status initially-hidden">
                 <span id="proShardsStatusText">0 shards selected</span>
               </div>
+              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
+                <small id="restoreSuccessorSelectionSummary" class="muted-copy"></small>
+                <small id="restoreSuccessorSelectionHelp" class="muted-copy"></small>
+                <div id="restoreStateSelectionGroup" class="form-group initially-hidden">
+                  <label>Archive / state selection
+                    <select id="restoreStateSelection"></select>
+                  </label>
+                </div>
+                <div id="restoreCohortSelectionGroup" class="form-group initially-hidden">
+                  <label>Same-state cohort selection
+                    <select id="restoreCohortSelection"></select>
+                  </label>
+                </div>
+                <div id="restoreBundleSelectionGroup" class="form-group initially-hidden">
+                  <label>Lifecycle-bundle selection
+                    <select id="restoreBundleSelection"></select>
+                  </label>
+                </div>
+              </div>
               <div class="button-group">
-                <button id="restoreQcontBtn" class="button primary" disabled type="button">Restore</button>
+                <button id="restoreQcontBtn" class="button primary" disabled type="button">Restore Selected Archive</button>
               </div>
               <div id="proRestoreResult" class="restore-result-panel initially-hidden"></div>
             </div>

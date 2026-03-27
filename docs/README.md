@@ -34,8 +34,16 @@ Publication note:
 Current release status:
 
 - the documentation set covers two coexisting artifact tracks: the legacy manifest/bundle family and the successor lifecycle family
-- the project is phasing out the legacy system in favor of the successor lifecycle family, but the current browser build/export flow still emits legacy manifest-based shards
+- the regular-user product surface now creates successor lifecycle archives by default in both Lite and Pro
+- beginning with v1.5.3, legacy manifest/bundle creation became compatibility-only rather than a normal product path on the shipped UI surface
+- legacy manifest/bundle creation is no longer a normal product path; legacy attach/restore material remains compatibility-only during the documented phase-out window
 - current published docs MUST distinguish implemented now, shipped-but-legacy, and future-only material explicitly; deferred work such as RFC 4998-style renewal, state-changing continuity records, and governance objects MUST remain clearly non-current
+
+Current product surfaces:
+
+- Lite: regular-user successor archive creation, successor restore, and explicit ambiguity resolution when successor archive/state/cohort or lifecycle-bundle selection is required
+- Pro: all Lite successor workflows plus explicit successor artifact export, attach, inspection, and same-state resharing controls
+- Legacy: compatibility-only attach/restore/documentation for previously created legacy archives; no normal legacy creation path remains on the shipped UI surface
 
 ## Control rules
 

@@ -7,15 +7,15 @@ import {
     generateKeyPair as generateMlKemKeyPair,
     hashBytes as computeHashHex,
 } from '../core/crypto/index.js';
-import { buildQcontShards as buildShardSet } from '../core/crypto/qcont/build.js';
+import { buildQcontShards as buildLegacyShardSet } from '../core/crypto/qcont/build.js';
 import { attachManifestBundleToShards as attachShardBundle } from '../core/crypto/qcont/attach.js';
 import { attachLifecycleBundleToShards as attachLifecycleShardBundle } from '../core/crypto/qcont/lifecycle-attach.js';
 import {
+    buildLifecycleQcontShards as buildSuccessorShardSet,
     parseLifecycleShard as parseLifecycleQcontShardBytes,
     reshareSameState as reshareSameStateShardSet,
 } from '../core/crypto/qcont/lifecycle-shard.js';
 import { parseShard as parseQcontShardBytes, restoreFromShards as restoreShardSet } from '../core/crypto/qcont/restore.js';
-import { runSelfTest as runCoreSelfTest } from '../core/crypto/selftest.js';
 import {
     assessShardSelection as assessSelectedShards,
     parseQcontShardPreviewFile as parseShardPreviewFile,
@@ -62,7 +62,14 @@ export async function hashBytes(bytes) {
 
 export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
     const erasureRuntime = requireErasureRuntime();
-    return buildShardSet(qencBytes, privKeyBytes, params, { ...options, erasureRuntime });
+    const artifactFamily = String(options.artifactFamily || 'successor').trim().toLowerCase();
+    if (artifactFamily === 'successor') {
+        return buildSuccessorShardSet(qencBytes, privKeyBytes, params, { ...options, erasureRuntime });
+    }
+    if (artifactFamily === 'legacy') {
+        return buildLegacyShardSet(qencBytes, privKeyBytes, params, { ...options, erasureRuntime });
+    }
+    throw new Error(`Unsupported shard artifactFamily "${options.artifactFamily}"`);
 }
 
 export async function attachManifestBundleToShards(shards, options = {}) {
@@ -98,6 +105,7 @@ export async function restoreFromShards(shards, options = {}) {
 }
 
 export async function runSelfTest(options = {}) {
+    const { runSelfTest: runCoreSelfTest } = await import('../core/crypto/selftest.js');
     return runCoreSelfTest(options);
 }
 
