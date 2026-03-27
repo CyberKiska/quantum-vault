@@ -125,6 +125,7 @@ export function initQcontReshareUI() {
         selectedCohortId: verificationOptions.selectedCohortId,
         selectedLifecycleBundleDigestHex: verificationOptions.selectedLifecycleBundleDigestHex,
         lifecycleBundleBytes: verificationOptions.lifecycleBundleBytes,
+        expectedEd25519Signer: verificationOptions.expectedEd25519Signer,
         transition: {
           reasonCode,
           operatorRole,

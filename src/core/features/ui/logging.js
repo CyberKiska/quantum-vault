@@ -134,7 +134,7 @@ export function formatAuthenticityStatusMessage(status = {}) {
     if (status?.userPinned === true) {
         details.push('user pin matched');
     }
-    if (status?.signerPinned === true && details.length === 0) {
+    if (status?.signerPinned === true && status?.bundlePinned !== true && status?.userPinned !== true) {
         details.push('signer pin active');
     }
     return details.length > 0

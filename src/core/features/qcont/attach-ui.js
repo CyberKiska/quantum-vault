@@ -437,7 +437,7 @@ async function updateAttachStatus() {
   }
 }
 
-async function exportSignableManifest() {
+async function exportSignableArtifact() {
   const input = document.getElementById('qcontAttachInput');
   const files = [...(input?.files || [])];
   if (!files.length) {
@@ -634,11 +634,11 @@ async function attachFilesToShards() {
 export function initQcontAttachUI() {
   const attachInput = document.getElementById('qcontAttachInput');
   const attachBtn = document.getElementById('attachQcontBtn');
-  const exportBtn = document.getElementById('exportSignableManifestBtn');
+  const exportBtn = document.getElementById('exportSignableArtifactBtn');
   const exportArtifactsBtn = document.getElementById('exportAttachedArtifactsBtn');
 
   attachInput?.addEventListener('change', () => { void updateAttachStatus(); });
   attachBtn?.addEventListener('click', attachFilesToShards);
-  exportBtn?.addEventListener('click', exportSignableManifest);
+  exportBtn?.addEventListener('click', exportSignableArtifact);
   exportArtifactsBtn?.addEventListener('click', exportAttachedArtifacts);
 }

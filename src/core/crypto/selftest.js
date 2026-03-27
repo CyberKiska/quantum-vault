@@ -39,6 +39,7 @@ import {
   parseManifestBundleBytes,
   parseManifestBundleBytesPreviewOnly,
 } from './manifest/manifest-bundle.js';
+import { formatAuthenticityStatusMessage } from '../features/ui/logging.js';
 import {
   ARCHIVE_MANIFEST_SCHEMA,
   ARCHIVE_MANIFEST_VERSION,
@@ -4290,6 +4291,21 @@ function buildCases() {
           assessment.message.includes('Explicit lifecycle-bundle selection is still required below.'),
           'successor shard assessment should report explicit lifecycle-bundle selection requirements'
         );
+      },
+    },
+    {
+      name: 'authenticity status message keeps signer pin detail alongside strong PQ detail',
+      fn: async () => {
+        const message = formatAuthenticityStatusMessage({
+          archiveApprovalSignatureVerified: true,
+          strongPqSignatureVerified: true,
+          signerPinned: true,
+          bundlePinned: false,
+          userPinned: false,
+        });
+
+        assert(message.includes('strong PQ present'), 'status message should report strong PQ detail');
+        assert(message.includes('signer pin active'), 'status message should preserve signer pin detail when no bundle/user pin flags are present');
       },
     },
     {

@@ -415,7 +415,7 @@
               </div>
               <div class="button-group">
                 <button id="attachQcontBtn" class="button primary" type="button">Attach Artifacts</button>
-                <button id="exportSignableManifestBtn" class="button secondary" type="button">Export Signable Artifact</button>
+                <button id="exportSignableArtifactBtn" class="button secondary" type="button">Export Signable Artifact</button>
                 <button id="exportAttachedArtifactsBtn" class="button secondary" type="button">Export Attached Artifacts</button>
               </div>
               <div id="attachStatus" class="shards-status initially-hidden">
@@ -441,6 +441,13 @@
               <div class="operation-warning">
                 <small>Same-state resharing is maintenance, not archive re-approval. It preserves archive-state bytes and archive-approval signatures, then emits a new cohort plus a required transition record for the new lifecycle bundle.</small>
               </div>
+              <details class="verification-section">
+                <summary>Operator Context (optional)</summary>
+                <div class="form-group verification-fields">
+                  <small class="muted-copy">Same-state resharing reconstructs one predecessor successor cohort and emits maintenance artifacts, but it does not run full archive-policy evaluation like Restore. The field below is operator context only and does not by itself authorize or block resharing.</small>
+                  <label>Expected Ed25519 signer (optional) <input type="text" id="reshareExpectedEdSigner" placeholder="G..."></label>
+                </div>
+              </details>
               <div id="proReshareStatus" class="shards-status initially-hidden">
                 <span id="proReshareStatusText">0 shards selected</span>
               </div>

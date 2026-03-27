@@ -609,7 +609,15 @@ The lifecycle bundle carries `authPolicy` and five attachment arrays (all mandat
 
 Successor restore groups candidate shards by `archiveId`, `stateId`, and `cohortId`, and requires exact byte equality for embedded **archive-state** and **cohort-binding** objects within a cohort. If more than one embedded **lifecycle-bundle** digest appears for an otherwise consistent cohort and the operator does not supply an explicit lifecycle bundle or selected digest, restore **fails closed** (no heuristic “richest bundle” or lexical winner). If multiple valid **cohorts** exist for the same archive state (same-state fork), restore **rejects** mixed cohorts without auto-selecting by timestamp, attachment count, or lexical order.
 
-### 11.5 Source-evidence v1 (privacy posture)
+### 11.5 Same-state resharing semantics (successor)
+
+Same-state resharing reconstructs one predecessor successor cohort, preserves exact archive-state descriptor bytes, and emits a new cohort plus a required transition record. It is a **threshold-shard reconstruction and maintenance path**, not a substitute for full restore-policy evaluation.
+
+- resharing does **not** produce a restore authorization decision
+- resharing does **not** rerun archive policy as the user-facing Restore flow does
+- preserved archive-approval signatures remain archive-approval evidence over the unchanged archive state; new maintenance signatures over the transition record remain separate maintenance evidence and **do not** satisfy archive policy
+
+### 11.6 Source-evidence v1 (privacy posture)
 
 `quantum-vault-source-evidence/v1` objects carried in `lifecycleBundle.sourceEvidence[]` are intentionally **digest-first**; optional fields are limited (for example optional `mediaType` and `externalSourceSignatureRefs` per schema). There are **no** first-class path, username, or free-form operator note fields in v1; privacy defaults are **structural** (omit sensitive fields), not runtime redaction of rich optional fields.
 

@@ -1068,12 +1068,17 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
 
   const onLog = options.onLog || (() => {});
   const onWarn = options.onWarn || options.onError || (() => {});
+  const expectedEd25519Signer = String(options.expectedEd25519Signer || '').trim();
   const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
   const prepared = preparePredecessorShards(predecessorShards);
   const predecessorCandidate = collectSinglePredecessorCohort(prepared, options);
   const predecessorBundleSelection = await selectPredecessorLifecycleBundle(predecessorCandidate, options);
   const predecessorLifecycleBundle = predecessorBundleSelection.lifecycleBundle;
   const targetParams = validateReshareTargetParams(params, predecessorCandidate.cohortBinding);
+
+  if (expectedEd25519Signer.length > 0) {
+    onWarn('Same-state resharing does not run full restore archive-policy evaluation. The expected Ed25519 signer was recorded as operator context only.');
+  }
 
   const transitionOptions = options.transition || options.transitionRecord || {};
   let reconstructedPrivKey = null;

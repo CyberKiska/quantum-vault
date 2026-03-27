@@ -41,9 +41,14 @@ Current release status:
 
 Current product surfaces:
 
-- Lite: regular-user successor archive creation, successor restore, and explicit ambiguity resolution when successor archive/state/cohort or lifecycle-bundle selection is required
-- Pro: all Lite successor workflows plus explicit successor artifact export, attach, inspection, and same-state resharing controls
+- Lite: regular-user successor archive creation/export of `.qcont`, `*.archive-state.json`, and `*.lifecycle-bundle.json`, successor restore, and explicit ambiguity resolution when successor archive/state/cohort or lifecycle-bundle selection is required
+- Pro: all Lite successor workflows plus standalone `*.cohort-binding.json` export, explicit successor artifact export/attach/inspection, and same-state resharing controls
 - Legacy: compatibility-only attach/restore/documentation for previously created legacy archives; no normal legacy creation path remains on the shipped UI surface
+
+Current release-gate note:
+
+- automated release-gate coverage for successor-default build/export, mixed legacy/successor rejection, same-state cohort ambiguity, and lifecycle-bundle ambiguity currently lives in `src/core/crypto/selftest.js`
+- a dedicated headless browser harness is not yet part of the repo; until one lands, maintainers MUST manually verify before release that Lite and Pro restore/reshare actions remain disabled until required successor selections are made, mixed legacy/successor input shows the blocking compatibility message, and successor-first labels remain on the create/build/attach surface
 
 ## Control rules
 
