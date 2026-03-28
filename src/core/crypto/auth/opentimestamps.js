@@ -60,29 +60,33 @@ export function decodeBundleSignatureBytes(signature) {
 // directly and must not rely on `otsStampedDigestHex` shortcuts.
 export async function resolveOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
   const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
+  const hashedSignatures = await Promise.all(signatures.map(async (signature) => {
+    if (!(signature?.bytes instanceof Uint8Array)) return null;
+    return {
+      signature,
+      computedStampedDigestHex: toHex(await digestSha256(signature.bytes)),
+    };
+  }));
   const uniqueSignatures = [];
   const seenSignatures = new Set();
-  for (const signature of signatures) {
-    if (!(signature?.bytes instanceof Uint8Array)) continue;
+  for (const entry of hashedSignatures) {
+    if (!entry) continue;
+    const { signature, computedStampedDigestHex } = entry;
     const dedupeKey = String(
       signature?.signatureContentDigestHex ||
-      signature?.otsStampedDigestHex ||
+      computedStampedDigestHex ||
       signature?.id ||
       signature?.name ||
       ''
     );
     if (dedupeKey && seenSignatures.has(dedupeKey)) continue;
     if (dedupeKey) seenSignatures.add(dedupeKey);
-    uniqueSignatures.push(signature);
+    uniqueSignatures.push(entry);
   }
 
-  const matchedSignatures = await Promise.all(uniqueSignatures.map(async (signature) => {
-    if (typeof signature?.otsStampedDigestHex === 'string' && signature.otsStampedDigestHex.length > 0) {
-      return signature.otsStampedDigestHex === parsedProof.stampedDigestHex;
-    }
-    return toHex(await digestSha256(signature.bytes)) === parsedProof.stampedDigestHex;
-  }));
-  const matches = uniqueSignatures.filter((_, index) => matchedSignatures[index]);
+  const matches = uniqueSignatures
+    .filter((entry) => entry.computedStampedDigestHex === parsedProof.stampedDigestHex)
+    .map((entry) => entry.signature);
 
   if (matches.length === 0) {
     throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} does not match any detached signature`);

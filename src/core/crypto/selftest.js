@@ -66,7 +66,12 @@ import { unpackPqpk, unpackQsig } from './auth/qsig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
-import { inspectManifestBundleTimestamps, parseOpenTimestampProof } from './auth/opentimestamps.js';
+import {
+  inspectManifestBundleTimestamps,
+  inspectTimestampEvidence,
+  parseOpenTimestampProof,
+  resolveOpenTimestampTarget,
+} from './auth/opentimestamps.js';
 import {
   DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL,
   LITE_DEFAULT_AUTH_POLICY_LEVEL,
@@ -6159,6 +6164,90 @@ function buildCases() {
           evidence.some((item) => item.completionLabel === 'OTS proof appears incomplete'),
           'timestamp evidence should report complete and incomplete states honestly'
         );
+      },
+    },
+    {
+      name: 'resolveOpenTimestampTarget rejects cached OTS digests that do not match detached signature bytes',
+      fn: async () => {
+        const sig = buildQsigFixture(textBytes('ots-cache-mismatch-negative'));
+        const unrelatedBytes = textBytes('not-the-detached-signature');
+        const timestampBytes = await buildOtsFixture(unrelatedBytes, { completeProof: true });
+        const forgedCachedDigestHex = toHex(await digestSha256(unrelatedBytes));
+
+        await expectFailureWithMessage(
+          () => resolveOpenTimestampTarget({
+            timestampBytes,
+            timestampName: 'archive.qsig.ots',
+            signatures: [{
+              id: 'sig:external-1',
+              name: 'archive.qsig',
+              source: 'external',
+              ok: true,
+              bytes: sig.qsigBytes,
+              otsStampedDigestHex: forgedCachedDigestHex,
+            }],
+          }),
+          /does not match any detached signature/,
+          'OpenTimestamps resolver unexpectedly trusted cached otsStampedDigestHex over detached-signature bytes'
+        );
+      },
+    },
+    {
+      name: 'resolveOpenTimestampTarget links OTS only from SHA-256 of detached signature bytes',
+      fn: async () => {
+        const sig = buildQsigFixture(textBytes('ots-byte-binding-positive'));
+        const timestampBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: true });
+        const staleCachedDigestHex = toHex(await digestSha256(textBytes('stale-ots-cache')));
+
+        const resolved = await resolveOpenTimestampTarget({
+          timestampBytes,
+          timestampName: 'archive.qsig.ots',
+          signatures: [{
+            id: 'sig:external-1',
+            name: 'archive.qsig',
+            source: 'external',
+            ok: true,
+            bytes: sig.qsigBytes,
+            otsStampedDigestHex: staleCachedDigestHex,
+          }],
+        });
+
+        assert(resolved.targetRef === 'sig:external-1', 'OTS linkage must preserve the detached signature targetRef');
+        assert(resolved.targetName === 'archive.qsig', 'OTS linkage must preserve the detached signature target name');
+        assert(resolved.targetSource === 'external', 'OTS linkage must preserve the detached signature target source');
+        assert(resolved.targetVerified === true, 'OTS linkage must preserve detached signature verification state');
+        assert(
+          resolved.stampedDigestHex === toHex(await digestSha256(sig.qsigBytes)),
+          'OTS linkage must be bound to SHA-256(detached-signature-bytes)'
+        );
+      },
+    },
+    {
+      name: 'inspectTimestampEvidence preserves reporting semantics while ignoring stale OTS digest caches',
+      fn: async () => {
+        const sig = buildQsigFixture(textBytes('ots-reporting-semantics'));
+        const timestampBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: false });
+
+        const evidence = await inspectTimestampEvidence({
+          bundle: {},
+          externalTimestamps: [{ name: 'archive.qsig.ots', bytes: timestampBytes }],
+          signatureArtifacts: [{
+            id: 'sig:external-1',
+            name: 'archive.qsig',
+            source: 'external',
+            ok: true,
+            bytes: sig.qsigBytes,
+            otsStampedDigestHex: toHex(await digestSha256(textBytes('stale-reporting-cache'))),
+          }],
+        });
+
+        assert(evidence.length === 1, 'expected one OTS evidence entry');
+        assert(evidence[0].targetRef === 'sig:external-1', 'timestamp evidence must retain the linked detached signature targetRef');
+        assert(evidence[0].targetName === 'archive.qsig', 'timestamp evidence must retain the linked detached signature target name');
+        assert(evidence[0].targetSource === 'external', 'timestamp evidence must report the detached signature source');
+        assert(evidence[0].targetVerified === true, 'timestamp evidence must retain detached signature verification status');
+        assert(evidence[0].linkLabel === 'External OTS evidence linked to signature', 'timestamp evidence must preserve existing reporting labels');
+        assert(evidence[0].completionLabel === 'OTS proof appears incomplete', 'timestamp evidence must preserve proof completion reporting');
       },
     },
     {
