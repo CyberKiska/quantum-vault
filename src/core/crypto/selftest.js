@@ -759,6 +759,13 @@ function assert(condition, message) {
   }
 }
 
+function assertNoSignerIdentityPinned(status, label) {
+  assert(
+    !Object.prototype.hasOwnProperty.call(status || {}, 'signerIdentityPinned'),
+    `${label} should expose only signerPinned for archive-approval pinning`
+  );
+}
+
 async function expectFailure(fn, message) {
   let failed = false;
   try {
@@ -3381,6 +3388,8 @@ function buildCases() {
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
         assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled key material');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
       },
     },
     {
@@ -3620,6 +3629,8 @@ function buildCases() {
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
         assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
         assert(restored.lifecycleVerification.transitions.present === true, 'expected lifecycle transition reporting');
         assert(restored.lifecycleVerification.transitions.chainValid === true, 'expected structural transition-chain validity in lifecycle reporting');
         assert(restored.lifecycleVerification.transitions.records.length === 1, 'expected one transition record in the lifecycle report');
@@ -3665,6 +3676,8 @@ function buildCases() {
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected OTS linkage reporting');
         assert(restored.authenticity.status.policySatisfied === true, 'integrity-only policy should remain satisfied');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
         assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'archive policy counting must remain archive-approval only');
         assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 0, 'archive-approval pinning count must remain zero without archive-approval signatures');
         assert(restored.authenticity.verification.counts.archiveApprovalBundlePinnedValidTotal === 0, 'archive-approval bundle pinning count must remain zero without archive-approval signatures');
@@ -5091,9 +5104,18 @@ function buildCases() {
     {
       name: 'authenticity status message keeps signer pin detail alongside strong PQ detail',
       fn: async () => {
+        const manifestBytes = textBytes('auth-status-signer-pin-detail');
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+          pinnedPqPublicKeyFileBytes: pqpkBytes,
+        });
+        assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
+
         const message = formatAuthenticityStatusMessage({
           archiveApprovalSignatureVerified: true,
-          strongPqSignatureVerified: true,
+          strongPqSignatureVerified: verification.status.strongPqSignatureVerified,
           signerPinned: true,
           bundlePinned: false,
           userPinned: false,
@@ -5252,6 +5274,7 @@ function buildCases() {
         assert(verification.status.signerPinned === true, 'matching pin must mark signer as pinned');
         assert(verification.status.bundlePinned === false, 'external signature should not set bundlePinned');
         assert(verification.status.userPinned === true, 'matching external pin must set userPinned');
+        assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
       },
     },
     {
@@ -5579,6 +5602,8 @@ function buildCases() {
         assert(restored.authenticity.status.bundlePinned === false, 'external .pqpk should not set bundlePinned');
         assert(restored.authenticity.status.userPinned === true, 'external .pqpk should set userPinned');
         assert(restored.authenticity.status.policySatisfied, 'expected policySatisfied');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'legacy verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'legacy restore authenticity status');
       },
     },
     {
