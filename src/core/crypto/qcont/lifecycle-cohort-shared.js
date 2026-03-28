@@ -1,5 +1,6 @@
 import { bytesEqual } from '../bytes.js';
 import { clearKeys, deriveKeyWithKmac, verifyKeyCommitment } from '../kdf.js';
+import { REED_SOLOMON_CODEC_ID, validateRuntimeSupportedCohortTuple } from '../lifecycle/artifacts.js';
 import { decapsulate } from '../mlkem.js';
 import { buildQencHeader } from '../qenc/format.js';
 import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
@@ -156,21 +157,15 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
   const m = ensurePositiveInteger(Number(reedSolomon.parity), 'cohortBinding.sharding.reedSolomon.parity', 0);
   const t = ensurePositiveInteger(Number(shamir.threshold), 'cohortBinding.sharding.shamir.threshold', 2);
   const shareCount = ensurePositiveInteger(Number(shamir.shareCount), 'cohortBinding.sharding.shamir.shareCount', 2);
-  if (shareCount !== n) {
-    throw new Error(`Invalid cohort binding: Shamir shareCount ${shareCount} must equal RS n ${n}`);
-  }
-  if ((m % 2) !== 0) {
-    throw new Error('Invalid cohort binding: RS parity must be even');
-  }
-  if (k >= n) {
-    throw new Error('Invalid cohort binding: expected k < n');
-  }
-
-  const allowedFailures = m / 2;
-  const expectedThreshold = k + allowedFailures;
-  if (t !== expectedThreshold) {
-    throw new Error(`Invalid cohort threshold: expected ${expectedThreshold}, got ${t}`);
-  }
+  const supportedTuple = validateRuntimeSupportedCohortTuple({
+    n,
+    k,
+    parity: m,
+    threshold: t,
+    shareCount,
+    codecId: String(reedSolomon.codecId || REED_SOLOMON_CODEC_ID),
+  });
+  const allowedFailures = supportedTuple.allowedFailures;
 
   const qenc = archiveState.qenc || {};
   const chunkSize = ensurePositiveInteger(Number(qenc.chunkSize), 'archiveState.qenc.chunkSize', 1);

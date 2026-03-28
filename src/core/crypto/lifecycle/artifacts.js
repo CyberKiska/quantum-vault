@@ -514,18 +514,67 @@ function normalizeShardingStructure(value, field = 'cohortBinding.sharding') {
 }
 
 function validateShardingSemantics(sharding, field = 'cohortBinding.sharding') {
-  if (sharding.shamir.threshold > sharding.shamir.shareCount) {
+  const threshold = sharding.shamir.threshold;
+  const shareCount = sharding.shamir.shareCount;
+  const n = sharding.reedSolomon.n;
+  const k = sharding.reedSolomon.k;
+  const parity = sharding.reedSolomon.parity;
+
+  if (threshold > shareCount) {
     throw new Error(`Invalid ${field}.shamir.threshold`);
   }
-  if (sharding.shamir.shareCount !== sharding.reedSolomon.n) {
+  if (shareCount !== n) {
     throw new Error(`Invalid ${field}.shamir.shareCount`);
   }
-  if (sharding.reedSolomon.k >= sharding.reedSolomon.n) {
+  if (k >= n) {
     throw new Error(`Invalid ${field}.reedSolomon.k`);
   }
-  if (sharding.reedSolomon.parity !== sharding.reedSolomon.n - sharding.reedSolomon.k) {
+  if (parity !== n - k) {
     throw new Error(`Invalid ${field}.reedSolomon.parity`);
   }
+}
+
+export function validateRuntimeSupportedCohortTuple(tuple, field = 'cohort parameters') {
+  const normalizedField = ensureString(field, 'field');
+  const n = Number(tuple?.n);
+  const k = Number(tuple?.k);
+  const parity = Number(tuple?.parity);
+  const threshold = Number(tuple?.threshold);
+  const shareCount = Number(tuple?.shareCount);
+  const codecId = String(tuple?.codecId || '');
+
+  if (!Number.isInteger(n) || n < 2 || !Number.isInteger(k) || k < 2 || k >= n) {
+    throw new Error(`Invalid ${normalizedField}: require 2 <= k < n`);
+  }
+  if (!Number.isInteger(shareCount) || shareCount < 2 || shareCount !== n) {
+    throw new Error(`Unsupported ${normalizedField}: shareCount must equal n`);
+  }
+  if (codecId !== REED_SOLOMON_CODEC_ID) {
+    throw new Error(`Unsupported ${normalizedField}: codecId must be ${REED_SOLOMON_CODEC_ID}`);
+  }
+  if (!Number.isInteger(parity) || parity < 0 || parity !== n - k) {
+    throw new Error(`Unsupported ${normalizedField}: parity must equal n - k`);
+  }
+  if ((parity % 2) !== 0) {
+    throw new Error(`Unsupported ${normalizedField}: parity must be even under ${REED_SOLOMON_CODEC_ID}`);
+  }
+  if (!Number.isInteger(threshold) || threshold < 2) {
+    throw new Error(`Invalid ${normalizedField}: threshold must be an integer >= 2`);
+  }
+  const derivedThreshold = k + (parity / 2);
+  if (threshold !== derivedThreshold) {
+    throw new Error(`Unsupported ${normalizedField}: t must equal k + (parity/2) under ${REED_SOLOMON_CODEC_ID}`);
+  }
+  return {
+    n,
+    k,
+    parity,
+    threshold,
+    shareCount,
+    codecId,
+    derivedThreshold,
+    allowedFailures: parity / 2,
+  };
 }
 
 function normalizeBodyDefinitionStructure(value, field = 'cohortBinding.bodyDefinition') {

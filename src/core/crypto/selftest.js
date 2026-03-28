@@ -4,6 +4,7 @@ import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
 import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
+import { reconstructLifecycleCohortMaterial } from './qcont/lifecycle-cohort-shared.js';
 import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
 import { buildLifecycleQcontShards, parseLifecycleShard, reshareSameState, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
@@ -375,6 +376,50 @@ function rewriteEmbeddedArchiveStateBytes(parsedShards, mutateArchiveState) {
     ...shard,
     archiveStateBytes: canonicalArchiveState.bytes,
   }));
+}
+
+function rewriteEmbeddedCohortBinding(parsedShards, mutateCohortBinding) {
+  const cohortBinding = cloneJson(parsedShards[0].cohortBinding);
+  mutateCohortBinding(cohortBinding);
+  const canonicalCohortBinding = canonicalizeCohortBinding(cohortBinding);
+  const cohortId = deriveCohortId({
+    archiveId: canonicalCohortBinding.cohortBinding.archiveId,
+    stateId: canonicalCohortBinding.cohortBinding.stateId,
+    cohortBindingDigest: canonicalCohortBinding.digest,
+  });
+  const sharding = canonicalCohortBinding.cohortBinding.sharding;
+
+  return parsedShards.map((shard) => ({
+    ...shard,
+    cohortBinding: canonicalCohortBinding.cohortBinding,
+    cohortBindingBytes: canonicalCohortBinding.bytes,
+    cohortBindingDigestHex: canonicalCohortBinding.digest.value,
+    cohortId,
+    metaJSON: {
+      ...shard.metaJSON,
+      cohortId,
+      n: sharding.reedSolomon.n,
+      k: sharding.reedSolomon.k,
+      m: sharding.reedSolomon.parity,
+      t: sharding.shamir.threshold,
+    },
+  }));
+}
+
+function buildLifecycleCohortCandidate(parsedShards) {
+  const first = parsedShards[0];
+  return {
+    archiveId: first.archiveState.archiveId,
+    stateId: first.stateId,
+    cohortId: first.cohortId,
+    archiveStateBytes: first.archiveStateBytes,
+    archiveStateDigestHex: first.archiveStateDigestHex,
+    archiveState: first.archiveState,
+    cohortBindingBytes: first.cohortBindingBytes,
+    cohortBindingDigestHex: first.cohortBindingDigestHex,
+    cohortBinding: first.cohortBinding,
+    shards: parsedShards,
+  };
 }
 
 function rewriteSuccessorPrivateKeyHash(parsedShards, privateKeyHash) {
@@ -4140,6 +4185,150 @@ function buildCases() {
         assert(reshared.cohortBinding.sharding.shamir.threshold === 6, 'successor t mismatch');
         assert(reshared.cohortBinding.sharding.reedSolomon.codecId === 'QV-RS-ErasureCodes-v1', 'successor codecId should remain schema-frozen');
         assert(reshared.cohortBinding.sharding.shamir.threshold !== sample.split.cohortBinding.sharding.shamir.threshold, 'successor threshold should differ from predecessor threshold');
+      },
+    },
+    {
+      name: 'lifecycle cohort runtime-supported tuples pass across build reconstruction and resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-supported-cohort-tuples'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const erasureRuntime = resolveErasureRuntime();
+        let reconstructed = null;
+
+        try {
+          assert(sample.split.cohortBinding.sharding.reedSolomon.n === 5, 'build path emitted unexpected supported n');
+          assert(sample.split.cohortBinding.sharding.reedSolomon.k === 3, 'build path emitted unexpected supported k');
+          assert(sample.split.cohortBinding.sharding.reedSolomon.parity === 2, 'build path emitted unexpected supported parity');
+          assert(sample.split.cohortBinding.sharding.shamir.threshold === 4, 'build path emitted unexpected supported threshold');
+
+          reconstructed = await reconstructLifecycleCohortMaterial(
+            buildLifecycleCohortCandidate(sample.parsed),
+            {
+              erasureRuntime,
+              digestHex: hashBytes,
+              validateQencMeta: () => {},
+            }
+          );
+          assert(reconstructed.shareCopiesCleared === true, 'reconstruction should report cleared copied share buffers');
+
+          const reshared = await reshareSameState(sample.parsed, { n: 7, k: 5 }, {
+            transition: {
+              reasonCode: 'capacity-adjustment',
+              performedAt: '2026-03-27T12:00:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-supported-cohort-tuples' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          });
+
+          assert(reshared.cohortBinding.sharding.reedSolomon.n === 7, 'resharing path emitted unexpected supported n');
+          assert(reshared.cohortBinding.sharding.reedSolomon.k === 5, 'resharing path emitted unexpected supported k');
+          assert(reshared.cohortBinding.sharding.reedSolomon.parity === 2, 'resharing path emitted unexpected supported parity');
+          assert(reshared.cohortBinding.sharding.shamir.threshold === 6, 'resharing path emitted unexpected supported threshold');
+        } finally {
+          if (reconstructed?.privKey instanceof Uint8Array) {
+            reconstructed.privKey.fill(0);
+          }
+        }
+      },
+    },
+    {
+      name: 'cohort-binding parser semantics remain unchanged for schema-valid runtime-unsupported tuples in this consolidation-only patch',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-consolidation-only-parser-surface'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const oddParity = cloneJson(sample.split.cohortBinding);
+        oddParity.sharding.reedSolomon.k = 4;
+        oddParity.sharding.reedSolomon.parity = 1;
+        oddParity.sharding.shamir.threshold = 4;
+        const parsedOddParity = parseCohortBindingBytes(canonicalizeJsonToBytes(oddParity));
+        assert(parsedOddParity.cohortBinding.sharding.reedSolomon.parity === 1, 'parser/build semantics unexpectedly rejected schema-valid odd parity');
+
+        const thresholdMismatch = cloneJson(sample.split.cohortBinding);
+        thresholdMismatch.sharding.shamir.threshold = 3;
+        const parsedThresholdMismatch = parseCohortBindingBytes(canonicalizeJsonToBytes(thresholdMismatch));
+        assert(parsedThresholdMismatch.cohortBinding.sharding.shamir.threshold === 3, 'parser/build semantics unexpectedly rejected schema-valid threshold mismatch');
+      },
+    },
+    {
+      name: 'odd-parity runtime-unsupported tuples share one error surface across build reconstruction and resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-odd-parity-error-surface'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const oddParityParsed = rewriteEmbeddedCohortBinding(sample.parsed, (cohortBinding) => {
+          cohortBinding.sharding.reedSolomon.k = 4;
+          cohortBinding.sharding.reedSolomon.parity = 1;
+          cohortBinding.sharding.shamir.threshold = 4;
+        });
+        const unsupportedPattern = /Unsupported cohort parameters: parity must be even under QV-RS-ErasureCodes-v1/i;
+
+        await expectFailureWithMessage(
+          () => buildLifecycleQcontShards(sample.qencBytes, sample.pair.secretKey, { n: 5, k: 4 }, {
+            authPolicyLevel: 'integrity-only',
+          }),
+          unsupportedPattern,
+          'lifecycle build unexpectedly accepted an odd-parity runtime-unsupported tuple'
+        );
+
+        await expectFailureWithMessage(
+          () => reconstructLifecycleCohortMaterial(buildLifecycleCohortCandidate(oddParityParsed), {
+            erasureRuntime: resolveErasureRuntime(),
+            digestHex: hashBytes,
+            validateQencMeta: () => {},
+          }),
+          unsupportedPattern,
+          'lifecycle reconstruction unexpectedly accepted an odd-parity runtime-unsupported tuple'
+        );
+
+        await expectFailureWithMessage(
+          () => reshareSameState(sample.parsed, { n: 5, k: 4 }, {
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          unsupportedPattern,
+          'same-state resharing unexpectedly accepted an odd-parity runtime-unsupported tuple'
+        );
+      },
+    },
+    {
+      name: 'threshold-mismatch runtime-unsupported tuples share one error surface across reconstruction and resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-threshold-mismatch-error-surface'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const thresholdMismatchParsed = rewriteEmbeddedCohortBinding(sample.parsed, (cohortBinding) => {
+          cohortBinding.sharding.shamir.threshold = 3;
+        });
+        const unsupportedPattern = /Unsupported cohort parameters: t must equal k \+ \(parity\/2\) under QV-RS-ErasureCodes-v1/i;
+
+        await expectFailureWithMessage(
+          () => reconstructLifecycleCohortMaterial(buildLifecycleCohortCandidate(thresholdMismatchParsed), {
+            erasureRuntime: resolveErasureRuntime(),
+            digestHex: hashBytes,
+            validateQencMeta: () => {},
+          }),
+          unsupportedPattern,
+          'lifecycle reconstruction unexpectedly accepted a threshold-mismatched runtime-unsupported tuple'
+        );
+
+        await expectFailureWithMessage(
+          () => reshareSameState(sample.parsed, { n: 5, k: 3, t: 3 }, {
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          unsupportedPattern,
+          'same-state resharing unexpectedly accepted a threshold-mismatched runtime-unsupported tuple'
+        );
       },
     },
     {

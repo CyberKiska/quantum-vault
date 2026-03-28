@@ -23,6 +23,7 @@ import {
   parseCohortBindingBytes,
   parseLifecycleBundleBytes,
   REED_SOLOMON_CODEC_ID,
+  validateRuntimeSupportedCohortTuple,
 } from '../lifecycle/artifacts.js';
 import {
   mergeLifecycleShardIntoCohortGroups,
@@ -140,26 +141,21 @@ function assertNoForbiddenReshareOverrides(params = {}, options = {}) {
 function validateReshareTargetParams(params, predecessorCohortBinding) {
   const n = ensurePositiveInteger(Number(params?.n), 'params.n', 2);
   const k = ensurePositiveInteger(Number(params?.k), 'params.k', 2);
-  if (k >= n) {
-    throw new Error('Invalid RS parameters: require 2 <= k < n');
-  }
   const m = n - k;
-  if ((m % 2) !== 0) {
-    throw new Error('n-k must be even');
-  }
-  const derivedThreshold = k + (m / 2);
   const requestedThreshold = params?.t == null
-    ? derivedThreshold
+    ? k + (m / 2)
     : ensurePositiveInteger(Number(params.t), 'params.t', 2);
-  if (requestedThreshold !== derivedThreshold) {
-    throw new Error('Same-state resharing currently requires t = k + ((n-k)/2) under QV-RS-ErasureCodes-v1');
-  }
 
   const predecessorCodecId = predecessorCohortBinding?.sharding?.reedSolomon?.codecId || REED_SOLOMON_CODEC_ID;
   const requestedCodecId = String(params?.rsCodecId || params?.codecId || predecessorCodecId);
-  if (requestedCodecId !== REED_SOLOMON_CODEC_ID) {
-    throw new Error(`Same-state resharing currently supports only codecId ${REED_SOLOMON_CODEC_ID} under the frozen v1 schema`);
-  }
+  const supportedTuple = validateRuntimeSupportedCohortTuple({
+    n,
+    k,
+    parity: m,
+    threshold: requestedThreshold,
+    shareCount: n,
+    codecId: requestedCodecId,
+  });
 
   if (
     Object.prototype.hasOwnProperty.call(params || {}, 'bodyDefinitionId') &&
@@ -187,8 +183,8 @@ function validateReshareTargetParams(params, predecessorCohortBinding) {
   return {
     n,
     k,
-    t: requestedThreshold,
-    rsCodecId: requestedCodecId,
+    t: supportedTuple.threshold,
+    rsCodecId: supportedTuple.codecId,
   };
 }
 
@@ -554,13 +550,15 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     : null;
 
   const { n, k } = params;
-  const m = n - k;
-  if (k < 2 || n <= k) {
-    throw new Error('Invalid RS parameters: require 2 <= k < n');
-  }
-  if ((m % 2) !== 0) {
-    throw new Error('n-k must be even');
-  }
+  const supportedTuple = validateRuntimeSupportedCohortTuple({
+    n,
+    k,
+    parity: n - k,
+    threshold: k + ((n - k) / 2),
+    shareCount: n,
+    codecId: REED_SOLOMON_CODEC_ID,
+  });
+  const m = supportedTuple.parity;
 
   const {
     header,
@@ -612,10 +610,7 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
   const containerId = computeDigestHex(header);
   const containerHash = computeDigestHex(qencBytes);
 
-  const t = k + (m / 2);
-  if (t > n) {
-    throw new Error('Invalid threshold computed');
-  }
+  const t = supportedTuple.threshold;
   const { splitSecret } = await import('../splitting/sss.js');
   const shares = await splitSecret(privKeyBytes, n, t);
   const shareCommitments = shares.map((share) => computeDigestHex(share));
