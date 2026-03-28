@@ -28,6 +28,7 @@ import {
   ensureExactString,
   ensureHex,
   ensureInteger,
+  ensureIJsonFreeformValue,
   ensureObject,
   ensureOptionalString,
   ensureSafeInteger,
@@ -243,7 +244,7 @@ function normalizeDigestArray(value, field) {
 
 function normalizeJsonObject(value, field) {
   const obj = ensureObject(value, field);
-  return obj;
+  return ensureIJsonFreeformValue(obj, field);
 }
 
 function normalizeOptionalStringArrayProperty(source, key, field, { minItems = 0 } = {}) {
@@ -1667,6 +1668,9 @@ export function buildCohortBinding(params) {
 }
 
 export function buildTransitionRecord(params) {
+  const actorHints = Object.prototype.hasOwnProperty.call(params, 'actorHints')
+    ? params.actorHints
+    : {};
   const transitionRecord = {
     schema: TRANSITION_RECORD_SCHEMA,
     version: TRANSITION_RECORD_VERSION,
@@ -1688,7 +1692,7 @@ export function buildTransitionRecord(params) {
     reasonCode: ensureString(params.reasonCode, 'reasonCode'),
     performedAt: normalizeIso8601(params.performedAt, 'performedAt'),
     operatorRole: ensureString(params.operatorRole, 'operatorRole'),
-    actorHints: normalizeJsonObject(params.actorHints || {}, 'actorHints'),
+    actorHints: normalizeJsonObject(actorHints, 'actorHints'),
     notes: ensureNullableString(params.notes, 'notes'),
   };
   return validateTransitionRecordObject(transitionRecord).transitionRecord;

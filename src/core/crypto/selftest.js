@@ -296,6 +296,15 @@ async function buildLifecycleSampleArtifacts() {
   };
 }
 
+function buildTransitionRecordCandidate(baseTransitionRecord, actorHints) {
+  return {
+    ...baseTransitionRecord,
+    fromCohortBindingDigest: { ...baseTransitionRecord.fromCohortBindingDigest },
+    toCohortBindingDigest: { ...baseTransitionRecord.toCohortBindingDigest },
+    actorHints,
+  };
+}
+
 function buildBundledMlDsaPublicKey(id, publicKeyBytes, { suite = 'mldsa-87' } = {}) {
   return {
     id,
@@ -1932,6 +1941,182 @@ function buildCases() {
         assert(
           parseSourceEvidenceBytes(canonicalSourceEvidence.bytes).digest.value === canonicalSourceEvidence.digest.value,
           'source-evidence parser digest regression mismatch'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects a float',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-float',
+          retryRatio: 1.5,
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.retryRatio/i,
+          'transition-record parser unexpectedly accepted a float inside actorHints'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects integers above Number.MAX_SAFE_INTEGER',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-unsafe-integer',
+          shardOrdinal: 9007199254740992,
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.shardOrdinal/i,
+          'transition-record parser unexpectedly accepted an unsafe integer inside actorHints'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects nested unsafe numeric values inside arrays',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-nested-array',
+          checkpoints: ['alpha', [1, 2, 9007199254740992]],
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.checkpoints\[1\]\[2\]/i,
+          'transition-record parser unexpectedly accepted a nested unsafe integer inside actorHints arrays'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects nested unsafe numeric values inside objects',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-nested-object',
+          operator: {
+            stage: 'witness',
+            counters: {
+              retryBudget: 9007199254740992,
+            },
+          },
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.operator\.counters\.retryBudget/i,
+          'transition-record parser unexpectedly accepted a nested unsafe integer inside actorHints objects'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects negative integers',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-negative-integer',
+          retryCount: -1,
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.retryCount/i,
+          'transition-record parser unexpectedly accepted a negative integer inside actorHints'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects non-finite numeric values on the builder path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const invalidValues = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+        for (const value of invalidValues) {
+          const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+            ceremony: 'phase5-actorhints-non-finite',
+            retryCount: value,
+          });
+
+          await expectFailureWithMessage(
+            () => Promise.resolve(canonicalizeTransitionRecord(transitionRecord)),
+            /Invalid transitionRecord\.actorHints\.retryCount/i,
+            'transition-record canonicalization unexpectedly accepted a non-finite numeric actorHints value'
+          );
+        }
+      },
+    },
+    {
+      name: 'transition-record actorHints accepts an empty object',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {});
+        const canonical = canonicalizeTransitionRecord(transitionRecord);
+        const parsed = parseTransitionRecordBytes(canonical.bytes);
+
+        assert(Object.keys(parsed.transitionRecord.actorHints).length === 0, 'transition-record parser should preserve empty actorHints objects');
+      },
+    },
+    {
+      name: 'transition-record actorHints accepts string boolean and null advisory metadata',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const actorHints = {
+          ceremony: 'phase5-actorhints-advisory',
+          operatorAcknowledged: true,
+          witnessComment: null,
+        };
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, actorHints);
+        const canonical = canonicalizeTransitionRecord(transitionRecord);
+        const parsed = parseTransitionRecordBytes(canonical.bytes);
+
+        assert(parsed.transitionRecord.actorHints.ceremony === actorHints.ceremony, 'transition-record parser lost actorHints string metadata');
+        assert(parsed.transitionRecord.actorHints.operatorAcknowledged === true, 'transition-record parser lost actorHints boolean metadata');
+        assert(parsed.transitionRecord.actorHints.witnessComment === null, 'transition-record parser lost actorHints null metadata');
+      },
+    },
+    {
+      name: 'transition-record actorHints accepts nested arrays and objects composed only of allowed values',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const actorHints = {
+          ceremony: 'phase5-actorhints-nested-valid',
+          operators: [
+            {
+              role: 'operator',
+              ordinal: 2,
+              annotations: [null, true, 'witnessed'],
+            },
+          ],
+          summary: {
+            approved: false,
+            note: 'in-profile nested advisory metadata',
+          },
+        };
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, actorHints);
+        const canonical = canonicalizeTransitionRecord(transitionRecord);
+        const parsed = parseTransitionRecordBytes(canonical.bytes);
+
+        assert(parsed.transitionRecord.actorHints.operators[0].ordinal === 2, 'transition-record parser lost nested safe integer metadata');
+        assert(parsed.transitionRecord.actorHints.operators[0].annotations[0] === null, 'transition-record parser lost nested null metadata');
+        assert(parsed.transitionRecord.actorHints.summary.approved === false, 'transition-record parser lost nested boolean metadata');
+      },
+    },
+    {
+      name: 'transition-record canonicalization remains unchanged for in-profile actorHints',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const rebuilt = buildTransitionRecord({
+          ...buildTransitionRecordCandidate(sample.transitionRecord, { ceremony: 'reshare-01' }),
+        });
+        const canonical = canonicalizeTransitionRecord(rebuilt);
+
+        assert(
+          canonical.canonical === LIFECYCLE_SAMPLE_VECTORS.transitionRecordCanonical,
+          'transition-record canonical regression changed unexpectedly for valid actorHints'
         );
       },
     },
