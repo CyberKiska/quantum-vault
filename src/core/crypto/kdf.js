@@ -9,7 +9,8 @@ const KENC_LABEL = new Uint8Array([1]);
 const KIV_LABEL = new Uint8Array([2]);
 
 // Derive keys from shared secret using KMAC256 per SP 800-185.
-export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStrings) {
+export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStrings, options = {}) {
+    const { includeAesKey = true } = options;
     if (!domainStrings || typeof domainStrings !== 'object') {
         throw new Error('KMAC domainStrings are required');
     }
@@ -29,6 +30,7 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStr
     let Kraw = null;
     let Kenc = null;
     let Kiv = null;
+    let aesKey = null;
     let completed = false;
     try {
         Kraw = kmac256(sharedSecret, kmacMessage, {
@@ -45,14 +47,16 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStr
             customization: domainStrings.kiv,
         });
 
-        // Slice the exact region: Kenc may be a view with non-zero byteOffset
-        const aesKey = await crypto.subtle.importKey(
-            'raw',
-            Kenc.buffer.slice(Kenc.byteOffset, Kenc.byteOffset + Kenc.byteLength),
-            { name: 'AES-GCM' },
-            false,
-            ['encrypt', 'decrypt']
-        );
+        if (includeAesKey) {
+            // Slice the exact region: Kenc may be a view with non-zero byteOffset
+            aesKey = await crypto.subtle.importKey(
+                'raw',
+                Kenc.buffer.slice(Kenc.byteOffset, Kenc.byteOffset + Kenc.byteLength),
+                { name: 'AES-GCM' },
+                false,
+                ['encrypt', 'decrypt']
+            );
+        }
 
         completed = true;
         return { Kraw, Kenc, Kiv, aesKey };

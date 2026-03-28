@@ -1742,6 +1742,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   const onWarn = options.onWarn || options.onError || (() => {});
   const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
   const verificationOptions = options.verification || {};
+  const keyValidationHooks = options.keyValidationHooks || null;
 
   const archiveContext = await resolveSuccessorArchiveContext(shards, verificationOptions);
   const candidate = archiveContext.candidate;
@@ -1772,6 +1773,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
       validateContainerPolicyMetadata(qencMetaJSON, { allowLegacyWithoutProfile: false });
       assertArchiveStateMatchesQencMetadata(currentArchiveState, qencMetaJSON);
     },
+    keyValidationHooks,
     messages: {
       needThreshold: (threshold, count) => `Need at least ${threshold} matching shards for selected archive/state/cohort, got ${count}`,
       missingKeyCommitment: 'Successor shard is missing required key commitment',
@@ -1784,6 +1786,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
       shardBodyFailure: (index) => `Fragment integrity check failed for shard ${index}. Treating as erasure.`,
       shardBodyVerified: 'Shard body hashes verified.',
       tooManyMissingCorrupted: (allowed, total) => `Too many missing/corrupted shards for RS reconstruction: allowed ${allowed}, got ${total}`,
+      recoveredPrivateKeyCommitmentFailure: 'Recovered ML-KEM secret key does not satisfy the embedded .qenc key commitment.',
       qencHashMismatch: 'Reconstructed .qenc hash does not match archive-state descriptor',
       privateKeyHashMismatch: 'Recovered secret key hash does not match shard metadata.',
     },
@@ -1795,7 +1798,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   const expectedQencHash = normalizeHexString(qenc.qencHash);
   const recoveredPrivHash = normalizeHexString(await hashBytes(privKey));
   const privateKeyHash = normalizeHexString(group[0]?.metaJSON?.privateKeyHash || '');
-  const qkeyOk = reconstructed.privateKeyHashMatchesMetadata;
+  const qkeyOk = reconstructed.recoveredKeyCommitmentValidated === true;
 
   const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
   const mixedBundleWarning = buildMixedLifecycleBundleVariantWarning(
@@ -1818,6 +1821,7 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     containerId,
     containerHash: expectedQencHash,
     privateKeyHash: privateKeyHash || null,
+    privateKeyHashMatchesMetadata: reconstructed.privateKeyHashMatchesMetadata,
     recoveredQencHash,
     recoveredPrivHash,
     rejectedShardIndices,

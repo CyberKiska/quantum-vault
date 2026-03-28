@@ -1,4 +1,6 @@
 import { bytesEqual } from '../bytes.js';
+import { clearKeys, deriveKeyWithKmac, verifyKeyCommitment } from '../kdf.js';
+import { decapsulate } from '../mlkem.js';
 import { buildQencHeader } from '../qenc/format.js';
 import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
 
@@ -16,6 +18,42 @@ function ensurePositiveInteger(value, field, min = 1) {
 function ensureEqual(actual, expected, field) {
   if (actual !== expected) {
     throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
+  }
+}
+
+async function validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privKey, options = {}) {
+  const { messages = {}, keyValidationHooks = null } = options;
+  const failureMessage = messages.recoveredPrivateKeyCommitmentFailure
+    || 'Recovered ML-KEM secret key does not satisfy the embedded .qenc key commitment.';
+  let sharedSecret = null;
+  let Kraw = null;
+  let Kenc = null;
+  let Kiv = null;
+
+  try {
+    sharedSecret = await decapsulate(base.encapsulatedKey, privKey);
+    ({ Kraw, Kenc, Kiv } = await deriveKeyWithKmac(
+      sharedSecret,
+      base.salt,
+      base.qencMetaBytes,
+      base.qencMetaJSON.domainStrings,
+      { includeAesKey: false }
+    ));
+    if (!verifyKeyCommitment(Kenc, base.keyCommit)) {
+      throw new Error(failureMessage);
+    }
+    return true;
+  } catch (error) {
+    const detail = String(error?.message || error);
+    if (detail === failureMessage) {
+      throw error;
+    }
+    throw new Error(`${failureMessage} ${detail}`.trim());
+  } finally {
+    clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+    if (typeof keyValidationHooks?.onFinally === 'function') {
+      keyValidationHooks.onFinally({ sharedSecret, Kraw, Kenc, Kiv });
+    }
   }
 }
 
@@ -100,6 +138,7 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
     digestHex,
     validateQencMeta = () => {},
     messages = {},
+    keyValidationHooks = null,
   } = options;
 
   if (typeof digestHex !== 'function') {
@@ -284,6 +323,10 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
 
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
   const { secret: privKey, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, t);
+  const recoveredKeyCommitmentValidated = await validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privKey, {
+    messages,
+    keyValidationHooks,
+  });
 
   const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
   const cipherChunks = [];
@@ -403,6 +446,7 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
     invalidShareIndices: [...invalidShareIndices].sort((a, b) => a - b),
     corruptedShardIndices: [...corruptedShardIndices].sort((a, b) => a - b),
     missingShardIndices: [...missingIndices].sort((a, b) => a - b),
+    recoveredKeyCommitmentValidated,
     privateKeyHashMatchesMetadata,
     shareCopiesCleared,
   };

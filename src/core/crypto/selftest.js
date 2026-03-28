@@ -357,6 +357,99 @@ async function buildSuccessorRestoreSample({
   };
 }
 
+function rewriteSuccessorPrivateKeyHash(parsedShards, privateKeyHash) {
+  return parsedShards.map((shard) => ({
+    ...shard,
+    metaJSON: {
+      ...shard.metaJSON,
+      privateKeyHash,
+    },
+  }));
+}
+
+function assertZeroizedRecoveredKeyValidationMaterial(refs, label) {
+  const entries = Object.entries(refs || {});
+  assert(entries.length === 4, `${label} should expose all temporary validation buffers`);
+  for (const [field, value] of entries) {
+    assert(value instanceof Uint8Array, `${label} missing ${field} buffer`);
+    assert(value.every((byte) => byte === 0), `${label} did not zeroize ${field}`);
+  }
+}
+
+async function buildSuccessorRecoveredKeyMismatchSample({
+  payloadBytes = textBytes('successor-recovered-key-mismatch'),
+} = {}) {
+  const honest = await buildSuccessorRestoreSample({
+    payloadBytes,
+    authPolicyLevel: 'any-signature',
+  });
+  const signedBundle = await buildSuccessorVerificationBundle(honest.split, {
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+    includeArchiveApproval: true,
+    includeMaintenance: false,
+    includeSourceEvidence: false,
+  });
+  const honestSignedShards = honest.parsed.map((shard) => ({
+    ...shard,
+    lifecycleBundleBytes: signedBundle.bundleBytes,
+    lifecycleBundleDigestHex: signedBundle.digestHex,
+    lifecycleBundle: signedBundle.bundle,
+  }));
+
+  const maliciousPair = await generateKeyPair({ collectUserEntropy: false });
+  try {
+    const { splitSecret } = await import('./splitting/sss.js');
+    const shareCount = Number(honest.split.cohortBinding.sharding.shamir.shareCount);
+    const threshold = Number(honest.split.cohortBinding.sharding.shamir.threshold);
+    const maliciousShares = await splitSecret(maliciousPair.secretKey, shareCount, threshold);
+    const maliciousShareCommitments = await Promise.all(maliciousShares.map((share) => hashBytes(share)));
+
+    const maliciousCohortBinding = cloneJson(honest.split.cohortBinding);
+    maliciousCohortBinding.shareCommitments = maliciousShareCommitments;
+    const canonicalMaliciousCohortBinding = canonicalizeCohortBinding(maliciousCohortBinding);
+    const maliciousCohortId = deriveCohortId({
+      archiveId: honest.split.archiveId,
+      stateId: honest.split.stateId,
+      cohortBindingDigest: canonicalMaliciousCohortBinding.digest,
+    });
+
+    const maliciousLifecycleBundle = cloneJson(signedBundle.bundle);
+    maliciousLifecycleBundle.currentCohortBinding = canonicalMaliciousCohortBinding.cohortBinding;
+    maliciousLifecycleBundle.currentCohortBindingDigest = canonicalMaliciousCohortBinding.digest;
+    const canonicalMaliciousLifecycleBundle = await canonicalizeLifecycleBundle(maliciousLifecycleBundle);
+    const maliciousPrivateKeyHash = await hashBytes(maliciousPair.secretKey);
+
+    const maliciousShards = honestSignedShards.map((shard, index) => ({
+      ...shard,
+      metaJSON: {
+        ...shard.metaJSON,
+        cohortId: maliciousCohortId,
+        privateKeyHash: maliciousPrivateKeyHash,
+      },
+      cohortBindingBytes: canonicalMaliciousCohortBinding.bytes,
+      cohortBindingDigestHex: canonicalMaliciousCohortBinding.digest.value,
+      cohortBinding: canonicalMaliciousCohortBinding.cohortBinding,
+      cohortId: maliciousCohortId,
+      lifecycleBundleBytes: canonicalMaliciousLifecycleBundle.bytes,
+      lifecycleBundleDigestHex: canonicalMaliciousLifecycleBundle.digest.value,
+      lifecycleBundle: canonicalMaliciousLifecycleBundle.lifecycleBundle,
+      share: maliciousShares[index],
+    }));
+
+    return {
+      honest,
+      signedBundle,
+      honestSignedShards,
+      maliciousShards,
+      maliciousCohortId,
+      maliciousPrivateKeyHash,
+    };
+  } finally {
+    maliciousPair.secretKey.fill(0);
+  }
+}
+
 async function rewriteLifecycleBundleSubset(parsedShards, lifecycleBundleBytes, selectedIndices = []) {
   const selected = new Set(
     selectedIndices.length > 0
@@ -3040,6 +3133,101 @@ function buildCases() {
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
         assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled key material');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+      },
+    },
+    {
+      name: 'successor restore sets qkeyOk from the authenticated .qenc key commitment on honest recovery',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-recovered-key-commitment-ok'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const restored = await restoreFromShards(sample.parsed, { onLog: () => {}, onError: () => {} });
+        assert(restored.qkeyOk === true, 'honest successor restore should report qkeyOk=true');
+        assert(restored.privateKeyHashMatchesMetadata === true, 'honest successor restore should report matching privateKeyHash metadata');
+      },
+    },
+    {
+      name: 'successor restore ignores privateKeyHash tampering for correctness and reports it separately',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-privatekeyhash-diagnostics-only'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const tampered = rewriteSuccessorPrivateKeyHash(sample.parsed, 'ff'.repeat(64));
+
+        const baseline = await restoreFromShards(sample.parsed, { onLog: () => {}, onError: () => {} });
+        const restored = await restoreFromShards(tampered, { onLog: () => {}, onError: () => {} });
+
+        assert(baseline.qkeyOk === true, 'baseline successor restore should report qkeyOk=true');
+        assert(restored.qkeyOk === true, 'privateKeyHash tampering must not clear qkeyOk on an honest recovery');
+        assert(restored.privateKeyHashMatchesMetadata === false, 'privateKeyHash tampering should be reported separately');
+        assert(restored.recoveredPrivHash === baseline.recoveredPrivHash, 'privateKeyHash tampering must not change the recovered private key');
+        assert(restored.recoveredQencHash === baseline.recoveredQencHash, 'privateKeyHash tampering must not change the recovered .qenc hash');
+      },
+    },
+    {
+      name: 'successor restore rejects metadata-hash agreement alone when the recovered key fails the embedded .qenc key commitment',
+      fn: async () => {
+        const sample = await buildSuccessorRecoveredKeyMismatchSample();
+
+        assert(sample.signedBundle.bundle.attachments.archiveApprovalSignatures.length === 1, 'malicious sample should still carry archive-approval evidence');
+        assert(sample.signedBundle.bundle.authPolicy.level === 'any-signature', 'malicious sample should still require archive approval');
+        assert(
+          sample.maliciousShards.every((shard, index) => timingSafeEqual(shard.fragments, sample.honestSignedShards[index].fragments)),
+          'malicious sample should preserve the original .qenc fragment stream'
+        );
+        assert(
+          sample.maliciousShards[0].archiveState.qenc.qencHash === sample.honest.split.archiveState.qenc.qencHash,
+          'malicious sample should preserve the archive-state qencHash anchor'
+        );
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(sample.maliciousShards, { onLog: () => {}, onError: () => {} }),
+          /embedded \.qenc key commitment/i,
+          'successor restore unexpectedly accepted a recovered secret key based on shard metadata alone'
+        );
+      },
+    },
+    {
+      name: 'successor restore zeroizes temporary recovered-key validation material on success and failure paths',
+      fn: async () => {
+        const honest = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-recovered-key-zeroize-success'),
+          authPolicyLevel: 'integrity-only',
+        });
+        let successRefs = null;
+        const restored = await restoreFromShards(honest.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          keyValidationHooks: {
+            onFinally: (refs) => {
+              successRefs = refs;
+            },
+          },
+        });
+        assert(restored.qkeyOk === true, 'success-path zeroization coverage expects a valid recovered key');
+        assertZeroizedRecoveredKeyValidationMaterial(successRefs, 'success-path recovered-key validation');
+
+        const malicious = await buildSuccessorRecoveredKeyMismatchSample({
+          payloadBytes: textBytes('successor-recovered-key-zeroize-failure'),
+        });
+        let failureRefs = null;
+        await expectFailureWithMessage(
+          () => restoreFromShards(malicious.maliciousShards, {
+            onLog: () => {},
+            onError: () => {},
+            keyValidationHooks: {
+              onFinally: (refs) => {
+                failureRefs = refs;
+              },
+            },
+          }),
+          /embedded \.qenc key commitment/i,
+          'failure-path zeroization coverage expected key-commitment validation to fail'
+        );
+        assertZeroizedRecoveredKeyValidationMaterial(failureRefs, 'failure-path recovered-key validation');
       },
     },
     {
