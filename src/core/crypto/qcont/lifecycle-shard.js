@@ -213,6 +213,12 @@ function assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON) {
   ensureEqual(qencMetaJSON.aadPolicyId, archiveState.aadPolicyId, 'aadPolicyId');
 }
 
+function assertPreservedArchiveStateMatchesRecomputedQenc(archiveState, { qencMetaJSON, qencHash, containerId }) {
+  assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON);
+  ensureEqual(archiveState?.qenc?.qencHash, qencHash, 'qencHash');
+  ensureEqual(archiveState?.qenc?.containerId, containerId, 'containerId');
+}
+
 function collectSinglePredecessorCohort(preparedShards, options = {}) {
   const byIdentity = new Map();
   for (const shard of preparedShards) {
@@ -334,6 +340,9 @@ function assertSameStatePreserved(predecessor, successorSplit) {
   if (!bytesEqual(predecessor.archiveStateBytes, successorSplit.archiveStateBytes)) {
     throw new Error('Same-state resharing must preserve exact archive-state descriptor bytes');
   }
+  if (successorSplit.archiveStateDigestHex !== predecessor.archiveStateDigestHex) {
+    throw new Error('Same-state resharing changed archive-state digest');
+  }
   if (successorSplit.archiveId !== predecessor.archiveId) {
     throw new Error('Same-state resharing changed archiveId');
   }
@@ -352,11 +361,6 @@ function assertSameStatePreserved(predecessor, successorSplit) {
   ensureEqual(successorState.counterBits, predecessorState.counterBits, 'counterBits');
   ensureEqual(successorState.maxChunkCount, predecessorState.maxChunkCount, 'maxChunkCount');
   ensureEqual(successorState.aadPolicyId, predecessorState.aadPolicyId, 'aadPolicyId');
-  ensureEqual(
-    normalizeHexString(JSON.stringify(successorState.authPolicyCommitment)),
-    normalizeHexString(JSON.stringify(predecessorState.authPolicyCommitment)),
-    'authPolicyCommitment'
-  );
 }
 
 function validateNewMaintenanceArtifacts(newArtifacts, canonicalTransition) {
@@ -545,6 +549,9 @@ function buildSuccessorShardBlob({
 export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params, options = {}) {
   const authPolicyLevel = options.authPolicyLevel || DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL;
   const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
+  const preservedArchiveStateBytes = options.preservedArchiveStateBytes instanceof Uint8Array
+    ? options.preservedArchiveStateBytes
+    : null;
 
   const { n, k } = params;
   const m = n - k;
@@ -670,32 +677,49 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     fragmentBodyHashes.push(computeDigestHex(bodyBytes));
   }
 
-  const archiveId = options.archiveId
-    ? String(options.archiveId)
-    : generateArchiveId(options.archiveIdRandomBytes);
+  let archiveId;
+  let archiveState;
+  let canonicalArchiveState;
+  let stateId;
+  if (preservedArchiveStateBytes) {
+    canonicalArchiveState = parseArchiveStateDescriptorBytes(preservedArchiveStateBytes);
+    archiveState = canonicalArchiveState.archiveState;
+    assertPreservedArchiveStateMatchesRecomputedQenc(archiveState, {
+      qencMetaJSON: meta,
+      qencHash: containerHash,
+      containerId,
+    });
+    archiveId = archiveState.archiveId;
+    stateId = canonicalArchiveState.stateId;
+  } else {
+    archiveId = options.archiveId
+      ? String(options.archiveId)
+      : generateArchiveId(options.archiveIdRandomBytes);
 
-  const archiveState = buildArchiveStateDescriptor({
-    archiveId,
-    parentStateId: options.parentStateId ?? null,
-    cryptoProfileId: meta.cryptoProfileId || DEFAULT_CRYPTO_PROFILE.cryptoProfileId,
-    kdfTreeId: meta.kdfTreeId || DEFAULT_CRYPTO_PROFILE.kdfTreeId,
-    noncePolicyId: meta.noncePolicyId || nonceContract.noncePolicyId,
-    nonceMode: meta.nonceMode || nonceContract.nonceMode,
-    counterBits: meta.counterBits ?? nonceContract.counterBits,
-    maxChunkCount: meta.maxChunkCount ?? nonceContract.maxChunkCount,
-    aadPolicyId: meta.aadPolicyId || DEFAULT_CRYPTO_PROFILE.aadPolicyId,
-    chunkSize,
-    chunkCount: totalChunks,
-    payloadLength: meta.payloadLength || effectiveLength,
-    qencHash: containerHash,
-    containerId,
-    authPolicy: {
-      level: authPolicyLevel,
-      minValidSignatures: options.minValidSignatures ?? 1,
-    },
-  });
-  const canonicalArchiveState = canonicalizeArchiveStateDescriptor(archiveState);
-  const stateId = canonicalArchiveState.stateId;
+    archiveState = buildArchiveStateDescriptor({
+      archiveId,
+      parentStateId: options.parentStateId ?? null,
+      stateType: options.stateType,
+      cryptoProfileId: meta.cryptoProfileId || DEFAULT_CRYPTO_PROFILE.cryptoProfileId,
+      kdfTreeId: meta.kdfTreeId || DEFAULT_CRYPTO_PROFILE.kdfTreeId,
+      noncePolicyId: meta.noncePolicyId || nonceContract.noncePolicyId,
+      nonceMode: meta.nonceMode || nonceContract.nonceMode,
+      counterBits: meta.counterBits ?? nonceContract.counterBits,
+      maxChunkCount: meta.maxChunkCount ?? nonceContract.maxChunkCount,
+      aadPolicyId: meta.aadPolicyId || DEFAULT_CRYPTO_PROFILE.aadPolicyId,
+      chunkSize,
+      chunkCount: totalChunks,
+      payloadLength: meta.payloadLength || effectiveLength,
+      qencHash: containerHash,
+      containerId,
+      authPolicy: {
+        level: authPolicyLevel,
+        minValidSignatures: options.minValidSignatures ?? 1,
+      },
+    });
+    canonicalArchiveState = canonicalizeArchiveStateDescriptor(archiveState);
+    stateId = canonicalArchiveState.stateId;
+  }
 
   const cohortBinding = buildCohortBinding({
     archiveId,
@@ -1104,8 +1128,7 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
       { n: targetParams.n, k: targetParams.k },
       {
         erasureRuntime,
-        archiveId: predecessorCandidate.archiveId,
-        parentStateId: predecessorCandidate.archiveState.parentStateId,
+        preservedArchiveStateBytes: predecessorCandidate.archiveStateBytes,
         authPolicyLevel: predecessorLifecycleBundle.authPolicy.level,
         minValidSignatures: predecessorLifecycleBundle.authPolicy.minValidSignatures,
       }

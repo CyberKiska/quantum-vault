@@ -338,6 +338,7 @@ async function buildSuccessorRestoreSample({
   filename = 'successor-restore-sample.bin',
   authPolicyLevel = 'integrity-only',
   minValidSignatures = 1,
+  buildOptions = {},
 } = {}) {
   const pair = await generateKeyPair({ collectUserEntropy: false });
   const qencBytes = await blobToBytes(await encryptFile(payloadBytes, pair.publicKey, filename));
@@ -345,7 +346,7 @@ async function buildSuccessorRestoreSample({
     qencBytes,
     pair.secretKey,
     { n: 5, k: 3 },
-    { authPolicyLevel, minValidSignatures }
+    { ...buildOptions, authPolicyLevel, minValidSignatures }
   );
   const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
   return {
@@ -355,6 +356,16 @@ async function buildSuccessorRestoreSample({
     split,
     parsed,
   };
+}
+
+function rewriteEmbeddedArchiveStateBytes(parsedShards, mutateArchiveState) {
+  const archiveState = cloneJson(parsedShards[0].archiveState);
+  mutateArchiveState(archiveState);
+  const canonicalArchiveState = canonicalizeLifecycleArchiveState(archiveState);
+  return parsedShards.map((shard) => ({
+    ...shard,
+    archiveStateBytes: canonicalArchiveState.bytes,
+  }));
 }
 
 function rewriteSuccessorPrivateKeyHash(parsedShards, privateKeyHash) {
@@ -470,11 +481,13 @@ async function buildResharePredecessorSample({
   authPolicyLevel = 'integrity-only',
   minValidSignatures = 1,
   bundleVariantOptions = null,
+  buildOptions = {},
 } = {}) {
   const sample = await buildSuccessorRestoreSample({
     payloadBytes,
     authPolicyLevel,
     minValidSignatures,
+    buildOptions,
   });
   if (!bundleVariantOptions) {
     return {
@@ -3745,6 +3758,174 @@ function buildCases() {
         assert(reparsed.length === 5, 'expected five reshared successor shards');
         assert(reparsed.every((shard) => shard.stateId === sample.split.stateId), 'reshared shard stateId mismatch');
         assert(reparsed.every((shard) => shard.cohortId === reshared.cohortId), 'reshared shard cohortId mismatch');
+      },
+    },
+    {
+      name: 'same-state resharing preserves identical archive-state bytes and stateId for non-default stateType archives',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('phase4-nondefault-state-type-reshare'),
+          authPolicyLevel: 'integrity-only',
+          buildOptions: {
+            stateType: 'sealed-audit-snapshot',
+          },
+        });
+        assert(sample.split.archiveState.stateType === 'sealed-audit-snapshot', 'test setup expected a non-default stateType');
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:30:30.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-nondefault-state-type' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'non-default stateType resharing changed archive-state bytes');
+        assert(reshared.stateId === sample.split.stateId, 'non-default stateType resharing changed stateId');
+        const parsed = parseArchiveStateDescriptorBytes(reshared.archiveStateBytes);
+        assert(parsed.archiveState.stateType === 'sealed-audit-snapshot', 'resharing should preserve the predecessor stateType bytes exactly');
+      },
+    },
+    {
+      name: 'same-state resharing with preserved archive-state bytes still emits a new cohort binding and new cohortId',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-new-cohort'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:30:45.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-preserved-state-new-cohort' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'preserved-state resharing changed archive-state bytes');
+        assert(!timingSafeEqual(reshared.cohortBindingBytes, sample.split.cohortBindingBytes), 'preserved-state resharing should emit new cohort-binding bytes');
+        assert(reshared.cohortBindingDigestHex !== sample.split.cohortBindingDigestHex, 'preserved-state resharing should emit a new cohort-binding digest');
+        assert(reshared.cohortId !== sample.split.cohortId, 'preserved-state resharing should emit a new cohortId');
+      },
+    },
+    {
+      name: 'same-state resharing rejects preserved archive-state qencHash mismatches against the unchanged .qenc',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-qenchash-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.qenc.qencHash = 'aa'.repeat(64);
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:31:15.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-qenchash-mismatch' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /qencHash mismatch/i,
+          'same-state resharing unexpectedly accepted preserved archive-state bytes with a mismatched qencHash'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects preserved archive-state containerId mismatches against the unchanged .qenc',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-containerid-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.qenc.containerId = 'bb'.repeat(64);
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:31:30.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-containerid-mismatch' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /containerId mismatch/i,
+          'same-state resharing unexpectedly accepted preserved archive-state bytes with a mismatched containerId'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects preserved archive-state qenc metadata mismatches against the unchanged .qenc',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-qenc-meta-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.qenc.chunkSize += 1;
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:31:45.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-qenc-meta-mismatch' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /qenc\.chunkSize mismatch/i,
+          'same-state resharing unexpectedly accepted preserved archive-state bytes with mismatched qenc metadata'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects accidental archive-state mutation instead of rebuilding from local defaults',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-mutation-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.stateType = 'mutated-archive-state';
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:32:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-mutation-reject' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /archive-state digest|stateId/i,
+          'same-state resharing unexpectedly treated schema-valid but byte-different archive-state bytes as the same state'
+        );
       },
     },
     {
