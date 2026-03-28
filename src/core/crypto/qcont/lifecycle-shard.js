@@ -333,6 +333,9 @@ async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog
 }
 
 function assertSameStatePreserved(predecessor, successorSplit) {
+  // Same-state resharing is defined by exact canonical archive-state bytes and the
+  // identifiers derived from those bytes. Do not add parsed-object equality
+  // shortcuts here; canonical archive-state bytes are the source of truth.
   if (!bytesEqual(predecessor.archiveStateBytes, successorSplit.archiveStateBytes)) {
     throw new Error('Same-state resharing must preserve exact archive-state descriptor bytes');
   }
@@ -345,18 +348,6 @@ function assertSameStatePreserved(predecessor, successorSplit) {
   if (successorSplit.stateId !== predecessor.stateId) {
     throw new Error('Same-state resharing changed stateId');
   }
-
-  const predecessorState = predecessor.archiveState;
-  const successorState = successorSplit.archiveState;
-  ensureEqual(successorState.qenc.qencHash, predecessorState.qenc.qencHash, 'qencHash');
-  ensureEqual(successorState.qenc.containerId, predecessorState.qenc.containerId, 'containerId');
-  ensureEqual(successorState.cryptoProfileId, predecessorState.cryptoProfileId, 'cryptoProfileId');
-  ensureEqual(successorState.kdfTreeId, predecessorState.kdfTreeId, 'kdfTreeId');
-  ensureEqual(successorState.noncePolicyId, predecessorState.noncePolicyId, 'noncePolicyId');
-  ensureEqual(successorState.nonceMode, predecessorState.nonceMode, 'nonceMode');
-  ensureEqual(successorState.counterBits, predecessorState.counterBits, 'counterBits');
-  ensureEqual(successorState.maxChunkCount, predecessorState.maxChunkCount, 'maxChunkCount');
-  ensureEqual(successorState.aadPolicyId, predecessorState.aadPolicyId, 'aadPolicyId');
 }
 
 function validateNewMaintenanceArtifacts(newArtifacts, canonicalTransition) {

@@ -4052,6 +4052,53 @@ function buildCases() {
       },
     },
     {
+      name: 'same-state resharing ignores local authPolicyCommitment object serialization when archive-state bytes are identical',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-auth-policy-commitment-local-serialization'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const originalCommitmentJson = JSON.stringify(sample.parsed[0].archiveState.authPolicyCommitment);
+        const reorderedCommitment = {
+          value: sample.parsed[0].archiveState.authPolicyCommitment.value,
+          canonicalization: sample.parsed[0].archiveState.authPolicyCommitment.canonicalization,
+          alg: sample.parsed[0].archiveState.authPolicyCommitment.alg,
+        };
+        assert(
+          JSON.stringify(reorderedCommitment) !== originalCommitmentJson,
+          'test setup expected a different local authPolicyCommitment serialization order'
+        );
+        const locallyReordered = sample.parsed.map((shard) => ({
+          ...shard,
+          archiveState: {
+            ...cloneJson(shard.archiveState),
+            authPolicyCommitment: {
+              value: shard.archiveState.authPolicyCommitment.value,
+              canonicalization: shard.archiveState.authPolicyCommitment.canonicalization,
+              alg: shard.archiveState.authPolicyCommitment.alg,
+            },
+          },
+        }));
+
+        const reshared = await reshareSameState(locallyReordered, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:31:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-auth-policy-commitment-local-serialization' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'resharing changed canonical archive-state bytes');
+        assert(reshared.archiveStateDigestHex === sample.split.archiveStateDigestHex, 'resharing changed archive-state digest');
+        assert(reshared.stateId === sample.split.stateId, 'resharing changed stateId');
+        assert(reshared.cohortId !== sample.split.cohortId, 'resharing should still rotate the cohortId');
+      },
+    },
+    {
       name: 'same-state resharing rejects preserved archive-state qencHash mismatches against the unchanged .qenc',
       fn: async () => {
         const sample = await buildResharePredecessorSample({
