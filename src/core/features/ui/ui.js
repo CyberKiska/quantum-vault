@@ -8,6 +8,7 @@ import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
 import { refreshSuccessorSelectionUi } from '../qcont/restore-ui.js';
+import { bindRsParamsUI } from '../qcont/rs-params-display.js';
 
 // Pro mode state
 let collectedUserEntropy = null;
@@ -204,13 +205,13 @@ export function initUI() {
         let stateClass;
 
         if (!hasPublicKey && !hasPrivateKey) {
-            message = 'Load keys in tab "1. Key Management": public key for encryption and secret key for decryption.';
+            message = 'Load keys in Key Management: public key for encryption and private key for decryption.';
             stateClass = 'warning';
         } else if (!hasPublicKey) {
-            message = 'Encryption is blocked: load a public key in tab "1. Key Management".';
+            message = 'Encryption is blocked: load a public key in Key Management.';
             stateClass = 'warning';
         } else if (!hasPrivateKey) {
-            message = 'Decryption is blocked: load a secret key in tab "1. Key Management".';
+            message = 'Decryption is blocked: load a private key in Key Management.';
             stateClass = 'warning';
         } else {
             message = 'Keys are loaded. Encryption and decryption are available.';
@@ -235,88 +236,22 @@ export function initUI() {
     pubKeyInput?.addEventListener('change', updateProEncryptionControls);
     privKeyInput?.addEventListener('change', updateProEncryptionControls);
 
-    function setConstraintState(element, isValid) {
-        if (!element) return;
-        element.classList.remove('ok', 'fail');
-        element.classList.add(isValid ? 'ok' : 'fail');
-    }
-
-    function updateRsHints() {
-        if (!rsNInput || !rsKInput) return;
-        const n = parseInt(rsNInput.value, 10);
-        const k = parseInt(rsKInput.value, 10);
-        const hasN = Number.isInteger(n);
-        const hasK = Number.isInteger(k);
-        const validN = hasN && n >= 5;
-        const validRange = hasN && hasK && k >= 2 && k < n;
-        const validEven = hasN && hasK && ((n - k) % 2 === 0);
-        const allValid = validN && validRange && validEven;
-
-        const m = (hasN && hasK) ? (n - k) : 0;
-        const t = allValid ? (k + (m / 2)) : 0;
-
-        setConstraintState(rsRuleN, validN);
-        setConstraintState(rsRuleRange, validRange);
-        setConstraintState(rsRuleEven, validEven);
-        if (buildQcontBtn) buildQcontBtn.disabled = !allValid;
-
-        if (rsTextEl) {
-            if (allValid) {
-                rsTextEl.textContent = `Total: n=${n}. Data: k=${k}. Parity: m=${m}. Threshold: t=${t}. Need >= t shards to restore.`;
-                rsTextEl.classList.remove('warning', 'error');
-            } else {
-                const reasons = [];
-                if (!hasN || !hasK) {
-                    reasons.push('enter numeric values for n and k');
-                } else {
-                    if (!validN) reasons.push('n must be >= 5');
-                    if (!validRange) reasons.push('require 2 <= k < n');
-                    if (!validEven) reasons.push('(n - k) must be even');
-                }
-                rsTextEl.textContent = `Invalid configuration: ${reasons.join('; ')}.`;
-                rsTextEl.classList.add('warning');
-            }
-        }
-
-        const safeN = hasN && n > 0 ? n : 1;
-        const vizK = hasK ? Math.max(0, Math.min(k, safeN)) : 0;
-        const vizM = Math.max(0, safeN - vizK);
-        const pctData = (vizK / safeN) * 100;
-        const pctParity = (vizM / safeN) * 100;
-        const pctT = allValid ? (t / n) * 100 : 0;
-        if (rsSegData) rsSegData.style.width = `${Math.max(0, Math.min(100, pctData))}%`;
-        if (rsSegParity) rsSegParity.style.width = `${Math.max(0, Math.min(100, pctParity))}%`;
-        if (rsMarker) rsMarker.style.left = `${Math.max(0, Math.min(100, pctT))}%`;
-        // Segment labels and marker label
-        const dataLabel = document.getElementById('rsDataLabel');
-        const parityLabel = document.getElementById('rsParityLabel');
-        const markerLabel = document.getElementById('rsMarkerLabel');
-        if (dataLabel) dataLabel.textContent = hasK ? `k=${k}` : 'k=?';
-        if (parityLabel) parityLabel.textContent = (hasN && hasK) ? `m=${m}` : 'm=?';
-        if (markerLabel) {
-            markerLabel.textContent = allValid ? `t=${t}` : 't=?';
-            markerLabel.style.left = `${Math.max(0, Math.min(100, pctT))}%`;
-        }
-        // Axis ticks 0..n
-        const ticks = document.getElementById('rsTicks');
-        if (ticks) {
-            ticks.innerHTML = '';
-            if (hasN && n > 0 && n <= 64) {
-                for (let i = 0; i <= n; i++) {
-                    const tick = document.createElement('span');
-                    tick.className = 'tick';
-                    tick.style.left = `${(i / n) * 100}%`;
-                    tick.title = String(i);
-                    ticks.appendChild(tick);
-                }
-            }
-        }
-        const bar = rsSegData && rsSegData.parentElement ? rsSegData.parentElement : null;
-        if (bar && bar.classList) bar.classList.toggle('rs-error', !allValid);
-    }
-    [rsNInput, rsKInput].forEach(elm => elm && elm.addEventListener('input', updateRsHints));
-    document.addEventListener('DOMContentLoaded', updateRsHints);
-    updateRsHints();
+    const splitRsParamsUpdate = bindRsParamsUI({
+        nInput: rsNInput,
+        kInput: rsKInput,
+        summaryEl: rsTextEl,
+        ruleN: rsRuleN,
+        ruleRange: rsRuleRange,
+        ruleEven: rsRuleEven,
+        segData: rsSegData,
+        segParity: rsSegParity,
+        marker: rsMarker,
+        dataLabel: el('rsDataLabel'),
+        parityLabel: el('rsParityLabel'),
+        markerLabel: el('rsMarkerLabel'),
+        ticks: el('rsTicks'),
+        splitPrimaryButton: buildQcontBtn,
+    }).update;
     void updateProShardsStatus();
     updateProEncryptionControls();
     updateProFilesList();
@@ -431,7 +366,7 @@ export function initUI() {
     // --- Event Handlers ---
     genKeyBtn?.addEventListener('click', async () => {
         if (privKeyInput?.files?.length || pubKeyInput?.files?.length) {
-            if (!confirm("A secret key or public key is already loaded. Generating a new one will overwrite it. Continue?")) {
+            if (!confirm("A private key or public key is already loaded. Generating a new one will replace the active session. Continue?")) {
                 return;
             }
         }
@@ -457,7 +392,7 @@ export function initUI() {
             const pkHash = await hashBytes(publicKey);
             
             log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (enhanced with user entropy)' : ''}`);
-            log(`Secret Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
+            log(`Private Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
             log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
             
             download(new Blob([secretKey]), 'secretKey.qkey');
@@ -483,7 +418,7 @@ export function initUI() {
         } catch (e) { logError(e); } finally {
             setButtonsDisabled(false);
             updateProEncryptionControls();
-            updateRsHints();
+            splitRsParamsUpdate();
             void updateProShardsStatus();
         }
     });
@@ -526,7 +461,7 @@ export function initUI() {
         } catch (e) { logError(e); } finally {
             setButtonsDisabled(false);
             updateProEncryptionControls();
-            updateRsHints();
+            splitRsParamsUpdate();
             void updateProShardsStatus();
             dataFileInput.value = '';
             updateProFilesList();
@@ -534,7 +469,7 @@ export function initUI() {
     });
 
     decBtn?.addEventListener('click', async () => {
-        if (!privKeyInput?.files?.[0]) { showToast('Load a secret key in Key Management.', 'warning'); return; }
+        if (!privKeyInput?.files?.[0]) { showToast('Load a private key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to decrypt (.qenc).', 'warning'); return; }
         setButtonsDisabled(true);
         try {
@@ -577,7 +512,7 @@ export function initUI() {
         } catch (e) { logError(e); } finally {
             setButtonsDisabled(false);
             updateProEncryptionControls();
-            updateRsHints();
+            splitRsParamsUpdate();
             void updateProShardsStatus();
             dataFileInput.value = '';
             updateProFilesList();
@@ -589,9 +524,9 @@ export function initUI() {
             proTabIdentity: 'proViewIdentity',
             proTabEncryption: 'proViewEncryption',
             proTabDistribution: 'proViewDistribution',
+            proTabRestore: 'proViewRestore',
             proTabAttach: 'proViewAttach',
             proTabReshare: 'proViewReshare',
-            proTabRestore: 'proViewRestore'
         };
         const tabIds = Object.keys(tabs);
 

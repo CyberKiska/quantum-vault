@@ -155,7 +155,7 @@ export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, option
     
     if (isLiteMode) {
         log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
-        logHash('Secret Key', privateKeyHash, { isLiteMode, elementId });
+        logHash('Private Key', privateKeyHash, { isLiteMode, elementId });
         logHash('Public Key', publicKeyHash, { isLiteMode, elementId });
     } else {
         log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
@@ -163,7 +163,7 @@ export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, option
         if (seedInfo.hasUserEntropy) {
             log('User entropy successfully collected and mixed.', { elementId, isLiteMode });
         }
-        logHash('Secret Key Hash', privateKeyHash, { isLiteMode, elementId });
+        logHash('Private Key Hash', privateKeyHash, { isLiteMode, elementId });
         logHash('Public Key Hash', publicKeyHash, { isLiteMode, elementId });
     }
 }

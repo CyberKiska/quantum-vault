@@ -31,9 +31,9 @@ export function initQcontBuildUI() {
 
     buildQcontBtn?.addEventListener('click', async () => {
         if (!qencForQcontInput?.files?.[0]) { showToast('Select a .qenc container to split.', 'warning'); return; }
-        if (!privKeyForQcontInput?.files?.[0]) { showToast('Select a secret .qkey to split.', 'warning'); return; }
+        if (!privKeyForQcontInput?.files?.[0]) { showToast('Select a private .qkey to split.', 'warning'); return; }
         const privKeyFile = privKeyForQcontInput.files[0];
-        if (privKeyFile.size !== 3168) { showToast(`Secret .qkey must be exactly 3168 bytes (got ${privKeyFile.size} B).`, 'warning'); return; }
+        if (privKeyFile.size !== 3168) { showToast(`Private .qkey must be exactly 3168 bytes (got ${privKeyFile.size} B).`, 'warning'); return; }
         setButtonsDisabled(true);
         try {
             const qencBytes = await readFileAsUint8Array(qencForQcontInput.files[0]);
@@ -68,9 +68,9 @@ export function initQcontBuildUI() {
             log(`Saved ${lifecycleBundleName} (${result.lifecycleBundleBytes.length} B) SHA3-512=${result.lifecycleBundleDigestHex}`);
             log(`Archive policy: ${authPolicyLevel}`);
             if (authPolicyLevel === 'integrity-only') {
-                log('This successor archive does not require archive-approval signatures for restore, but archive approval remains absent until a detached signature over the archive-state descriptor is attached.');
+                log('Next actions: sign the exported archive-state later if you need archive approval, attach detached evidence when ready, or proceed to Restore for integrity-only recovery.');
             } else {
-                log('Sign the exported .archive-state.json file externally, then use Attach to merge the detached archive-approval signature into the lifecycle bundle without changing the signed bytes.');
+                log('Next actions: sign the exported .archive-state.json file externally, use Attach to merge that detached archive-approval signature into the lifecycle bundle, or proceed to Restore after the evidence is attached.');
             }
             log('Same-state resharing later emits maintenance transition records and preserves archive-approval signatures because the archive-state descriptor bytes stay unchanged.');
             log('.qcont shards built. Distribute files across storage providers.');

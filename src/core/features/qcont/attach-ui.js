@@ -155,6 +155,26 @@ function deriveBundleFilename(sourceFiles, mode) {
     : `${baseName}.extended.qvmanifest.json`;
 }
 
+function clearAttachResultPanel() {
+  const panel = document.getElementById('attachResult');
+  if (!panel) return;
+  panel.style.display = 'none';
+  panel.replaceChildren();
+}
+
+function setAttachActionAvailability({
+  canAttach = false,
+  canExportSignable = false,
+  canExportArtifacts = false,
+} = {}) {
+  const attachBtn = document.getElementById('attachQcontBtn');
+  const exportBtn = document.getElementById('exportSignableArtifactBtn');
+  const exportArtifactsBtn = document.getElementById('exportAttachedArtifactsBtn');
+  if (attachBtn) attachBtn.disabled = !canAttach;
+  if (exportBtn) exportBtn.disabled = !canExportSignable;
+  if (exportArtifactsBtn) exportArtifactsBtn.disabled = !canExportArtifacts;
+}
+
 function isSuccessorShard(shard) {
   return shard?.archiveStateBytes instanceof Uint8Array && shard?.lifecycleBundleBytes instanceof Uint8Array;
 }
@@ -415,26 +435,185 @@ async function updateAttachStatus() {
   const status = document.getElementById('attachStatus');
   const text = document.getElementById('attachStatusText');
   const hint = document.getElementById('attachStatusHint');
+  const modeSummary = document.getElementById('attachModeSummary');
   if (!input || !status || !text || !hint) return;
   const count = input.files?.length || 0;
-  status.classList.toggle('initially-hidden', count === 0);
   if (count === 0) {
-    text.textContent = '0 attach files selected';
+    status.style.display = 'none';
+    status.className = 'shards-status initially-hidden';
+    text.textContent = 'Select attach inputs to see the attach plan.';
     hint.textContent = '';
+    if (modeSummary) {
+      modeSummary.textContent = '';
+      modeSummary.classList.add('initially-hidden');
+    }
+    setAttachActionAvailability();
+    clearAttachResultPanel();
     return;
   }
 
-  text.textContent = `${count} attach file(s) selected`;
+  status.style.display = 'block';
+  status.className = 'shards-status unknown';
+  text.textContent = 'Analyzing attach inputs...';
+  hint.textContent = `${count} file(s) loaded.`;
+  status.setAttribute('aria-label', text.textContent);
   try {
-    const classified = await classifyAttachFiles([...(input.files || [])]);
+    const files = [...(input.files || [])];
+    const classified = await classifyAttachFiles(files);
     const shards = await parseAttachShards(classified);
     const mode = classifyAttachMode(classified, shards);
     const plan = deriveAttachPlan(classified, shards, mode);
-    text.textContent = `${count} attach file(s) selected. ${plan.modeLabel}.`;
-    hint.textContent = plan.hint;
+    const canAttach = mode === 'successor'
+      ? (classified.shardFiles.length > 0 || classified.lifecycleBundleBytes instanceof Uint8Array)
+      : (
+          classified.shardFiles.length > 0 ||
+          classified.bundleBytes instanceof Uint8Array ||
+          classified.manifestBytes instanceof Uint8Array
+        );
+    const canExportSignable = mode === 'successor'
+      ? (
+          classified.archiveStateBytes instanceof Uint8Array ||
+          classified.lifecycleBundleBytes instanceof Uint8Array ||
+          classified.shardFiles.length > 0
+        )
+      : (
+          classified.manifestBytes instanceof Uint8Array ||
+          classified.bundleBytes instanceof Uint8Array ||
+          classified.shardFiles.length > 0
+        );
+
+    let canExportArtifacts = false;
+    try {
+      const bundle = await resolveAttachSourceBundle(classified, mode);
+      if (bundle) {
+        canExportArtifacts = buildAttachedArtifactExports(bundle, deriveArchiveBaseName(files)).length > 0;
+      }
+    } catch {
+      canExportArtifacts = false;
+    }
+
+    let stateClass = 'sufficient';
+    let summary;
+    if (!canAttach) {
+      stateClass = 'invalid';
+      summary = mode === 'successor'
+        ? 'More input required: load successor shards or a lifecycle bundle'
+        : 'More input required: load shards, a canonical manifest, or a manifest bundle';
+    } else if (plan.warning) {
+      stateClass = 'insufficient';
+    }
+
+    if (!summary) {
+      if (mode === 'successor') {
+        summary = plan.embedIntoShards
+          ? (plan.warning ? 'Ready to update selected shards only' : 'Ready to embed into selected shards')
+          : 'Ready to update lifecycle bundle only';
+      } else {
+        summary = plan.embedIntoShards
+          ? 'Ready to update selected legacy shards'
+          : 'Ready to update legacy bundle only';
+      }
+    }
+
+    status.className = `shards-status ${stateClass}`;
+    text.textContent = summary;
+    hint.textContent = `${count} file(s) loaded. ${!canAttach && mode === 'successor'
+      ? 'Attach stays blocked until the input includes successor shards or an existing lifecycle bundle.'
+      : (!canAttach
+        ? 'Attach stays blocked until the input includes shard files, a canonical manifest, or a manifest bundle.'
+        : plan.hint)}`;
+    status.setAttribute('aria-label', summary);
+    if (modeSummary) {
+      modeSummary.textContent = `${summary}\n${plan.modeLabel}`;
+      modeSummary.classList.remove('initially-hidden');
+    }
+    setAttachActionAvailability({
+      canAttach,
+      canExportSignable,
+      canExportArtifacts,
+    });
   } catch (error) {
-    hint.textContent = error?.message || String(error);
+    const message = error?.message || String(error);
+    const summary = /mix(?:ed)? legacy and successor/i.test(message)
+      ? 'Input conflict: mixed legacy and successor artifacts'
+      : 'Attach inputs need attention';
+    status.className = 'shards-status invalid';
+    status.style.display = 'block';
+    text.textContent = summary;
+    hint.textContent = `${count} file(s) loaded. ${message}`;
+    status.setAttribute('aria-label', summary);
+    if (modeSummary) {
+      modeSummary.textContent = summary;
+      modeSummary.classList.remove('initially-hidden');
+    }
+    setAttachActionAvailability();
   }
+}
+
+function buildAttachResultSummary({ mode, plan, classified }) {
+  const panel = document.getElementById('attachResult');
+  if (!panel) return;
+
+  panel.replaceChildren();
+  panel.style.display = 'block';
+
+  const header = document.createElement('h4');
+  header.textContent = 'Attach Result';
+  panel.appendChild(header);
+
+  const addSection = (title) => {
+    const section = document.createElement('div');
+    section.className = 'restore-result-section';
+    section.textContent = title;
+    panel.appendChild(section);
+  };
+
+  const addPolar = (ok, okText, failText, warnOnFail = false) => {
+    const item = document.createElement('div');
+    const useWarn = !ok && warnOnFail;
+    item.className = `restore-result-item ${useWarn ? 'warn' : (ok ? 'ok' : 'fail')}`;
+    item.textContent = `${ok ? '✓' : (useWarn ? '⚠' : '✗')} ${ok ? okText : failText}`;
+    panel.appendChild(item);
+  };
+
+  const addNeutral = (text) => {
+    const item = document.createElement('div');
+    item.className = 'restore-result-item neutral';
+    item.textContent = `· ${text}`;
+    panel.appendChild(item);
+  };
+
+  const signatureCount = classified.signatures.length;
+  const timestampCount = classified.timestamps.length;
+  const publicKeyCount = classified.pqPublicKeyFileBytesList.length;
+
+  addSection('Result');
+  addPolar(true, mode === 'successor' ? 'Lifecycle bundle updated' : 'Legacy compatibility bundle updated', '');
+  if (plan.embedIntoShards) {
+    addPolar(true, 'Selected shard files updated', '');
+  } else {
+    addNeutral('Shard files were not rewritten.');
+  }
+  addPolar(
+    true,
+    mode === 'successor'
+      ? 'Signable archive-state bytes remained unchanged'
+      : 'Canonical manifest bytes remained unchanged',
+    '',
+  );
+
+  addSection('Detached Evidence');
+  if (signatureCount > 0) addPolar(true, `Detached signatures merged (${signatureCount})`, '');
+  else addNeutral('No detached signatures were supplied.');
+  if (publicKeyCount > 0) addPolar(true, `Signer public keys merged (${publicKeyCount})`, '');
+  else addNeutral('No signer public keys were supplied.');
+  if (timestampCount > 0) addPolar(true, `Timestamp proofs merged (${timestampCount})`, '');
+  else addNeutral('No timestamp proofs were supplied.');
+
+  addSection('Next Actions');
+  addNeutral('Export the updated bundle or shard set, or continue to Restore with the merged evidence.');
+
+  panel.className = 'restore-result-panel ok';
 }
 
 async function exportSignableArtifact() {
@@ -491,6 +670,7 @@ async function exportSignableArtifact() {
     logError(error);
   } finally {
     setButtonsDisabled(false);
+    void updateAttachStatus();
   }
 }
 
@@ -532,6 +712,7 @@ async function exportAttachedArtifacts() {
     logError(error);
   } finally {
     setButtonsDisabled(false);
+    void updateAttachStatus();
   }
 }
 
@@ -614,6 +795,8 @@ async function attachFilesToShards() {
         logWarning('The selected successor shard set previously carried multiple embedded lifecycle-bundle digests within one cohort. The attach result preserves that fact without treating it as mixed cohorts.');
       }
       log('Detached archive-approval signatures bind the canonical archive-state descriptor bytes, not mutable lifecycle-bundle bytes.');
+      log('Next actions: export the updated bundle or shard set, or continue to Restore with the merged evidence.');
+      buildAttachResultSummary({ mode, plan, classified });
       return;
     }
 
@@ -624,10 +807,13 @@ async function attachFilesToShards() {
     }
     log(`Bundle digest: ${result.bundleDigestHex}`);
     log('Detached signatures still bind the embedded canonical manifest bytes, not the whole bundle file.');
+    log('Next actions: export the updated bundle or shard set, or continue to Restore with the merged evidence.');
+    buildAttachResultSummary({ mode, plan, classified });
   } catch (error) {
     logError(error);
   } finally {
     setButtonsDisabled(false);
+    void updateAttachStatus();
   }
 }
 
@@ -637,8 +823,13 @@ export function initQcontAttachUI() {
   const exportBtn = document.getElementById('exportSignableArtifactBtn');
   const exportArtifactsBtn = document.getElementById('exportAttachedArtifactsBtn');
 
-  attachInput?.addEventListener('change', () => { void updateAttachStatus(); });
+  attachInput?.addEventListener('change', () => {
+    clearAttachResultPanel();
+    void updateAttachStatus();
+  });
   attachBtn?.addEventListener('click', attachFilesToShards);
   exportBtn?.addEventListener('click', exportSignableArtifact);
   exportArtifactsBtn?.addEventListener('click', exportAttachedArtifacts);
+  setAttachActionAvailability();
+  void updateAttachStatus();
 }

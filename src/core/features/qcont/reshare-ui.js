@@ -1,5 +1,6 @@
 import { parseShardForRestore, reshareSameState } from '../../../app/crypto-service.js';
 import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './restore-ui.js';
+import { bindRsParamsUI } from './rs-params-display.js';
 import { updateShardSelectionStatus } from '../ui/shards-status.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
@@ -37,6 +38,13 @@ function buildReshareResultSummary(result) {
   header.textContent = 'Reshare Result';
   panel.appendChild(header);
 
+  const addSection = (title) => {
+    const section = document.createElement('div');
+    section.className = 'restore-result-section';
+    section.textContent = title;
+    panel.appendChild(section);
+  };
+
   const addItem = (ok, text, warn = false) => {
     const item = document.createElement('div');
     item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
@@ -44,12 +52,29 @@ function buildReshareResultSummary(result) {
     panel.appendChild(item);
   };
 
+  const addNeutral = (text) => {
+    const item = document.createElement('div');
+    item.className = 'restore-result-item neutral';
+    item.textContent = `· ${text}`;
+    panel.appendChild(item);
+  };
+
+  addSection('Result');
   addItem(true, 'Archive-state descriptor preserved exactly');
   addItem(result.predecessorCohortId !== result.cohortId, 'New successor cohort emitted');
   addItem(Boolean(result.transitionRecordDigestHex), 'Transition record emitted');
   addItem(Boolean(result.lifecycleBundleDigestHex), 'Lifecycle bundle updated for the new cohort');
+
+  addSection('Maintenance Evidence');
   addItem(true, 'Archive approval remains separate from maintenance resharing');
-  addItem(result.maintenanceSignatureCountAdded > 0, 'Maintenance signatures added to the new transition record', result.maintenanceSignatureCountAdded === 0);
+  if (result.maintenanceSignatureCountAdded > 0) {
+    addItem(true, `Maintenance signatures added to the transition record (${result.maintenanceSignatureCountAdded})`);
+  } else {
+    addNeutral('No new maintenance signatures were attached. The transition record can be signed and attached later.');
+  }
+
+  addSection('Next Actions');
+  addNeutral('Distribute the new cohort, attach maintenance signatures later if needed, or continue to Restore with the updated evidence set.');
 
   panel.className = 'restore-result-panel ok';
 }
@@ -83,7 +108,35 @@ export function initQcontReshareUI() {
   const operatorRoleInput = document.getElementById('reshareOperatorRole');
   const notesInput = document.getElementById('reshareNotes');
 
+  bindRsParamsUI({
+    nInput,
+    kInput,
+    summaryEl: document.getElementById('reshareRsText'),
+    ruleN: document.getElementById('reshareRuleN'),
+    ruleRange: document.getElementById('reshareRuleRange'),
+    ruleEven: document.getElementById('reshareRuleEven'),
+    segData: document.getElementById('reshareSegData'),
+    segParity: document.getElementById('reshareSegParity'),
+    marker: document.getElementById('reshareMarker'),
+    dataLabel: document.getElementById('reshareDataLabel'),
+    parityLabel: document.getElementById('reshareParityLabel'),
+    markerLabel: document.getElementById('reshareMarkerLabel'),
+    ticks: document.getElementById('reshareRsTicks'),
+    onValidityChange(valid) {
+      if (!valid) {
+        if (reshareBtn) reshareBtn.disabled = true;
+      } else {
+        void updateReshareStatus();
+      }
+    },
+  });
+
   input?.addEventListener('change', () => {
+    const resultPanel = document.getElementById('proReshareResult');
+    if (resultPanel) {
+      resultPanel.style.display = 'none';
+      resultPanel.replaceChildren();
+    }
     void updateReshareStatus();
   });
   void updateReshareStatus();
@@ -175,6 +228,7 @@ export function initQcontReshareUI() {
       } else {
         log('No new maintenance signatures were added. The emitted transition record can be signed externally and attached later as maintenance evidence.');
       }
+      log('Next actions: distribute the new cohort, attach maintenance signatures later if needed, or continue to Restore with the updated evidence set.');
 
       buildReshareResultSummary(result);
       logSuccess('Same-state resharing completed successfully.');

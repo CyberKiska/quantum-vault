@@ -12,7 +12,11 @@ import {
     assessShardSelection,
 } from '../../app/crypto-service.js';
 import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
-import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './qcont/restore-ui.js';
+import {
+    buildRestoreResultSummary,
+    collectRestoreVerificationOptions,
+    refreshSuccessorSelectionUi,
+} from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
@@ -480,11 +484,11 @@ async function createLiteShards() {
         }
         log(`Archive policy: ${authPolicyLevel}`, { isLiteMode: true });
         if (authPolicyLevel === 'integrity-only') {
-            log(`Saved ${archiveStateName}. Restore can proceed without detached archive approval for integrity-only archives, but archive approval remains absent unless you sign the archive-state descriptor and attach that signature to the lifecycle bundle.`, { isLiteMode: true });
+            log(`Next actions: sign ${archiveStateName} later if you need archive approval, attach detached evidence when ready, or proceed to Restore for integrity-only recovery.`, { isLiteMode: true });
         } else {
-            log(`Saved ${archiveStateName}. Sign this file externally for archive approval, then attach the detached signature to ${lifecycleBundleName} without changing the signed archive-state bytes.`, { isLiteMode: true });
+            log(`Next actions: sign ${archiveStateName} externally, then attach that detached archive-approval signature to ${lifecycleBundleName} without changing the signed bytes.`, { isLiteMode: true });
         }
-        log(`Saved ${lifecycleBundleName}. This mutable lifecycle bundle carries archive approval, maintenance signatures, source evidence, pinning material, and OTS evidence separately.`, { isLiteMode: true });
+        log(`Saved ${lifecycleBundleName}. This mutable lifecycle bundle carries detached evidence separately from the signable archive-state descriptor.`, { isLiteMode: true });
         log('Same-state resharing later is maintenance, not archive re-approval, because the archive-state descriptor stays unchanged while a new cohort and transition record are emitted.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
@@ -495,126 +499,6 @@ async function createLiteShards() {
         updateCreateShardsButton();
         setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
     }
-}
-
-function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
-    const panel = document.getElementById('liteRestoreResult');
-    if (!panel) return;
-
-    panel.replaceChildren();
-    panel.style.display = 'block';
-
-    const allOk = containerOk && decryptOk && result.authenticity?.status?.policySatisfied;
-
-    const header = document.createElement('h4');
-    header.textContent = 'Restore Result';
-    panel.appendChild(header);
-
-    const addPolar = (ok, okText, failText, warnOnFail = false) => {
-        const item = document.createElement('div');
-        const useWarn = !ok && warnOnFail;
-        item.className = `restore-result-item ${useWarn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-        const icon = ok ? '✓' : (useWarn ? '⚠' : '✗');
-        item.textContent = `${icon} ${ok ? okText : failText}`;
-        panel.appendChild(item);
-    };
-
-    const addNeutral = (text) => {
-        const item = document.createElement('div');
-        item.className = 'restore-result-item neutral';
-        item.textContent = `· ${text}`;
-        panel.appendChild(item);
-    };
-
-    addPolar(result.qencOk, 'Container integrity verified', 'Container integrity check failed');
-    addPolar(result.qkeyOk, 'Secret key integrity verified', 'Secret key integrity check failed');
-    if (containerOk) {
-        addPolar(decryptOk, 'Decryption and file integrity verified', 'Decryption or file integrity check failed');
-    }
-
-    const status = result.authenticity?.status || {};
-    const archiveApprovalVerified = status.archiveApprovalSignatureVerified ?? status.signatureVerified;
-    const hasSuccessorStates = (
-        'archiveApprovalSignatureVerified' in status ||
-        'maintenanceSignatureVerified' in status ||
-        'sourceEvidenceSignatureVerified' in status
-    );
-    addPolar(
-        archiveApprovalVerified === true,
-        hasSuccessorStates ? 'Archive-approval signature verified' : 'Detached signature verified (canonical manifest)',
-        hasSuccessorStates ? 'No verified archive-approval signature over archive-state' : 'No verified detached signature over canonical manifest',
-    );
-    addPolar(
-        status.strongPqSignatureVerified === true,
-        hasSuccessorStates ? 'Strong PQ archive-approval signature verified' : 'Strong PQ detached signature verified',
-        hasSuccessorStates ? 'Strong PQ archive-approval signature not present' : 'Strong PQ detached signature not present',
-        archiveApprovalVerified === true && status.strongPqSignatureVerified !== true,
-    );
-    addPolar(
-        status.bundlePinned === true,
-        hasSuccessorStates ? 'Bundle signer pinned (lifecycle bundle signer material)' : 'Bundle signer pinned (manifest bundle signer material)',
-        'Bundle signer not pinned',
-        archiveApprovalVerified === true && status.bundlePinned !== true,
-    );
-    if (status.bundleCohortMixed === true) {
-        addPolar(false, '', 'Mixed embedded lifecycle-bundle variants were used in this cohort', true);
-    }
-    if (status.userPinProvided === true || status.userPinned === true) {
-        addPolar(
-            status.userPinned === true,
-            'User-supplied signer pin matched',
-            status.userPinProvided === true ? 'User-supplied pin did not match a verifying signer' : 'User signer not pinned',
-            status.userPinProvided === true && status.userPinned !== true,
-        );
-    }
-    if (hasSuccessorStates) {
-        if (status.transitionRecordPresent !== true) {
-            addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
-        } else {
-            addPolar(true, 'Transition record present', 'Transition record missing');
-            addPolar(
-                status.transitionChainValid === true,
-                'Transition-chain references valid',
-                'Transition-chain references invalid or broken',
-            );
-            addPolar(
-                status.maintenanceSignatureVerified === true,
-                'Maintenance signature verified',
-                'No verified maintenance signature on transition record(s)',
-            );
-        }
-        if (status.sourceEvidencePresent !== true) {
-            addNeutral('No source-evidence objects on this archive (optional provenance).');
-        } else {
-            addPolar(
-                status.sourceEvidenceSignatureVerified === true,
-                'Source-evidence signature verified',
-                'Source-evidence present but no verified signature',
-            );
-        }
-    }
-    addPolar(status.policySatisfied === true, 'Archive policy satisfied', 'Archive policy not satisfied');
-
-    const timestampEvidence = Array.isArray(result.authenticity?.timestampEvidence) ? result.authenticity.timestampEvidence : [];
-    if (timestampEvidence.length > 0) {
-        const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
-        const incompleteCount = timestampEvidence.length - completeCount;
-        const appendStatusLine = (ok, text, warn = false) => {
-            const item = document.createElement('div');
-            item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-            item.textContent = `${ok ? '✓' : (warn ? '⚠' : '✗')} ${text}`;
-            panel.appendChild(item);
-        };
-        appendStatusLine(true, `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`);
-        if (completeCount > 0) {
-            appendStatusLine(true, `OTS proof complete (${completeCount})`);
-        }
-        if (incompleteCount > 0) {
-            appendStatusLine(false, `OTS proof not yet complete (${incompleteCount}) — calendars may still be pending`, true);
-        }
-    }
-
-    panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
 }
 
 async function restoreLiteShards() {
@@ -743,7 +627,9 @@ async function restoreLiteShards() {
         
         if (!qencOk || !qkeyOk) {
             logError('Hash verification failed for container', { isLiteMode: true });
-            buildLiteRestoreResultPanel(result, false, false);
+            buildRestoreResultSummary(result, 'liteRestoreResult', {
+                liteDecrypt: { containerOk: false, decryptOk: false },
+            });
             return;
         }
         
@@ -754,7 +640,9 @@ async function restoreLiteShards() {
 
         if (!integrityOk) {
             logError('File integrity check failed - hashes do not match', { isLiteMode: true });
-            buildLiteRestoreResultPanel(result, true, false);
+            buildRestoreResultSummary(result, 'liteRestoreResult', {
+                liteDecrypt: { containerOk: true, decryptOk: false },
+            });
             return;
         }
 
@@ -785,7 +673,9 @@ async function restoreLiteShards() {
         logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
         logSuccess('Container restored successfully from a policy-satisfying archive cohort', { isLiteMode: true });
-        buildLiteRestoreResultPanel(result, true, true);
+        buildRestoreResultSummary(result, 'liteRestoreResult', {
+            liteDecrypt: { containerOk: true, decryptOk: true },
+        });
         
     } catch (error) {
         logError(error, { isLiteMode: true });

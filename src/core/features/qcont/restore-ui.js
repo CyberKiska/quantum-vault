@@ -195,8 +195,8 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     elements.container.className = 'verification-section successor-selection';
 
     if (legacyCount > 0) {
-      elements.summary.textContent = 'Selected files mix legacy and successor shard families.';
-      elements.help.textContent = 'Restore remains blocked until the input contains only one artifact family. Legacy restore is compatibility-only on the current product surface.';
+      elements.summary.textContent = 'Input conflict: mixed legacy and successor artifact families.';
+      elements.help.textContent = 'Restore stays blocked until the input contains only one artifact family.';
       [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
         if (group) group.style.display = 'none';
       });
@@ -276,7 +276,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       elements.stateSelect,
       model.states.map((state) => ({ value: state.key, label: describeStateOption(state) })),
       stateChoiceRequired ? selectedStateKey : '',
-      stateChoiceRequired ? 'Choose one archive/state' : null
+      stateChoiceRequired ? 'Choose one archive and state' : null
     );
     if (elements.stateGroup) {
       elements.stateGroup.style.display = stateChoiceRequired ? 'block' : 'none';
@@ -313,17 +313,17 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const totalBundleVariants = model.states.reduce((acc, state) => (
       acc + state.cohorts.reduce((innerAcc, cohort) => innerAcc + cohort.bundleDigests.length, 0)
     ), 0);
-    elements.summary.textContent = `Successor restore candidates: ${model.states.length} archive-state candidate${model.states.length === 1 ? '' : 's'}, ${totalCohorts} cohort${totalCohorts === 1 ? '' : 's'}, ${totalBundleVariants} embedded lifecycle-bundle variant${totalBundleVariants === 1 ? '' : 's'}.`;
+    elements.summary.textContent = `Successor restore candidates: ${model.states.length} archive-state candidate${model.states.length === 1 ? '' : 's'}, ${totalCohorts} cohort${totalCohorts === 1 ? '' : 's'}, ${totalBundleVariants} embedded lifecycle bundle variant${totalBundleVariants === 1 ? '' : 's'}.`;
     if (lifecycleBundleProvided) {
-      elements.help.textContent = 'An uploaded lifecycle bundle already fixes the archive/state/cohort selection. Any same-state fork remains reported, but Quantum Vault will not auto-select a winner if the uploaded bundle is absent.';
+      elements.help.textContent = 'The uploaded lifecycle bundle already fixes the archive, state, and cohort selection.';
     } else if (uploadedArchiveState) {
       elements.help.textContent = selectionRequired
-        ? 'The uploaded archive-state descriptor fixed the archive state. Choose the exact cohort and embedded lifecycle bundle below whenever more than one valid successor option remains.'
-        : 'The uploaded archive-state descriptor fixed the archive state. No additional successor selection is required for this restore set.';
+        ? 'The uploaded archive-state descriptor fixed the archive state. Choose the remaining cohort or lifecycle bundle below.'
+        : 'The uploaded archive-state descriptor fixed the archive state. No additional successor selection is required.';
     } else if (selectionRequired) {
-      elements.help.textContent = 'Quantum Vault requires an explicit operator choice for every ambiguous successor restore step. It will not auto-select across same-state cohorts or embedded lifecycle-bundle variants.';
+      elements.help.textContent = 'Choose the exact archive, cohort, or lifecycle bundle below. Quantum Vault will not auto-select an ambiguous successor path.';
     } else {
-      elements.help.textContent = 'One successor archive/state/cohort path is available from the selected shard set. Archive approval, maintenance signatures, source evidence, pinning, and OTS remain separate verification states.';
+      elements.help.textContent = 'One successor restore path is available from the selected shard set.';
     }
 
     const stateForRestore = stateChoiceRequired && selectedState
@@ -462,14 +462,24 @@ function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   }
 }
 
-function buildRestoreResultSummary(result, resultPanelId) {
+/**
+ * @param {object} result - restoreFromShards result
+ * @param {string} resultPanelId - DOM id of `.restore-result-panel`
+ * @param {{ liteDecrypt?: { containerOk: boolean, decryptOk: boolean } }} [options] - Lite mode adds decrypt/output line under Integrity
+ */
+export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
   const panel = document.getElementById(resultPanelId);
   if (!panel) return;
 
   panel.replaceChildren();
   panel.style.display = 'block';
   const { qencOk, qkeyOk, authenticity } = result;
-  const allOk = qencOk && qkeyOk && authenticity?.status?.policySatisfied;
+  const policyOk = authenticity?.status?.policySatisfied === true;
+  let allOk = qencOk && qkeyOk && policyOk;
+  if (options.liteDecrypt) {
+    const { containerOk, decryptOk } = options.liteDecrypt;
+    allOk = qencOk && qkeyOk && containerOk && decryptOk && policyOk;
+  }
 
   const header = document.createElement('h4');
   header.textContent = 'Restore Result';
@@ -500,7 +510,14 @@ function buildRestoreResultSummary(result, resultPanelId) {
 
   addSection('Integrity');
   addPolar(qencOk, 'Container integrity verified', 'Container integrity check failed');
-  addPolar(qkeyOk, 'Secret key integrity verified', 'Secret key integrity check failed');
+  addPolar(qkeyOk, 'Private key integrity verified', 'Private key integrity check failed');
+  if (options.liteDecrypt?.containerOk) {
+    addPolar(
+      options.liteDecrypt.decryptOk,
+      'Decryption and file integrity verified',
+      'Decryption or file integrity check failed',
+    );
+  }
 
   const status = authenticity?.status || {};
   const archiveApprovalVerified = status.archiveApprovalSignatureVerified ?? status.signatureVerified;
@@ -528,9 +545,9 @@ function buildRestoreResultSummary(result, resultPanelId) {
       addPolar(false, '', 'Same-state cohort fork remains known for this archive state', true);
     }
     if (status.bundleCohortMixed === true) {
-      addPolar(false, '', 'Mixed embedded lifecycle-bundle variants were present in the selected cohort', true);
+      addPolar(false, '', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', true);
     } else {
-      addPolar(true, 'One lifecycle-bundle variant selected for policy evaluation', '');
+      addPolar(true, 'One lifecycle bundle variant selected for policy evaluation', '');
     }
   }
   addSection('Pinning & Evidence');
@@ -567,6 +584,17 @@ function buildRestoreResultSummary(result, resultPanelId) {
     }
   }
   if (hasSuccessorStates) {
+    if (status.sourceEvidencePresent !== true) {
+      addNeutral('No source-evidence objects on this archive (optional provenance).');
+    } else {
+      addPolar(
+        status.sourceEvidenceSignatureVerified === true,
+        'Source-evidence signature verified',
+        'Source-evidence present but no verified signature',
+      );
+    }
+  }
+  if (hasSuccessorStates) {
     addSection('Maintenance & Provenance');
     if (status.transitionRecordPresent !== true) {
       addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
@@ -581,15 +609,6 @@ function buildRestoreResultSummary(result, resultPanelId) {
         status.maintenanceSignatureVerified === true,
         'Maintenance signature verified',
         'No verified maintenance signature on transition record(s)',
-      );
-    }
-    if (status.sourceEvidencePresent !== true) {
-      addNeutral('No source-evidence objects on this archive (optional provenance).');
-    } else {
-      addPolar(
-        status.sourceEvidenceSignatureVerified === true,
-        'Source-evidence signature verified',
-        'Source-evidence present but no verified signature',
       );
     }
   }
