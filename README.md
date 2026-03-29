@@ -68,12 +68,12 @@ Deprecated v1 context:
 
 | Stage | Main inputs | Main outputs | What this stage adds |
 | --- | --- | --- | --- |
-| Generate | Browser entropy | `secretKey.qkey`, `publicKey.qkey` | ML-KEM key pair generated client-side |
+| Generate | Browser entropy | `privateKey.qkey`, `publicKey.qkey` | ML-KEM key pair generated client-side |
 | Encrypt | File(s), `publicKey.qkey` | `.qenc` | Post-quantum confidentiality and AEAD integrity |
-| Split | `.qenc`, `secretKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
+| Split | `.qenc`, `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
 | Attach | Manifest or bundle, successor shards or lifecycle bundle, optional successor archive-state check, `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated bundle artifacts, optional rewritten `.qcont` | Portable authenticity material without changing canonical signed bytes |
-| Restore | `.qcont`, optional manifest/bundle or lifecycle objects, optional signatures, pins, timestamps | Recovered `.qenc`, recovered `secretKey.qkey` | Policy-gated archive reconstruction with track-specific verification and explicit successor selection when ambiguity exists |
-| Decrypt | `.qenc`, `secretKey.qkey` | Original file(s) | Payload recovery and file-hash confirmation |
+| Restore | `.qcont`, optional manifest/bundle or lifecycle objects, optional signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Policy-gated archive reconstruction with track-specific verification and explicit successor selection when ambiguity exists |
+| Decrypt | `.qenc`, `privateKey.qkey` | Original file(s) | Payload recovery and file-hash confirmation |
 
 ## Workflow Overview
 
@@ -82,11 +82,11 @@ flowchart TB
     subgraph CREATE["Create archive"]
         G["Generate key pair<br/>ML-KEM-1024 KeyGen"]:::crypto
         PK["publicKey.qkey"]:::artifact
-        SK["secretKey.qkey"]:::artifact
+        SK["privateKey.qkey"]:::artifact
         U["User file(s)"]:::input
         E["Encrypt<br/>ML-KEM-1024 Encaps → KMAC256 → AES-256-GCM"]:::crypto
         Q[".qenc"]:::artifact
-        S["Split<br/>Shamir(secretKey) + Reed-Solomon(ciphertext)"]:::split
+        S["Split<br/>Shamir(privateKey) + Reed-Solomon(ciphertext)"]:::split
         QC[".qcont shards<br/>(embedded archive-state + cohort binding + lifecycle bundle)"]:::artifact
         AS["Lite + Pro<br/>*.archive-state.json<br/>(canonical signable archive-state descriptor)"]:::artifact
         CB["Pro export<br/>*.cohort-binding.json"]:::artifact
@@ -126,7 +126,7 @@ flowchart TB
     subgraph RECOVER["Recover archive"]
         SEL["Resolve successor restore path<br/>(explicit choice only when ambiguous)"]:::restore
         R["Restore<br/>(policy-gated reconstruction)"]:::restore
-        OUT["Recovered .qenc + secretKey.qkey"]:::artifact
+        OUT["Recovered .qenc + privateKey.qkey"]:::artifact
         D["Decrypt<br/>ML-KEM-1024 Decaps → KMAC256 → AES-256-GCM"]:::restore
         F["Original file(s)"]:::input
 
@@ -156,20 +156,20 @@ The diagram above shows the current shipped v2 build/export path. In the current
 
 | Stage | User action | Required inputs | Primary outputs | Important behavior |
 | --- | --- | --- | --- | --- |
-| 1. Generate | Create a key pair in-browser | None | `secretKey.qkey`, `publicKey.qkey` | Secrets stay client-side only |
+| 1. Generate | Create a key pair in-browser | None | `privateKey.qkey`, `publicKey.qkey` | Secrets stay client-side only |
 | 2. Encrypt | Encrypt one file or a local file bundle | File(s), `publicKey.qkey` | `.qenc` | Uses ML-KEM-1024 + KMAC256 + AES-256-GCM |
-| 3. Split | Convert one archive into threshold shards | `.qenc`, matching `secretKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Regular-user creation emits successor `QVqcont-7` shards by default; Lite does not export a standalone cohort-binding file, but the same cohort-binding bytes remain embedded in successor shards |
+| 3. Split | Convert one archive into threshold shards | `.qenc`, matching `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Regular-user creation emits successor `QVqcont-7` shards by default; Lite does not export a standalone cohort-binding file, but the same cohort-binding bytes remain embedded in successor shards |
 | 4. Sign | Sign the signable archive description in an external signer app | `*.qvmanifest.json` (legacy) or exported archive-state descriptor (successor) | `.qsig` or `.sig` | Legacy archive approval signs canonical manifest bytes; successor archive approval signs canonical archive-state bytes |
 | 5. Attach | Merge signatures, pins, and timestamps into the mutable bundle | Manifest or bundle, successor shards or lifecycle bundle, optional archive-state descriptor, detached artifacts | `*.extended.qvmanifest.json` (legacy) or `*.lifecycle-bundle.json` (successor), optional rewritten shards | Successor attach requires successor shards or an existing lifecycle bundle; archive-state may be supplied as a consistency/signable input but is not sufficient on its own. Full shard cohort rewrites embedded bundle bytes; partial input updates only the selected bundle variant |
-| 6. Restore | Reconstruct from shards with optional authenticity inputs | `.qcont`, optional manifest/bundle or lifecycle objects, signatures, pins, timestamps | Recovered `.qenc`, recovered `secretKey.qkey` | Recovery is blocked unless the selected archive policy is satisfied; successor restore fails closed by default on ambiguity and requires explicit archive/cohort/bundle selection before proceeding when multiple valid candidates remain |
-| 7. Decrypt | Decrypt the recovered archive | `.qenc`, recovered `secretKey.qkey` | Original file(s) | The UI confirms `privateMeta.fileHash` before export |
+| 6. Restore | Reconstruct from shards with optional authenticity inputs | `.qcont`, optional manifest/bundle or lifecycle objects, signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Recovery is blocked unless the selected archive policy is satisfied; successor restore fails closed by default on ambiguity and requires explicit archive/cohort/bundle selection before proceeding when multiple valid candidates remain |
+| 7. Decrypt | Decrypt the recovered archive | `.qenc`, recovered `privateKey.qkey` | Original file(s) | The UI confirms `privateMeta.fileHash` before export |
 
 ## Artifact Overview
 
 | Artifact | Produced by | Purpose | Notes |
 | --- | --- | --- | --- |
 | `publicKey.qkey` | Generate | ML-KEM public key | Used to encrypt |
-| `secretKey.qkey` | Generate | Legacy filename for the ML-KEM private key | The object is an asymmetric `privateKey` |
+| `privateKey.qkey` | Generate | ML-KEM private key | Used to decrypt |
 | `.qenc` | Encrypt | Encrypted container | Carries public metadata, key commitment, ciphertext |
 | `.qcont` | Split / Reshare | Threshold shard | Legacy `QVqcont-6` shards embed manifest and bundle; successor `QVqcont-7` shards embed archive-state, cohort binding, and lifecycle bundle |
 | `*.qvmanifest.json` | Deprecated v1 import/export | Canonical signable manifest (v1) | Immutable detached-signature payload for previously created v1 archives during the phase-out window |

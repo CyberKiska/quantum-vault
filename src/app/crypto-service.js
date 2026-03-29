@@ -52,8 +52,8 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
     return encryptContainerBytes(fileBytes, publicKey, originalFilename);
 }
 
-export async function decryptFile(containerBytes, secretKey) {
-    return decryptContainerBytes(containerBytes, secretKey);
+export async function decryptFile(containerBytes, privateKey) {
+    return decryptContainerBytes(containerBytes, privateKey);
 }
 
 export async function hashBytes(bytes) {

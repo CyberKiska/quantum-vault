@@ -170,11 +170,9 @@ Formal grammar convention:
 
 Key terminology rule used by this file:
 
-- `privateKey` means asymmetric secret key material, such as the ML-KEM decryption key currently exported in the file named `secretKey.qkey`
+- `privateKey` means asymmetric secret key material, such as the ML-KEM decryption key currently exported in the file named `privateKey.qkey`
 - `publicKey` means asymmetric public key material
 - `secretKey` means symmetric secret material, such as `Kenc` or `Kiv`
-
-The current file name `secretKey.qkey` is treated as a legacy operational name, not as the canonical terminology for the asymmetric object it contains.
 
 ### Specification stack
 

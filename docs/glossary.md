@@ -55,7 +55,7 @@ Current examples:
 
 - `archive class` is currently a documentation and policy taxonomy, not a manifest field
 - `OTS evidence` reflects current linkage behavior and heuristic completeness labels
-- `secretKey.qkey` remains a legacy filename even though the canonical term for the contained asymmetric object is `privateKey`
+- `privateKey.qkey` is the exported ML-KEM private-key filename
 
 ## Future work and non-normative notes
 
@@ -150,10 +150,9 @@ Do not preload speculative roadmap terminology into the shared glossary before t
 | `publicKey` | Asymmetric public key material. | `docs/format-spec.md` |
 | `secretKey` | Symmetric secret material such as derived `Kenc` or `Kiv`. | `docs/format-spec.md` |
 
-Compatibility note:
+Current file naming note:
 
-- the exported filename `secretKey.qkey` currently contains the ML-KEM private key
-- the filename is a legacy operational name and not the canonical term for the asymmetric object it contains
+- the exported filename `privateKey.qkey` contains the ML-KEM private key
 
 ## Related maintenance tasks
 

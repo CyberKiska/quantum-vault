@@ -126,16 +126,16 @@ The exact normative rule now lives in the core docs, but the reason is implement
 - mixed or conflicting cohorts are a safety problem, not just a UX problem
 - recovering from the "largest" set can silently select the wrong archive state
 
-### 6. Terminology note for `secretKey.qkey`
+### 6. Terminology note for `privateKey.qkey`
 
 The canonical terminology home is `docs/glossary.md`.
 
-The implementation still uses the filename `secretKey.qkey`.
+The implementation now uses the filename `privateKey.qkey`.
 Historically that name was convenient operationally, but it is not the right cryptographic term for the object inside.
 
 Contributor rule:
 
-- treat the object in `secretKey.qkey` as an asymmetric `privateKey`
+- treat the object in `privateKey.qkey` as an asymmetric `privateKey`
 - reserve `secretKey` for symmetric secret material such as derived AES/KMAC keys
 
 If you touch docs, logs, UI, or code comments, keep that distinction explicit.

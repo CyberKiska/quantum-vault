@@ -383,19 +383,19 @@ export function initUI() {
             }
             
             // Generate keys with collected entropy if available
-            const { secretKey, publicKey, seedInfo } = await generateKeyPair({ 
+            const { privateKey, publicKey, seedInfo } = await generateKeyPair({
                 userEntropyBytes: hasCollectedEntropy ? collectedUserEntropy : null
             });
             wipeCollectedUserEntropy();
             
-            const skHash = await hashBytes(secretKey);
+            const skHash = await hashBytes(privateKey);
             const pkHash = await hashBytes(publicKey);
             
             log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (enhanced with user entropy)' : ''}`);
-            log(`Private Key: secretKey.qkey (${secretKey.length} B) SHA3-512=${skHash}`);
+            log(`Private Key: privateKey.qkey (${privateKey.length} B) SHA3-512=${skHash}`);
             log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
             
-            download(new Blob([secretKey]), 'secretKey.qkey');
+            download(new Blob([privateKey]), 'privateKey.qkey');
             download(new Blob([publicKey]), 'publicKey.qkey');
             logSuccess('Keys generated and downloaded successfully.');
             showToast('New keypair generated in memory.', 'success');
@@ -473,14 +473,14 @@ export function initUI() {
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to decrypt (.qenc).', 'warning'); return; }
         setButtonsDisabled(true);
         try {
-            const secretKey = await readFileAsUint8Array(privKeyInput.files[0]);
+            const privateKey = await readFileAsUint8Array(privKeyInput.files[0]);
             for (const file of dataFileInput.files) {
                 if (!file.name.toLowerCase().endsWith('.qenc')) { log(`Skipping file ${file.name} as it is not a .qenc container.`); continue; }
                 log(`Decrypting file ${file.name} (${file.size} B)...`);
                 const containerBytes = await readFileAsUint8Array(file);
                 const containerHash = await hashBytes(containerBytes);
                 log(`Container hash: SHA3-512=${containerHash}`);
-                const { decryptedBlob, metadata } = await decryptFile(containerBytes, secretKey);
+                const { decryptedBlob, metadata } = await decryptFile(containerBytes, privateKey);
                 const decBytes = await readFileAsUint8Array(decryptedBlob);
                 const decHash = await hashBytes(decBytes);
 

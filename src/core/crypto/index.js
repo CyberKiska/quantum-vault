@@ -43,7 +43,7 @@ export {
 /**
  * Generate ML-KEM key pair with enhanced entropy
  * @param {object} options - Key generation options
- * @returns {Promise<{publicKey: Uint8Array, secretKey: Uint8Array, seedInfo: object}>} Key pair
+ * @returns {Promise<{publicKey: Uint8Array, privateKey: Uint8Array, seedInfo: object}>} Key pair
  */
 export async function generateKeyPair(options = {}) {
     return await generateMLKEMKeyPair(options);
@@ -229,10 +229,10 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
 /**
  * Decrypt file using quantum-resistant cryptography
  * @param {Uint8Array} containerBytes - Encrypted container
- * @param {Uint8Array} secretKey - ML-KEM-1024 secret key
+ * @param {Uint8Array} privateKey - ML-KEM-1024 private key
  * @returns {Promise<{decryptedBlob: Blob, metadata: object}>} Decrypted file and metadata
  */
-export async function decryptFile(containerBytes, secretKey) {
+export async function decryptFile(containerBytes, privateKey) {
     const warnings = [];
 
     if (!(containerBytes instanceof Uint8Array) || containerBytes.length === 0) {
@@ -264,7 +264,7 @@ export async function decryptFile(containerBytes, secretKey) {
 
     try {
         // Step 2: KEM Decapsulation (FIPS 203)
-        sharedSecret = await decapsulate(encapsulatedKey, secretKey);
+        sharedSecret = await decapsulate(encapsulatedKey, privateKey);
         
         // Step 3: Derive decryption keys (SP 800-185)
         const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });

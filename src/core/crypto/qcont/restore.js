@@ -1784,9 +1784,9 @@ async function restoreSuccessorFromShards(shards, options = {}) {
       shardBodyFailure: (index) => `Fragment integrity check failed for shard ${index}. Treating as erasure.`,
       shardBodyVerified: 'Shard body hashes verified.',
       tooManyMissingCorrupted: (allowed, total) => `Too many missing/corrupted shards for RS reconstruction: allowed ${allowed}, got ${total}`,
-      recoveredPrivateKeyCommitmentFailure: 'Recovered ML-KEM secret key does not satisfy the embedded .qenc key commitment.',
+      recoveredPrivateKeyCommitmentFailure: 'Recovered ML-KEM private key does not satisfy the embedded .qenc key commitment.',
       qencHashMismatch: 'Reconstructed .qenc hash does not match archive-state descriptor',
-      privateKeyHashMismatch: 'Recovered secret key hash does not match shard metadata.',
+      privateKeyHashMismatch: 'Recovered private key hash does not match shard metadata.',
     },
   });
 
@@ -2224,7 +2224,7 @@ export async function restoreFromShards(shards, options = {}) {
   const privateKeyHash = normalizeHexString(base.metaJSON?.privateKeyHash || '');
   const qkeyOk = privateKeyHash ? (privateKeyHash === recoveredPrivHash) : true;
   if (!qkeyOk) {
-    onWarn('Recovered secret key hash does not match shard metadata.');
+    onWarn('Recovered private key hash does not match shard metadata.');
   }
   const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
   const mixedBundleWarning = buildMixedBundleCohortWarning(embeddedBundleDigestsUsed, bundleDigestHex);

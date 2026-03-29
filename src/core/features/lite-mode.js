@@ -53,8 +53,8 @@ function describeAuthPolicyHelp(authPolicyLevel) {
 }
 
 function wipeLiteKeyPair(keyPair) {
-    if (keyPair?.secretKey instanceof Uint8Array) {
-        keyPair.secretKey.fill(0);
+    if (keyPair?.privateKey instanceof Uint8Array) {
+        keyPair.privateKey.fill(0);
     }
     if (keyPair?.publicKey instanceof Uint8Array) {
         keyPair.publicKey.fill(0);
@@ -246,7 +246,7 @@ async function generateLiteKeys() {
             wipeLiteKeyPair(previousKeys);
         }
         
-        const skHash = await hashBytes(liteKeys.secretKey);
+        const skHash = await hashBytes(liteKeys.privateKey);
         const pkHash = await hashBytes(liteKeys.publicKey);
         
         // Log with Lite mode formatting
@@ -362,8 +362,8 @@ function downloadLiteKeys() {
     }
     
     const timestamp = createFilenameTimestamp();
-    // Download secret key first (most important)
-    download(new Blob([liteKeys.secretKey]), `quantum-vault-${timestamp}-secretKey.qkey`);
+    // Download private key first (most important)
+    download(new Blob([liteKeys.privateKey]), `quantum-vault-${timestamp}-privateKey.qkey`);
     
     // Small delay to prevent browser from blocking the second download
     setTimeout(() => {
@@ -457,7 +457,7 @@ async function createLiteShards() {
         
         // 2. Create shards from encrypted container + private key
         const authPolicyLevel = String(authPolicyInput?.value || LITE_DEFAULT_AUTH_POLICY_LEVEL);
-        const splitResult = await buildQcontShards(encBytes, liteKeys.secretKey, {
+        const splitResult = await buildQcontShards(encBytes, liteKeys.privateKey, {
             n: params.n,
             k: params.k
         }, { authPolicyLevel });
@@ -776,7 +776,7 @@ function toggleMode() {
         } else {
             // Restore lite keys status to sidebar if previously generated
             hashBytes(liteKeys.publicKey).then(pk => {
-                hashBytes(liteKeys.secretKey).then(sk => updateSidebarStatus(pk, sk));
+                hashBytes(liteKeys.privateKey).then(sk => updateSidebarStatus(pk, sk));
             });
         }
     } else {

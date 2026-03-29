@@ -686,7 +686,7 @@ export function initQcontRestoreUI() {
       const qencBlob = new Blob([qencBytes], { type: 'application/octet-stream' });
       const qkeyBlob = new Blob([privKey], { type: 'application/octet-stream' });
       const qencName = `${containerId}.recovered.qenc`;
-      const qkeyName = `${containerId}.recovered.secretKey.qkey`;
+      const qkeyName = `${containerId}.recovered.privateKey.qkey`;
 
       if (qencOk && qkeyOk && result.authenticity?.status?.policySatisfied) {
         download(qencBlob, qencName);

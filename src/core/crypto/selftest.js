@@ -1,6 +1,6 @@
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
 import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fromHex, timingSafeEqual, utf8ToBytes } from './bytes.js';
-import { validatePublicKey, validateSecretKey } from './mlkem.js';
+import { validatePublicKey, validatePrivateKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
 import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
@@ -359,7 +359,7 @@ async function buildSuccessorRestoreSample({
   const qencBytes = await blobToBytes(await encryptFile(payloadBytes, pair.publicKey, filename));
   const split = await buildLifecycleQcontShards(
     qencBytes,
-    pair.secretKey,
+    pair.privateKey,
     { n: 5, k: 3 },
     { ...buildOptions, authPolicyLevel, minValidSignatures }
   );
@@ -472,7 +472,7 @@ async function buildSuccessorRecoveredKeyMismatchSample({
     const { splitSecret } = await import('./splitting/sss.js');
     const shareCount = Number(honest.split.cohortBinding.sharding.shamir.shareCount);
     const threshold = Number(honest.split.cohortBinding.sharding.shamir.threshold);
-    const maliciousShares = await splitSecret(maliciousPair.secretKey, shareCount, threshold);
+    const maliciousShares = await splitSecret(maliciousPair.privateKey, shareCount, threshold);
     const maliciousShareCommitments = await Promise.all(maliciousShares.map((share) => hashBytes(share)));
 
     const maliciousCohortBinding = cloneJson(honest.split.cohortBinding);
@@ -488,7 +488,7 @@ async function buildSuccessorRecoveredKeyMismatchSample({
     maliciousLifecycleBundle.currentCohortBinding = canonicalMaliciousCohortBinding.cohortBinding;
     maliciousLifecycleBundle.currentCohortBindingDigest = canonicalMaliciousCohortBinding.digest;
     const canonicalMaliciousLifecycleBundle = await canonicalizeLifecycleBundle(maliciousLifecycleBundle);
-    const maliciousPrivateKeyHash = await hashBytes(maliciousPair.secretKey);
+    const maliciousPrivateKeyHash = await hashBytes(maliciousPair.privateKey);
 
     const maliciousShards = honestSignedShards.map((shard, index) => ({
       ...shard,
@@ -516,7 +516,7 @@ async function buildSuccessorRecoveredKeyMismatchSample({
       maliciousPrivateKeyHash,
     };
   } finally {
-    maliciousPair.secretKey.fill(0);
+    maliciousPair.privateKey.fill(0);
   }
 }
 
@@ -1408,35 +1408,35 @@ function buildCases() {
     {
       name: 'ML-KEM keygen',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         assert(publicKey.length === 1568, `public key length mismatch: ${publicKey.length}`);
-        assert(secretKey.length === 3168, `secret key length mismatch: ${secretKey.length}`);
+        assert(privateKey.length === 3168, `private key length mismatch: ${privateKey.length}`);
         validatePublicKey(publicKey);
-        validateSecretKey(secretKey);
+        validatePrivateKey(privateKey);
       },
     },
     {
       name: 'ML-KEM key import (.qkey bytes)',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const importedPublic = new Uint8Array(await fileLike('public.qkey', publicKey).arrayBuffer());
-        const importedSecret = new Uint8Array(await fileLike('secret.qkey', secretKey).arrayBuffer());
+        const importedPrivate = new Uint8Array(await fileLike('private.qkey', privateKey).arrayBuffer());
 
         validatePublicKey(importedPublic);
-        validateSecretKey(importedSecret);
+        validatePrivateKey(importedPrivate);
 
         const originalPubHash = await hashBytes(publicKey);
         const importedPubHash = await hashBytes(importedPublic);
-        const originalSecHash = await hashBytes(secretKey);
-        const importedSecHash = await hashBytes(importedSecret);
+        const originalPrivHash = await hashBytes(privateKey);
+        const importedPrivHash = await hashBytes(importedPrivate);
         assert(originalPubHash === importedPubHash, 'imported public key hash mismatch');
-        assert(originalSecHash === importedSecHash, 'imported secret key hash mismatch');
+        assert(originalPrivHash === importedPrivHash, 'imported private key hash mismatch');
       },
     },
     {
       name: 'one file -> .qenc container encrypt',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('single-file-payload');
         const encrypted = await encryptFile(payload, publicKey, 'single.txt');
         const encryptedBytes = await blobToBytes(encrypted);
@@ -1456,7 +1456,7 @@ function buildCases() {
         assert(parsedHeader.metadata.domainStrings.kenc === DEFAULT_CRYPTO_PROFILE.domainStrings.kenc, 'domainStrings.kenc mismatch');
         assert(parsedHeader.metadata.domainStrings.kiv === DEFAULT_CRYPTO_PROFILE.domainStrings.kiv, 'domainStrings.kiv mismatch');
 
-        const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, secretKey);
+        const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, privateKey);
         const decrypted = await blobToBytes(decryptedBlob);
         assert(metadata.originalFilename === 'single.txt', 'original filename mismatch');
         assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'single-file roundtrip mismatch');
@@ -1472,10 +1472,10 @@ function buildCases() {
         const { bundleBytes, bundleName, fileCount } = await createBundlePayloadFromFiles(files);
         assert(fileCount === 2, `expected 2 files in bundle, got ${fileCount}`);
 
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const encrypted = await encryptFile(bundleBytes, publicKey, bundleName);
         const encryptedBytes = await blobToBytes(encrypted);
-        const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, secretKey);
+        const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, privateKey);
         const decrypted = await blobToBytes(decryptedBlob);
 
         assert(metadata.originalFilename === bundleName, 'bundle original filename mismatch');
@@ -1489,13 +1489,13 @@ function buildCases() {
       },
     },
     {
-      name: '.qenc + secret.qkey -> split',
+      name: '.qenc + private.qkey -> split',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('split-check');
         const encrypted = await encryptFile(payload, publicKey, 'split.txt');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
         const shards = split.shards;
 
         assert(shards.length === 5, `expected 5 shards, got ${shards.length}`);
@@ -1596,11 +1596,11 @@ function buildCases() {
     {
       name: 'manifest parser rejects duplicate object keys on the parse path',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('manifest-duplicate-keys');
         const encrypted = await encryptFile(payload, publicKey, 'manifest-duplicate-keys.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
         const manifestText = new TextDecoder().decode(split.manifestBytes);
         const duplicateText = `{\"schema\":\"${ARCHIVE_MANIFEST_SCHEMA}\",${manifestText.slice(1)}`;
 
@@ -1613,11 +1613,11 @@ function buildCases() {
     {
       name: 'manifest parser rejects lone surrogate escapes on the parse path',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('manifest-lone-surrogate');
         const encrypted = await encryptFile(payload, publicKey, 'manifest-lone-surrogate.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
         const manifestText = new TextDecoder().decode(split.manifestBytes);
         const malformedText = manifestText.replace('"manifestType":"archive"', '"manifestType":"\\ud800"');
 
@@ -1630,11 +1630,11 @@ function buildCases() {
     {
       name: 'manifest parser rejects unknown signed fields',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('manifest-unknown-fields');
         const encrypted = await encryptFile(payload, publicKey, 'manifest-unknown-fields.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
         const manifestText = new TextDecoder().decode(split.manifestBytes);
         const malformedText = `{\"unexpectedField\":1,${manifestText.slice(1)}`;
 
@@ -1647,11 +1647,11 @@ function buildCases() {
     {
       name: 'manifest bundle parser rejects duplicate object keys on the parse path',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('bundle-duplicate-keys');
         const encrypted = await encryptFile(payload, publicKey, 'bundle-duplicate-keys.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
         const bundleText = new TextDecoder().decode(split.bundleBytes);
         const duplicateText = `{\"type\":\"${MANIFEST_BUNDLE_TYPE}\",${bundleText.slice(1)}`;
 
@@ -3143,7 +3143,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = createLargeDeterministicPayload(CHUNK_SIZE + 3072);
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-attach-regression.bin'));
-        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.archiveStateBytes);
 
@@ -3169,7 +3169,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = createLargeDeterministicPayload(CHUNK_SIZE + 6144);
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-partial-rewrite.bin'));
-        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
 
         const sigA = buildQsigFixture(split.archiveStateBytes);
@@ -3212,7 +3212,7 @@ function buildCases() {
         const archiveIdRandomBytes = new Uint8Array(32).fill(0xab);
         const split = await buildLifecycleQcontShards(
           qencBytes,
-          pair.secretKey,
+          pair.privateKey,
           { n: 5, k: 3 },
           { authPolicyLevel: 'integrity-only', archiveIdRandomBytes }
         );
@@ -3274,7 +3274,7 @@ function buildCases() {
         const legacyPair = await generateKeyPair({ collectUserEntropy: false });
         const legacyPayload = textBytes('mixed-legacy-successor-legacy');
         const legacyQenc = await blobToBytes(await encryptFile(legacyPayload, legacyPair.publicKey, 'mixed-legacy-successor-legacy.bin'));
-        const legacySplit = await buildQcontShards(legacyQenc, legacyPair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const legacySplit = await buildQcontShards(legacyQenc, legacyPair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const legacyParsed = await Promise.all(legacySplit.shards.slice(0, 2).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const successorSample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('mixed-legacy-successor-successor') });
 
@@ -4337,7 +4337,7 @@ function buildCases() {
         const unsupportedPattern = /Unsupported cohort parameters: parity must be even under QV-RS-ErasureCodes-v1/i;
 
         await expectFailureWithMessage(
-          () => buildLifecycleQcontShards(sample.qencBytes, sample.pair.secretKey, { n: 5, k: 4 }, {
+          () => buildLifecycleQcontShards(sample.qencBytes, sample.pair.privateKey, { n: 5, k: 4 }, {
             authPolicyLevel: 'integrity-only',
           }),
           unsupportedPattern,
@@ -5000,7 +5000,7 @@ function buildCases() {
         const payload = textBytes('phase7-regular-user-successor-build');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-regular-user-successor-build.bin'));
 
-        const split = await buildRegularUserShardSet(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildRegularUserShardSet(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'strong-pq-signature',
         });
 
@@ -5021,7 +5021,7 @@ function buildCases() {
         const payload = textBytes('phase7-explicit-legacy-build');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-explicit-legacy-build.bin'));
 
-        const split = await buildRegularUserShardSet(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildRegularUserShardSet(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           artifactFamily: 'legacy',
           authPolicyLevel: 'integrity-only',
         });
@@ -5067,7 +5067,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-selection-status.bin'));
-        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
 
         const sigA = buildQsigFixture(split.archiveStateBytes);
@@ -5128,11 +5128,11 @@ function buildCases() {
     {
       name: '.qcont reconstruction',
       fn: async () => {
-        const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
+        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = createLargeDeterministicPayload(256 * 1024);
         const encrypted = await encryptFile(payload, publicKey, 'restore.txt');
         const qencBytes = await blobToBytes(encrypted);
-        const built = await buildQcontShards(qencBytes, secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const built = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const builtShards = built.shards;
         const shardBytes = await Promise.all(builtShards.map((shard) => blobToBytes(shard.blob)));
         const oneCorrupted = shardBytes.map((bytes, idx) => (idx === 0 ? mutateTail(bytes) : bytes.slice()));
@@ -5158,8 +5158,8 @@ function buildCases() {
         const qencA = await blobToBytes(await encryptFile(payloadA, pairA.publicKey, 'a.bin'));
         const qencB = await blobToBytes(await encryptFile(payloadB, pairB.publicKey, 'b.bin'));
 
-        const splitA = await buildQcontShards(qencA, pairA.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const splitB = await buildQcontShards(qencB, pairB.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const splitA = await buildQcontShards(qencA, pairA.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const splitB = await buildQcontShards(qencB, pairB.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
 
         const mixed = [
           ...(await Promise.all(splitA.shards.slice(0, 3).map((item) => blobToBytes(item.blob)))),
@@ -5184,8 +5184,8 @@ function buildCases() {
         const qencA = await blobToBytes(await encryptFile(payloadA, pairA.publicKey, 'sa.bin'));
         const qencB = await blobToBytes(await encryptFile(payloadB, pairB.publicKey, 'sb.bin'));
 
-        const splitA = await buildQcontShards(qencA, pairA.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const splitB = await buildQcontShards(qencB, pairB.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const splitA = await buildQcontShards(qencA, pairA.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const splitB = await buildQcontShards(qencB, pairB.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
 
         const selectedShardBytes = await Promise.all(splitA.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
         const distractorShardBytes = await blobToBytes(splitB.shards[0].blob);
@@ -5207,7 +5207,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('manifest-tamper');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'tamper.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 });
         const shardBytes = await blobToBytes(split.shards[0].blob);
         const tampered = mutateQcontManifestByte(shardBytes);
 
@@ -5283,7 +5283,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('duplicate-policy-count');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'any-signature',
           minValidSignatures: 2,
         });
@@ -5311,7 +5311,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('unique-policy-count');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'unique-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'any-signature',
           minValidSignatures: 2,
         });
@@ -5340,7 +5340,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('bundle-external-duplicate-policy-count');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'bundle-external-duplicate-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'any-signature',
           minValidSignatures: 2,
         });
@@ -5453,7 +5453,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('duplicate-bundle-signatures');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-bundle-signatures.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
         const attached = await attachManifestBundleToShards(parsed, {
@@ -5489,7 +5489,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('duplicate-stellar-sep53-policy-count');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-stellar-sep53-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'any-signature',
           minValidSignatures: 2,
         });
@@ -5518,7 +5518,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('duplicate-stellar-xdr-attach');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-stellar-xdr-attach.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const stellarSig = await buildStellarXdrSignatureFixture(split.manifestBytes);
         const duplicateBytes = rewriteStellarSignatureDocument(stellarSig.bytes, {
           reverseHashes: true,
@@ -5552,7 +5552,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('default-auth-policy');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'default-policy.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 });
 
         assert(split.bundle.authPolicy.level === PRO_DEFAULT_AUTH_POLICY_LEVEL, 'builder fallback must emit the Pro default policy');
       },
@@ -5563,7 +5563,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('strict-authn');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'strict.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
         const parsed = shardBytes.map((bytes) => parseShard(bytes));
 
@@ -5582,7 +5582,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('pre-attach-signature');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'signed.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
         const parsed = shardBytes.map((bytes) => parseShard(bytes));
         const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
@@ -5612,7 +5612,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('strong-pq-valid');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'strong-pq-valid.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes } = buildQsigFixture(split.manifestBytes);
 
@@ -5635,7 +5635,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('unsupported-qsig-context');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'unsupported-qsig-context.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes } = buildQsigFixture(split.manifestBytes, { ctx: 'quantum-signer/v3' });
 
@@ -5657,7 +5657,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('any-signature-ed25519');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'any-signature-ed25519.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
 
@@ -5775,7 +5775,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('invalid-extra-signatures');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'invalid-extra-signatures.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes } = buildQsigFixture(split.manifestBytes);
         const malformedQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
@@ -5805,7 +5805,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('post-attach-signature');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
 
@@ -5845,7 +5845,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('stale-shards-with-uploaded-bundle');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stale.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const originalShards = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const allShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
@@ -5876,7 +5876,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('bundle-and-user-pin');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'bundle-and-user-pin.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
 
@@ -6073,7 +6073,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('stellar-bundle-pin');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stellar-bundle-pin.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const stellarSig = await buildStellarSignatureFixtureWithSigner(split.manifestBytes);
 
@@ -6110,7 +6110,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('attach-current-format-signatures');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach-current-format-signatures.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const manifestBytes = split.manifestBytes;
         const { qsigBytes: mlQsigBytes, pqpkBytes: mlPqpkBytes } = buildQsigFixture(manifestBytes);
         const stellarSigner = await createStellarSignerMaterial();
@@ -6139,7 +6139,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('attach-semantic-pqpk-dedupe');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach-semantic-pqpk-dedupe.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const sig = buildQsigFixture(split.manifestBytes);
         const alternateWrapper = mutatePqpkVersionMinor(sig.pqpkBytes, 0x07);
 
@@ -6164,7 +6164,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('stellar-export-attachment');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stellar-export-attachment.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const stellarSig = await buildStellarSignatureFixtureWithSigner(split.manifestBytes);
 
@@ -6187,7 +6187,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('ots-target-selection');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sigA = buildQsigFixture(split.manifestBytes);
         const sigB = buildQsigFixture(split.manifestBytes);
@@ -6328,7 +6328,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-external-ots');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-external-ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.manifestBytes);
         const otsBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: true });
@@ -6368,7 +6368,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-multiple-pqpk-pins');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-multiple-pqpk-pins.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'any-signature',
           minValidSignatures: 2,
         });
@@ -6445,7 +6445,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-bundled-ots');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-bundled-ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.manifestBytes);
         const otsBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: false });
@@ -6477,7 +6477,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-ots-dedupe');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-ots-dedupe.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sigA = buildQsigFixture(split.manifestBytes);
         const sigB = buildQsigFixture(split.manifestBytes);
@@ -6527,7 +6527,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('ots-unrelated');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots-unrelated.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.manifestBytes);
         const unrelatedOts = await buildOtsFixture(textBytes('not-a-detached-signature'), { completeProof: false });
@@ -6549,7 +6549,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-unrelated-ots');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-unrelated-ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.manifestBytes);
         const unrelatedOts = await buildOtsFixture(textBytes('not-a-detached-signature'), { completeProof: false });
@@ -6573,7 +6573,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('ots-does-not-satisfy-policy');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots-does-not-satisfy-policy.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
         const otsBytes = await buildOtsFixture(stellarSigBytes, { completeProof: true });
@@ -6596,7 +6596,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('manifest-only-attach');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'bundle-only.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const sigA = buildQsigFixture(split.manifestBytes);
         const firstAttach = await attachManifestBundleToShards([], {
           manifestBytes: split.manifestBytes,
@@ -6639,7 +6639,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-prefer-richer-bundle');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-prefer-richer-bundle.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const originalShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.manifestBytes);
         const attached = await attachManifestBundleToShards(originalShards, {
@@ -6684,7 +6684,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('restore-uploaded-bundle-mixed-cohort');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-uploaded-bundle-mixed-cohort.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
         const originalShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
         const sig = buildQsigFixture(split.manifestBytes);
         const attached = await attachManifestBundleToShards(originalShards, {
@@ -6727,7 +6727,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('legacy-signature-only');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
 
@@ -6747,7 +6747,7 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('duplicate-index');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'dup.bin'));
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
         const parsed = [
           parseShard(shardBytes[0]),
@@ -6772,7 +6772,7 @@ function buildCases() {
         const encryptedBytes = await blobToBytes(encrypted);
 
         await expectFailure(
-          () => decryptFile(encryptedBytes, pairB.secretKey),
+          () => decryptFile(encryptedBytes, pairB.privateKey),
           'decrypt unexpectedly succeeded with unrelated private key'
         );
       },
@@ -6787,7 +6787,7 @@ function buildCases() {
         const tampered = mutateTail(encryptedBytes);
 
         await expectFailure(
-          () => decryptFile(tampered, pair.secretKey),
+          () => decryptFile(tampered, pair.privateKey),
           'decrypt unexpectedly succeeded on tampered qenc'
         );
       },
@@ -6799,7 +6799,7 @@ function buildCases() {
         const payload = textBytes('qcont-too-many-errors');
         const encrypted = await encryptFile(payload, pair.publicKey, 'qcont-fail.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const qconts = split.shards;
         const shardBytes = await Promise.all(qconts.map((shard) => blobToBytes(shard.blob)));
 
@@ -6829,7 +6829,7 @@ function buildCases() {
         assert(header.metadata.maxChunkCount === 0xffffffff, 'per-chunk maxChunkCount mismatch');
         assert(header.metadata.iv_strategy === IV_STRATEGY_KMAC_PREFIX64_CTR32_V3, 'per-chunk iv_strategy mismatch');
 
-        const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, pair.secretKey);
+        const { decryptedBlob, metadata } = await decryptFile(encryptedBytes, pair.privateKey);
         const decrypted = await blobToBytes(decryptedBlob);
         assert(metadata.fileHash === (await hashBytes(payload)), 'chunked metadata hash mismatch');
         assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'chunked roundtrip mismatch');
@@ -7003,7 +7003,7 @@ function buildCases() {
         const qencBytes = await blobToBytes(encrypted);
 
         await expectFailure(
-          () => buildQcontShards(qencBytes, pairB.secretKey, { n: 5, k: 3 }),
+          () => buildQcontShards(qencBytes, pairB.privateKey, { n: 5, k: 3 }),
           'buildQcontShards unexpectedly accepted mismatched private key'
         );
       },
@@ -7018,7 +7018,7 @@ function buildCases() {
         const malformed = removeQencKeyCommitmentBytes(encBytes);
 
         await expectFailure(
-          () => decryptFile(malformed, pair.secretKey),
+          () => decryptFile(malformed, pair.privateKey),
           'decryptFile unexpectedly accepted missing key commitment'
         );
       },
@@ -7087,7 +7087,7 @@ function buildCases() {
     {
       name: 'ADV: validatePublicKey rejects wrong-size keys',
       fn: async () => {
-        const { validatePublicKey: vpk, validateSecretKey: vsk } = await import('./mlkem.js');
+        const { validatePublicKey: vpk, validatePrivateKey: vsk } = await import('./mlkem.js');
         await expectFailure(
           () => vpk(new Uint8Array(100)),
           'validatePublicKey accepted wrong-size key'
@@ -7098,7 +7098,7 @@ function buildCases() {
         );
         await expectFailure(
           () => vsk(new Uint8Array(100)),
-          'validateSecretKey accepted wrong-size key'
+          'validatePrivateKey accepted wrong-size key'
         );
       },
     },
@@ -7121,11 +7121,11 @@ function buildCases() {
         const qenc = await blobToBytes(await encryptFile(payload, pair.publicKey, 'rs.bin'));
 
         await expectFailure(
-          () => buildQcontShards(qenc, pair.secretKey, { n: 1, k: 1 }),
+          () => buildQcontShards(qenc, pair.privateKey, { n: 1, k: 1 }),
           'buildQcontShards accepted n=1, k=1'
         );
         await expectFailure(
-          () => buildQcontShards(qenc, pair.secretKey, { n: 3, k: 5 }),
+          () => buildQcontShards(qenc, pair.privateKey, { n: 3, k: 5 }),
           'buildQcontShards accepted k > n'
         );
       },
@@ -7140,7 +7140,7 @@ function buildCases() {
         const truncated = encryptedBytes.slice(0, 64);
 
         await expectFailure(
-          () => decryptFile(truncated, pair.secretKey),
+          () => decryptFile(truncated, pair.privateKey),
           'decryptFile unexpectedly succeeded on truncated container'
         );
       },
@@ -7170,7 +7170,7 @@ function buildCases() {
           exercised = true;
 
           await expectFailure(
-            () => decryptFile(swapped, pair.secretKey),
+            () => decryptFile(swapped, pair.privateKey),
             'decryptFile unexpectedly succeeded with swapped chunks'
           );
         }
@@ -7199,7 +7199,7 @@ function buildCases() {
         const header = parseQencHeader(qencBytes);
         assert(header.metadata.aead_mode === 'per-chunk-aead', 'expected per-chunk-aead');
 
-        const split = await buildQcontShards(qencBytes, pair.secretKey, { n: 7, k: 5 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 7, k: 5 }, { authPolicyLevel: 'integrity-only' });
         assert(split.shards.length === 7, 'expected 7 shards');
 
         const shardBytes = await Promise.all(split.shards.map(s => blobToBytes(s.blob)));

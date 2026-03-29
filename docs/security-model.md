@@ -116,7 +116,6 @@ Terminology used here follows `docs/glossary.md` and `format-spec.md`:
 
 - `privateKey` means asymmetric secret material
 - `secretKey` means symmetric secret material
-- the exported filename `secretKey.qkey` is a legacy operational name for the ML-KEM private key file
 
 ## 2. Assets and trust boundaries
 
@@ -125,7 +124,7 @@ Terminology used here follows `docs/glossary.md` and `format-spec.md`:
 | Asset | Primary security concern | Current notes |
 | --- | --- | --- |
 | Plaintext payload | Confidentiality, integrity | Exists before encrypt and after decrypt in browser memory |
-| ML-KEM private key file (`secretKey.qkey`) | Confidentiality, recoverability | This is asymmetric `privateKey` material, despite the legacy filename |
+| ML-KEM private key file (`privateKey.qkey`) | Confidentiality, recoverability | This is asymmetric `privateKey` material |
 | ML-KEM public key file (`publicKey.qkey`) | Integrity, correct binding | Used to encapsulate the shared secret for `.qenc` creation |
 | Shared secret and derived symmetric secrets (`Kraw`, `Kenc`, `Kiv`) | Confidentiality | Ephemeral runtime-only symmetric `secretKey` material |
 | `.qenc` container | Confidentiality, fixity, parse safety | Public metadata plus authenticated ciphertext |
