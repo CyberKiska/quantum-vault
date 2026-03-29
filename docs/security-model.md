@@ -66,14 +66,19 @@ Implemented now:
 - best-effort in-memory secret wiping and no intended persistent secret storage
 - explicit separation among integrity, signature validity, pinning, and policy satisfaction
 - **Successor lifecycle** artifacts (QVqcont-7 shards, `QV-Lifecycle-Bundle` v1) with archive-state–centric approval and fail-closed restore selection rules described in `format-spec.md` Section 8
-- successor-default regular-user creation in Lite and Pro, with legacy manifest/bundle handling retained only as a compatibility surface for existing archives
+- successor-default regular-user creation in Lite and Pro, with v1 manifest/bundle handling retained only as a transition surface for existing archives
 
-Not yet provided by the current implementation:
+Deferred roadmap:
 
 - resistance to a fully compromised host or browser environment
 - hardware-backed key isolation or strong side-channel resistance
 - a complete renewable evidence-record architecture
 - institutional governance, repository certification, or mandatory signer pinning by default
+
+Deprecated v1 context:
+
+- `QVqcont-6` restore, manifest-signature verification, and manifest-bundle semantics remain implemented for previously created archives only
+- v1 richer-bundle restore heuristics remain bounded to the deprecated v1 path and are not part of successor restore behavior
 
 ## Future work and non-normative notes
 
@@ -283,16 +288,18 @@ Current confidentiality and AEAD invariants:
 - key commitment is mandatory and MUST be verified before decryption
 - KMAC domain strings for KDF and IV derivation MUST remain explicit, non-colliding, and stable for the artifact instance
 
-### 7.3 Legacy manifest, bundle, and authenticity invariants
+### 7.3 Successor lifecycle authenticity and restore invariants
 
-Current authenticity invariants:
+Current successor invariants:
 
-- canonical manifest bytes are the only detached-signature payload
-- bundle mutation MUST NOT mutate canonical manifest bytes
-- detached signatures MUST NOT be treated as signatures over mutable bundle bytes
-- `manifestDigest` and `authPolicyCommitment` bindings MUST remain consistent with the embedded manifest and bundle policy object
-- integrity verified, signature verified, signer pinned, and archive policy satisfied MUST remain separate states
-- timestamp evidence MUST NOT satisfy archive signature policy by itself
+- archive-approval signatures MUST verify over canonical archive-state descriptor bytes, not mutable lifecycle-bundle bytes
+- lifecycle-bundle mutation MUST NOT mutate canonical archive-state or canonical cohort-binding bytes
+- archive policy MUST count only `archiveApprovalSignatures`
+- maintenance and source-evidence signatures MUST remain separate from archive policy satisfaction
+- OTS evidence MUST target detached signature bytes and MUST NOT satisfy archive policy by itself
+- restore MUST group successor candidates by `archiveId`, `stateId`, `cohortId`, and exact archive-state/cohort-binding bytes
+- restore MUST NOT auto-select a same-state fork winner or embedded lifecycle-bundle winner by timestamp, attachment count, lexical order, or similar heuristic
+- if an operator explicitly selects a successor cohort or lifecycle bundle in an otherwise ambiguous case, the result MUST be reported as an explicit operator choice with warning rather than an automatic winner
 
 ### 7.4 Shard and reconstruction invariants
 
@@ -302,7 +309,7 @@ Current threshold and shard invariants:
 - threshold semantics MUST remain deterministic, with current threshold derived as `t = k + (n-k)/2`
 - Shamir share commitments MUST bind raw share bytes
 - fragment integrity validation MUST remain mandatory
-- conflicting manifest digests, bundle digests, or incompatible cohorts MUST fail closed
+- conflicting manifest digests, bundle digests, archive-state bytes, cohort-binding bytes, or incompatible cohorts MUST fail closed
 - fewer than threshold shards MUST NOT reconstruct the ML-KEM private key
 
 ### 7.5 Parsing and verifier invariants
@@ -315,13 +322,13 @@ Current parser and verifier invariants:
 - cryptographic meaning MUST NOT depend on mutable filesystem metadata
 - malformed or ambiguously linked evidence MUST be rejected rather than silently downgraded
 
-### 7.6 Successor lifecycle and same-state resharing (claim boundaries)
+### 7.6 Deprecated v1 context and same-state resharing claim boundaries
 
-The **successor** track separates archive-state approval from cohort-level sharding (`format-spec.md`, `trust-and-policy.md` §11). Invariants include:
+Historical v1 invariants:
 
-- archive-approval signatures MUST verify over canonical **archive-state descriptor** bytes, not mutable lifecycle-bundle bytes
-- maintenance and source-evidence detached signatures MUST NOT satisfy archive policy
-- restore MUST NOT auto-select a lifecycle bundle digest, cohort, or fork winner by heuristic when disambiguation is required
+- canonical manifest bytes remain the detached-signature payload for legacy archives
+- legacy bundle mutation MUST NOT mutate canonical manifest bytes
+- legacy restore heuristics MUST remain bounded to `QVqcont-6` compatibility restore and MUST NOT leak into successor restore
 
 **Same-state resharing** (availability maintenance) produces a new cohort and `cohortId` but preserves archive-state bytes and existing archive-approval signatures. The implementation does **not** claim to:
 
@@ -340,7 +347,7 @@ Operational warnings emitted by resharing flows are advisory; they are not a sub
 | Threshold secrecy | Fewer than the required shards are available and Shamir/recovery invariants hold | Availability or recoverability |
 | Threshold recoverability | A sufficient consistent shard cohort is available and policy permits restore | That every shard source was honest or that provenance is strong |
 | A verified detached signature | The signature cryptographically verifies over the exact canonical **signable** bytes for the path (legacy: manifest bytes; successor archive-approval: archive-state descriptor bytes) under a supported suite/wrapper | That the signer audited plaintext, approved archive class, or authorized migration |
-| Archive policy satisfied | The required valid signature set exists under the current policy semantics | Signer pinning, timestamp evidence, or broader organizational approval |
+| Archive policy satisfied | The required valid signature set exists under the current policy semantics (successor: archive-approval signatures only) | Signer pinning, timestamp evidence, maintenance approval, source-review approval, or broader organizational approval |
 | OTS evidence linked | The evidence object targets a detached signature under the supported linkage checks | A full independent third-party time proof or policy satisfaction by itself |
 
 Current long-horizon qualification:

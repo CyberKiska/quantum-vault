@@ -8,7 +8,7 @@
 
 ## Abstract
 
-Quantum Vault is a client-only archival containerization system that combines post-quantum confidentiality, threshold recoverability, and detached provenance into a long-lived artifact family. The legacy track uses a canonical signable manifest plus mutable manifest bundle. The successor lifecycle track uses a canonical archive-state descriptor, cohort binding, and `QV-Lifecycle-Bundle` v1, with archive-approval signatures bound to canonical archive-state bytes. The current repository implements both tracks, but the shipped Lite and Pro surface now creates successor shard sets by default; beginning with v1.5.3, legacy manifest/bundle creation became compatibility-only during the documented phase-out window. Across both tracks, mutable evidence — signatures, signer identity material, and timestamp proofs — can evolve without invalidating previously computed approval signatures. Restoration is gated by an explicit archive authenticity policy committed at creation time. The current implementation executes entirely within the browser with no runtime network cryptographic service. This paper describes the system's design rationale, cryptographic construction, canonicality and binding model, security invariants, and long-term archival direction, and identifies the limitations and open risks that remain.
+Quantum Vault is a client-only archival containerization system that combines post-quantum confidentiality, threshold recoverability, and detached provenance into a long-lived artifact family. The current baseline uses the successor lifecycle model: a canonical archive-state descriptor, cohort binding, and `QV-Lifecycle-Bundle` v1, with archive-approval signatures bound to canonical archive-state bytes. Previously, v1 used a canonical signable manifest plus mutable manifest bundle. The current repository still implements both tracks during the phase-out window, but the shipped Lite and Pro surface now creates successor shard sets by default; beginning with v1.5.3, v1 manifest/bundle creation left the normal product path. Across both tracks, mutable evidence — signatures, signer identity material, and timestamp proofs — can evolve without invalidating previously computed approval signatures. Restoration is gated by an explicit archive authenticity policy committed at creation time. The current implementation executes entirely within the browser with no runtime network cryptographic service. This paper describes the system's design rationale, cryptographic construction, canonicality and binding model, security invariants, and long-term archival direction, and identifies the limitations and open risks that remain.
 
 ---
 
@@ -108,6 +108,28 @@ The archive lifecycle proceeds through the following stages:
 
 **Successor lifecycle track (current implementation):** For **`QVqcont-7`** shards, embedded objects replace the manifest/bundle pair with an **archive-state descriptor**, **cohort binding**, and **`QV-Lifecycle-Bundle` v1**. Detached **archive-approval** signatures target canonical **archive-state** bytes, separating cohort-level sharding from the stable approval object. The shipped regular-user surface now uses this successor flow by default. The **legacy** manifest-based flow remains **supported** only as a compatibility path for existing archives while the project phases legacy behavior out. Normative details: `docs/format-spec.md`, `docs/trust-and-policy.md`; design history: `docs/process/roadmap/lifecycle/resharing-design.md`.
 
+### 3.3 Current implementation boundary
+
+**Implemented now**
+
+- successor-default build/export in Lite and Pro
+- canonical archive-state approval separated from mutable lifecycle-bundle evidence
+- state-bound cohort bindings plus derived `archiveId`, `stateId`, and `cohortId`
+- detached archive-approval, maintenance, and source-evidence signature families
+- restore-time policy evaluation over archive-approval signatures only
+- same-state resharing with required transition records
+
+**Deferred roadmap**
+
+- state-changing continuity records across rewrap or reencryption
+- RFC 4998-style renewable evidence records
+- governance and trust-root objects
+- distributed resharing
+
+**Historical v1 context**
+
+- canonical manifest, mutable manifest bundle, and `QVqcont-6` remain implemented only for previously created archives and historical transition analysis
+
 ---
 
 ## 4. Cryptographic Construction
@@ -118,7 +140,7 @@ Quantum Vault uses ML-KEM-1024 (FIPS 203 [6]) for key establishment. ML-KEM is a
 
 The encapsulation produces a shared secret and a ciphertext (the encapsulated key). The shared secret is not used directly as an encryption key; it enters the key-derivation tree described in Section 4.2.
 
-The chosen parameter set (`ML-KEM-1024`) is recorded as an explicit algorithm identifier in every `.qenc` container header and in the canonical manifest's `cryptoProfileId`. This follows SP 800-227's guidance that a KEM parameter set must be selected before key generation and must be bound to the resulting key pair [23].
+The chosen parameter set (`ML-KEM-1024`) is recorded as an explicit algorithm identifier in every `.qenc` container header and in the current signable archive description's `cryptoProfileId` field: the legacy canonical manifest or the successor archive-state descriptor. This follows SP 800-227's guidance that a KEM parameter set must be selected before key generation and must be bound to the resulting key pair [23].
 
 ML-KEM provides IND-CCA2-secure key encapsulation under the module-LWE hardness assumption. It protects against passive capture, including HNDL scenarios. It does not provide sender authentication; origin claims require the detached signature layer described in Section 4.6. SP 800-227 explicitly states that a KEM is not a key-agreement mechanism: the encapsulator and decapsulator roles are asymmetric, and the shared secret is established unilaterally by the encapsulation operation [23].
 
@@ -166,7 +188,9 @@ Quantum Vault uses SHA3-512 (FIPS 202 [10]) as its primary hash function for:
 
 - `qencHash`: SHA3-512 over the full `.qenc` container bytes (primary fixity anchor)
 - `containerId`: SHA3-512 over the `.qenc` header bytes (secondary identifier)
-- `manifestDigest`: SHA3-512 over canonical manifest bytes
+- `manifestDigest`: SHA3-512 over canonical manifest bytes (historical v1 anchor)
+- `stateId`: SHA3-512 over canonical archive-state descriptor bytes (successor)
+- `cohortBindingDigest`: SHA3-512 over canonical cohort-binding bytes (successor)
 - `authPolicyCommitment`: SHA3-512 over canonicalized authenticity policy
 - Shard body hashes and Shamir share commitments
 
@@ -178,15 +202,15 @@ SHA-3 (Keccak) is chosen over SHA-2 for its distinct algebraic structure, which 
 
 Quantum Vault splits archive material across `n` shards using two complementary mechanisms:
 
-**Shamir secret sharing** [11] splits the ML-KEM private key into `n` shares such that any `t` shares suffice to reconstruct the key, but fewer than `t` shares reveal no information about it (information-theoretic secrecy). The threshold is computed as `t = k + (n − k) / 2`, where `k` is the Reed–Solomon data-shard count and `n` is the total shard count, with the constraint that `n − k` is even. Shamir's original construction provides secrecy and reconstruction but does not inherently provide integrity: a corrupted or maliciously substituted share will cause reconstruction to yield a wrong secret without detection [11]. Quantum Vault mitigates this by computing a SHA3-512 commitment over each raw share at creation time and recording these commitments in the canonical manifest. During restoration, each submitted share is checked against its committed digest before entering reconstruction; a share that does not match its commitment is rejected. This design provides share-level integrity verification but does not provide verifiable secret sharing in the formal cryptographic sense (e.g., Feldman VSS or Pedersen VSS), which would require additional round-trip interaction or computational assumptions beyond the information-theoretic model.
+**Shamir secret sharing** [11] splits the ML-KEM private key into `n` shares such that any `t` shares suffice to reconstruct the key, but fewer than `t` shares reveal no information about it (information-theoretic secrecy). The threshold is computed as `t = k + (n − k) / 2`, where `k` is the Reed–Solomon data-shard count and `n` is the total shard count, with the constraint that `n − k` is even. Shamir's original construction provides secrecy and reconstruction but does not inherently provide integrity: a corrupted or maliciously substituted share will cause reconstruction to yield a wrong secret without detection [11]. Quantum Vault mitigates this by computing a SHA3-512 commitment over each raw share at creation time and recording these commitments in the current track's distribution object: the legacy canonical manifest or the successor cohort binding. During restoration, each submitted share is checked against its committed digest before entering reconstruction; a share that does not match its commitment is rejected. This design provides share-level integrity verification but does not provide verifiable secret sharing in the formal cryptographic sense (e.g., Feldman VSS or Pedersen VSS), which would require additional round-trip interaction or computational assumptions beyond the information-theoretic model.
 
-**Reed–Solomon erasure coding** [12] splits the `.qenc` ciphertext into `k` data fragments and `n − k` parity fragments, such that any `k` of `n` fragments suffice to reconstruct the ciphertext. The implementation operates over GF(2^8) with a maximum codeword length of 255 symbols. Per-shard fragment body hashes (SHA3-512) are recorded in the canonical manifest and verified during restoration.
+**Reed–Solomon erasure coding** [12] splits the `.qenc` ciphertext into `k` data fragments and `n − k` parity fragments, such that any `k` of `n` fragments suffice to reconstruct the ciphertext. The implementation operates over GF(2^8) with a maximum codeword length of 255 symbols. Per-shard fragment body hashes (SHA3-512) are recorded in the current track's shard-distribution object and verified during restoration: the legacy canonical manifest or the successor cohort binding.
 
-The combination provides both confidentiality protection (Shamir threshold for key material) and availability protection (Reed–Solomon erasure tolerance for ciphertext fragments). Each `.qcont` shard carries one Shamir share, one set of Reed–Solomon fragments, and embedded copies of the canonical manifest and manifest bundle.
+The combination provides both confidentiality protection (Shamir threshold for key material) and availability protection (Reed–Solomon erasure tolerance for ciphertext fragments). Each `.qcont` shard carries one Shamir share, one set of Reed–Solomon fragments, and the track-specific embedded authenticity material for its format family. Legacy `QVqcont-6` shards embed the canonical manifest and manifest bundle. The current shipped successor `QVqcont-7` shards embed the archive-state descriptor, cohort binding, and lifecycle bundle.
 
 ### 4.7 Detached Signatures
 
-Quantum Vault supports detached signatures over canonical manifest bytes from two external signer tools:
+Quantum Vault supports detached signatures over the current signable archive description from two external signer tools:
 
 **Post-quantum signatures (`.qsig`).** Produced by Quantum Signer, a client-only tool that supports ML-DSA parameter sets (FIPS 204 [13]) and SLH-DSA parameter sets (FIPS 205 [14]). The `.qsig` format is a versioned binary container (context `quantum-signer/v2`) that carries the signature suite identifier, a SHA3-512 prehash of the signed payload, signer fingerprint, and signature bytes.
 
@@ -196,61 +220,79 @@ SLH-DSA is a stateless hash-based signature scheme whose security rests solely o
 
 **Classical-interoperability signatures (`.sig`).** Produced by Stellar WebSigner using Ed25519 (RFC 8032 [15]). These signatures provide interoperability with existing identity ecosystems but are not quantum-resistant. Ed25519 relies on the hardness of the elliptic-curve discrete-logarithm problem on Curve25519, which Shor's algorithm solves in polynomial time [1]. Roetteler et al. estimate that breaking 256-bit elliptic-curve keys requires on the order of 2330 logical qubits and 10^11 Toffoli gates [27] — feasible for a fault-tolerant quantum computer but well beyond current hardware. After a quantum transition, Ed25519 signatures lose cryptographic force unless time evidence proves they were produced before the transition. Accordingly, the archive policy system treats Ed25519 signatures as valid for `any-signature` policy but insufficient for `strong-pq-signature` policy (Section 6.2). IR 8547 frames this as a transitional posture: classical signatures remain useful while quantum computers are unavailable, but long-term provenance requires PQ alternatives [2].
 
+In the legacy track, detached archive-approval signatures target canonical manifest bytes. In the successor track, detached archive-approval signatures target canonical archive-state descriptor bytes, while maintenance and source-evidence signatures target canonical transition-record or source-evidence bytes and are reported separately from archive policy.
+
 Current archive authenticity policy recognizes three signature-strength suites as "strong PQ": `mldsa-87` (ML-DSA-87), `slhdsa-shake-256s` (SLH-DSA-SHAKE-256s), and `slhdsa-shake-256f` (SLH-DSA-SHAKE-256f). Policy evaluation is based on normalized suite identifiers, not on wrapper type or file extension.
 
 ---
 
 ## 5. Canonicality, Mutability, and Binding Model
 
-This section describes one of the most important architectural patterns in Quantum Vault: the separation between an immutable canonical manifest and a mutable manifest bundle.
-That legacy pattern remains relevant for compatibility analysis. The shipped regular-user surface now uses the successor variant of the same pattern: an immutable archive-state descriptor plus a mutable `QV-Lifecycle-Bundle` v1. Normative successor details live in `docs/format-spec.md` and `docs/trust-and-policy.md`.
+This section describes one of the most important architectural patterns in Quantum Vault: the separation between an immutable signable object and a mutable evidence carrier.
+The shipped regular-user surface now uses the successor variant of this pattern: an immutable archive-state descriptor plus a mutable `QV-Lifecycle-Bundle` v1. The legacy manifest/bundle pattern remains relevant for compatibility analysis, but it is no longer the default archive model.
 
-### 5.1 Canonical Manifest
+### 5.1 Successor archive-state descriptor (current primary track)
 
-The canonical manifest (`*.qvmanifest.json`) is a JSON object with schema `quantum-vault-archive-manifest/v3` that describes the archive state at creation time. Its fields include:
+The successor archive-state descriptor is the long-lived archive-approval object for one archive state. It is canonicalized under `QV-JSON-RFC8785-v1` and carries:
 
-- Cryptographic profile and KDF tree identifiers
-- Nonce policy, AEAD mode, IV strategy, and counter parameters
-- `qencHash` and `containerId` binding the manifest to a specific `.qenc` container
-- Sharding parameters (Shamir threshold, Reed–Solomon dimensions, codec identifier)
-- Shard body hashes and share commitments
-- An `authPolicyCommitment` binding the manifest to a specific authenticity policy
+- `archiveId` as the stable archive identifier within the successor family
+- `parentStateId` for state lineage
+- cryptographic profile and KDF identifiers
+- nonce/AAD interpretation fields
+- a `qenc` binding object containing `qencHash`, `containerId`, and related current-state fixity anchors
+- `authPolicyCommitment` binding the canonical archive-state bytes to the mutable `authPolicy` object carried in the lifecycle bundle
 
-The manifest is serialized under an RFC 8785-aligned (JSON Canonicalization Scheme, JCS) [16] canonical JSON profile labeled `QV-JSON-RFC8785-v1`. The same strict canonicalization rules are also used for `authPolicyCommitment` input. Bundle bytes are labeled separately as `QV-BUNDLE-JSON-v1` so unsigned bundle-byte compatibility can evolve independently from detached-signature payload compatibility. The parser rejects duplicate keys, lone surrogates, invalid UTF-8, and prototype-sensitive JSON member-name behavior before canonicalization. The repository currently demonstrates byte-level parity for the checked-in regression vectors and current manifest-family shapes; it does not make a broader external conformance claim beyond that covered scope.
+The canonical archive-state bytes are the payload of successor archive-approval signatures. The derived `stateId` is `SHA3-512(canonical archive-state descriptor bytes)`. `stateId` does not appear inside the canonical archive-state bytes used to derive it.
 
-The current structural grammar for manifest-family JSON artifacts is now also published as JSON Schema draft 2020-12 files under `docs/schema/`. Those schemas define the machine-readable grammar layer for the canonical manifest and manifest bundle. They do not replace canonicalization or semantic validation: parser code still enforces digest equality, commitment equality, and other fail-closed binding rules. The repository's checked-in JavaScript CI helper validates the active schema-keyword subset used by the current checked-in schemas and fixtures; it is not a full general-purpose draft 2020-12 validator.
+### 5.2 Successor lifecycle bundle (current primary track)
 
-In the legacy track, the canonical manifest bytes — the exact byte output of `QV-JSON-RFC8785-v1` serialization — are the sole payload of detached archive-approval signatures. They are embedded identically into every legacy `.qcont` shard and into every manifest bundle. They must not be altered after creation.
+`QV-Lifecycle-Bundle` v1 is the mutable evidence carrier for the successor track. It embeds:
 
-### 5.2 Manifest Bundle
+- the current archive-state descriptor and its digest
+- the current cohort binding and its digest
+- the concrete `authPolicy`
+- `sourceEvidence[]`
+- `transitions[]`
+- `attachments.publicKeys[]`
+- `attachments.archiveApprovalSignatures[]`
+- `attachments.maintenanceSignatures[]`
+- `attachments.sourceEvidenceSignatures[]`
+- `attachments.timestamps[]`
 
-The manifest bundle (`*.extended.qvmanifest.json`) is a mutable JSON object of type `QV-Manifest-Bundle` (version 2) that carries:
+The lifecycle bundle is mutable by design. Detached archive-approval signatures do not sign lifecycle-bundle bytes; they sign canonical archive-state bytes. This lets new signatures, keys, timestamps, transition records, and source-evidence objects accumulate over time without invalidating existing archive-approval signatures.
 
-- The canonical manifest (embedded as a structured object)
-- A `manifestDigest` (SHA3-512 over canonical manifest bytes)
-- The concrete `authPolicy` object
-- Attachment arrays for public keys, signatures, and timestamps
+Archive policy is evaluated using `archiveApprovalSignatures` only. Maintenance and source-evidence signatures remain separate semantic channels and do not satisfy archive policy.
 
-The bundle is the carrier for evidence that accumulates over time: new signatures, signer identity material, and timestamp proofs can be attached to the bundle without altering the canonical manifest bytes. Because detached signatures cover only the canonical manifest, bundle mutations do not invalidate any previously computed signature.
+### 5.3 Successor cohort binding and binding chain
 
-### 5.3 Binding Chain
+The cohort binding is the state-bound distribution object that carries sharding commitments and shard-body binding data for one shard cohort. It is canonicalized separately from the archive-state descriptor. `cohortId` is derived from `archiveId`, `stateId`, and `cohortBindingDigest`; the lifecycle-bundle digest is not part of cohort identity.
 
-The binding model creates a chain from evidence to ciphertext:
+The successor binding model creates the following chain:
 
-1. Detached signatures sign the current signable archive description: canonical manifest bytes in the legacy track, canonical archive-state bytes for successor archive approval, or other declared successor lifecycle targets for maintenance and source-evidence signatures.
-2. The signable archive description binds the archive description, including `qencHash`, `containerId`, sharding metadata, and shard body hashes.
-3. `qencHash` binds the manifest to the exact `.qenc` container bytes.
-4. `authPolicyCommitment` in the signable object binds the canonical description to the concrete `authPolicy` carried in the relevant mutable bundle.
-5. `.ots` evidence targets the bytes of a detached signature artifact, linking timestamp evidence to a signed archive description.
+1. Detached signatures sign canonical archive-state bytes for archive approval, or other declared successor lifecycle targets for maintenance and source evidence.
+2. The archive-state descriptor binds the current `.qenc` container through `qencHash`, `containerId`, and related interpretation fields.
+3. The cohort binding binds that archive state to one concrete shard cohort and its commitments.
+4. `authPolicyCommitment` binds the canonical archive-state descriptor to the concrete `authPolicy` carried in the lifecycle bundle.
+5. `.ots` evidence targets the bytes of a detached signature artifact, linking timestamp evidence to a signed lifecycle object rather than to mutable lifecycle-bundle bytes.
 
 This layered binding ensures that:
 
 - Signature validity is evaluated over a stable, immutable object.
 - Evidence can be added without re-signing.
-- The mutable bundle can carry evolving provenance without compromising the signed canonical description.
-- Changing the authenticity policy requires a new canonical manifest and new signatures, preventing silent policy weakening.
+- The mutable lifecycle bundle can carry evolving provenance without compromising the signed archive-state description.
+- Changing restore-relevant policy semantics requires a new archive-state descriptor and new archive-approval signatures, preventing silent policy weakening.
 
-### 5.4 Current Timestamp Evidence Semantics
+### 5.4 Historical v1 manifest/bundle comparison
+
+Previously, v1 used the same general architectural pattern with different object boundaries:
+
+- canonical manifest bytes were the detached archive-approval payload
+- the mutable manifest bundle carried policy, public keys, signatures, and timestamps
+- sharding parameters, shard body hashes, and share commitments lived inside the manifest rather than in a separate cohort-binding object
+
+That older model remains technically relevant only for historical analysis and for previously created archives, but the successor track is the current primary architecture because it cleanly separates archive-state approval from replaceable shard-cohort distribution.
+
+### 5.5 Current Timestamp Evidence Semantics
 
 OpenTimestamps (`.ots`) evidence is linked to detached signature bytes via `SHA-256(detachedSignatureBytes)`. A bundle timestamp entry references a detached signature by identifier (`targetRef`).
 
@@ -395,7 +437,7 @@ This architecture is a recommended future direction, not a current implementatio
 
 ### 8.4 Migration and Archive Identity
 
-The current system uses layered identity anchors across two coexisting artifact tracks. The legacy track relies on `qencHash`, `containerId`, `manifestDigest`, and `authPolicyCommitment`. The successor lifecycle track adds stable `archiveId`, `stateId`, and `cohortId` semantics within one archive family. This means:
+The current system uses layered identity anchors with the successor lifecycle track as the primary baseline. Historically, v1 relied on `qencHash`, `containerId`, `manifestDigest`, and `authPolicyCommitment`. The successor lifecycle track adds stable `archiveId`, `stateId`, and `cohortId` semantics within one archive family. This means:
 
 - If ciphertext changes (rewrap or reencryption), `qencHash` changes.
 - If the signable archive description changes to reflect new ciphertext or policy, the legacy `manifestDigest` changes or the successor `stateId` changes.
@@ -407,10 +449,10 @@ The following migration taxonomy guides future design:
 
 | Event | Effect on current anchors |
 |---|---|
-| Attach signatures/evidence | `qencHash`, `manifestDigest` unchanged; bundle content changes |
-| Reshard | `qencHash`, `manifestDigest` unchanged; shard packaging changes |
+| Attach signatures/evidence | current track signable object unchanged; mutable bundle content changes |
+| Reshard | successor `archiveId` and `stateId` stay stable; `cohortId` and shard packaging change |
 | Rewrap | Higher-level continuity may be intended; current fixity anchors may change |
-| Reencryption | `qencHash`, `containerId`, `manifestDigest` change; explicit continuity records required |
+| Reencryption | `qencHash`, `containerId`, and the current track's signable-state anchor change; explicit continuity records required |
 
 ### 8.5 OAIS Alignment
 
@@ -420,7 +462,7 @@ Quantum Vault is not an OAIS (ISO 14721 [17]) implementation and does not claim 
 |---|---|
 | Fixity Information | `qencHash`, digests, commitments, detached signatures |
 | Provenance Information | Detached signatures, signer identity material (partial) |
-| Reference Information | `qencHash`, `containerId`, `manifestDigest` |
+| Reference Information | successor `archiveId`, `stateId`, `cohortId`, `qencHash`, `containerId`, and legacy `manifestDigest` where applicable |
 | Context Information | Policy object, evidence linkage, signer material |
 | Representation Information | Format specification, algorithm identifiers, canonicalization rules, documentation |
 
@@ -428,7 +470,7 @@ OAIS also distinguishes Packaging Information — the metadata that binds Conten
 
 Representation Information — the information that maps a data object's bit sequences into "more meaningful concepts" [17] — is currently carried by the format specification document, algorithm identifiers, canonicalization labels, and version tags in artifact headers. OAIS emphasizes that Representation Information is itself a preservation object and must be maintained alongside the content it describes [17]. For Quantum Vault, this means that the format specification, canonicalization profile documentation, and algorithm-identifier registries must be preserved as part of the archival package, not merely referenced by external URL.
 
-A minimally sufficient long-term archival package would include the `.qenc` or restorable `.qcont` cohort, the current track's signable archive description (legacy manifest or successor archive-state descriptor), the current track's mutable bundle (manifest bundle or lifecycle bundle), detached signature set, timestamp/evidence set, representation information (format specification, canonicalization profile, algorithm identifiers), and packaging metadata sufficient for future verification. The current product generates most but not all of these components automatically.
+A minimally sufficient long-term archival package would include the `.qenc` or restorable `.qcont` cohort, the current track's signable archive description (successor archive-state descriptor on the normal shipped path; legacy manifest for compatibility packages), the current track's mutable bundle, detached signature set, timestamp/evidence set, representation information (format specification, canonicalization profile, algorithm identifiers), and packaging metadata sufficient for future verification. The current product generates most but not all of these components automatically.
 
 ---
 

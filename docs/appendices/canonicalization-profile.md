@@ -3,7 +3,7 @@
 Status: Release Candidate
 Type: Normative compatibility appendix
 Audience: implementers, auditors, interoperability tool authors, test-vector maintainers
-Scope: exact current serialization rules for `QV-JSON-RFC8785-v1` and `QV-BUNDLE-JSON-v1` as used by canonical manifests, manifest bundles, and canonicalized policy commitments
+Scope: exact current serialization rules for `QV-JSON-RFC8785-v1` and `QV-BUNDLE-JSON-v1` as used by canonical manifests, successor signable lifecycle artifacts, manifest bundles, lifecycle bundles, and canonicalized policy commitments
 Out of scope: signature semantics, archive-policy meaning, parser acceptance policy for unknown fields
 
 ## Role
@@ -18,7 +18,7 @@ It does not decide whether unknown fields are accepted or rejected in a given ar
 
 ## Normative status
 
-This appendix is normative for the current manifest and bundle byte profiles.
+This appendix is normative for the current manifest, successor signable-artifact, and bundle byte profiles.
 An implementation is conformant to this version if and only if it satisfies all MUST-level requirements defined in the current normative sections of this appendix and the owner document `format-spec.md`.
 If an implementation deviates from this appendix, it MUST explicitly document the deviation and MUST declare itself non-conformant to this version.
 Statements explicitly labeled as future or recommended direction are non-normative until promoted into the current sections of this appendix.
@@ -31,6 +31,7 @@ Internal current-state grounding:
 - `src/core/crypto/manifest/jcs.js`
 - `src/core/crypto/manifest/archive-manifest.js`
 - `src/core/crypto/manifest/manifest-bundle.js`
+- `src/core/crypto/lifecycle/artifacts.js`
 - `docs/format-spec.md`
 
 External references already used elsewhere in the repository:
@@ -42,9 +43,9 @@ External references already used elsewhere in the repository:
 
 Implemented now:
 
-- strict UTF-8 canonical byte output for manifests, bundles, and canonicalized policy commitments
-- RFC 8785-aligned canonicalization for canonical manifests and `authPolicyCommitment` input, with byte-level regression coverage for the current repository vectors and current manifest-family shapes
-- current bundle canonicalization using the same strict serializer but a separate bundle-specific label
+- strict UTF-8 canonical byte output for canonical manifests, successor signable lifecycle artifacts, bundles, and canonicalized policy commitments
+- RFC 8785-aligned canonicalization for canonical manifests, successor signable lifecycle artifacts, and `authPolicyCommitment` input, with byte-level regression coverage for the current repository vectors and current artifact-family shapes
+- current bundle canonicalization using the same strict serializer but a separate bundle-specific label for both legacy manifest bundles and successor lifecycle bundles
 - duplicate-key rejection on manifest and bundle parse paths
 - lone-surrogate rejection on parse and canonicalization paths
 - JSON member names are parsed as inert data keys even when named `__proto__`, `constructor`, or `prototype`
@@ -59,27 +60,29 @@ Not yet first-class in the current implementation:
 
 - Future vector publications may mirror this appendix in a machine-consumable corpus, but that does not change the current profile labels.
 - If a materially different profile is introduced later, it should receive a new canonicalization label rather than silently changing `QV-JSON-RFC8785-v1` or `QV-BUNDLE-JSON-v1`.
-- The current structural grammar layer uses JSON Schema draft 2020-12 files under `docs/schema/`, as described in [format-spec.md](../format-spec.md). These schemas govern artifact structure and field constraints for the canonical manifest and manifest bundle.
+- The current structural grammar layer uses JSON Schema draft 2020-12 files under `docs/schema/`, as described in [format-spec.md](../format-spec.md). These schemas govern artifact structure and field constraints for the canonical manifest, successor signable lifecycle artifacts, manifest bundle, and lifecycle bundle.
 - Intended longer-term direction, not current behavior: Quantum Vault may in the future add CDDL (RFC 8610) as a representation-information layer for OAIS-oriented archival package description and long-term format portability, as discussed in [long-term-archive.md](../long-term-archive.md). CDDL in that context would be a separate concern from the current JSON Schema structural-validation layer and would not replace it.
 
 ## 1. Current profile summary
 
 Current labels:
 
-- `QV-JSON-RFC8785-v1` governs canonical manifest bytes and canonicalized `authPolicy` input for `authPolicyCommitment`
-- `QV-BUNDLE-JSON-v1` governs canonical manifest-bundle bytes
+- `QV-JSON-RFC8785-v1` governs canonical manifest bytes, successor signable lifecycle artifact bytes (archive-state descriptor, cohort binding, transition record, source evidence), and canonicalized `authPolicy` input for `authPolicyCommitment`
+- `QV-BUNDLE-JSON-v1` governs canonical manifest-bundle bytes and successor lifecycle-bundle bytes
 
 Current implementation note:
 
 - both labels are currently emitted by the same strict UTF-8 JSON canonicalizer
-- the labels remain distinct because only canonical manifest bytes are detached-signature payload
+- the labels remain distinct because detached signatures target the current signable object for the active track rather than mutable bundle bytes
 
 Current uses include:
 
 - canonical manifest export bytes
 - the manifest bytes embedded inside a manifest bundle
+- canonical archive-state descriptor, cohort binding, transition-record, and source-evidence bytes
 - canonicalized `authPolicy` input when computing `authPolicyCommitment`
 - canonical bundle export bytes
+- canonical lifecycle-bundle export bytes
 
 ## 2. Serialization rules
 
@@ -122,13 +125,13 @@ Current array handling:
 
 `QV-JSON-RFC8785-v1` should be described honestly:
 
-- it is the current manifest-side canonical JSON profile
-- the current repository demonstrates byte-level parity for the covered vectors and current manifest-family JSON objects it emits and accepts
+- it is the current signable-object canonical JSON profile across both tracks
+- the current repository demonstrates byte-level parity for the covered vectors and current manifest-family and successor lifecycle JSON objects it emits and accepts
 - compatibility with an external RFC 8785 tool exists only when that tool emits the same bytes for the same JSON value
 
 `QV-BUNDLE-JSON-v1` should also be described honestly:
 
-- it is the current bundle-byte profile label
+- it is the current mutable bundle-byte profile label across both tracks
 - it currently uses the same strict canonicalizer as `QV-JSON-RFC8785-v1`
 - it remains separately labeled so bundle-byte compatibility can evolve independently from detached-signature payload compatibility
 
@@ -185,4 +188,4 @@ The current serializer rejects:
 - non-plain objects and cyclic structures
 
 Higher-layer parsers add additional requirements on top of this profile.
-For example, [format-spec.md](../format-spec.md) requires canonical manifest inputs to already be serialized exactly in `QV-JSON-RFC8785-v1` form and canonical bundle inputs to already be serialized exactly in `QV-BUNDLE-JSON-v1` form.
+For example, [format-spec.md](../format-spec.md) requires canonical manifest inputs and successor signable lifecycle artifacts to already be serialized exactly in `QV-JSON-RFC8785-v1` form, and canonical manifest-bundle or lifecycle-bundle inputs to already be serialized exactly in `QV-BUNDLE-JSON-v1` form.

@@ -1,11 +1,11 @@
 # Quantum Vault — Resharing And Lifecycle Artifact Design
 
-Status: Draft successor-design document with Phase 0-frozen contracts
+Status: Historical successor-design record for the shipped same-state resharing model
 Type: Informative technical design recording the Phase 0-frozen successor design
 Audience: contributors, implementers, reviewers, cryptographic auditors
 Scope: same-state resharing, lifecycle artifact boundaries, signature/evidence split, transition semantics, shard carriage, and operator roles
 Out of scope: full external-format publication, institutional governance policy, and interactive MPC protocols
-Relationship: builds on the completed Stage A-C baseline; feeds `implementation-plan-lifecycle.md`, future normative lifecycle specs, and any future successor-format implementation
+Relationship: builds on the completed Stage A-C baseline; now serves as historical design rationale for `docs/format-spec.md`, `docs/trust-and-policy.md`, `docs/security-model.md`, and the shipped successor implementation
 
 ## 1. Design Posture
 
@@ -31,7 +31,18 @@ Therefore, if lifecycle support introduces:
 
 then it must do so as a new artifact family with explicit schemas and versions.
 
-### 1.1 Normative language and JSON discipline
+### 1.1 Current implementation mapping
+
+The design in this document is now implemented on the current branch.
+
+- successor artifact schemas and canonicalization helpers: `src/core/crypto/lifecycle/artifacts.js`
+- successor shard layout and same-state resharing: `src/core/crypto/qcont/lifecycle-shard.js`
+- successor restore, fork handling, and explicit selection semantics: `src/core/crypto/qcont/restore.js`
+- shipped Lite and Pro successor build/export wording: `src/core/features/lite-mode.js`, `src/core/features/qcont/build-ui.js`
+
+Later sections that discuss state-changing migration, renewable evidence, governance, or distributed resharing remain design direction rather than current implementation.
+
+### 1.2 Normative language and JSON discipline
 
 Uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals.
 Explanatory prose outside frozen-decision, wire-contract, and verifier-predicate sections is informative.

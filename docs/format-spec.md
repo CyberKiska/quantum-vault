@@ -22,12 +22,12 @@ It is intentionally paired with `trust-and-policy.md`:
 
 This document covers the current Quantum Vault artifact family and verifier behavior for `.qenc`, `.qcont`, and the detached authenticity artifacts the implementation currently accepts.
 
-Quantum Vault maintains **two coexisting format tracks**:
+Quantum Vault now uses the **successor lifecycle track** as its primary format baseline:
 
-- **Legacy track:** canonical manifest (`quantum-vault-archive-manifest/v3`), mutable `QV-Manifest-Bundle` v2, and **QVqcont-6** shards that embed manifest and bundle bytes.
 - **Successor lifecycle track:** archive-state descriptor (`quantum-vault-archive-state-descriptor/v1`), cohort binding (`quantum-vault-cohort-binding/v1`), `QV-Lifecycle-Bundle` v1, transition and source-evidence artifacts as applicable, and **QVqcont-7** shards that embed lifecycle objects (see Section 8).
+- **Deprecated v1 track:** canonical manifest (`quantum-vault-archive-manifest/v3`), mutable `QV-Manifest-Bundle` v2, and **QVqcont-6** shards that embed manifest and bundle bytes.
 
-The project is **phasing out** the **legacy** track in favor of the **successor** lifecycle track. The shipped Lite and Pro build/export surface now emits **successor** artifacts by default. Beginning with release **v1.5.3**, legacy manifest/bundle creation is no longer part of the normal regular-user creation path. The **legacy** track remains **supported** only for compatibility with existing material during the documented phase-out window.
+The shipped Lite and Pro build/export surface now emits successor artifacts by default. Beginning with release **v1.5.3**, v1 manifest/bundle creation is no longer part of the normal regular-user creation path. The v1 track remains implemented only to interpret previously created material during the documented phase-out window.
 
 JSON Schema files under `docs/schema/` are the **grammar layer** for each artifact shape; they do not define canonical bytes, derived identifiers, or policy semantics (see Section 2).
 
@@ -71,22 +71,25 @@ External references already used elsewhere in the repository:
 
 Implemented now:
 
-- the supported versions, schema IDs, and artifact boundaries listed in Section 1 (legacy and successor)
-- canonical manifest export and embedding under `QV-JSON-RFC8785-v1` (legacy)
-- canonical bundle export under `QV-BUNDLE-JSON-v1` (legacy manifest bundle and successor lifecycle bundle)
+- the supported versions, schema IDs, and artifact boundaries listed in Section 1
 - regular-user build/export defaults to **QVqcont-7** successor shards plus successor archive-state, cohort-binding, and lifecycle-bundle artifacts; new legacy manifest/bundle creation is retired from the normal product path
-- successor lifecycle artifacts: `quantum-vault-archive-state-descriptor/v1`, `quantum-vault-cohort-binding/v1`, `quantum-vault-transition-record/v1`, `quantum-vault-source-evidence/v1`, and `QV-Lifecycle-Bundle` v1 with closed attachment arrays; canonical signable JSON for lifecycle objects uses `QV-JSON-RFC8785-v1` unless the bundle label specifies `QV-BUNDLE-JSON-v1` for the bundle wrapper (see `src/core/crypto/lifecycle/artifacts.js`)
+- successor lifecycle artifacts: `quantum-vault-archive-state-descriptor/v1`, `quantum-vault-cohort-binding/v1`, `quantum-vault-transition-record/v1`, `quantum-vault-source-evidence/v1`, and `QV-Lifecycle-Bundle` v1 with closed attachment arrays
 - **QVqcont-7** successor `.qcont` shards embedding archive-state, cohort-binding, and lifecycle-bundle bytes plus digests (`src/core/crypto/qcont/lifecycle-shard.js`)
+- successor restore grouping by `archiveId`, `stateId`, `cohortId`, exact archive-state bytes, and exact cohort-binding bytes, with explicit disambiguation required for same-state forks or multi-bundle cohorts (`src/core/crypto/qcont/restore.js`)
+- detached signatures split by family in successor lifecycle bundles; archive policy is evaluated over `attachments.archiveApprovalSignatures` only, while maintenance and source-evidence signatures are verified and reported separately
 - JSON Schema draft 2020-12 files under `docs/schema/` for structural grammar plus a checked-in fixture corpus validated in JavaScript CI by a checked-in validator that covers the active repository keyword subset, not the full draft 2020-12 vocabulary
-- detached signatures: legacy signatures over canonical **manifest** bytes; successor **archive-approval** signatures over canonical **archive-state descriptor** bytes (maintenance and source-evidence signatures target other canonical objects per `trust-and-policy.md` §11)
-- embedded or external bundle, signature, key, and timestamp inputs during restore (path-dependent)
-- current unknown-field handling and deterministic **successor** restore candidate selection without heuristic bundle auto-selection across conflicting embedded lifecycle-bundle digests (see Section 8)
 - active compatibility appendices for canonicalization, external-artifact handling, and current vector coverage under `docs/appendices/`
 
-Not yet first-class in the current implementation:
+Deferred roadmap:
 
 - state-changing continuity records that preserve successor `archiveId` semantics across future rewrap or reencryption
 - a frozen standalone interoperability corpus versioned separately from the repository examples and selftests
+
+Deprecated v1 context:
+
+- v1 canonical manifest export and embedding under `QV-JSON-RFC8785-v1`
+- v1 canonical bundle export under `QV-BUNDLE-JSON-v1` for the manifest-bundle family
+- detached signatures over canonical v1 manifest bytes, plus the deprecated v1 restore-specific richer-bundle heuristic documented only for `QVqcont-6`
 
 ## Future work and non-normative notes
 
@@ -113,7 +116,7 @@ These apply to all tracks:
 - detached PQ signature acceptance: Quantum Signer major version 2 with context `quantum-signer/v2`
 - detached Stellar signature acceptance: `stellar-signature/v2`
 
-### 1.2 Legacy manifest / shard track
+### 1.2 Deprecated v1 manifest / shard track
 
 - `.qcont` shard metadata format identifier **`QVqcont-6`**
 - canonical manifest schema/version `quantum-vault-archive-manifest/v3`
@@ -197,10 +200,11 @@ Conforming parsers MUST enforce all three layers. The JSON Schema grammar layer 
 | --- | --- | --- |
 | `.qenc` | Encrypted container | The primary ciphertext object |
 | `.qcont` | Threshold shard | Carries one shard's recovery state plus embedded authenticity material (legacy: manifest + manifest bundle; successor: archive-state + cohort binding + lifecycle bundle) |
+| Archive-state descriptor JSON | Canonical signable archive state (successor) | Detached-signature payload for archive approval; carried in `QV-Lifecycle-Bundle` and successor shards |
+| Cohort-binding JSON | State-bound shard cohort description (successor) | Carries current sharding commitments and the digest input used to derive `cohortId` |
+| `QV-Lifecycle-Bundle` v1 | Mutable lifecycle bundle (successor) | Carries archive state, cohort binding, policy, attachments, source evidence, and transitions; not the archive-approval signable byte sequence |
 | `*.qvmanifest.json` | Canonical signable manifest (legacy) | Detached-signature payload for legacy archives |
 | `*.extended.qvmanifest.json` | Mutable manifest bundle (legacy) | Carries manifest + policy + attachments |
-| Archive-state descriptor JSON | Canonical signable archive state (successor) | Detached-signature payload for archive-approval; carried in `QV-Lifecycle-Bundle` and shards |
-| `QV-Lifecycle-Bundle` v1 | Mutable lifecycle bundle (successor) | Carries archive state, cohort binding, policy, attachments; not the archive-approval signable byte sequence |
 | `.qsig` | Detached PQ signature | Signs canonical manifest bytes (legacy) or canonical archive-state bytes (successor archive-approval), depending on bundle shape |
 | `.sig` | Detached Stellar/Ed25519 signature proof | Same path-dependent rule as `.qsig` |
 | `.pqpk` | Detached PQ public key | Used for bundle pinning or restore-time user pinning |
@@ -211,8 +215,8 @@ Artifact lifecycle summary:
 
 - When multiple files are archived, Encrypt first bundles them into a `.qvpack` payload.
 - Encrypt creates a `.qenc` container from the plaintext payload (single file or `.qvpack`).
-- Split creates `.qcont` shards and a canonical manifest (legacy) or successor lifecycle objects (QVqcont-7).
-- Attach creates or updates a manifest bundle (legacy) or updates lifecycle bundle attachments on successor shards without mutating canonical archive-state bytes.
+- Split creates `.qcont` shards and successor lifecycle objects (`QVqcont-7`) on the normal shipped path; legacy manifest artifacts remain compatibility-only.
+- Attach creates or updates a manifest bundle (legacy) or updates lifecycle bundle attachments on successor shards without mutating canonical archive-state bytes or canonical cohort-binding bytes.
 - Restore may use embedded or externally supplied manifests, bundles, lifecycle bundles, signatures, keys, and timestamps depending on shard format.
 - Decrypt recovers the plaintext payload; if it is a `.qvpack`, the individual files are extracted.
 - **Legacy:** detached archive-approval signatures target canonical manifest bytes only. **Successor:** detached archive-approval signatures target canonical archive-state descriptor bytes only; other attachment families target their declared objects (`trust-and-policy.md` §11).
@@ -234,18 +238,59 @@ Current binding invariants:
 - **Legacy:** `manifestDigest` MUST match the canonical manifest bytes embedded in the bundle, and `authPolicyCommitment` in the manifest MUST match the concrete `authPolicy` carried by the manifest bundle.
 - **Successor:** lifecycle-bundle mutation MUST NOT mutate canonical archive-state or cohort-binding bytes, and the lifecycle bundle's digests MUST match the selected archive-state and cohort-binding objects.
 
+### 4.1 Successor archive-state descriptor (implemented now)
+
+The successor archive-state descriptor is the current long-lived archive-approval object.
+
+- schema: `quantum-vault-archive-state-descriptor/v1`
+- canonicalization: `QV-JSON-RFC8785-v1`
+- `stateId = SHA3-512(canonical archive-state descriptor bytes)`
+- `stateId` is derived metadata and MUST NOT appear inside the canonical archive-state bytes used to derive it
+- the descriptor carries `archiveId`, `parentStateId`, crypto/profile/nonce/AAD identifiers, the current `qenc` binding object, and `authPolicyCommitment`
+
+### 4.2 Successor cohort binding (implemented now)
+
+The successor cohort binding carries the state-bound shard-cohort commitments that are allowed to change during same-state resharing.
+
+- schema: `quantum-vault-cohort-binding/v1`
+- canonicalization: `QV-JSON-RFC8785-v1`
+- `cohortBindingDigest = SHA3-512(canonical cohort-binding bytes)`
+- `cohortId = SHA3-256(canonical cohort-id preimage rooted in archiveId, stateId, and cohortBindingDigest)`
+- `cohortId` is derived metadata and MUST NOT appear inside the canonical cohort-binding bytes used to derive `cohortBindingDigest`
+- lifecycle-bundle digest is not part of state or cohort identity
+
+### 4.3 Successor lifecycle bundle (implemented now)
+
+The lifecycle bundle is the mutable carrier for successor policy and detached evidence.
+
+- type/version: `QV-Lifecycle-Bundle` v1
+- canonicalization: `QV-BUNDLE-JSON-v1`
+- top-level members include `archiveState`, `archiveStateDigest`, `currentCohortBinding`, `currentCohortBindingDigest`, `authPolicy`, `sourceEvidence`, `transitions`, and `attachments`
+- `attachments` contains exactly `publicKeys`, `archiveApprovalSignatures`, `maintenanceSignatures`, `sourceEvidenceSignatures`, and `timestamps`
+- archive policy counts only `attachments.archiveApprovalSignatures`
+- `maintenanceSignatures` and `sourceEvidenceSignatures` are verified and reported separately from archive policy
+- `.ots` evidence targets detached signature bytes, not lifecycle-bundle bytes
+
+### 4.4 Deprecated v1 anchors
+
+Historical v1 identity and binding rules remain implemented only to interpret older archives:
+
+- `manifestDigest` is `SHA3-512` over canonical manifest bytes
+- detached archive-approval signatures sign canonical manifest bytes
+- `authPolicyCommitment` binds canonical manifest bytes to the mutable manifest-bundle policy object
+
 Not yet present as a first-class artifact:
 
 - state-changing continuity records that preserve successor `archiveId` semantics across future rewrap or reencryption
 
-## 5. Canonicalization and canonical manifest
+## 5. Deprecated v1 canonicalization and canonical manifest
 
 ### 5.1 Canonicalization
 
-The canonical manifest uses canonical JSON `QV-JSON-RFC8785-v1`.
+The legacy canonical manifest uses canonical JSON `QV-JSON-RFC8785-v1`.
 Current behavior is:
 
-- for legacy compatibility material, the same canonical bytes are exported as `*.qvmanifest.json`
+- for deprecated v1 material, the same canonical bytes are exported as `*.qvmanifest.json`
 - the same canonical bytes are embedded into every `.qcont` shard
 - the same canonical bytes are embedded inside every manifest bundle
 - detached signatures are always computed over those canonical bytes
@@ -426,7 +471,7 @@ Current canonical-manifest parsing behavior is:
 - unknown additional manifest fields are rejected at every object level
 - compatibility fails closed on unsupported schema, version, canonicalization, and required-binding mismatches
 
-## 6. Manifest bundle
+## 6. Deprecated v1 manifest bundle
 
 ### 6.1 Purpose and top-level structure
 
@@ -449,8 +494,8 @@ The current top-level structure is:
 
 Naming behavior:
 
-- legacy compatibility split exports canonical signable manifest as `*.qvmanifest.json`
-- legacy compatibility attach exports the self-contained bundle as `*.extended.qvmanifest.json`
+- deprecated v1 split exports canonical signable manifest as `*.qvmanifest.json`
+- deprecated v1 attach exports the self-contained bundle as `*.extended.qvmanifest.json`
 - extracting a signable manifest from an existing bundle may use `*.signable.qvmanifest.json`
 
 ### 6.1.1 Current top-level bundle fields
@@ -979,9 +1024,13 @@ Normative summary (grammar: `docs/schema/qv-lifecycle-bundle-v1.schema.json`; se
 
 - Top-level members are closed to the v1 set; `attachments` contains exactly `publicKeys`, `archiveApprovalSignatures`, `maintenanceSignatures`, `sourceEvidenceSignatures`, and `timestamps` (all arrays, present even if empty).
 - **Archive-approval** detached signatures authenticate canonical **archive-state descriptor** bytes (`targetType` archive-state). Mutable lifecycle-bundle bytes are **not** the archive-approval signable payload.
+- **Archive policy** counts only verified `archiveApprovalSignatures`; maintenance and source-evidence signatures remain separate reporting channels and do not satisfy archive policy.
 - Restore groups successor shards by `archiveId`, `stateId`, `cohortId`, exact archive-state bytes, and exact cohort-binding bytes. Mixed-state or mixed-cohort sets MUST be rejected.
 - If a cohort embeds **more than one** distinct lifecycle-bundle digest across its shards and the operator does not supply matching lifecycle-bundle bytes or an explicit selected digest, restore MUST **fail closed** (no lexical, timestamp, or “richest bundle” heuristic).
+- If an explicit lifecycle bundle or embedded lifecycle-bundle digest is supplied for a mixed-bundle cohort, restore MAY proceed, but it MUST report that authenticity and policy were evaluated against the explicitly selected bundle rather than auto-selected embedded bytes.
 - If multiple valid **cohorts** exist for the same `archiveId` and `stateId` (same-state fork), restore MUST reject ambiguous inputs without auto-selecting a winner by timestamp, attachment count, or lexical order.
+- If the operator explicitly selects one cohort or supplies a matching lifecycle bundle for a same-state fork, restore MAY proceed but MUST emit a warning that multiple valid cohorts remain known and that Quantum Vault did not auto-select a winner.
+- Successor restore reporting uses distinct status channels including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`.
 
 Informative design rationale: `docs/process/roadmap/lifecycle/resharing-design.md`.
 
@@ -1008,9 +1057,32 @@ Detailed current acceptance, linkage, deduplication, and ambiguity rules for the
 
 ## 10. Verification and restore algorithm
 
-The implementation follows **two** restore paths. Steps 1–11 below describe the **legacy** manifest-bundle path. **Successor** restore (QVqcont-7) classifies shards by `archiveId`, `stateId`, `cohortId`, and embedded byte equality, selects a lifecycle bundle per Section 8.6, then verifies ciphertext and evaluates policy over `archiveApprovalSignatures` (`src/core/crypto/qcont/restore.js`).
+The implementation follows **two** restore paths. The shipped default path is the **successor** lifecycle path for `QVqcont-7`. The deprecated v1 manifest-bundle path remains implemented only for previously created archives during the phase-out window.
 
-Legacy verifier/restore order is:
+Successor verifier/restore order is:
+
+1. parse artifacts and classify shard, archive-state, lifecycle-bundle, signature, key, and timestamp inputs
+2. reject mixed legacy/successor artifact families
+3. group successor shard candidates by `archiveId`, `stateId`, `cohortId`, exact archive-state bytes, and exact cohort-binding bytes
+4. apply any explicit selection filters from uploaded archive-state bytes, uploaded lifecycle-bundle bytes, selected `archiveId`, selected `stateId`, selected `cohortId`, or explicit embedded lifecycle-bundle digest
+5. fail closed if same-state forks or multi-bundle cohorts remain ambiguous after explicit filtering
+6. reconstruct `.qenc` and the ML-KEM private key from one internally consistent successor cohort
+7. verify that the selected lifecycle bundle matches the selected archive-state and cohort-binding objects
+8. verify detached signatures by family against the exact canonical target bytes for that family
+9. evaluate archive policy using `archiveApprovalSignatures` only
+10. link timestamps/evidence to detached signature bytes and emit separate transition and source-evidence reports
+11. emit status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`
+
+Successor restore selection rules:
+
+- if an uploaded lifecycle bundle is supplied, it MUST match exactly one candidate archive/state/cohort set
+- if an uploaded archive-state descriptor is supplied, it narrows candidate states by exact canonical bytes; it does not authorize heuristic cohort selection
+- if multiple successor candidate sets remain after explicit archive/state filtering, restore MUST require explicit cohort selection or lifecycle-bundle input
+- if exactly one archive/state/cohort candidate remains and it carries multiple embedded lifecycle-bundle digests, restore MUST require uploaded lifecycle-bundle bytes or an explicit embedded bundle digest
+- if the operator explicitly selects a cohort in a known same-state fork, restore MAY proceed but MUST emit a warning naming the known competing cohort IDs
+- if payload reconstruction uses shards carrying multiple embedded lifecycle-bundle digests, restore MUST report that authenticity and policy were evaluated against the explicitly selected lifecycle bundle
+
+Deprecated v1 verifier/restore order is:
 
 1. parse artifacts and classify optional external manifest, bundle, signature, public-key, and timestamp inputs
 2. validate versions, schema values, canonicalization labels, and declared format/profile identifiers
@@ -1049,6 +1121,10 @@ Quantum Vault MUST fail closed on:
 - malformed signature or key references that prevent safe verification
 - unsupported algorithm IDs
 - inconsistent shard cohorts
+- mixed legacy/successor artifact families in one restore attempt
+- exact archive-state or cohort-binding byte mismatch inside a selected successor cohort
+- ambiguous same-state successor forks when no explicit cohort or lifecycle-bundle selection is supplied
+- multiple embedded lifecycle-bundle digests inside a selected successor cohort when no explicit bundle bytes or digest are supplied
 - OTS evidence that fails the supported target-linkage checks for its declared target
 
 Current mandatory rejection examples:
@@ -1059,6 +1135,14 @@ Current mandatory rejection examples:
 4. detached signature target digest does not match the manifest digest
 5. bundle references missing key material required for safe verification
 6. shard cohort mixes conflicting manifest digests or bundle digests
+7. mixed legacy and successor shard families are supplied to one restore attempt
+8. successor shards disagree on exact archive-state bytes or exact cohort-binding bytes inside one selected cohort
+9. multiple valid successor cohorts exist for one `archiveId` and `stateId`, but the operator did not explicitly select one cohort or lifecycle bundle
+10. one successor cohort carries multiple embedded lifecycle-bundle digests, but the operator did not explicitly select one bundle variant
+
+Current non-rejection note for explicit successor disambiguation:
+
+- when the operator explicitly selects a successor cohort or lifecycle bundle for an otherwise ambiguous same-state fork or multi-bundle cohort, restore may proceed, but Quantum Vault MUST warn rather than pretend that the ambiguity was resolved automatically.
 
 Related policy consequences are defined in `trust-and-policy.md`.
 Current selftest-backed vector classes, regression coverage, malformed or fail-closed cases, and any local-development example artifacts are mapped in [appendices/interoperability-and-test-vectors.md](appendices/interoperability-and-test-vectors.md).

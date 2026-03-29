@@ -101,7 +101,7 @@ Do not preload speculative roadmap terminology into the shared glossary before t
 | archive authenticity policy | The restore and verify rule committed in the current signable archive description and carried concretely in the relevant mutable bundle as `authPolicy`. | `docs/trust-and-policy.md` |
 | archive policy satisfied | The available verified signatures satisfy the archive authenticity policy. | `docs/trust-and-policy.md` |
 | signer pinning | Binding a valid signature to expected signer material from the bundle or from restore-time user input; distinct from policy satisfaction. | `docs/trust-and-policy.md` |
-| `bundlePinned` | At least one verified signature matched bundled signer material explicitly linked from the manifest bundle. | `docs/trust-and-policy.md` |
+| `bundlePinned` | At least one verified signature matched bundled signer material explicitly linked from the relevant mutable bundle: the manifest bundle on the legacy path or the lifecycle bundle on the successor path. | `docs/trust-and-policy.md` |
 | `userPinned` | At least one verified signature matched restore-time user-supplied signer material. | `docs/trust-and-policy.md` |
 | `signerPinned` | The combined status `bundlePinned || userPinned`. | `docs/trust-and-policy.md` |
 | evidence | Supplementary material linked to detached signatures that may improve reporting or future time and provenance interpretation, but does not satisfy archive signature policy by itself. | `docs/trust-and-policy.md` |

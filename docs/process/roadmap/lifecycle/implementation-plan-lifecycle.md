@@ -1,14 +1,14 @@
 # Quantum Vault — Lifecycle Implementation Plan
 
-Status: Draft execution plan
-Type: Informative implementation plan
+Status: Historical implementation record with deferred later branches
+Type: Informative historical implementation plan
 Audience: implementers, reviewers, maintainers
-Scope: phased execution plan for the successor lifecycle artifact family
-Relationship: architecture is defined in `resharing-design.md`; decision framing and standards map live in `implementation-questions-and-reading.md`; milestone ordering lives in `roadmap-archive-lifecycle.md`
+Scope: preserved phased execution record for the successor lifecycle artifact family, plus the remaining deferred branches
+Relationship: architecture is defined in `resharing-design.md`; decision framing and standards map live in `implementation-questions-and-reading.md`; milestone ordering lives in `roadmap-archive-lifecycle.md`; current normative behavior lives in `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`
 
 ## 1. Role Of This Document
 
-This is the **execution document** for lifecycle work.
+This was the **execution document** for lifecycle work during the successor transition.
 
 It exists to answer:
 
@@ -26,7 +26,32 @@ Those responsibilities stay in:
 - `resharing-design.md`
 - `roadmap-archive-lifecycle.md`
 
-## 1.1 Document Conventions
+## 1.1 Current Status
+
+This file is now a historical implementation record.
+
+Implemented in the current branch history:
+
+- Phase 0 frozen contracts are reflected in successor schemas and canonicalization helpers
+- Phases 1-3 shipped successor artifacts, attach-flow semantics, restore-time archive/state/cohort selection, and explicit lifecycle-bundle disambiguation
+- Phase 4 shipped same-state resharing with required transition records
+- Phase 5 shipped transition verification, maintenance-signature handling, and same-state fork warnings
+- Phase 6 shipped source-evidence object support
+- Phase 7 shipped successor-default Lite/Pro UI migration and legacy retirement from the normal creation path
+
+Deferred roadmap:
+
+- state-changing continuity records
+- envelope-DEK and future `rewrap`
+- renewable evidence records
+- distributed resharing
+
+Interpretation rule:
+
+- Sections 5 through 12 below are preserved as historical execution records for work already completed.
+- Section 13 remains the deferred roadmap branch set.
+
+## 1.2 Document Conventions
 
 This plan is informative except where it restates:
 
@@ -217,9 +242,9 @@ State-changing lifecycle operations are deferred, but the architectural requirem
 - any later policy change, reencryption, or future `rewrap` MUST preserve predecessor archive-state descriptors, predecessor archive-approval signatures, predecessor timestamp/evidence sets, and continuity links sufficient to verify lineage
 - no state-changing feature may ship until that preservation path is defined and implemented
 
-## 4. Success Criteria For The First Shipping Wave
+## 4. Implemented Shipping-Wave Outcomes
 
-Phase 1 shipping is complete only if Quantum Vault can:
+The first shipping wave is complete in the current branch implementation: Quantum Vault now can
 
 1. produce successor archive-state descriptors, cohort bindings, and lifecycle bundles deterministically
 2. export archive-state descriptor bytes as the external signer target
@@ -229,7 +254,7 @@ Phase 1 shipping is complete only if Quantum Vault can:
 6. emit a required transition record for every QV-produced same-state resharing event
 7. keep integrity, signature validity, pinning, and policy satisfaction distinct in verification output
 
-## 5. Phase 0 — Freeze Specs, Artifact IDs, And Wire Decisions
+## 5. Historical Record: Phase 0 — Freeze Specs, Artifact IDs, And Wire Decisions
 
 Objective:
 
@@ -342,7 +367,7 @@ Disposition 4: there is no self-referential identifier hashing ambiguity.
 - lifecycle-bundle digest is explicitly outside state/cohort identity
 - timestamp linkage is over exact detached-signature bytes rather than over mutable bundle bytes
 
-## 6. Phase 1 — Encode Frozen Successor Artifacts, Canonical Bytes, And Shard Layout
+## 6. Historical Record: Phase 1 — Encode Frozen Successor Artifacts, Canonical Bytes, And Shard Layout
 
 Objective:
 
@@ -411,7 +436,7 @@ Exit criteria:
 - shards can carry the successor artifacts
 - canonicalization/digest vectors pass
 
-## 7. Phase 2 — External Signer Targets, Attach Flow, And Frozen Signature Attachment Semantics
+## 7. Historical Record: Phase 2 — External Signer Targets, Attach Flow, And Frozen Signature Attachment Semantics
 
 Objective:
 
@@ -501,7 +526,7 @@ Exit criteria:
 - attach can update lifecycle bundles without mutating archive-state or cohort-binding bytes
 - bundled-key and OTS linkage checks are fail-closed
 
-## 8. Phase 3 — Restore Flow, Cohort Selection, And Successor Verification States
+## 8. Historical Record: Phase 3 — Restore Flow, Cohort Selection, And Successor Verification States
 
 Objective:
 
@@ -583,7 +608,7 @@ Exit criteria:
 - restore selection uses archive/state/cohort identity explicitly
 - successor verification states are separated and reported correctly
 
-## 9. Phase 4 — Same-State Resharing
+## 9. Historical Record: Phase 4 — Same-State Resharing
 
 Objective:
 
@@ -670,7 +695,7 @@ Exit criteria:
 - archive-state signatures survive unchanged
 - required transition record is emitted
 
-## 10. Phase 5 — Transition Verification, Maintenance Signatures, And Fork Handling
+## 10. Historical Record: Phase 5 — Transition Verification, Maintenance Signatures, And Fork Handling
 
 Objective:
 
@@ -730,7 +755,7 @@ Exit criteria:
 - maintenance signatures verify
 - fork warnings are correct and scoped to state/cohort conflicts
 
-## 11. Phase 6 — Source-Evidence Object Support
+## 11. Historical Record: Phase 6 — Source-Evidence Object Support
 
 Objective:
 
@@ -775,7 +800,7 @@ Exit criteria:
 
 - source-evidence provenance is supported as a separate semantic layer
 
-## 12. Phase 7 — Full UI/UX Migration, Documentation Closure, And Legacy Retirement
+## 12. Historical Record: Phase 7 — Full UI/UX Migration, Documentation Closure, And Legacy Retirement
 
 Objective:
 
@@ -796,43 +821,43 @@ Important scope note:
 - it MUST preserve the frozen successor contracts and fail-closed restore semantics already established in Phases 0 through 6
 - it MUST NOT reopen Phase 0 wire decisions or substitute a new architecture
 
-Lite-mode migration tasks:
+Lite-mode migration outcomes:
 
-- make Lite create new archives as successor archives by default, including successor shard output rather than legacy manifest/bundle-first output
-- export the correct successor signable artifact for external archive approval in Lite workflows
-- update Lite labels, help text, and guided steps so they describe:
+- Lite now creates new archives as successor archives by default, including successor shard output rather than legacy manifest/bundle-first output
+- Lite now exports the correct successor signable artifact for external archive approval workflows
+- Lite labels, help text, and guided steps now describe:
   - archive-state descriptor signing
   - lifecycle-bundle attachment
   - successor restore verification states
   - same-state resharing as maintenance rather than re-approval
-- keep any temporary legacy import or restore affordance explicitly labeled as compatibility-only until final removal
-- ensure Lite never hides required explicit selection when multiple lifecycle bundles or same-state cohorts are present
+- any temporary legacy import or restore affordance remains explicitly labeled as compatibility-only until final removal
+- Lite preserves required explicit selection when multiple lifecycle bundles or same-state cohorts are present
 
-Pro-mode migration tasks:
+Pro-mode migration outcomes:
 
-- move Pro build/export flows to the successor archive-state / cohort-binding / lifecycle-bundle model and successor shard container outputs
-- expose successor-specific operator controls where the implementation already requires explicit operator choice, including:
+- Pro build/export flows moved to the successor archive-state / cohort-binding / lifecycle-bundle model and successor shard container outputs
+- Pro exposes successor-specific operator controls where the implementation already requires explicit operator choice, including:
   - archive/state/cohort selection
   - lifecycle-bundle selection when one cohort carries multiple embedded bundle digests
   - same-state resharing controls and resulting transition records
-- update Pro restore and inspection output so archive approval, maintenance signatures, source evidence, pinning, and OTS remain visibly separate
-- keep any temporary legacy tooling behind an explicit compatibility boundary until final retirement
+- Pro restore and inspection output keeps archive approval, maintenance signatures, source evidence, pinning, and OTS visibly separate
+- any temporary legacy tooling remains behind an explicit compatibility boundary until final retirement
 
-Container and artifact cutover tasks:
+Container and artifact cutover outcomes:
 
-- make successor containers and successor artifact exports the default downloadable outputs in the regular-user UI
-- ensure the signable archive-state descriptor, lifecycle bundle, and successor shard set can be exported and re-imported without falling back to legacy manifest assumptions
-- remove generation of new legacy manifest/bundle artifacts from the default build path once successor UI cutover is complete
-- preserve explicit compatibility parsing only as long as the documented phase-out window remains open
+- successor containers and successor artifact exports are the default downloadable outputs in the regular-user UI
+- the signable archive-state descriptor, lifecycle bundle, and successor shard set export and re-import without falling back to legacy manifest assumptions
+- generation of new legacy manifest/bundle artifacts was removed from the default build path during the successor UI cutover
+- explicit compatibility parsing remains bounded to the documented phase-out window
 
-Documentation-closure tasks:
+Documentation-closure outcomes:
 
-- update the current public and maintainer-facing documentation so it fully describes the current shipped state rather than the previously frozen implementation intent
-- explicitly document, separately for Lite and Pro:
+- the current public and maintainer-facing documentation was updated to describe the shipped state rather than the earlier frozen implementation intent
+- the documentation now distinguishes, separately for Lite and Pro:
   - which successor workflows are available to regular users
   - which successor workflows remain advanced or operator-facing
   - which legacy affordances, if any, still exist during the phase-out window
-- verify that the following are fully current and mutually consistent:
+- the cutover review checked the following for mutual consistency:
   - `README.md`
   - `docs/README.md`
   - `docs/format-spec.md`
@@ -842,35 +867,35 @@ Documentation-closure tasks:
   - `docs/long-term-archive.md`
   - in-product Lite and Pro help text
   - interoperability/vector appendices
-- remove or relocate any remaining outdated text that still describes:
+- remaining outdated text was removed or relocated when it still described:
   - legacy manifest signing as the default path for new archives
-  - successor `archiveId` or successor artifact support as future work if it is already implemented
+  - successor `archiveId` or successor artifact support as if it were still future work
   - deferred features as current capability
-- document any still-deferred areas explicitly as deferred, including:
+- still-deferred areas are documented explicitly as deferred, including:
   - state-changing lifecycle continuity
   - future `rewrap` / wrapped-DEK work
   - RFC 4998-style renewable evidence
   - governance or trust-root objects beyond the current implementation
 
-Legacy phase-out tasks:
+Legacy phase-out status:
 
-- define and publish the point at which legacy becomes compatibility-only rather than a normal creation path
-- stop offering legacy archive creation in Lite and Pro once successor build/export is available on the regular-user surface
-- migrate any remaining legacy-first UI wording, screenshots, examples, and walkthroughs to successor-first wording before release
-- after the compatibility window closes, remove user-facing legacy build, attach, and restore flows from the product surface
-- move any remaining legacy-only material to historical or archival documentation if it is retained for reference
-- remove legacy code paths only after successor replacements are shipped, documented, and covered by release-gate tests
+- legacy is now documented as compatibility-only rather than a normal creation path
+- Lite and Pro no longer offer legacy archive creation as the normal regular-user path
+- remaining legacy-first wording, screenshots, and walkthroughs should continue to move to successor-first or historical wording as they are found
+- after the compatibility window closes, user-facing legacy build, attach, and restore flows should be removed from the product surface
+- any remaining legacy-only material should move to historical or archival documentation if it is retained for reference
+- legacy code paths should be removed only after successor replacements remain shipped, documented, and covered by release-gate tests
 
-Test and release-gate tasks:
+Test and release-gate checks carried into release review:
 
-- add release-gate coverage for regular-user successor build/export paths in Lite and Pro
-- add UI/regression coverage proving the product surface no longer defaults to legacy manifest/bundle semantics for new archives
-- keep explicit fail-closed regression coverage for:
+- release-gate coverage for regular-user successor build/export paths in Lite and Pro
+- UI/regression coverage proving the product surface no longer defaults to legacy manifest/bundle semantics for new archives
+- explicit fail-closed regression coverage for:
   - mixed legacy/successor inputs
   - mixed same-state cohorts
   - ambiguous lifecycle-bundle selection
   - separation of archive approval, maintenance, source evidence, and OTS
-- keep legacy regression coverage only for as long as legacy compatibility support remains in the shipped product
+- legacy regression coverage only for as long as legacy compatibility support remains in the shipped product
 
 Security review points:
 
@@ -887,7 +912,7 @@ Exit criteria:
 - legacy creation and other legacy-first product flows are retired from the normal user surface
 - any remaining legacy compatibility support is explicitly documented as temporary or historical, or is removed entirely
 
-## 13. Later Phases — Deferred But Architecturally Constrained
+## 13. Deferred Later Phases — Architecturally Constrained
 
 ### 13.1 Later Phase A — State-changing migration continuity
 
@@ -950,7 +975,7 @@ This branch must not leak server-coordinated or MPC assumptions into the Phase 1
 - no auto-winner selection for same-state cohort forks
 - no state-changing migration feature before predecessor-state preservation is designed and implemented
 
-## 15. Implementation Summary
+## 15. Historical Execution Summary
 
 The strict execution order is:
 

@@ -1,13 +1,36 @@
 # Quantum Vault — Archive Lifecycle Roadmap
 
-Status: Draft roadmap with Phase 0-frozen dependencies
-Type: Informative capability and dependency roadmap
+Status: Historical transition roadmap with implemented phases 0-7 and deferred later branches
+Type: Informative historical capability and dependency roadmap
 Audience: contributors, implementers, reviewers
-Scope: staged evolution from the current Stage A-C baseline to the successor lifecycle artifact family
-Relationship: architectural depth lives in `resharing-design.md`; decision framing and standards reasoning live in `implementation-questions-and-reading.md`; execution sequencing lives in `implementation-plan-lifecycle.md`
+Scope: preserved record of the staged evolution from the current Stage A-C baseline to the shipped successor lifecycle artifact family, plus the remaining deferred branches
+Relationship: architectural depth lives in `resharing-design.md`; decision framing and standards reasoning live in `implementation-questions-and-reading.md`; historical execution sequencing lives in `implementation-plan-lifecycle.md`; current normative behavior lives in `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`
 
 Uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals.
 This roadmap is otherwise informative except where it restates frozen Phase 0 decisions or mandatory dependency ordering.
+
+## Current status
+
+This file is now a historical transition record rather than an active delivery roadmap.
+
+Implemented in the `2a2b957..HEAD` transition window:
+
+- Milestones 1-3 / Phase 0 frozen contracts for the successor artifact family
+- Milestone 4 / Phase 1 successor schemas, canonical bytes, and shard layout
+- Milestone 5 / Phases 2-3 signer, attach, restore, and explicit successor selection seams
+- Milestone 6 / Phase 4 same-state resharing
+- Milestone 7 / Phases 5-7 transition verification, maintenance signatures, source-evidence support, and shipped UI/UX migration
+
+Deferred roadmap:
+
+- Milestone 8 state-changing migration continuity
+- Milestone 9 envelope-DEK and future `rewrap`
+- Milestone 10 distributed resharing and related research branches
+
+Interpretation rule:
+
+- Sections below preserve the dependency order and design rationale that shaped the shipped migration.
+- Completed milestones should not be read as open backlog items; only the explicitly deferred branches remain future work.
 
 ## 1. Post-Stage A-C Baseline
 
@@ -366,11 +389,11 @@ Interpretation notes:
 - Archive policy is evaluated from archive-approval signatures only, regardless of what other signature families are present.
 - Mixed embedded lifecycle-bundle digests inside one selected cohort do not authorize heuristic winner selection.
 
-## 8. Near-Term Priorities
+## 8. Historical First Shipping Wave
 
-Status: First implementation wave
+Status: Implemented transition wave
 
-The near-term lifecycle roadmap should prioritize:
+The historical first shipping wave prioritized:
 
 1. freeze the artifact family, state/cohort boundary, and successor verification semantics
 2. freeze shard carriage, lifecycle-bundle v1 contents, and the no-heuristic bundle-selection rule
@@ -419,9 +442,9 @@ Optional optimization, not a roadmap gate.
 
 Useful long-term direction, but not current lifecycle capability.
 
-## 11. Roadmap Conclusion
+## 11. Historical Transition Conclusion
 
-Status: Frozen roadmap conclusion
+Status: Preserved transition conclusion
 
 The least risky lifecycle order for Quantum Vault is:
 

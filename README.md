@@ -8,7 +8,7 @@ Documentation map: see [`docs/README.md`](docs/README.md).
 
 This README is the product-facing overview: it complements the Whitepaper and is meant for onboarding, first impression, and understanding the workflow quickly. Byte-level formats, detailed policy semantics, and the long-term archival roadmap live under `docs/`.
 
-Quantum Vault currently ships the successor lifecycle family (`QVqcont-7`, archive-state descriptor, cohort binding, and `QV-Lifecycle-Bundle` v1) on the regular-user surface in both Lite and Pro. Beginning with v1.5.3, legacy manifest/bundle creation is compatibility-only rather than a normal product path; the remaining legacy surface exists only for previously created archives during the documented phase-out window.
+Quantum Vault currently ships the successor lifecycle family (`QVqcont-7`, archive-state descriptor, cohort binding, and `QV-Lifecycle-Bundle` v1) on the regular-user surface in both Lite and Pro. Beginning with v1.5.3, v1 manifest/bundle creation left the normal product path; the remaining v1 surface exists only to interpret previously created archives during the documented phase-out window.
 
 * [What Quantum Vault Is For](#what-quantum-vault-is-for) | [Features](#features) | [Workflow](#workflow-at-a-glance) | [Authenticity](#authenticity-model) | [Security](#security-notes) | [Docs](#documentation-guide) | [Development](#development) | [License](#license)
 
@@ -27,12 +27,22 @@ A normal encrypted file solves confidentiality at one point in time, but long-li
 
 ### Current release status
 
+Implemented now:
+
 - Lite and Pro create new archives as successor lifecycle archives by default. Lite exports successor `.qcont` shards plus `*.archive-state.json` and `*.lifecycle-bundle.json`; Pro additionally exports `*.cohort-binding.json`.
-- Starting in v1.5.3, legacy manifest/bundle creation is retired from the normal Lite and Pro build/export surface and remains compatibility-only.
 - Lite exposes successor archive creation and restore for regular users; Pro additionally exposes operator-facing cohort inspection, explicit selection controls, attach flows, and same-state resharing.
-- Attach and Restore support both legacy manifest/bundle archives and successor lifecycle archives; legacy inputs are compatibility-only, while successor restore uses archive-state approval, lifecycle bundles, and fail-closed archive/state/cohort selection.
+- Attach and Restore still accept previously created v1 manifest/bundle archives as well as current successor lifecycle archives. Successor restore evaluates archive approval from the archive-state descriptor and fails closed by default on ambiguous archive/state/cohort or embedded lifecycle-bundle selection, but it can proceed after an explicit cohort or lifecycle-bundle choice with a warning instead of auto-selecting a winner.
 - Same-state resharing is implemented for successor lifecycle archives and preserves archive-state bytes while emitting a new cohort and required transition record.
-- Future-only work remains deferred: RFC 4998-style evidence renewal, state-changing continuity records across rewrap or reencryption, and governance or trust-root objects.
+
+Deferred roadmap:
+
+- RFC 4998-style evidence renewal
+- state-changing continuity records across rewrap or reencryption
+- governance or trust-root objects
+
+Deprecated v1 context:
+
+- Starting in v1.5.3, v1 manifest/bundle creation is retired from the normal Lite and Pro build/export surface and remains available only for previously created archives during the phase-out window.
 
 ### Current cryptographic profile
 
@@ -49,7 +59,7 @@ A normal encrypted file solves confidentiality at one point in time, but long-li
 - **Encrypt** one or more files into a `.qenc` container for long-lived confidentiality.
 - **Decrypt** Quantum Vault `.qenc` containers back into their original payload.
 - **Split** an archive and its ML-KEM private key into threshold successor `.qcont` shards, exporting a signable archive-state descriptor and lifecycle bundle for later approval and maintenance; Pro additionally exports a standalone cohort-binding artifact for operator workflows.
-- **Attach** detached signatures, signer identity material, and timestamp evidence into a manifest bundle (legacy) or lifecycle bundle (successor).
+- **Attach** detached signatures, signer identity material, and timestamp evidence into a manifest bundle (legacy) or into an existing successor lifecycle bundle carried by successor shards or provided explicitly.
 - **Restore** from legacy or successor shards plus optional authenticity material, with recovery gated by archive policy.
 - **Verify** detached signatures while keeping integrity, signer pinning, and policy satisfaction as separate outcomes.
 - **Keep cryptographic operations local** to the client browser during normal operation.
@@ -61,8 +71,8 @@ A normal encrypted file solves confidentiality at one point in time, but long-li
 | Generate | Browser entropy | `secretKey.qkey`, `publicKey.qkey` | ML-KEM key pair generated client-side |
 | Encrypt | File(s), `publicKey.qkey` | `.qenc` | Post-quantum confidentiality and AEAD integrity |
 | Split | `.qenc`, `secretKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
-| Attach | Manifest or bundle, successor archive-state or lifecycle bundle, `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated bundle artifacts, optional rewritten `.qcont` | Portable authenticity material without changing canonical signed bytes |
-| Restore | `.qcont`, optional manifest/bundle or lifecycle objects, optional signatures, pins, timestamps | Recovered `.qenc`, recovered `secretKey.qkey` | Policy-gated archive reconstruction with legacy/successor track-specific verification |
+| Attach | Manifest or bundle, successor shards or lifecycle bundle, optional successor archive-state check, `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated bundle artifacts, optional rewritten `.qcont` | Portable authenticity material without changing canonical signed bytes |
+| Restore | `.qcont`, optional manifest/bundle or lifecycle objects, optional signatures, pins, timestamps | Recovered `.qenc`, recovered `secretKey.qkey` | Policy-gated archive reconstruction with track-specific verification and explicit successor selection when ambiguity exists |
 | Decrypt | `.qenc`, `secretKey.qkey` | Original file(s) | Payload recovery and file-hash confirmation |
 
 ## Workflow Overview
@@ -104,7 +114,9 @@ flowchart TB
 
         AS --> SG
         SG --> SIG
+        QC -. successor shards may supply embedded lifecycle bundle .-> AT
         LB --> AT
+        AS -. optional consistency / signable input .-> AT
         SIG --> AT
         OPT --> AT
         AT --> EM
@@ -112,14 +124,16 @@ flowchart TB
     end
 
     subgraph RECOVER["Recover archive"]
+        SEL["Resolve successor restore path<br/>(explicit choice only when ambiguous)"]:::restore
         R["Restore<br/>(policy-gated reconstruction)"]:::restore
         OUT["Recovered .qenc + secretKey.qkey"]:::artifact
         D["Decrypt<br/>ML-KEM-1024 Decaps → KMAC256 → AES-256-GCM"]:::restore
         F["Original file(s)"]:::input
 
-        QC --> R
-        AS -. optional .-> R
-        EM -. optional .-> R
+        QC --> SEL
+        AS -. optional state narrowing .-> SEL
+        EM -. optional bundle selection .-> SEL
+        SEL --> R
         SIG -. optional .-> R
         OPT -. optional .-> R
         R --> OUT
@@ -136,7 +150,7 @@ flowchart TB
     classDef optional fill:#fafafa,stroke:#999,stroke-width:1px,color:#555;
 ```
 
-The diagram above shows the current shipped successor-default build/export path. Legacy manifest/bundle material remains supported only as a compatibility path for previously created archives.
+The diagram above shows the current shipped v2 build/export path. In the current implementation, successor attach can start from successor shards carrying an embedded lifecycle bundle or from an explicitly provided lifecycle bundle, and successor restore inserts an explicit selection step whenever multiple archive/state/cohort or lifecycle-bundle candidates exist. v1 manifest/bundle material remains only as a deprecated migration path for previously created archives.
 
 ## User Flow By Stage
 
@@ -146,8 +160,8 @@ The diagram above shows the current shipped successor-default build/export path.
 | 2. Encrypt | Encrypt one file or a local file bundle | File(s), `publicKey.qkey` | `.qenc` | Uses ML-KEM-1024 + KMAC256 + AES-256-GCM |
 | 3. Split | Convert one archive into threshold shards | `.qenc`, matching `secretKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Regular-user creation emits successor `QVqcont-7` shards by default; Lite does not export a standalone cohort-binding file, but the same cohort-binding bytes remain embedded in successor shards |
 | 4. Sign | Sign the signable archive description in an external signer app | `*.qvmanifest.json` (legacy) or exported archive-state descriptor (successor) | `.qsig` or `.sig` | Legacy archive approval signs canonical manifest bytes; successor archive approval signs canonical archive-state bytes |
-| 5. Attach | Merge signatures, pins, and timestamps into the mutable bundle | Manifest or bundle, archive-state or lifecycle bundle, detached artifacts | `*.extended.qvmanifest.json` (legacy) or `*.lifecycle-bundle.json` (successor), optional rewritten shards | Full shard cohort rewrites embedded bundle bytes; partial input updates only the selected bundle variant |
-| 6. Restore | Reconstruct from shards with optional authenticity inputs | `.qcont`, optional manifest/bundle or lifecycle objects, signatures, pins, timestamps | Recovered `.qenc`, recovered `secretKey.qkey` | Recovery is blocked unless the selected archive policy is satisfied, and successor restore fails closed on mixed archive/state/cohort or ambiguous lifecycle-bundle selection |
+| 5. Attach | Merge signatures, pins, and timestamps into the mutable bundle | Manifest or bundle, successor shards or lifecycle bundle, optional archive-state descriptor, detached artifacts | `*.extended.qvmanifest.json` (legacy) or `*.lifecycle-bundle.json` (successor), optional rewritten shards | Successor attach requires successor shards or an existing lifecycle bundle; archive-state may be supplied as a consistency/signable input but is not sufficient on its own. Full shard cohort rewrites embedded bundle bytes; partial input updates only the selected bundle variant |
+| 6. Restore | Reconstruct from shards with optional authenticity inputs | `.qcont`, optional manifest/bundle or lifecycle objects, signatures, pins, timestamps | Recovered `.qenc`, recovered `secretKey.qkey` | Recovery is blocked unless the selected archive policy is satisfied; successor restore fails closed by default on ambiguity and requires explicit archive/cohort/bundle selection before proceeding when multiple valid candidates remain |
 | 7. Decrypt | Decrypt the recovered archive | `.qenc`, recovered `secretKey.qkey` | Original file(s) | The UI confirms `privateMeta.fileHash` before export |
 
 ## Artifact Overview
@@ -158,8 +172,8 @@ The diagram above shows the current shipped successor-default build/export path.
 | `secretKey.qkey` | Generate | Legacy filename for the ML-KEM private key | The object is an asymmetric `privateKey` |
 | `.qenc` | Encrypt | Encrypted container | Carries public metadata, key commitment, ciphertext |
 | `.qcont` | Split / Reshare | Threshold shard | Legacy `QVqcont-6` shards embed manifest and bundle; successor `QVqcont-7` shards embed archive-state, cohort binding, and lifecycle bundle |
-| `*.qvmanifest.json` | Legacy compatibility import/export | Canonical signable manifest (legacy) | Immutable detached-signature payload for legacy archives during the compatibility window |
-| `*.extended.qvmanifest.json` | Legacy compatibility attach | Self-contained manifest bundle (legacy) | Mutable bundle containing policy, keys, signatures, timestamps for legacy archives during the compatibility window |
+| `*.qvmanifest.json` | Deprecated v1 import/export | Canonical signable manifest (v1) | Immutable detached-signature payload for previously created v1 archives during the phase-out window |
+| `*.extended.qvmanifest.json` | Deprecated v1 attach | Self-contained manifest bundle (v1) | Mutable bundle containing policy, keys, signatures, timestamps for previously created v1 archives during the phase-out window |
 | `*.archive-state.json` | Successor export / Attach | Canonical signable archive-state descriptor (successor) | Immutable archive-approval payload for successor archives |
 | `*.cohort-binding.json` | Successor export / Reshare | State-bound successor cohort description | Captures sharding commitments and the successor `cohortId` derivation input |
 | `*.lifecycle-bundle.json` | Successor attach / Reshare | Mutable lifecycle bundle (successor) | Carries policy, public keys, archive-approval signatures, maintenance signatures, source-evidence signatures, and timestamps |
@@ -177,7 +191,7 @@ Quantum Vault keeps four states separate:
 3. signer identity pinned
 4. archive policy satisfied
 
-Legacy detached signatures from external signer apps ([Quantum Signer](https://github.com/CyberKiska/quantum-signer) `.qsig`, [Stellar WebSigner](https://github.com/CyberKiska/stellar-websigner) `.sig`) target canonical manifest bytes. Successor archive-approval signatures target canonical archive-state descriptor bytes, while successor maintenance and source-evidence signatures target their declared lifecycle objects and are reported separately from archive policy.
+In v1, detached signatures from external signer apps ([Quantum Signer](https://github.com/CyberKiska/quantum-signer) `.qsig`, [Stellar WebSigner](https://github.com/CyberKiska/stellar-websigner) `.sig`) targeted canonical manifest bytes. In the current successor model, archive-approval signatures target canonical archive-state descriptor bytes, and archive policy counts only those `archiveApprovalSignatures`; maintenance and source-evidence signatures target their declared lifecycle objects and are reported separately from archive policy.
 Timestamp evidence is supplementary and does not satisfy archive policy by itself.
 
 | Policy level | Minimum requirement | Unsigned restore allowed | Ed25519-only signatures sufficient |

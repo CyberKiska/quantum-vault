@@ -13,12 +13,12 @@ Historical consolidation source: `process/IMPLEMENTATION-NOTES.md`
 This document defines what signatures, pinning, and policy outcomes mean in Quantum Vault today.
 It is the semantic counterpart to `format-spec.md`.
 
-Quantum Vault currently supports **two coexisting format tracks** (see `format-spec.md` Scope):
+Quantum Vault currently uses the **successor lifecycle track** as its baseline, while still retaining the deprecated v1 track to interpret previously created archives during the phase-out window (see `format-spec.md` Scope):
 
-- **Legacy track:** canonical manifest (`quantum-vault-archive-manifest/v3`), mutable `QV-Manifest-Bundle` v2, and `QVqcont-6` shards.
 - **Successor lifecycle track:** archive-state descriptor, `QV-Lifecycle-Bundle` v1, and `QVqcont-7` shards.
+- **Deprecated v1 track:** canonical manifest (`quantum-vault-archive-manifest/v3`), mutable `QV-Manifest-Bundle` v2, and `QVqcont-6` shards.
 
-Sections below apply to **both** tracks unless explicitly scoped to **legacy** or **successor** semantics.
+The shipped Lite and Pro user surface now creates **successor lifecycle** archives by default. Sections below apply to **both** tracks unless explicitly scoped to **legacy** or **successor** semantics.
 
 Division of labor:
 
@@ -27,7 +27,7 @@ Division of labor:
 
 ## Scope
 
-This document covers the current semantics of detached signatures, archive authenticity policy, proof counting, signer pinning, and restore authorization for **both** the legacy manifest-bundle model and the **successor lifecycle** model.
+This document is successor-first. It defines the current semantics of detached signatures, archive authenticity policy, proof counting, signer pinning, and restore authorization for the v2 lifecycle model, while also preserving the still-implemented v1 semantics needed to interpret previously created manifest/bundle archives during the phase-out window.
 
 It does not define byte-level encoding, the full threat model, long-term archive classes, or a complete governance framework.
 
@@ -68,19 +68,24 @@ External references already used elsewhere in the repository:
 
 Implemented now:
 
-- current policy levels `integrity-only`, `any-signature`, and `strong-pq-signature` (for **both** legacy and successor bundles)
+- current policy levels `integrity-only`, `any-signature`, and `strong-pq-signature` across the shipped restore paths
 - **Successor lifecycle** artifacts: `QV-Lifecycle-Bundle` v1, archive-state descriptor signing, `QVqcont-7` shards, and restore-time evaluation described in **§11**
 - current proof-counting and strong-PQ suite evaluation rules
 - current bundle pinning and user pinning semantics (legacy `attachments.signatures`; successor `attachments.archiveApprovalSignatures` and related families per §11)
 - current restore authorization behavior and status vocabulary
 - current OTS evidence linkage and heuristic completeness reporting (detached signature bytes as targets; see §8 and §11)
 
-Not yet first-class in the current implementation:
+Deferred roadmap:
 
 - first-class policy-profile identifiers or enforcement beyond the current built-in levels
 - institution-level governance objects and change-control mechanisms for policy meaning
 - institutional trust-root programs or repository-level authority models
 - first-class migration, renewal, or external approval claim types
+
+Deprecated v1 context:
+
+- v1 manifest-bundle policy evaluation over `attachments.signatures`
+- the historical richer-bundle restore heuristics retained only for `QVqcont-6` restores during the phase-out window
 
 ## Future work and non-normative notes
 
@@ -138,6 +143,7 @@ Current mandatory separation:
 - signer pinning does not replace policy evaluation
 - timestamps do not satisfy archive signature policy
 - **successor:** maintenance and source-evidence detached signatures do not satisfy archive policy (§11)
+- **successor:** restore reports separate status channels including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`
 
 ## 3. Current role model and lifecycle authority
 
@@ -299,7 +305,7 @@ They are descriptive guidance for operators and documentation, not first-class `
 | Recommended profile | Current policy object | Typical use | Current consequence |
 | --- | --- | --- | --- |
 | Personal recovery profile | `level = integrity-only`, `minValidSignatures = 1` | Personal or family archival storage where recoverability is primary and signer-authenticated provenance is optional | Restore is allowed if reconstruction integrity holds; detached signatures may still be attached later but are not required |
-| Signature-required recovery profile | `level = any-signature`, `minValidSignatures = 1` | Distributed storage where restore must block unless at least one detached signature exists, but interoperability with Ed25519 or mixed signature sets is acceptable | Restore blocks unless at least one valid detached signature verifies over the canonical manifest |
+| Signature-required recovery profile | `level = any-signature`, `minValidSignatures = 1` | Distributed storage where restore must block unless at least one detached signature exists, but interoperability with Ed25519 or mixed signature sets is acceptable | Restore blocks unless at least one valid detached signature verifies over the current signable object for the selected track: canonical manifest bytes on the legacy path, or canonical archive-state descriptor bytes for successor archive approval |
 | Auditor-led archival profile | `level = strong-pq-signature`, `minValidSignatures = 1` | Verified data where provenance responsibility matters and the auditor and signer may be the same entity | Restore blocks unless at least one valid strong-PQ detached signature exists; signer identity material should be preserved with the archive |
 | Multi-approver archival profile | `level = strong-pq-signature`, `minValidSignatures > 1` | Dual-control or committee-style archival approval where more than one valid signature is required | Restore blocks unless the signature count threshold is met and at least one valid strong-PQ detached signature is present |
 
@@ -428,7 +434,7 @@ It is not a default hard blocker in the current implementation.
 
 Current signer pin sources are:
 
-- `bundlePinned`: a verified signature matched bundled signer material explicitly linked from the manifest bundle
+- `bundlePinned`: a verified signature matched bundled signer material explicitly linked from the relevant mutable bundle for that path
 - `userPinned`: signer identity material came from restore-time user input
 - `signerPinned = bundlePinned || userPinned`
 
@@ -551,6 +557,11 @@ Current restore policy evaluation occurs after structural and reconstruction che
 
 **Successor lifecycle restore** (see `format-spec.md` and **§11**) uses the same three policy **levels** but evaluates **only** `attachments.archiveApprovalSignatures` over canonical **archive-state descriptor** bytes. Restore must also resolve cohort and lifecycle-bundle selection without heuristic auto-selection across multiple embedded bundle digests or mixed cohorts when the implementation requires explicit disambiguation.
 
+Current successor ambiguity rule:
+
+- restore fails closed by default when same-state forks or multi-bundle cohorts remain ambiguous
+- restore may proceed after explicit cohort or lifecycle-bundle selection, but it emits a warning rather than pretending Quantum Vault auto-selected a winner
+
 Current pinning consequence:
 
 - pinning affects status/provenance reporting
@@ -581,12 +592,12 @@ Quantum Vault implements a **successor lifecycle** artifact family **alongside**
 
 Quantum Vault is **phasing out** the **legacy** model in favor of the **successor lifecycle** model: archive-state-centric approval, `QV-Lifecycle-Bundle` v1, and `QVqcont-7` shards.
 
-The **legacy** model (`quantum-vault-archive-manifest/v3`, `QV-Manifest-Bundle` v2, `QVqcont-6`) remains **supported** for **compatibility** with existing archives and tooling, but it is no longer the normal creation path on the shipped Lite or Pro UI surface. Beginning with release **v1.5.3**, legacy creation became compatibility-only on the regular-user surface. Legacy is **not** removed from the implementation while the documented compatibility window remains open.
+The previously shipped v1 model (`quantum-vault-archive-manifest/v3`, `QV-Manifest-Bundle` v2, `QVqcont-6`) remains in the implementation only to interpret existing archives and tooling during the documented phase-out window. Beginning with release **v1.5.3**, v1 creation left the normal Lite and Pro UI surface and the successor lifecycle model became the regular-user baseline.
 
 | Track | Signable approval object | Mutable bundle | Typical shard metadata `alg.fmt` |
 | --- | --- | --- | --- |
-| Legacy | Canonical **manifest** bytes | `QV-Manifest-Bundle` v2 | `QVqcont-6` |
-| Successor | Canonical **archive-state descriptor** bytes | `QV-Lifecycle-Bundle` v1 | `QVqcont-7` |
+| Deprecated v1 | Canonical **manifest** bytes | `QV-Manifest-Bundle` v2 | `QVqcont-6` |
+| Successor v2 | Canonical **archive-state descriptor** bytes | `QV-Lifecycle-Bundle` v1 | `QVqcont-7` |
 
 ### 11.2 Attachment families (`QV-Lifecycle-Bundle` v1)
 
@@ -604,10 +615,16 @@ The lifecycle bundle carries `authPolicy` and five attachment arrays (all mandat
 - **OTS** linkage does not satisfy archive policy; semantics match §8 (detached signature bytes as targets).
 - **Pinning:** If a bundled signature declares `publicKeyRef`, resolution uses bundled `publicKeys[]` and MUST fail closed on unknown, ambiguous, incompatible, or non-verifying bindings (not merely “unpinned”).
 - **Integrity, signature validity, pinning, policy satisfaction, and OTS evidence** remain **distinct** reporting channels (§§2–8).
+- Current successor restore reporting uses distinct status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`.
 
 ### 11.4 Restore semantics (successor)
 
-Successor restore groups candidate shards by `archiveId`, `stateId`, and `cohortId`, and requires exact byte equality for embedded **archive-state** and **cohort-binding** objects within a cohort. If more than one embedded **lifecycle-bundle** digest appears for an otherwise consistent cohort and the operator does not supply an explicit lifecycle bundle or selected digest, restore **fails closed** (no heuristic “richest bundle” or lexical winner). If multiple valid **cohorts** exist for the same archive state (same-state fork), restore **rejects** mixed cohorts without auto-selecting by timestamp, attachment count, or lexical order.
+Successor restore groups candidate shards by `archiveId`, `stateId`, and `cohortId`, and requires exact byte equality for embedded **archive-state** and **cohort-binding** objects within a cohort.
+
+- If more than one embedded **lifecycle-bundle** digest appears for an otherwise consistent cohort and the operator does not supply an explicit lifecycle bundle or selected digest, restore **fails closed**.
+- If the operator supplies explicit lifecycle-bundle bytes or an explicit embedded lifecycle-bundle digest, restore may proceed, but it MUST report that authenticity and policy were evaluated against the explicitly selected bundle rather than auto-selected embedded bytes.
+- If multiple valid **cohorts** exist for the same archive state (same-state fork), restore **fails closed** by default and does not auto-select by timestamp, attachment count, or lexical order.
+- If the operator explicitly selects one cohort or supplies a matching lifecycle bundle for a same-state fork, restore may proceed, but it MUST warn that multiple valid cohorts remain known and that Quantum Vault did not auto-select a winner.
 
 ### 11.5 Same-state resharing semantics (successor)
 
