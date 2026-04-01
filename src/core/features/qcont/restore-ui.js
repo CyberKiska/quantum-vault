@@ -1,4 +1,4 @@
-import { parseShardForRestore, restoreFromShards } from '../../../app/crypto-service.js';
+import { parseLifecycleShard, restoreFromShards } from '../../../app/crypto-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { download, readFileAsUint8Array, setButtonsDisabled, shortenHash } from '../../../utils.js';
 import { parseArchiveStateDescriptorBytes } from '../../crypto/lifecycle/artifacts.js';
@@ -178,13 +178,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }
 
     const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
-    const parsed = await Promise.all(shardBytes.map((bytes) => parseShardForRestore(bytes, { strict: true })));
-    const successorShards = parsed.filter((shard) => (
-      shard?.archiveStateBytes instanceof Uint8Array &&
-      shard?.cohortBindingBytes instanceof Uint8Array &&
-      shard?.lifecycleBundleBytes instanceof Uint8Array
-    ));
-    const legacyCount = parsed.length - successorShards.length;
+    const successorShards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
 
     if (!successorShards.length) {
       clearSuccessorSelectionUi(prefix, actionButton);
@@ -193,22 +187,6 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
 
     elements.container.style.display = 'block';
     elements.container.className = 'verification-section successor-selection';
-
-    if (legacyCount > 0) {
-      elements.summary.textContent = 'Input conflict: mixed legacy and successor artifact families.';
-      elements.help.textContent = 'Restore stays blocked until the input contains only one artifact family.';
-      [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
-        if (group) group.style.display = 'none';
-      });
-      successorSelectionState.set(prefix, {
-        ...nextState,
-        mode: 'mixed',
-        selectionRequired: true,
-        selectionComplete: false,
-      });
-      setRestoreActionAvailability(prefix, actionButton);
-      return successorSelectionState.get(prefix);
-    }
 
     const model = buildSuccessorSelectionModel(successorShards);
     const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
@@ -654,7 +632,7 @@ export function initQcontRestoreUI() {
       }
 
       const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-      const shards = await Promise.all(shardBytesArr.map((bytes) => parseShardForRestore(bytes, { strict: true })));
+      const shards = await Promise.all(shardBytesArr.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
 
       const result = await restoreFromShards(shards, {
         onLog: (msg) => log(msg),

@@ -7,7 +7,7 @@ import {
     generateKeyPair,
     hashBytes,
     buildQcontShards,
-    parseShardForRestore,
+    parseLifecycleShard,
     restoreFromShards,
     assessShardSelection,
 } from '../../app/crypto-service.js';
@@ -535,7 +535,7 @@ async function restoreLiteShards() {
 
         // Parse shards using shared function
         const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-        const shards = await Promise.all(shardBytesArr.map((arr) => parseShardForRestore(arr, { strict: true })));
+        const shards = await Promise.all(shardBytesArr.map((arr) => parseLifecycleShard(arr, { strict: true })));
         
         // Log restoration start
         const containerId = shards[0]?.metaJSON?.containerId;

@@ -1,4 +1,4 @@
-import { parseShardForRestore, reshareSameState } from '../../../app/crypto-service.js';
+import { parseLifecycleShard, reshareSameState } from '../../../app/crypto-service.js';
 import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './restore-ui.js';
 import { bindRsParamsUI } from './rs-params-display.js';
 import { updateShardSelectionStatus } from '../ui/shards-status.js';
@@ -165,7 +165,7 @@ export function initQcontReshareUI() {
       }
 
       const shardBytes = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-      const shards = await Promise.all(shardBytes.map((bytes) => parseShardForRestore(bytes, { strict: true })));
+      const shards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
       const n = parsePositiveInteger(nInput, 'reshare n');
       const k = parsePositiveInteger(kInput, 'reshare k');
       const reasonCode = String(reasonCodeInput?.value || 'cohort-rotation').trim() || 'cohort-rotation';

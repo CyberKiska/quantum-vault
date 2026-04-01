@@ -5167,7 +5167,7 @@ function buildCases() {
       },
     },
     {
-      name: 'regular-user build service retains explicit legacy compatibility builds only when requested',
+      name: 'regular-user build service remains successor-only when a stale legacy option is passed',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('phase7-explicit-legacy-build');
@@ -5178,8 +5178,11 @@ function buildCases() {
           authPolicyLevel: 'integrity-only',
         });
 
-        assert(split.formatVersion === 'QVqcont-6', 'explicit legacy compatibility builds should still emit legacy shard format');
-        assert(split.manifestBytes instanceof Uint8Array, 'explicit legacy compatibility builds should still export canonical manifest bytes');
+        assert(split.formatVersion === 'QVqcont-7', 'regular-user build service should remain successor-only');
+        assert(split.archiveStateBytes instanceof Uint8Array, 'regular-user build service should still export archive-state bytes');
+        assert(split.cohortBindingBytes instanceof Uint8Array, 'regular-user build service should still export cohort-binding bytes');
+        assert(split.lifecycleBundleBytes instanceof Uint8Array, 'regular-user build service should still export lifecycle-bundle bytes');
+        assert(!(split.manifestBytes instanceof Uint8Array), 'regular-user build service should not emit legacy manifest bytes');
       },
     },
     {

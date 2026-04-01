@@ -1,12 +1,12 @@
 import {
   attachLifecycleBundleToShards,
-  attachManifestBundleToShards,
   parseLifecycleShard,
-  parseShard as parseLegacyShard,
 } from '../../../app/crypto-service.js';
 import { packPqpk } from '../../crypto/auth/qsig.js';
 import { base64ToBytes } from '../../crypto/bytes.js';
 import { isSupportedStellarSignatureDocumentBytes } from '../../crypto/auth/stellar-sig.js';
+import { attachManifestBundleToShards } from '../../crypto/qcont/attach.js';
+import { parseShard as parseLegacyShard } from '../../crypto/qcont/restore.js';
 import {
   canonicalizeArchiveStateDescriptor,
   parseArchiveStateDescriptorBytes,
