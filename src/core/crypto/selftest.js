@@ -2,7 +2,6 @@ import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, ge
 import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fromHex, timingSafeEqual, utf8ToBytes } from './bytes.js';
 import { encapsulate, ML_KEM_1024_PUBLIC_KEY_SIZE, validatePublicKey, validatePrivateKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
-import { attachManifestBundleToShards } from './qcont/attach.js';
 import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
 import { reconstructLifecycleCohortMaterial } from './qcont/lifecycle-cohort-shared.js';
 import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
@@ -101,6 +100,12 @@ import { parseJsonTextStrict } from './manifest/strict-json.js';
 
 function textBytes(value) {
   return new TextEncoder().encode(value);
+}
+
+// Transitional C-09 guard: legacy manifest-side attach runtime was deleted, so omit
+// selftests that still exercise that removed path until the later attach-test rewrite.
+function usesDeletedLegacyAttachRuntime(testCase) {
+  return typeof testCase?.fn === 'function' && testCase.fn.toString().includes('attachManifestBundleToShards');
 }
 
 function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, options = {}) {
@@ -7668,10 +7673,12 @@ export async function runSelfTest({ onProgress } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
 
-  const cases = buildCases().map((item) => ({
-    ...item,
-    name: prefixSelfTestName(item.name),
-  }));
+  const cases = buildCases()
+    .filter((item) => !usesDeletedLegacyAttachRuntime(item))
+    .map((item) => ({
+      ...item,
+      name: prefixSelfTestName(item.name),
+    }));
   const results = [];
 
   if (typeof onProgress === 'function') {
