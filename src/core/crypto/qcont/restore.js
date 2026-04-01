@@ -175,6 +175,7 @@ function buildLifecycleVerificationFailureResult({
 }) {
   return {
     ok: false,
+    selfSigned: false,
     family,
     source,
     format,
@@ -191,6 +192,11 @@ function buildLifecycleVerificationFailureResult({
     targetType,
     targetRef,
   };
+}
+
+function buildSelfSignedIgnoredWarning(result) {
+  const name = String(result?.name || result?.artifactId || 'detached PQ signature').trim();
+  return `${name}: detached PQ signature verified only with the embedded signer key and was ignored for trust/policy because no bundled or user-pinned signer key verified.`;
 }
 
 function safeVerifySuccessorQsigAgainstBytes(options) {
@@ -575,10 +581,15 @@ function buildLifecycleVerificationCounts(results) {
     validSourceEvidence: 0,
   };
   const duplicateWarnings = [];
+  const selfSignedWarnings = [];
   const uniqueValid = new Map();
 
   for (const result of results) {
     result.countedForPolicy = false;
+    if (result?.selfSigned === true) {
+      selfSignedWarnings.push(buildSelfSignedIgnoredWarning(result));
+      continue;
+    }
     if (!result?.ok || typeof result.proofIdentityDigestHex !== 'string') continue;
     const family = String(result.family || 'archive-approval');
     const dedupeKey = `${family}:${result.format}:${result.proofIdentityDigestHex}`;
@@ -627,7 +638,7 @@ function buildLifecycleVerificationCounts(results) {
     }
   }
 
-  return { counts, duplicateWarnings };
+  return { counts, duplicateWarnings, selfSignedWarnings };
 }
 
 function evaluateSuccessorArchivePolicy(authPolicy, verification) {
@@ -977,12 +988,13 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     }));
   }
 
-  const { counts, duplicateWarnings } = buildLifecycleVerificationCounts(results);
+  const { counts, duplicateWarnings, selfSignedWarnings } = buildLifecycleVerificationCounts(results);
   const warnings = [];
   for (const result of results) {
     for (const warning of result.warnings || []) warnings.push(warning);
   }
   warnings.push(...pinNormalizationWarnings);
+  warnings.push(...selfSignedWarnings);
   warnings.push(...duplicateWarnings);
 
   const policy = evaluateSuccessorArchivePolicy(lifecycleBundle.authPolicy, { counts });

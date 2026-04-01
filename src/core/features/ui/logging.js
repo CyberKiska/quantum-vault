@@ -104,6 +104,7 @@ export function formatSignatureResultSummary(result) {
     );
     const detailParts = [suite];
     if (signer) detailParts.push(`signer ${signer}`);
+    if (result?.selfSigned) detailParts.push('self-signed');
     if (result?.bundlePinned) detailParts.push('bundle-pinned');
     if (result?.userPinned) detailParts.push('user-pinned');
     if (!result?.bundlePinned && !result?.userPinned && result?.signerPinned) detailParts.push('pinned');

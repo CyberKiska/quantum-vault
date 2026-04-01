@@ -62,7 +62,7 @@ import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
 import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
 import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
 import { verifyManifestSignatures } from './auth/verify-signatures.js';
-import { unpackPqpk, unpackQsig } from './auth/qsig.js';
+import { unpackPqpk, unpackQsig, verifyQsigAgainstBytes } from './auth/qsig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
@@ -3817,6 +3817,60 @@ function buildCases() {
       },
     },
     {
+      name: 'successor restore keeps a selfSigned external .qsig visible without granting archive-approval status',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-self-signed-visible'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: {
+            signatures: [{ name: 'external-self-signed.qsig', bytes: qsig.qsigBytes }],
+          },
+        });
+
+        const result = restored.authenticity.verification.results.find((item) => item.name === 'external-self-signed.qsig');
+        assert(result?.ok === true, 'expected selfSigned external detached PQ signature to remain visible as ok');
+        assert(result?.selfSigned === true, 'expected selfSigned external detached PQ signature to be flagged selfSigned');
+        assert(result?.countedForPolicy === false, 'selfSigned external detached PQ signature must not count for archive policy');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === false, 'selfSigned external detached PQ signature must not satisfy archive-approval verification');
+        assert(restored.authenticity.status.strongPqSignatureVerified === false, 'selfSigned external detached PQ signature must not satisfy strong PQ archive-approval status');
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'selfSigned external detached PQ signature must not count toward archive-approval totals');
+        assert(restored.authenticity.verification.counts.validArchiveApprovalStrongPq === 0, 'selfSigned external detached PQ signature must not count toward strong PQ archive-approval totals');
+        assert(restored.authenticity.verification.counts.validTotal === 0, 'selfSigned external detached PQ signature must not count toward trusted detached signature totals');
+        assert(
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
+          'selfSigned external detached PQ signature should emit an explicit trust/policy warning'
+        );
+      },
+    },
+    {
+      name: 'successor restore does not let a selfSigned external .qsig satisfy any-signature archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-self-signed-policy-fail'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(sample.parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [{ name: 'external-self-signed.qsig', bytes: qsig.qsigBytes }],
+            },
+          }),
+          /no verified archive-approval signature satisfies archive policy/i,
+          'selfSigned external detached PQ signature unexpectedly satisfied successor any-signature policy'
+        );
+      },
+    },
+    {
       name: 'successor restore reports and ignores unresolved publicKeyRef entries when another archive-approval signature satisfies policy',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({
@@ -3915,6 +3969,9 @@ function buildCases() {
         const wrongOts = await buildOtsFixture(textBytes('wrong-detached-signature-bytes'), { completeProof: true });
         const bundle = cloneJson(sample.split.lifecycleBundle);
         bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-archive', qsig.signerPublicKey),
+        ];
         bundle.attachments.archiveApprovalSignatures = [
           buildLifecycleQsigEntry({
             id: 'archive-approval-sig-1',
@@ -3923,6 +3980,7 @@ function buildCases() {
             targetRef: `state:${sample.split.stateId}`,
             targetDigest: sample.split.stateId,
             qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-archive',
           }),
         ];
         bundle.attachments.timestamps = [
@@ -5220,7 +5278,70 @@ function buildCases() {
       },
     },
     {
-      name: 'pinning: valid PQ signature without pin remains valid and unpinned',
+      name: 'qsig verifier reports embedded-key-only verification as selfSigned',
+      fn: async () => {
+        const messageBytes = textBytes('qsig-self-signed-low-level');
+        const { qsigBytes } = buildQsigFixture(messageBytes);
+
+        const verification = verifyQsigAgainstBytes({
+          messageBytes,
+          qsigBytes,
+        });
+
+        assert(verification.ok === true, 'embedded-key-only detached PQ signature should remain cryptographically valid');
+        assert(verification.selfSigned === true, 'embedded-key-only detached PQ signature should be flagged selfSigned');
+        assert(verification.bundlePinned === false, 'embedded-key-only detached PQ signature must not set bundlePinned');
+        assert(verification.userPinned === false, 'embedded-key-only detached PQ signature must not set userPinned');
+        assert(verification.signerPinned === false, 'embedded-key-only detached PQ signature must not set signerPinned');
+        assert(
+          verification.warnings.some((warning) => warning.includes('embedded in the .qsig itself')),
+          'embedded-key-only detached PQ signature should emit an explicit self-verification warning'
+        );
+      },
+    },
+    {
+      name: 'qsig verifier clears selfSigned when a matching .pqpk pin verifies',
+      fn: async () => {
+        const messageBytes = textBytes('qsig-user-pin-low-level');
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(messageBytes);
+
+        const verification = verifyQsigAgainstBytes({
+          messageBytes,
+          qsigBytes,
+          pinnedPqPublicKeyFileBytes: pqpkBytes,
+        });
+
+        assert(verification.ok === true, 'matching .pqpk should preserve detached PQ verification');
+        assert(verification.selfSigned === false, 'matching .pqpk should clear selfSigned');
+        assert(verification.bundlePinned === false, 'external .pqpk should not set bundlePinned');
+        assert(verification.userPinned === true, 'matching .pqpk should set userPinned');
+        assert(verification.signerPinned === true, 'matching .pqpk should set signerPinned');
+      },
+    },
+    {
+      name: 'qsig verifier keeps authoritative bundled key mismatches fail closed without selfSigned fallback',
+      fn: async () => {
+        const messageBytes = textBytes('qsig-authoritative-fail-closed');
+        const matching = buildQsigFixture(messageBytes);
+        const wrong = buildQsigFixture(messageBytes);
+
+        const verification = verifyQsigAgainstBytes({
+          messageBytes,
+          qsigBytes: matching.qsigBytes,
+          bundlePqPublicKeyFileBytes: wrong.pqpkBytes,
+          authoritativeBundlePqPublicKey: true,
+        });
+
+        assert(verification.ok === false, 'authoritative bundled key mismatch must fail verification');
+        assert(verification.selfSigned === false, 'authoritative bundled key mismatch must never degrade into selfSigned');
+        assert(
+          String(verification.error || '').includes('Bundled PQ public key did not verify'),
+          'expected authoritative bundled key failure'
+        );
+      },
+    },
+    {
+      name: 'pinning: embedded-key-only PQ signature stays visible but does not satisfy trusted verification',
       fn: async () => {
         const manifestBytes = textBytes('pinning-no-pin');
         const { qsigBytes } = buildQsigFixture(manifestBytes);
@@ -5230,14 +5351,25 @@ function buildCases() {
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
         });
 
-        assert(verification.status.signatureVerified === true, 'signature should remain verified without a pin');
+        assert(verification.results.length === 1, 'expected one detached PQ verification result');
+        assert(verification.results[0].ok === true, 'embedded-key-only detached PQ signature should remain cryptographically valid');
+        assert(verification.results[0].selfSigned === true, 'embedded-key-only detached PQ signature should be surfaced as selfSigned');
+        assert(verification.results[0].countedForPolicy === false, 'embedded-key-only detached PQ signature must not count for policy');
+        assert(verification.status.signatureVerified === false, 'embedded-key-only detached PQ signature must not satisfy signatureVerified');
+        assert(verification.status.strongPqSignatureVerified === false, 'embedded-key-only detached PQ signature must not satisfy strong PQ status');
         assert(verification.status.signerPinned === false, 'signature should remain unpinned without a pin');
         assert(verification.status.bundlePinned === false, 'external signature without bundle key must not set bundlePinned');
         assert(verification.status.userPinned === false, 'external signature without user pin must not set userPinned');
+        assert(verification.counts.validTotal === 0, 'embedded-key-only detached PQ signature must not count toward validTotal');
+        assert(verification.counts.validStrongPq === 0, 'embedded-key-only detached PQ signature must not count toward validStrongPq');
+        assert(
+          verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
+          'embedded-key-only detached PQ signature should emit an explicit trust/policy warning'
+        );
       },
     },
     {
-      name: 'pinning: valid PQ signature with wrong pin remains valid and unpinned',
+      name: 'pinning: wrong PQ pin keeps detached PQ result visible but selfSigned',
       fn: async () => {
         const manifestBytes = textBytes('pinning-wrong-pin');
         const { qsigBytes } = buildQsigFixture(manifestBytes);
@@ -5249,12 +5381,19 @@ function buildCases() {
           pinnedPqPublicKeyFileBytes: wrongPqpkBytes,
         });
 
-        assert(verification.status.signatureVerified === true, 'wrong pin must not downgrade signature verification');
+        assert(verification.results[0].ok === true, 'wrong pin must not hide cryptographic verification');
+        assert(verification.results[0].selfSigned === true, 'wrong pin without any verifying pin must leave the result selfSigned');
+        assert(verification.status.signatureVerified === false, 'wrong pin must not satisfy trusted signature verification');
         assert(verification.status.signerPinned === false, 'wrong pin must not mark signer as pinned');
         assert(verification.status.userPinned === false, 'wrong pin must not set userPinned');
+        assert(verification.counts.validTotal === 0, 'wrong pin must not let a selfSigned detached PQ signature count for policy');
         assert(
           verification.warnings.some((warning) => warning.includes('Pinned PQ signer key did not match')),
           'wrong pin should emit an explicit warning'
+        );
+        assert(
+          verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
+          'wrong pin should leave the detached PQ signature explicitly ignored for trust/policy'
         );
       },
     },
@@ -5327,6 +5466,7 @@ function buildCases() {
               { name: 'unique-a.qsig', bytes: sigA.qsigBytes },
               { name: 'unique-b.qsig', bytes: sigB.qsigBytes },
             ],
+            pinnedPqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
           },
         });
 
@@ -5607,7 +5747,7 @@ function buildCases() {
       },
     },
     {
-      name: 'restore strong-pq-signature policy accepts one valid strong PQ signature',
+      name: 'restore strong-pq-signature policy rejects a selfSigned external PQ signature without a pin',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('strong-pq-valid');
@@ -5616,17 +5756,16 @@ function buildCases() {
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const { qsigBytes } = buildQsigFixture(split.manifestBytes);
 
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: {
-            signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          },
-        });
-
-        assert(restored.authenticity.status.signatureVerified === true, 'expected signatureVerified');
-        assert(restored.authenticity.status.strongPqSignatureVerified === true, 'expected strongPqSignatureVerified');
-        assert(restored.authenticity.status.policySatisfied === true, 'expected policySatisfied');
+        await expectFailure(
+          () => restoreFromShards(parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+            },
+          }),
+          'selfSigned external PQ signature unexpectedly satisfied strong-pq-signature policy'
+        );
       },
     },
     {
@@ -5777,7 +5916,7 @@ function buildCases() {
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'invalid-extra-signatures.bin'));
         const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
         const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes } = buildQsigFixture(split.manifestBytes);
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
         const malformedQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
 
         const restored = await restoreFromShards(parsed, {
@@ -5788,6 +5927,7 @@ function buildCases() {
               { name: 'archive-good.qsig', bytes: qsigBytes },
               { name: 'archive-bad.qsig', bytes: malformedQsigBytes },
             ],
+            pinnedPqPublicKeyFileBytes: pqpkBytes,
           },
         });
 
@@ -6338,6 +6478,7 @@ function buildCases() {
           onError: () => {},
           verification: {
             signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
+            pinnedPqPublicKeyFileBytes: sig.pqpkBytes,
             timestamps: [{ name: 'archive.qsig.ots', bytes: otsBytes }],
           },
         });

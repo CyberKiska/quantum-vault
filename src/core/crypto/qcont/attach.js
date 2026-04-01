@@ -176,6 +176,9 @@ async function importExternalQsig({ manifestBytes, signature, normalizedPqPins }
     }
   }
 
+  // Embedded-key-only verification may still be imported as unpinned evidence, but
+  // attach must not fabricate bundled signer material or a publicKeyRef without an
+  // authoritative .pqpk match.
   const publicKeyAttachment = matchedKey ? buildPublicKeyAttachment(matchedKey) : null;
   return {
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],

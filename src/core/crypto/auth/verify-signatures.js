@@ -61,6 +61,7 @@ function buildVerificationFailureResult({
 }) {
   return {
     ok: false,
+    selfSigned: false,
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -79,6 +80,11 @@ function buildFormatFailureResult(format, error, warnings = []) {
     return buildVerificationFailureResult({ type: 'sig', format: 'stellar-sig', error, warnings });
   }
   return buildVerificationFailureResult({ type: 'unknown', format, error, warnings });
+}
+
+function buildSelfSignedIgnoredWarning(result) {
+  const name = String(result?.name || result?.artifactId || 'detached PQ signature').trim();
+  return `${name}: detached PQ signature verified only with the embedded signer key and was ignored for trust/policy because no bundled or user-pinned signer key verified.`;
 }
 
 function safeVerifyQsigAgainstBytes(options) {
@@ -144,6 +150,7 @@ function verifyQsigWithPinnedKeys({
     return {
       ...(firstOk || baseline || {}),
       ok: false,
+      selfSigned: false,
       bundlePinned: false,
       userPinned: false,
       signerPinned: false,
@@ -263,6 +270,7 @@ async function verifyBundleSignature({
 
   return {
     ok: false,
+    selfSigned: false,
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -286,6 +294,7 @@ async function verifyExternalSignature({
   if (sigType === 'unknown') {
     return {
       ok: false,
+      selfSigned: false,
       bundlePinned: false,
       userPinned: false,
       signerPinned: false,
@@ -339,10 +348,15 @@ function buildCounts(results) {
     userPinnedValidTotal: 0,
   };
   const duplicateWarnings = [];
+  const selfSignedWarnings = [];
   const uniqueValid = new Map();
 
   for (const result of results) {
     result.countedForPolicy = false;
+    if (result?.selfSigned === true) {
+      selfSignedWarnings.push(buildSelfSignedIgnoredWarning(result));
+      continue;
+    }
     if (!result.ok || typeof result.proofIdentityDigestHex !== 'string') continue;
     const dedupeKey = `${result.format}:${result.proofIdentityDigestHex}`;
     const current = uniqueValid.get(dedupeKey);
@@ -377,7 +391,7 @@ function buildCounts(results) {
     }
   }
 
-  return { counts, duplicateWarnings };
+  return { counts, duplicateWarnings, selfSignedWarnings };
 }
 
 async function attachSignatureDigests(result) {
@@ -458,7 +472,7 @@ export async function verifyManifestSignatures({
     results.push(result);
   }
 
-  const { counts, duplicateWarnings } = buildCounts(results);
+  const { counts, duplicateWarnings, selfSignedWarnings } = buildCounts(results);
   if (counts.validStrongPq > 0) {
     for (const result of results) {
       if (!Array.isArray(result?.warnings) || result.warnings.length === 0) continue;
@@ -469,6 +483,7 @@ export async function verifyManifestSignatures({
     if (Array.isArray(result.warnings)) warnings.push(...result.warnings);
   }
   warnings.push(...pinNormalizationWarnings);
+  warnings.push(...selfSignedWarnings);
   warnings.push(...duplicateWarnings);
   const dedupedWarnings = dedupeWarnings(warnings);
   return {

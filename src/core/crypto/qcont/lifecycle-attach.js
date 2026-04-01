@@ -226,6 +226,9 @@ async function importExternalArchiveApprovalQsig({
     }
   }
 
+  // Embedded-key-only verification may still be imported as unpinned evidence, but
+  // lifecycle attach must not synthesize bundled signer material or a publicKeyRef
+  // without an authoritative .pqpk match.
   const publicKeyAttachment = matchedKey ? buildLifecyclePublicKeyAttachment(matchedKey) : null;
   return {
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],
