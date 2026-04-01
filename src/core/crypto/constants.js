@@ -21,10 +21,6 @@ export const KEY_COMMITMENT_SIZE = 32;
 // Current container format version
 export const FORMAT_VERSION = 'QVv1-5-0';
 
-// Current shard format version
-export const QCONT_FORMAT_VERSION = 'QVqcont-6';
-export const LEGACY_QCONT_FORMAT_VERSION = 'QVqcont-5';
-
 // Archive authenticity policy defaults
 export const LITE_DEFAULT_AUTH_POLICY_LEVEL = 'integrity-only';
 export const PRO_DEFAULT_AUTH_POLICY_LEVEL = 'strong-pq-signature';

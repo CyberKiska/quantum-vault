@@ -14,7 +14,6 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { hashBytes } from '../index.js';
 import { asciiBytes, base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
 import { buildQencHeader } from '../qenc/format.js';
-import { LEGACY_QCONT_FORMAT_VERSION, QCONT_FORMAT_VERSION } from '../constants.js';
 import { parseArchiveManifestBytes } from '../manifest/archive-manifest.js';
 import {
   assertAuthPolicyCommitment,
@@ -50,6 +49,8 @@ import {
 import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
 
 const QCONT_MAGIC = 'QVC1';
+const PREDECESSOR_LEGACY_QCONT_FORMAT_VERSION = 'QVqcont-5';
+const LEGACY_MANIFEST_QCONT_FORMAT_VERSION = 'QVqcont-6';
 const MAGIC_QSIG = asciiBytes('PQSG');
 const PIN_MISMATCH_WARNING_PREFIX = 'Pinned PQ signer key did not match';
 const KEY_COMMITMENT_MAX_LEN = 32;
@@ -1620,11 +1621,11 @@ function parseShardUnsafe(arr) {
   }
   const metaBytes = readBytes(metaLen, 'metaJSON');
   const metaJSON = decodeJsonBytes(metaBytes, 'shard metadata JSON');
-  if (metaJSON?.alg?.fmt === LEGACY_QCONT_FORMAT_VERSION) {
+  if (metaJSON?.alg?.fmt === PREDECESSOR_LEGACY_QCONT_FORMAT_VERSION) {
     throw new Error('Legacy .qcont format is not supported. Rebuild the archive with the new manifest bundle format.');
   }
-  if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION) {
-    throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION}, got ${metaJSON?.alg?.fmt ?? 'unknown'}`);
+  if (metaJSON?.alg?.fmt !== LEGACY_MANIFEST_QCONT_FORMAT_VERSION) {
+    throw new Error(`Unsupported shard format: expected ${LEGACY_MANIFEST_QCONT_FORMAT_VERSION}, got ${metaJSON?.alg?.fmt ?? 'unknown'}`);
   }
 
   const manifestLen = readU32('manifest length');

@@ -2,13 +2,16 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { CHUNK_SIZE, hashBytes } from '../index.js';
 import { toHex } from '../bytes.js';
 import { parseQencHeader } from '../qenc/format.js';
-import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL, QCONT_FORMAT_VERSION } from '../constants.js';
+import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL } from '../constants.js';
 import { buildArchiveManifest, canonicalizeArchiveManifest } from '../manifest/archive-manifest.js';
 import { buildInitialManifestBundle, canonicalizeManifestBundle } from '../manifest/manifest-bundle.js';
 import { DEFAULT_CRYPTO_PROFILE, getNonceContractForAeadMode } from '../policy.js';
 import { decapsulate } from '../mlkem.js';
 import { deriveKeyWithKmac, verifyKeyCommitment, clearKeys } from '../kdf.js';
 import { resolveErasureRuntime } from '../erasure-runtime.js';
+
+// Compatibility-only legacy shard builder retained until later deletion commits.
+const LEGACY_MANIFEST_QCONT_FORMAT_VERSION = 'QVqcont-6';
 
 export function buildShardBlob({
   metaJSON,
@@ -99,7 +102,7 @@ export function buildShardBlob({
 export async function buildQcontShards(qencBytes, privKeyBytes, params, options = {}) {
   const authPolicyLevel = options.authPolicyLevel || DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL;
   const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
-  const formatVersion = QCONT_FORMAT_VERSION;
+  const formatVersion = LEGACY_MANIFEST_QCONT_FORMAT_VERSION;
 
   const { n, k } = params;
   const m = n - k;
