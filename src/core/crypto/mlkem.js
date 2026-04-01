@@ -42,6 +42,7 @@ export async function generateKeyPair(options = {}) {
 // Encapsulate using ML-KEM-1024 public key
 // noble-post-quantum v0.5.x API: { cipherText, sharedSecret }
 export async function encapsulate(publicKey) {
+    validatePublicKey(publicKey);
     const result = await ml_kem1024.encapsulate(publicKey);
     
     const encapsulatedKey = result.cipherText;
@@ -77,9 +78,8 @@ export function validatePublicKey(publicKey) {
     if (!(publicKey instanceof Uint8Array)) {
         throw new Error('Public key must be Uint8Array');
     }
-    // ML-KEM-1024 public key is 1568 bytes
-    if (publicKey.length !== 1568) {
-        throw new Error(`Invalid ML-KEM-1024 public key length: expected 1568 bytes, got ${publicKey.length}`);
+    if (publicKey.length !== ML_KEM_1024_PUBLIC_KEY_SIZE) {
+        throw new Error(`Invalid ML-KEM-1024 public key length: expected ${ML_KEM_1024_PUBLIC_KEY_SIZE} bytes, got ${publicKey.length}`);
     }
 }
 
@@ -88,9 +88,8 @@ export function validatePrivateKey(privateKey) {
     if (!(privateKey instanceof Uint8Array)) {
         throw new Error('Private key must be Uint8Array');
     }
-    // ML-KEM-1024 private key is 3168 bytes
-    if (privateKey.length !== 3168) {
-        throw new Error(`Invalid ML-KEM-1024 private key length: expected 3168 bytes, got ${privateKey.length}`);
+    if (privateKey.length !== ML_KEM_1024_PRIVATE_KEY_SIZE) {
+        throw new Error(`Invalid ML-KEM-1024 private key length: expected ${ML_KEM_1024_PRIVATE_KEY_SIZE} bytes, got ${privateKey.length}`);
     }
 }
 
@@ -99,9 +98,8 @@ export function validateEncapsulatedKey(encapsulatedKey) {
     if (!(encapsulatedKey instanceof Uint8Array)) {
         throw new Error('Encapsulated key must be Uint8Array');
     }
-    // ML-KEM-1024 encapsulated key is 1568 bytes
-    if (encapsulatedKey.length !== 1568) {
-        throw new Error(`Invalid ML-KEM-1024 encapsulated key length: expected 1568 bytes, got ${encapsulatedKey.length}`);
+    if (encapsulatedKey.length !== ML_KEM_1024_ENCAPSULATED_KEY_SIZE) {
+        throw new Error(`Invalid ML-KEM-1024 encapsulated key length: expected ${ML_KEM_1024_ENCAPSULATED_KEY_SIZE} bytes, got ${encapsulatedKey.length}`);
     }
 }
 

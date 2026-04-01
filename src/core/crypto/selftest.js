@@ -1,6 +1,6 @@
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
 import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fromHex, timingSafeEqual, utf8ToBytes } from './bytes.js';
-import { validatePublicKey, validatePrivateKey } from './mlkem.js';
+import { encapsulate, ML_KEM_1024_PUBLIC_KEY_SIZE, validatePublicKey, validatePrivateKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
 import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
@@ -69,6 +69,7 @@ import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
 import {
   inspectManifestBundleTimestamps,
+  parseManifestBundleTimestamps,
   inspectTimestampEvidence,
   parseOpenTimestampProof,
   resolveOpenTimestampTarget,
@@ -1432,6 +1433,16 @@ function buildCases() {
         const importedPrivHash = await hashBytes(importedPrivate);
         assert(originalPubHash === importedPubHash, 'imported public key hash mismatch');
         assert(originalPrivHash === importedPrivHash, 'imported private key hash mismatch');
+      },
+    },
+    {
+      name: 'ML-KEM encapsulate rejects invalid public key length before noble encapsulation',
+      fn: async () => {
+        await expectFailureWithMessage(
+          () => encapsulate(new Uint8Array(ML_KEM_1024_PUBLIC_KEY_SIZE - 1)),
+          /Invalid ML-KEM-1024 public key length/i,
+          'encapsulate unexpectedly accepted an invalid ML-KEM public key length'
+        );
       },
     },
     {
@@ -6667,6 +6678,8 @@ function buildCases() {
           evidence.some((item) => item.completionLabel === 'OTS proof appears incomplete'),
           'timestamp evidence should report complete and incomplete states honestly'
         );
+
+        await parseManifestBundleTimestamps(parsedBundle.bundle);
       },
     },
     {

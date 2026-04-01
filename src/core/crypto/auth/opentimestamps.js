@@ -146,7 +146,7 @@ export async function inspectManifestBundleTimestamps(bundle) {
   }));
 }
 
-export async function assertManifestBundleTimestamps(bundle) {
+export async function parseManifestBundleTimestamps(bundle) {
   await inspectManifestBundleTimestamps(bundle);
 }
 

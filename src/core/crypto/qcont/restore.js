@@ -21,7 +21,7 @@ import {
   parseManifestBundleBytes,
 } from '../manifest/manifest-bundle.js';
 import {
-  assertManifestBundleTimestamps,
+  parseManifestBundleTimestamps,
   inspectTimestampEvidence,
   resolveOpenTimestampTarget,
 } from '../auth/opentimestamps.js';
@@ -1283,7 +1283,7 @@ async function enrichCandidate(candidate, bundleBytesOverride = null) {
     throw new Error('Embedded bundle manifestDigest does not match embedded manifest digest');
   }
   assertAuthPolicyCommitment(parsedManifest.manifest.authPolicyCommitment, parsedBundle.bundle.authPolicy);
-  await assertManifestBundleTimestamps(parsedBundle.bundle);
+  await parseManifestBundleTimestamps(parsedBundle.bundle);
   return {
     ...candidate,
     embeddedBundleDigestHex: candidate.bundleDigestHex,

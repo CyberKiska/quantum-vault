@@ -1,7 +1,6 @@
 // --- QENC Container Format Helpers ---
 
 import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from '../constants.js';
-import { bytesEqual } from '../bytes.js';
 import {
     IV_STRATEGY_SINGLE_IV,
     IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
@@ -19,6 +18,18 @@ function writeUint32BE(value) {
     const out = new Uint8Array(4);
     new DataView(out.buffer).setUint32(0, value, false);
     return out;
+}
+
+function magicMatches(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length !== MAGIC.length) {
+        return false;
+    }
+    for (let i = 0; i < MAGIC.length; i += 1) {
+        if (bytes[i] !== MAGIC[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -105,7 +116,7 @@ export function parseQencHeader(containerBytes, options = {}) {
     let offset = 0;
 
     const magic = containerBytes.subarray(offset, offset + MAGIC.length);
-    if (!bytesEqual(magic, MAGIC)) {
+    if (!magicMatches(magic)) {
         throw new Error('Invalid file format (magic bytes mismatch).');
     }
     offset += MAGIC.length;

@@ -9,7 +9,7 @@ import {
 } from '../manifest/manifest-bundle.js';
 import { verifyManifestSignatures } from '../auth/verify-signatures.js';
 import {
-  assertManifestBundleTimestamps,
+  parseManifestBundleTimestamps,
   decodeBundleSignatureBytes,
   resolveOpenTimestampTarget,
 } from '../auth/opentimestamps.js';
@@ -305,7 +305,7 @@ export async function attachManifestBundleToShards(shards, options = {}) {
   if (existingInvalid.length > 0) {
     throw new Error(`Existing manifest bundle contains invalid signatures: ${existingInvalid[0].error}`);
   }
-  await assertManifestBundleTimestamps(workingBundle);
+  await parseManifestBundleTimestamps(workingBundle);
 
   const pqPublicKeyFileBytesList = Array.isArray(options.pqPublicKeyFileBytesList)
     ? options.pqPublicKeyFileBytesList.filter((item) => item instanceof Uint8Array)
@@ -376,7 +376,7 @@ export async function attachManifestBundleToShards(shards, options = {}) {
     }));
     mergedBundle.attachments.timestamps = mergeById(mergedBundle.attachments.timestamps, importedTimestamps);
   }
-  await assertManifestBundleTimestamps(mergedBundle);
+  await parseManifestBundleTimestamps(mergedBundle);
 
   const canonicalBundle = canonicalizeManifestBundle(mergedBundle);
   if (!bytesEqual(canonicalBundle.manifestBytes, embeddedManifest.bytes)) {
