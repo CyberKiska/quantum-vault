@@ -63,6 +63,7 @@ import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-s
 import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
 import { verifyManifestSignatures } from './auth/verify-signatures.js';
 import { unpackPqpk, unpackQsig, verifyQsigAgainstBytes } from './auth/qsig.js';
+import { verifyStellarSigAgainstBytes } from './auth/stellar-sig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
@@ -3871,6 +3872,88 @@ function buildCases() {
       },
     },
     {
+      name: 'successor restore keeps wrong explicit Stellar signer visible as a failed archive-approval result',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-stellar-expected-signer-mismatch-visible'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const stellarSig = await buildStellarSignatureFixture(sample.split.archiveStateBytes);
+        const wrongSigner = (await createStellarSignerMaterial()).signer;
+
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: {
+            signatures: [{ name: 'external-stellar.sig', bytes: stellarSig.bytes }],
+            expectedEd25519Signer: wrongSigner,
+          },
+        });
+
+        const result = restored.authenticity.verification.results.find((item) => item.name === 'external-stellar.sig');
+        assert(result?.ok === false, 'wrong explicit Stellar signer must surface as a failed successor verification result');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === false, 'wrong explicit Stellar signer must not satisfy archive-approval verification');
+        assert(restored.authenticity.status.userPinned === false, 'wrong explicit Stellar signer must not set userPinned');
+        assert(
+          String(result?.error || '').includes('Provided expected signer did not match the verified signer'),
+          'wrong explicit Stellar signer should surface a mismatch failure'
+        );
+      },
+    },
+    {
+      name: 'successor restore does not let wrong explicit Stellar signer satisfy archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-stellar-expected-signer-mismatch-policy'),
+          authPolicyLevel: 'any-signature',
+        });
+        const stellarSig = await buildStellarSignatureFixture(sample.split.archiveStateBytes);
+        const wrongSigner = (await createStellarSignerMaterial()).signer;
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(sample.parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [{ name: 'external-stellar.sig', bytes: stellarSig.bytes }],
+              expectedEd25519Signer: wrongSigner,
+            },
+          }),
+          /no verified archive-approval signature satisfies archive policy/i,
+          'wrong explicit Stellar signer unexpectedly satisfied successor archive policy'
+        );
+      },
+    },
+    {
+      name: 'successor restore fails closed on wrong explicit PQ signer pin',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-pq-user-pin-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const wrongPin = buildQsigFixture(sample.split.archiveStateBytes);
+
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: {
+            signatures: [{ name: 'external-self-signed.qsig', bytes: qsig.qsigBytes }],
+            pinnedPqPublicKeyFileBytes: wrongPin.pqpkBytes,
+          },
+        });
+
+        const result = restored.authenticity.verification.results.find((item) => item.name === 'external-self-signed.qsig');
+        assert(result?.ok === false, 'wrong explicit PQ pin must surface as a failed successor verification result');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === false, 'wrong explicit PQ pin must not satisfy archive-approval verification');
+        assert(restored.authenticity.status.userPinned === false, 'wrong explicit PQ pin must not set userPinned');
+        assert(
+          String(result?.error || '').includes('Provided PQ signer keys did not match this verified signature'),
+          'wrong explicit PQ pin should surface an explicit mismatch failure'
+        );
+      },
+    },
+    {
       name: 'successor restore reports and ignores unresolved publicKeyRef entries when another archive-approval signature satisfies policy',
       fn: async () => {
         const sample = await buildSuccessorRestoreSample({
@@ -5278,6 +5361,55 @@ function buildCases() {
       },
     },
     {
+      name: 'stellar verifier fail-closes wrong expected signer for SEP-53 and signed-XDR proofs',
+      fn: async () => {
+        const messageBytes = textBytes('stellar-expected-signer-mismatch');
+        const wrongSigner = (await createStellarSignerMaterial()).signer;
+        const cases = [
+          { label: 'SEP-53', fixture: await buildStellarSignatureFixture(messageBytes) },
+          { label: 'signed-XDR', fixture: await buildStellarXdrSignatureFixture(messageBytes) },
+        ];
+
+        for (const item of cases) {
+          const verification = await verifyStellarSigAgainstBytes({
+            messageBytes,
+            sigJsonBytes: item.fixture.bytes,
+            expectedSigner: wrongSigner,
+          });
+
+          assert(verification.ok === false, `${item.label} wrong expected signer must fail closed`);
+          assert(verification.userPinned === false, `${item.label} wrong expected signer must not set userPinned`);
+          assert(verification.signerPinned === false, `${item.label} wrong expected signer must not set signerPinned`);
+          assert(
+            String(verification.error || '').includes('Provided expected signer did not match the verified signer'),
+            `${item.label} wrong expected signer should emit an explicit mismatch error`
+          );
+        }
+      },
+    },
+    {
+      name: 'stellar verifier still user-pins matching expected signer for SEP-53 and signed-XDR proofs',
+      fn: async () => {
+        const messageBytes = textBytes('stellar-expected-signer-match');
+        const cases = [
+          { label: 'SEP-53', fixture: await buildStellarSignatureFixture(messageBytes) },
+          { label: 'signed-XDR', fixture: await buildStellarXdrSignatureFixture(messageBytes) },
+        ];
+
+        for (const item of cases) {
+          const verification = await verifyStellarSigAgainstBytes({
+            messageBytes,
+            sigJsonBytes: item.fixture.bytes,
+            expectedSigner: item.fixture.signer,
+          });
+
+          assert(verification.ok === true, `${item.label} matching expected signer should still verify`);
+          assert(verification.userPinned === true, `${item.label} matching expected signer should set userPinned`);
+          assert(verification.signerPinned === true, `${item.label} matching expected signer should set signerPinned`);
+        }
+      },
+    },
+    {
       name: 'qsig verifier reports embedded-key-only verification as selfSigned',
       fn: async () => {
         const messageBytes = textBytes('qsig-self-signed-low-level');
@@ -5369,7 +5501,7 @@ function buildCases() {
       },
     },
     {
-      name: 'pinning: wrong PQ pin keeps detached PQ result visible but selfSigned',
+      name: 'pinning: wrong PQ pin now fails detached PQ verification closed',
       fn: async () => {
         const manifestBytes = textBytes('pinning-wrong-pin');
         const { qsigBytes } = buildQsigFixture(manifestBytes);
@@ -5381,19 +5513,15 @@ function buildCases() {
           pinnedPqPublicKeyFileBytes: wrongPqpkBytes,
         });
 
-        assert(verification.results[0].ok === true, 'wrong pin must not hide cryptographic verification');
-        assert(verification.results[0].selfSigned === true, 'wrong pin without any verifying pin must leave the result selfSigned');
+        assert(verification.results[0].ok === false, 'wrong pin must now fail detached PQ verification closed');
+        assert(verification.results[0].selfSigned === false, 'wrong pin failure must not degrade into selfSigned');
         assert(verification.status.signatureVerified === false, 'wrong pin must not satisfy trusted signature verification');
         assert(verification.status.signerPinned === false, 'wrong pin must not mark signer as pinned');
         assert(verification.status.userPinned === false, 'wrong pin must not set userPinned');
         assert(verification.counts.validTotal === 0, 'wrong pin must not let a selfSigned detached PQ signature count for policy');
         assert(
-          verification.warnings.some((warning) => warning.includes('Pinned PQ signer key did not match')),
-          'wrong pin should emit an explicit warning'
-        );
-        assert(
-          verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
-          'wrong pin should leave the detached PQ signature explicitly ignored for trust/policy'
+          String(verification.results[0].error || '').includes('Provided PQ signer keys did not match this verified signature'),
+          'wrong pin should emit an explicit mismatch failure'
         );
       },
     },
@@ -5414,6 +5542,74 @@ function buildCases() {
         assert(verification.status.bundlePinned === false, 'external signature should not set bundlePinned');
         assert(verification.status.userPinned === true, 'matching external pin must set userPinned');
         assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
+      },
+    },
+    {
+      name: 'manifest-side verification fails closed on wrong explicit Stellar signer',
+      fn: async () => {
+        const manifestBytes = textBytes('manifest-stellar-expected-signer-mismatch');
+        const stellarSig = await buildStellarSignatureFixture(manifestBytes);
+        const wrongSigner = (await createStellarSignerMaterial()).signer;
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
+          expectedEd25519Signer: wrongSigner,
+        });
+
+        assert(verification.results.length === 1, 'expected one Stellar verification result');
+        assert(verification.results[0].ok === false, 'wrong explicit Stellar signer must fail manifest-side verification');
+        assert(verification.status.signatureVerified === false, 'wrong explicit Stellar signer must not satisfy signatureVerified');
+        assert(verification.status.userPinned === false, 'wrong explicit Stellar signer must not set userPinned');
+        assert(
+          String(verification.results[0].error || '').includes('Provided expected signer did not match the verified signer'),
+          'wrong explicit Stellar signer should surface a mismatch failure'
+        );
+      },
+    },
+    {
+      name: 'manifest-side verification fails closed when bundled PQ signer verifies but explicit user pin mismatches',
+      fn: async () => {
+        const manifestBytes = textBytes('manifest-bundle-pq-user-pin-mismatch');
+        const matching = buildQsigFixture(manifestBytes);
+        const wrong = buildQsigFixture(manifestBytes);
+
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          bundlePublicKeys: [{
+            id: 'pk-good',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(matching.pqpkBytes),
+            legacy: false,
+          }],
+          bundleSignatures: [{
+            id: 'sig-qsig',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            target: {
+              type: 'canonical-manifest',
+              digestAlg: 'SHA3-512',
+              digestValue: toHex(sha3_512(manifestBytes)),
+            },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(matching.qsigBytes),
+            publicKeyRef: 'pk-good',
+            legacy: false,
+          }],
+          pinnedPqPublicKeyFileBytes: wrong.pqpkBytes,
+        });
+
+        assert(verification.results.length === 1, 'expected one bundled PQ verification result');
+        assert(verification.results[0].ok === false, 'wrong explicit user .pqpk must fail even when bundled PQ signer verifies');
+        assert(verification.status.signatureVerified === false, 'wrong explicit user .pqpk must not satisfy signatureVerified');
+        assert(verification.status.bundlePinned === false, 'wrong explicit user .pqpk failure must not set bundlePinned');
+        assert(verification.status.userPinned === false, 'wrong explicit user .pqpk failure must not set userPinned');
+        assert(
+          String(verification.results[0].error || '').includes('Provided PQ signer keys did not match the bundled signer key'),
+          'wrong explicit user .pqpk should surface a bundled mismatch failure'
+        );
       },
     },
     {
@@ -5744,6 +5940,54 @@ function buildCases() {
         assert(restored.authenticity.status.policySatisfied, 'expected policySatisfied');
         assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'legacy verification status');
         assertNoSignerIdentityPinned(restored.authenticity.status, 'legacy restore authenticity status');
+      },
+    },
+    {
+      name: 'restore any-signature policy rejects wrong explicit Stellar signer',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('legacy-stellar-expected-signer-mismatch');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy-stellar-expected-signer-mismatch.bin'));
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const stellarSig = await buildStellarSignatureFixture(split.manifestBytes);
+        const wrongSigner = (await createStellarSignerMaterial()).signer;
+
+        await expectFailure(
+          () => restoreFromShards(parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
+              expectedEd25519Signer: wrongSigner,
+            },
+          }),
+          'wrong explicit Stellar signer unexpectedly satisfied legacy any-signature policy'
+        );
+      },
+    },
+    {
+      name: 'restore any-signature policy rejects wrong explicit PQ signer pin',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('legacy-pq-user-pin-mismatch');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy-pq-user-pin-mismatch.bin'));
+        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
+        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const qsig = buildQsigFixture(split.manifestBytes);
+        const wrongPin = buildQsigFixture(split.manifestBytes);
+
+        await expectFailure(
+          () => restoreFromShards(parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              signatures: [{ name: 'archive.qsig', bytes: qsig.qsigBytes }],
+              pinnedPqPublicKeyFileBytes: wrongPin.pqpkBytes,
+            },
+          }),
+          'wrong explicit PQ pin unexpectedly satisfied legacy any-signature policy'
+        );
       },
     },
     {

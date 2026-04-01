@@ -87,6 +87,23 @@ function buildSelfSignedIgnoredWarning(result) {
   return `${name}: detached PQ signature verified only with the embedded signer key and was ignored for trust/policy because no bundled or user-pinned signer key verified.`;
 }
 
+function buildPinnedPqSignerMismatchFailure(verified, mismatchWarning) {
+  return {
+    ...(verified || {}),
+    ok: false,
+    selfSigned: false,
+    bundlePinned: false,
+    userPinned: false,
+    signerPinned: false,
+    type: 'qsig',
+    format: 'qsig',
+    error: mismatchWarning,
+    warnings: dedupeWarnings([
+      ...((verified?.warnings || []).filter((warning) => !String(warning).startsWith(PIN_MISMATCH_WARNING_PREFIX))),
+    ]),
+  };
+}
+
 function safeVerifyQsigAgainstBytes(options) {
   try {
     return verifyQsigAgainstBytes(options);
@@ -112,13 +129,25 @@ function verifyQsigWithPinnedKeys({
     });
   }
   if (normalizedPinnedPqPins.length === 1) {
-    return safeVerifyQsigAgainstBytes({
+    const verified = safeVerifyQsigAgainstBytes({
       messageBytes,
       qsigBytes,
       bundlePqPublicKeyFileBytes,
       pinnedPqPublicKeyFileBytes: normalizedPinnedPqPins[0].bytes,
       authoritativeBundlePqPublicKey,
     });
+    if (!verified.ok || verified.userPinned === true) {
+      return verified;
+    }
+    const mismatchWarning = bundlePqPublicKeyFileBytes instanceof Uint8Array
+      ? 'Provided PQ signer keys did not match the bundled signer key.'
+      : 'Provided PQ signer keys did not match this verified signature.';
+    return buildPinnedPqSignerMismatchFailure({
+      ...verified,
+      warnings: dedupeWarnings([
+        ...(verified.warnings || []).filter((warning) => !String(warning).startsWith(PIN_MISMATCH_WARNING_PREFIX)),
+      ]),
+    }, mismatchWarning);
   }
 
   let baseline = null;
@@ -187,16 +216,13 @@ function verifyQsigWithPinnedKeys({
     ? 'Provided PQ signer keys did not match the bundled signer key.'
     : 'Provided PQ signer keys did not match this verified signature.';
 
-  return {
+  return buildPinnedPqSignerMismatchFailure({
     ...verified,
-    userPinned: false,
-    signerPinned: verified.bundlePinned === true,
     warnings: dedupeWarnings([
       ...retainedWarnings,
       ...(verified.warnings || []).filter((warning) => !String(warning).startsWith(PIN_MISMATCH_WARNING_PREFIX)),
-      mismatchWarning,
     ]),
-  };
+  }, mismatchWarning);
 }
 
 async function verifyBundleSignature({

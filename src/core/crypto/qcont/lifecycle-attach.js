@@ -262,9 +262,6 @@ async function importExternalArchiveApprovalStellarSig({
   if (!verified.ok) {
     throw new Error(`${signature.name}: ${verified.error}`);
   }
-  if (String(expectedEd25519Signer || '').trim() && verified.userPinned !== true) {
-    throw new Error(`${signature.name}: signer does not match the expected pinned Stellar signer`);
-  }
   const publicKeyAttachment = buildLifecycleStellarSignerAttachment(verified.signer);
   return {
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],

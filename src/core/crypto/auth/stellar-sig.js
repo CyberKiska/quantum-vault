@@ -278,6 +278,13 @@ function buildFailureResult({ error, warnings }) {
   };
 }
 
+function buildExpectedSignerMismatchFailure(expectedSigner, signer, warnings) {
+  return buildFailureResult({
+    error: `Provided expected signer did not match the verified signer (expected ${expectedSigner}, got ${signer})`,
+    warnings,
+  });
+}
+
 function networkHintFromPassphrase(passphrase) {
   const normalized = String(passphrase || '').trim();
   if (normalized === PUBLIC_NETWORK_PASSPHRASE) return 'pubnet';
@@ -682,8 +689,6 @@ export async function verifyStellarSigAgainstBytes({
   if (expected) {
     if (expected === signer) {
       userPinned = true;
-    } else {
-      warnings.push(`Pinned Ed25519 signer did not match this verified signature (expected ${expected}, got ${signer}).`);
     }
   }
 
@@ -735,6 +740,10 @@ export async function verifyStellarSigAgainstBytes({
         error: 'SEP-53 content signature verification failed',
         warnings,
       });
+    }
+
+    if (expected && expected !== signer) {
+      return buildExpectedSignerMismatchFailure(expected, signer, warnings);
     }
 
     return buildSuccessResult({
@@ -897,6 +906,10 @@ export async function verifyStellarSigAgainstBytes({
       error: 'No valid signer signature found in signedXdr',
       warnings,
     });
+  }
+
+  if (expected && expected !== signer) {
+    return buildExpectedSignerMismatchFailure(expected, signer, warnings);
   }
 
   return buildSuccessResult({
