@@ -6,7 +6,7 @@ import {
 } from '../../../app/crypto-service.js';
 import { packPqpk } from '../../crypto/auth/qsig.js';
 import { base64ToBytes } from '../../crypto/bytes.js';
-import { isSupportedStellarSignatureDocument } from '../../crypto/auth/stellar-sig.js';
+import { isSupportedStellarSignatureDocumentBytes } from '../../crypto/auth/stellar-sig.js';
 import {
   canonicalizeArchiveStateDescriptor,
   parseArchiveStateDescriptorBytes,
@@ -26,7 +26,7 @@ function startsWithAscii(bytes, ascii) {
   return true;
 }
 
-async function classifyAttachFiles(files) {
+export async function classifyAttachFiles(files) {
   const shardFiles = [];
   const signatures = [];
   const timestamps = [];
@@ -98,14 +98,9 @@ async function classifyAttachFiles(files) {
       // try stellar signature
     }
 
-    try {
-      const parsed = JSON.parse(new TextDecoder().decode(bytes));
-      if (isSupportedStellarSignatureDocument(parsed)) {
-        signatures.push({ name, bytes });
-        continue;
-      }
-    } catch {
-      // ignore
+    if (isSupportedStellarSignatureDocumentBytes(bytes)) {
+      signatures.push({ name, bytes });
+      continue;
     }
   }
 

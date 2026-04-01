@@ -8,6 +8,8 @@ import {
   digestSha256,
   utf8ToBytes,
 } from '../bytes.js';
+import { parseJsonBytesStrict } from '../manifest/strict-json.js';
+import { assertExactKeys, ensureString } from '../manifest/validation.js';
 
 export const STELLAR_SIGNATURE_SCHEMA = 'stellar-signature/v2';
 
@@ -49,20 +51,95 @@ const KEY_TYPE_ED25519 = 0;
 const PRECOND_NONE = 0;
 const MEMO_NONE = 0;
 
+function ensureTrimmedTopLevelString(value, field) {
+  const text = ensureString(value, field).trim();
+  if (!text) {
+    throw new Error(`Invalid ${field}`);
+  }
+  return text;
+}
+
+function getSupportedStellarSignatureProfile(proofType, payloadType, signatureScheme) {
+  if (
+    proofType === PROOF_TYPE.SEP53_MESSAGE &&
+    payloadType === PAYLOAD_TYPE.RAW_BYTES &&
+    signatureScheme === SIGNATURE_SCHEME.SEP53_SHA256_ED25519
+  ) {
+    return {
+      requiredKeys: ['schema', 'proofType', 'payloadType', 'signatureScheme', 'signer', 'hashes', 'signatureB64'],
+      optionalKeys: ['input'],
+    };
+  }
+  if (
+    proofType === PROOF_TYPE.XDR_ENVELOPE &&
+    payloadType === PAYLOAD_TYPE.DETACHED_DIGESTS &&
+    signatureScheme === SIGNATURE_SCHEME.TX_ENVELOPE_ED25519
+  ) {
+    return {
+      requiredKeys: ['schema', 'proofType', 'payloadType', 'signatureScheme', 'signer', 'hashes', 'manageData', 'network', 'signedXdr'],
+      optionalKeys: ['input', 'txSourceAccount'],
+    };
+  }
+  return null;
+}
+
+function validateSupportedStellarSignatureDocument(doc) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    throw new Error('Invalid stellarSignature');
+  }
+
+  const schema = ensureTrimmedTopLevelString(doc.schema, 'stellarSignature.schema');
+  const proofType = ensureTrimmedTopLevelString(doc.proofType, 'stellarSignature.proofType');
+  const payloadType = ensureTrimmedTopLevelString(doc.payloadType, 'stellarSignature.payloadType');
+  const signatureScheme = ensureTrimmedTopLevelString(doc.signatureScheme, 'stellarSignature.signatureScheme');
+  const profile = getSupportedStellarSignatureProfile(proofType, payloadType, signatureScheme);
+  if (schema !== STELLAR_SIGNATURE_SCHEMA || !profile) {
+    throw new Error(`Unsupported Stellar signature profile: ${schema} / ${proofType} / ${signatureScheme}`);
+  }
+
+  assertExactKeys(doc, profile.requiredKeys, profile.optionalKeys, 'stellarSignature');
+
+  const signer = ensureTrimmedTopLevelString(doc.signer, 'stellarSignature.signer');
+  const signatureB64 = proofType === PROOF_TYPE.SEP53_MESSAGE
+    ? ensureTrimmedTopLevelString(doc.signatureB64, 'stellarSignature.signatureB64')
+    : null;
+  const signedXdr = proofType === PROOF_TYPE.XDR_ENVELOPE
+    ? ensureTrimmedTopLevelString(doc.signedXdr, 'stellarSignature.signedXdr')
+    : null;
+
+  let txSourceAccount = '';
+  if (Object.prototype.hasOwnProperty.call(doc, 'txSourceAccount')) {
+    if (doc.txSourceAccount != null && typeof doc.txSourceAccount !== 'string') {
+      throw new Error('Invalid stellarSignature.txSourceAccount');
+    }
+    txSourceAccount = typeof doc.txSourceAccount === 'string' ? doc.txSourceAccount.trim() : '';
+  }
+
+  return {
+    doc,
+    proofType,
+    signer,
+    signatureB64,
+    signedXdr,
+    txSourceAccount,
+  };
+}
+
 export function isSupportedStellarSignatureDocument(doc) {
-  if (!doc || typeof doc !== 'object') return false;
-  if (String(doc.schema || '').trim() !== STELLAR_SIGNATURE_SCHEMA) return false;
-  const proofType = String(doc.proofType || '').trim();
-  const payloadType = String(doc.payloadType || '').trim();
-  const signatureScheme = String(doc.signatureScheme || '').trim();
-  return (
-    (proofType === PROOF_TYPE.SEP53_MESSAGE &&
-      payloadType === PAYLOAD_TYPE.RAW_BYTES &&
-      signatureScheme === SIGNATURE_SCHEME.SEP53_SHA256_ED25519) ||
-    (proofType === PROOF_TYPE.XDR_ENVELOPE &&
-      payloadType === PAYLOAD_TYPE.DETACHED_DIGESTS &&
-      signatureScheme === SIGNATURE_SCHEME.TX_ENVELOPE_ED25519)
-  );
+  try {
+    validateSupportedStellarSignatureDocument(doc);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isSupportedStellarSignatureDocumentBytes(bytes) {
+  try {
+    return isSupportedStellarSignatureDocument(parseJsonBytesStrict(bytes));
+  } catch {
+    return false;
+  }
 }
 
 function normalizeHashAlgorithmName(value) {
@@ -650,7 +727,7 @@ export async function verifyStellarSigAgainstBytes({
 
   let doc;
   try {
-    doc = JSON.parse(new TextDecoder().decode(sigJsonBytes));
+    doc = parseJsonBytesStrict(sigJsonBytes);
   } catch (error) {
     return buildFailureResult({
       error: `Invalid JSON signature document: ${error?.message || error}`,
@@ -658,14 +735,20 @@ export async function verifyStellarSigAgainstBytes({
     });
   }
 
-  if (!isSupportedStellarSignatureDocument(doc)) {
+  let parsedDoc;
+  try {
+    parsedDoc = validateSupportedStellarSignatureDocument(doc);
+  } catch (error) {
+    const message = error?.message || String(error);
     return buildFailureResult({
-      error: `Unsupported Stellar signature profile: ${String(doc?.schema || '(missing)')} / ${String(doc?.proofType || '(missing)')} / ${String(doc?.signatureScheme || '(missing)')}`,
+      error: message.startsWith('Unsupported Stellar signature profile:')
+        ? message
+        : `Malformed Stellar signature document: ${message}`,
       warnings,
     });
   }
 
-  const signer = String(doc.signer || '').trim();
+  const { proofType, signer } = parsedDoc;
   let signerPublicBytes;
   try {
     signerPublicBytes = decodeEd25519PublicKey(signer);
@@ -721,11 +804,10 @@ export async function verifyStellarSigAgainstBytes({
     });
   }
 
-  const proofType = String(doc.proofType || '').trim();
   if (proofType === PROOF_TYPE.SEP53_MESSAGE) {
     let signatureBytes;
     try {
-      signatureBytes = parseSep53Signature(doc.signatureB64);
+      signatureBytes = parseSep53Signature(parsedDoc.signatureB64);
     } catch (error) {
       return buildFailureResult({
         error: error?.message || String(error),
@@ -756,7 +838,7 @@ export async function verifyStellarSigAgainstBytes({
 
   let parsedEnvelope;
   try {
-    parsedEnvelope = parseTransactionEnvelope(String(doc.signedXdr || '').trim());
+    parsedEnvelope = parseTransactionEnvelope(parsedDoc.signedXdr);
   } catch (error) {
     return buildFailureResult({
       error: `Malformed signedXdr: ${error?.message || error}`,
@@ -793,7 +875,7 @@ export async function verifyStellarSigAgainstBytes({
     });
   }
 
-  const declaredTxSource = String(doc.txSourceAccount || '').trim();
+  const declaredTxSource = parsedDoc.txSourceAccount;
   if (declaredTxSource) {
     let txSourcePublicBytes;
     try {

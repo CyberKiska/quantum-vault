@@ -26,7 +26,7 @@ import {
   resolveOpenTimestampTarget,
 } from '../auth/opentimestamps.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
-import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
+import { isSupportedStellarSignatureDocumentBytes, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import { verifyManifestSignatures } from '../auth/verify-signatures.js';
 import { normalizePqPublicKeyPins, packPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import {
@@ -131,14 +131,6 @@ function findLifecycleSignatureFamilyDescriptor(family) {
   return LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.find((descriptor) => descriptor.family === family) || null;
 }
 
-function decodeJsonBytes(bytes) {
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return null;
-  }
-}
-
 function isSuccessorParsedShard(shard) {
   return (
     shard?.archiveStateBytes instanceof Uint8Array &&
@@ -157,8 +149,7 @@ function detectExternalLifecycleSignatureType(signature) {
   if (bytes.length >= MAGIC_QSIG.length && bytesEqual(bytes.subarray(0, MAGIC_QSIG.length), MAGIC_QSIG)) {
     return 'qsig';
   }
-  const parsed = decodeJsonBytes(bytes);
-  return isSupportedStellarSignatureDocument(parsed) ? 'stellar-sig' : 'unknown';
+  return isSupportedStellarSignatureDocumentBytes(bytes) ? 'stellar-sig' : 'unknown';
 }
 
 function buildLifecycleVerificationFailureResult({

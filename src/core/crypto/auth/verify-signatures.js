@@ -2,20 +2,12 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { asciiBytes, base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
 import { normalizePqPublicKeyPins, verifyQsigAgainstBytes } from './qsig.js';
 import { computeDetachedSignatureIdentityDigestHex } from './signature-identity.js';
-import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from './stellar-sig.js';
+import { isSupportedStellarSignatureDocumentBytes, verifyStellarSigAgainstBytes } from './stellar-sig.js';
 import { getSignaturePublicKeyRefCompatibilityError } from '../manifest/manifest-bundle.js';
 
 const MAGIC_QSIG = asciiBytes('PQSG');
 const PIN_MISMATCH_WARNING_PREFIX = 'Pinned PQ signer key did not match';
 const LEGACY_ED25519_WARNING = 'Legacy Ed25519 signature is not post-quantum secure. Prefer .qsig for PQ authenticity.';
-
-function decodeJsonBytes(bytes) {
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return null;
-  }
-}
 
 function detectExternalSignatureType(signature) {
   const { name = '', bytes } = signature;
@@ -23,11 +15,11 @@ function detectExternalSignatureType(signature) {
   if (bytes.length >= 4 && bytesEqual(bytes.subarray(0, 4), MAGIC_QSIG)) return 'qsig';
 
   const lowerName = String(name).toLowerCase();
-  if (lowerName.endsWith('.sig') || lowerName.endsWith('.json') || lowerName.length > 0) {
-    const json = decodeJsonBytes(bytes);
-    if (json && isSupportedStellarSignatureDocument(json)) {
-      return 'stellar-sig';
-    }
+  if (
+    (lowerName.endsWith('.sig') || lowerName.endsWith('.json') || lowerName.length > 0) &&
+    isSupportedStellarSignatureDocumentBytes(bytes)
+  ) {
+    return 'stellar-sig';
   }
 
   return 'unknown';

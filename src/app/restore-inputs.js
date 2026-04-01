@@ -1,5 +1,5 @@
 import { bytesEqual } from '../core/crypto/bytes.js';
-import { isSupportedStellarSignatureDocument } from '../core/crypto/auth/stellar-sig.js';
+import { isSupportedStellarSignatureDocumentBytes } from '../core/crypto/auth/stellar-sig.js';
 import { parseArchiveStateDescriptorBytes, parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
 import { parseArchiveManifestBytes } from '../core/crypto/manifest/archive-manifest.js';
 import { parseManifestBundleBytes } from '../core/crypto/manifest/manifest-bundle.js';
@@ -70,7 +70,7 @@ export async function classifyRestoreInputFiles(files) {
     }
 
     const parsedJson = tryParseJsonBytes(bytes);
-    if (isSupportedStellarSignatureDocument(parsedJson)) {
+    if (isSupportedStellarSignatureDocumentBytes(bytes)) {
       signatures.push({ name, bytes });
       continue;
     }

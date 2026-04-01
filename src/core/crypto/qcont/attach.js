@@ -15,7 +15,7 @@ import {
 } from '../auth/opentimestamps.js';
 import { normalizePqPublicKeyPins, verifyQsigAgainstBytes, unpackPqpk } from '../auth/qsig.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
-import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
+import { isSupportedStellarSignatureDocumentBytes, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import { getSignatureSuiteInfo } from '../auth/signature-suites.js';
 import { buildShardBlob } from './build.js';
 
@@ -61,13 +61,8 @@ function detectExternalSignatureType(signature) {
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x51 && bytes[2] === 0x53 && bytes[3] === 0x47) {
     return 'qsig';
   }
-  try {
-    const parsed = JSON.parse(new TextDecoder().decode(bytes));
-    if (isSupportedStellarSignatureDocument(parsed)) {
-      return 'stellar-sig';
-    }
-  } catch {
-    // ignore
+  if (isSupportedStellarSignatureDocumentBytes(bytes)) {
+    return 'stellar-sig';
   }
   return 'unknown';
 }

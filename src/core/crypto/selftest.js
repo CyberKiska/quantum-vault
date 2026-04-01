@@ -56,7 +56,7 @@ import {
   canonicalizeJsonToBytes,
 } from './manifest/jcs.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
-import { buildAttachedArtifactExports } from '../features/qcont/attach-ui.js';
+import { buildAttachedArtifactExports, classifyAttachFiles } from '../features/qcont/attach-ui.js';
 import { buildSuccessorSelectionModel } from '../features/qcont/restore-ui.js';
 import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
 import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
@@ -5407,6 +5407,53 @@ function buildCases() {
           assert(verification.userPinned === true, `${item.label} matching expected signer should set userPinned`);
           assert(verification.signerPinned === true, `${item.label} matching expected signer should set signerPinned`);
         }
+      },
+    },
+    {
+      name: 'stellar verifier and guard paths reject duplicate-key .sig JSON while valid current-format proofs still pass',
+      fn: async () => {
+        const messageBytes = textBytes('stellar-strict-json-duplicate-keys');
+        const fixture = await buildStellarSignatureFixture(messageBytes);
+
+        const validVerification = await verifyStellarSigAgainstBytes({
+          messageBytes,
+          sigJsonBytes: fixture.bytes,
+        });
+        assert(validVerification.ok === true, 'valid current-format Stellar .sig should still verify');
+
+        const validRestoreClassified = await classifyRestoreInputFiles([
+          fileLike('valid.sig', fixture.bytes),
+        ]);
+        assert(validRestoreClassified.signatures.length === 1, 'restore input classifier should still recognize a valid Stellar .sig');
+
+        const validAttachClassified = await classifyAttachFiles([
+          fileLike('valid.sig', fixture.bytes),
+        ]);
+        assert(validAttachClassified.signatures.length === 1, 'attach classifier should still recognize a valid Stellar .sig');
+
+        const validText = new TextDecoder().decode(fixture.bytes);
+        const duplicateBytes = textBytes(`{"schema":"stellar-signature/v2",${validText.slice(1)}`);
+        const duplicateVerification = await verifyStellarSigAgainstBytes({
+          messageBytes,
+          sigJsonBytes: duplicateBytes,
+        });
+
+        assert(duplicateVerification.ok === false, 'duplicate-key Stellar .sig must fail verification');
+        assert(
+          String(duplicateVerification.error || '').includes('Duplicate object key "schema"'),
+          'duplicate-key Stellar .sig should report strict JSON duplicate-key rejection'
+        );
+
+        const duplicateRestoreClassified = await classifyRestoreInputFiles([
+          fileLike('duplicate.sig', duplicateBytes),
+        ]);
+        assert(duplicateRestoreClassified.signatures.length === 0, 'restore input classifier must reject duplicate-key Stellar .sig files');
+        assert(duplicateRestoreClassified.ignoredFileNames.includes('duplicate.sig'), 'restore input classifier should ignore duplicate-key Stellar .sig files');
+
+        const duplicateAttachClassified = await classifyAttachFiles([
+          fileLike('duplicate.sig', duplicateBytes),
+        ]);
+        assert(duplicateAttachClassified.signatures.length === 0, 'attach classifier must reject duplicate-key Stellar .sig files');
       },
     },
     {
