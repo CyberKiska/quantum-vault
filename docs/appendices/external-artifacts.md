@@ -9,7 +9,7 @@ Out of scope: full upstream signature-format specifications, archive-policy sema
 ## Role
 
 This appendix is the compatibility reference for the detached authenticity artifacts accepted by Quantum Vault today.
-It supports [format-spec.md](../format-spec.md) for ingestion and linkage rules and [trust-and-policy.md](../trust-and-policy.md) for policy meaning.
+It supports [`format-spec.md`](../format-spec.md) for ingestion and linkage rules and [`trust-and-policy.md`](../trust-and-policy.md) for policy meaning.
 
 ## Scope
 
@@ -25,7 +25,7 @@ It does not restate the complete upstream formats for those artifacts.
 ## Normative status
 
 This appendix is normative for current external-artifact acceptance and linkage behavior.
-An implementation is conformant to this version if and only if it satisfies all MUST-level requirements defined in the current normative sections of this appendix and the owner documents `format-spec.md` and `trust-and-policy.md`.
+An implementation is conformant to this version if and only if it satisfies all MUST-level requirements defined in the current normative sections of this appendix and the owner documents [`format-spec.md`](../format-spec.md) and [`trust-and-policy.md`](../trust-and-policy.md).
 If an implementation deviates from this appendix, it MUST explicitly document the deviation and MUST declare itself non-conformant to this version.
 Statements explicitly labeled as future or recommended direction are non-normative until promoted into the current sections of this appendix.
 In case of ambiguity, this appendix MUST be interpreted conservatively and fail-closed.
@@ -34,15 +34,14 @@ In case of ambiguity, this appendix MUST be interpreted conservatively and fail-
 
 Internal current-state grounding:
 
-- `src/core/crypto/auth/verify-signatures.js`
 - `src/core/crypto/auth/qsig.js`
 - `src/core/crypto/auth/stellar-sig.js`
 - `src/core/crypto/auth/opentimestamps.js`
 - `src/core/crypto/auth/signature-identity.js`
 - `src/core/crypto/lifecycle/artifacts.js`
-- `src/core/crypto/manifest/manifest-bundle.js`
-- `docs/format-spec.md`
-- `docs/trust-and-policy.md`
+- `src/core/crypto/qcont/restore.js`
+- [`format-spec.md`](../format-spec.md)
+- [`trust-and-policy.md`](../trust-and-policy.md)
 
 External references already used elsewhere in the repository:
 
@@ -53,8 +52,8 @@ External references already used elsewhere in the repository:
 
 Implemented now:
 
-- detached PQ signature verification for the current `.qsig` wrapper and context across the legacy manifest track and successor lifecycle targets
-- Stellar detached-signature verification for the current `stellar-signature/v2` JSON profiles across the same path-dependent target contracts
+- detached PQ signature verification for the current `.qsig` wrapper and context
+- Stellar detached-signature verification for the current `stellar-signature/v2` JSON profiles
 - detached PQ public-key wrapper parsing for user pinning and bundled signer references
 - OpenTimestamps linkage to detached signature bytes
 - proof-identity deduplication for policy counting
@@ -68,22 +67,22 @@ Not yet first-class in the current implementation:
 
 ## Future work and non-normative notes
 
-- Additional detached artifact families should receive explicit acceptance rules rather than being inferred by filename alone.
-- Broader evidence chaining may be added later, but must remain clearly labeled as future behavior until implemented.
+- additional detached artifact families should receive explicit acceptance rules rather than being inferred by filename alone
+- broader evidence chaining may be added later, but must remain clearly labeled as future behavior until implemented
 
 ## 1. Accepted artifact families
 
 | Artifact family | Current acceptance boundary | Current linkage target |
 | --- | --- | --- |
-| `.qsig` | binary wrapper with magic `PQSG`, detached PQ signature major version `2`, and context `quantum-signer/v2` | legacy canonical manifest bytes or successor declared lifecycle target bytes |
-| `.sig` | JSON document accepted only when it matches the supported `stellar-signature/v2` schema/profile combinations | same path-dependent target rule as `.qsig` |
+| `.qsig` | binary wrapper with magic `PQSG`, detached PQ signature major version `2`, and context `quantum-signer/v2` | archive-state bytes for archive approval, or declared lifecycle target bytes for bundled lifecycle signatures |
+| `.sig` | JSON document accepted only when it matches the supported `stellar-signature/v2` schema and profile combinations | same target rule as `.qsig` |
 | `.pqpk` | binary wrapper with magic `PQPK` and detached PQ public-key major version `1` | signer pinning and `publicKeyRef` resolution |
 | `.ots` | OpenTimestamps proof with the supported proof header and SHA-256 stamped digest operation | detached signature bytes |
 
 Current detection rules:
 
 - external `.qsig` detection is byte-based by magic, not by filename alone
-- external `.sig` detection requires JSON decoding plus a supported Stellar signature profile
+- external `.sig` detection requires strict JSON decoding plus a supported Stellar signature profile
 - external `.pqpk` is parsed explicitly as a detached PQ public-key wrapper
 - `.ots` linkage is based on the stamped digest matching detached signature bytes, not on a filename convention
 
@@ -91,19 +90,17 @@ Current detection rules:
 
 Current detached-signature linkage rules are:
 
-- both bundled and external signatures are verified over the correct canonical target bytes for the selected track
-- **Legacy bundled signatures** MUST declare `target.type = "canonical-manifest"`
-- **Legacy bundled signatures** MUST declare `target.digestAlg = "SHA3-512"`
-- **Legacy bundled signatures** MUST carry a `target.digestValue` equal to the bundle's `manifestDigest.value`
-- **Successor lifecycle signatures** MUST declare `signatureFamily`, `targetType`, `targetRef`, and `targetDigest` consistent with the selected archive-state, transition-record, or source-evidence object
-- external signatures are verified directly against the selected signable object or declared lifecycle target bytes rather than mutable bundle bytes
+- archive-approval signatures MUST target canonical archive-state descriptor bytes
+- bundled maintenance signatures MUST target canonical transition-record bytes
+- bundled source-evidence signatures MUST target canonical source-evidence bytes
+- bundled lifecycle signatures MUST declare `signatureFamily`, `targetType`, `targetRef`, and `targetDigest` consistent with the selected archive-state, transition-record, or source-evidence object
+- external signatures supplied at restore are verified directly against the selected archive-state bytes rather than against lifecycle-bundle bytes
 
 Current acceptance limits:
 
-- Quantum Vault does not treat the mutable manifest bundle as the signable payload
 - Quantum Vault does not treat the mutable lifecycle bundle as the archive-approval signable payload
-- Quantum Vault does not infer signer algorithms from wrapper filenames or key lengths
 - unsupported detached-signature major versions, contexts, or profile identifiers fail closed
+- target mismatches fail closed
 
 ## 3. Public-key attachment and pinning rules
 
@@ -117,7 +114,7 @@ Current `publicKeyRef` rules:
 
 - `publicKeyRef` is optional
 - if `publicKeyRef` is present on a bundled signature, it is authoritative for that bundled signature
-- unresolved, incompatible, or non-verifying `publicKeyRef` bindings fail closed
+- unresolved, ambiguous, incompatible, or non-verifying `publicKeyRef` bindings fail closed
 - a bundled `qsig` `publicKeyRef` must reference a bundled PQ public key with `encoding = "base64"` and a matching PQ suite
 - a bundled `stellar-sig` `publicKeyRef` must reference a bundled Stellar signer with `encoding = "stellar-address"` and suite `ed25519`
 
@@ -125,7 +122,8 @@ Current pinning consequences:
 
 - bundled-signature verification against a bundled key contributes to `bundlePinned`
 - verification against user-supplied pin material contributes to `userPinned`
-- a valid signature does not become invalid merely because a supplied user pin does not match; it remains valid but unpinned, with an explicit warning
+- a valid signature does not become policy-satisfying solely because a pin is present
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself do not count toward trust or policy when bundled or user-supplied signer material did not verify
 
 ## 4. Proof identity deduplication and ambiguity handling
 
@@ -149,7 +147,7 @@ Current ambiguity handling:
 Current `.ots` rules are intentionally narrow:
 
 - the stamped digest is the SHA-256 digest of detached signature bytes
-- bundled timestamps link to `attachments.signatures[]` through `targetRef`
+- bundled timestamps link to detached signatures through `targetRef`
 - external timestamps resolve by matching the stamped digest against the detached signature bytes seen during verification
 - `.ots` evidence does not satisfy archive signature policy by itself
 
@@ -171,9 +169,10 @@ Quantum Vault currently rejects at least the following cases:
 
 - unsupported `.qsig` major version or context
 - unsupported `.pqpk` major version or CRC failure
-- unsupported Stellar signature schema/profile
+- unsupported Stellar signature schema or profile
 - bundled signature target digest mismatch
-- incompatible or unresolved `publicKeyRef`
+- incompatible, unresolved, ambiguous, or non-verifying `publicKeyRef`
+- multiple provided `.pqpk` pins matching the same detached PQ signature
 - unrelated `.ots` proof that matches no detached signature
 - `.ots` proof that matches multiple detached signatures
 

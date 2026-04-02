@@ -96,6 +96,22 @@ Contributor writing should follow these active boundaries:
 
 This prevents duplication and contradictions.
 
+## 4. Doc invariants to preserve
+
+When updating the current owner docs, preserve the following implementation-boundary text and distinctions unless the code, schema, and owner docs are intentionally changing together:
+
+* successor-only scope for the current shipped artifact family
+* archive-state descriptor versus lifecycle bundle
+* archive approval versus maintenance signatures versus source-evidence signatures versus OTS evidence
+* fail-closed ambiguity handling during restore
+* explicit operator selection as a warning-bearing override, not an automatic winner selection
+* source-evidence privacy posture as defined by the current schema
+* no overclaiming around evidence renewal or long-term time-proof capabilities
+
+Reference-discipline rule:
+
+* prefer explicit artifact names such as `QVqcont-7`, `quantum-vault-archive-state-descriptor/v1`, and `QV-Lifecycle-Bundle` v1 over abstractions like "current track", "current signable object", or "current artifact family" unless the wording is clearly marked as historical comparison
+
 # Recommended reference discipline for each document
 
 To keep the set clean, we would use the following rule:
