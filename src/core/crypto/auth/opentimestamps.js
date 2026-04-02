@@ -47,7 +47,7 @@ export function parseOpenTimestampProof(bytes, { name = '' } = {}) {
   };
 }
 
-export function decodeBundleSignatureBytes(signature) {
+export function decodeLifecycleBundleSignatureBytes(signature) {
   if (signature?.signatureEncoding !== 'base64') {
     throw new Error(`Unsupported bundle signature encoding: ${signature?.signatureEncoding ?? 'unknown'}`);
   }
@@ -107,11 +107,11 @@ export async function resolveOpenTimestampTarget({ timestampBytes, timestampName
   };
 }
 
-export async function inspectManifestBundleTimestamps(bundle) {
+export async function inspectLifecycleBundleTimestamps(bundle) {
   const signatures = Array.isArray(bundle?.attachments?.signatures)
     ? bundle.attachments.signatures.map((signature) => ({
         id: signature.id,
-        bytes: decodeBundleSignatureBytes(signature),
+        bytes: decodeLifecycleBundleSignatureBytes(signature),
       }))
     : [];
   const signaturesById = new Map(signatures.map((signature) => [signature.id, signature]));
@@ -146,8 +146,8 @@ export async function inspectManifestBundleTimestamps(bundle) {
   }));
 }
 
-export async function parseManifestBundleTimestamps(bundle) {
-  await inspectManifestBundleTimestamps(bundle);
+export async function parseLifecycleBundleTimestamps(bundle) {
+  await inspectLifecycleBundleTimestamps(bundle);
 }
 
 function timestampEvidencePreference(entry) {
@@ -180,12 +180,12 @@ function dedupeTimestampEvidence(entries) {
   return [...bestByStampedDigest.values()];
 }
 
-export async function inspectTimestampEvidence({
+export async function inspectLifecycleTimestampEvidence({
   bundle,
   externalTimestamps = [],
   signatureArtifacts = [],
 }) {
-  const embeddedEvidence = await inspectManifestBundleTimestamps(bundle);
+  const embeddedEvidence = await inspectLifecycleBundleTimestamps(bundle);
   const externalEvidence = await Promise.all(externalTimestamps.map(async (timestamp, index) => {
     if (!(timestamp?.bytes instanceof Uint8Array) || timestamp.bytes.length === 0) {
       throw new Error(`Invalid OpenTimestamps proof: ${timestamp?.name || `timestamp-${index + 1}`}`);

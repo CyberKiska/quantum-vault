@@ -1,12 +1,11 @@
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
 import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fromHex, timingSafeEqual, utf8ToBytes } from './bytes.js';
 import { encapsulate, ML_KEM_1024_PUBLIC_KEY_SIZE, validatePublicKey, validatePrivateKey } from './mlkem.js';
-import { buildQcontShards } from './qcont/build.js';
 import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
 import { reconstructLifecycleCohortMaterial } from './qcont/lifecycle-cohort-shared.js';
 import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
 import { buildLifecycleQcontShards, parseLifecycleShard, reshareSameState, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
-import { parseShard, restoreFromShards } from './qcont/restore.js';
+import { restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
 import {
   buildArchiveStateDescriptor,
@@ -31,26 +30,8 @@ import {
   parseLifecycleBundleBytes,
   verifyLifecycleSignatureEntry,
 } from './lifecycle/artifacts.js';
-import {
-  buildInitialManifestBundle,
-  canonicalizeManifestBundle,
-  MANIFEST_BUNDLE_TYPE,
-  MANIFEST_BUNDLE_VERSION,
-  parseManifestBundleBytes,
-  parseManifestBundleBytesPreviewOnly,
-} from './manifest/manifest-bundle.js';
 import { formatAuthenticityStatusMessage } from '../features/ui/logging.js';
 import {
-  ARCHIVE_MANIFEST_SCHEMA,
-  ARCHIVE_MANIFEST_VERSION,
-  buildArchiveManifest,
-  canonicalizeArchiveManifest,
-  parseArchiveManifestBytes,
-} from './manifest/archive-manifest.js';
-import { normalizeAuthPolicy } from './manifest/auth-policy.js';
-import {
-  BUNDLE_CANONICALIZATION_LABEL,
-  MANIFEST_CANONICALIZATION_LABEL,
   canonicalizeJson,
   canonicalizeJsonToBytes,
 } from './manifest/jcs.js';
@@ -60,16 +41,12 @@ import { buildSuccessorSelectionModel } from '../features/qcont/restore-ui.js';
 import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
 import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
 import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
-import { verifyManifestSignatures } from './auth/verify-signatures.js';
 import { unpackPqpk, unpackQsig, verifyQsigAgainstBytes } from './auth/qsig.js';
 import { verifyStellarSigAgainstBytes } from './auth/stellar-sig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
 import {
-  inspectManifestBundleTimestamps,
-  parseManifestBundleTimestamps,
-  inspectTimestampEvidence,
   parseOpenTimestampProof,
   resolveOpenTimestampTarget,
 } from './auth/opentimestamps.js';
@@ -102,10 +79,32 @@ function textBytes(value) {
   return new TextEncoder().encode(value);
 }
 
-// Transitional C-09 guard: legacy manifest-side attach runtime was deleted, so omit
-// selftests that still exercise that removed path until the later attach-test rewrite.
-function usesDeletedLegacyAttachRuntime(testCase) {
-  return typeof testCase?.fn === 'function' && testCase.fn.toString().includes('attachManifestBundleToShards');
+const DELETED_LEGACY_RUNTIME_MARKERS = [
+  'attachManifestBundleToShards',
+  'buildQcontShards(',
+  'parseShard(',
+  'buildArchiveManifest(',
+  'parseArchiveManifestBytes(',
+  'buildInitialManifestBundle(',
+  'parseManifestBundleBytes(',
+  'parseManifestBundleBytesPreviewOnly(',
+  'canonicalizeArchiveManifest(',
+  'canonicalizeManifestBundle(',
+  'verifyLegacyDetachedSignatures(',
+  'inspectManifestBundleTimestamps(',
+  'parseManifestBundleTimestamps(',
+  'inspectTimestampEvidence(',
+  'buildTestArchiveManifest(',
+  'buildManifestParams(',
+  'legacyCanonicalizeQvC14n',
+];
+
+// Transitional C-11 guard: the legacy manifest/bundle runtime was deleted, so omit
+// selftests that still exercise that removed path until the later selftest rewrite.
+function usesDeletedLegacyRuntime(testCase) {
+  if (typeof testCase?.fn !== 'function') return false;
+  const body = testCase.fn.toString();
+  return DELETED_LEGACY_RUNTIME_MARKERS.some((marker) => body.includes(marker));
 }
 
 function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, options = {}) {
@@ -275,7 +274,7 @@ async function buildLifecycleSampleArtifacts() {
   });
   const sourceEvidence = buildSourceEvidence({
     relationType: 'reviewed-source',
-    sourceObjectType: 'archive-manifest-v3',
+    sourceObjectType: 'archive-state-descriptor',
     sourceDigests: [
       { alg: 'SHA3-512', value: '45'.repeat(64) },
       { alg: 'SHA-256', value: '67'.repeat(32) },
@@ -691,7 +690,7 @@ async function buildSuccessorVerificationBundle(split, {
   if (includeSourceEvidence || timestampTargetFamily === 'source-evidence') {
     sourceEvidence = buildSourceEvidence({
       relationType: 'reviewed-source',
-      sourceObjectType: 'archive-manifest-v3',
+      sourceObjectType: 'archive-state-descriptor',
       sourceDigests: [
         { alg: 'SHA3-512', value: '45'.repeat(64) },
         { alg: 'SHA-256', value: '67'.repeat(32) },
@@ -756,8 +755,8 @@ const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
   cohortIdPreimageCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","cohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","type":"quantum-vault-cohort-id-preimage/v1"}',
   cohortId: 'd14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b',
   transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"ebf832f7aff98cbe063b84b6835e58321ce5f932a211c888280511e614ae619b","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
-  sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-manifest-v3","version":1}',
-  lifecycleBundleDigest: '87a7d082a65713b689c441fadfdc51f41166945cbf9619a03a6806ee3542e37a31593c4e25ba4fc021d334ea7a979a37bd7b169e451f32fc5c886b74a729dda3',
+  sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-state-descriptor","version":1}',
+  lifecycleBundleDigest: '8bb5b59ca01e5bac80babd9f8ec894bcd34d17f75b653ff265656108a449ebebecf5a76ec9c88799646eec3a029033f2391a9e0eea069f57868a57a28c5bf4ab',
 });
 
 function assert(condition, message) {
@@ -1596,7 +1595,7 @@ function buildCases() {
 
             assert(
               timingSafeEqual(strictManifestBytes, legacyCanonicalizeQvC14nToBytes(manifest)),
-              `current archive-manifest shape diverged from legacy QV-C14N-v1 bytes for ${label}`
+              `current archive-state descriptor shape diverged from legacy QV-C14N-v1 bytes for ${label}`
             );
             assert(
               timingSafeEqual(strictAuthPolicyBytes, legacyCanonicalizeQvC14nToBytes(normalizedAuthPolicy)),
@@ -1895,7 +1894,7 @@ function buildCases() {
           authPolicyLevel: 'any-signature',
           minValidSignatures: 2,
         });
-        const expected = '{"aadPolicyId":"QV-AAD-HEADER-CHUNK-v1","authPolicyCommitment":{"alg":"SHA3-512","canonicalization":"QV-JSON-RFC8785-v1","value":"d40373eb7006f8d120acff9e34fe2b6e3cc8eca0cf3e78b48037026aae88d2c230a8b5cb1560710e43c46e6398c2e02bbb8bb0a56d86ca49059b50fcf90eb429"},"canonicalization":"QV-JSON-RFC8785-v1","counterBits":32,"cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2","kdfTreeId":"QV-KDF-TREE-v2","manifestType":"archive","maxChunkCount":4294967295,"nonceMode":"kmac-prefix64-ctr32","noncePolicyId":"QV-GCM-KMACPFX64-CTR32-v3","qenc":{"aeadMode":"per-chunk-aead","chunkCount":3,"chunkSize":65536,"containerId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","containerIdAlg":"SHA3-512(qenc-header-bytes)","containerIdRole":"secondary-header-id","format":"QVv1-5-0","hashAlg":"SHA3-512","ivStrategy":"kmac-prefix64-ctr32-v3","payloadLength":131072,"primaryAnchor":"qencHash","qencHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"schema":"quantum-vault-archive-manifest/v3","sharding":{"reedSolomon":{"codecId":"QV-RS-ErasureCodes-v1","k":3,"n":5,"parity":2},"shamir":{"shareCount":5,"threshold":4}},"version":3}';
+        const expected = '{"aadPolicyId":"QV-AAD-HEADER-CHUNK-v1","authPolicyCommitment":{"alg":"SHA3-512","canonicalization":"QV-JSON-RFC8785-v1","value":"d40373eb7006f8d120acff9e34fe2b6e3cc8eca0cf3e78b48037026aae88d2c230a8b5cb1560710e43c46e6398c2e02bbb8bb0a56d86ca49059b50fcf90eb429"},"canonicalization":"QV-JSON-RFC8785-v1","counterBits":32,"cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2","kdfTreeId":"QV-KDF-TREE-v2","manifestType":"archive","maxChunkCount":4294967295,"nonceMode":"kmac-prefix64-ctr32","noncePolicyId":"QV-GCM-KMACPFX64-CTR32-v3","qenc":{"aeadMode":"per-chunk-aead","chunkCount":3,"chunkSize":65536,"containerId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","containerIdAlg":"SHA3-512(qenc-header-bytes)","containerIdRole":"secondary-header-id","format":"QVv1-5-0","hashAlg":"SHA3-512","ivStrategy":"kmac-prefix64-ctr32-v3","payloadLength":131072,"primaryAnchor":"qencHash","qencHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"schema":"quantum-vault-legacy-manifest/v3","sharding":{"reedSolomon":{"codecId":"QV-RS-ErasureCodes-v1","k":3,"n":5,"parity":2},"shamir":{"shareCount":5,"threshold":4}},"version":3}';
         const canonicalized = canonicalizeArchiveManifest(manifest);
 
         assert(canonicalized.canonical === expected, 'canonical manifest regression string changed unexpectedly');
@@ -2199,7 +2198,7 @@ function buildCases() {
       fn: async () => {
         const sourceEvidence = buildSourceEvidence({
           relationType: 'reviewed-source',
-          sourceObjectType: 'archive-manifest-v3',
+          sourceObjectType: 'archive-state-descriptor',
           sourceDigests: [
             { alg: 'SHA3-512', value: '90'.repeat(64) },
             { alg: 'SHA-256', value: '12'.repeat(32) },
@@ -2222,7 +2221,7 @@ function buildCases() {
       fn: async () => {
         const sourceEvidence = buildSourceEvidence({
           relationType: 'reviewed-source',
-          sourceObjectType: 'archive-manifest-v3',
+          sourceObjectType: 'archive-state-descriptor',
           sourceDigests: [
             { alg: 'SHA3-512', value: '13'.repeat(64) },
             { alg: 'SHA-256', value: '24'.repeat(32) },
@@ -2239,7 +2238,7 @@ function buildCases() {
       fn: async () => {
         const sourceEvidence = buildSourceEvidence({
           relationType: 'reviewed-source',
-          sourceObjectType: 'archive-manifest-v3',
+          sourceObjectType: 'archive-state-descriptor',
           sourceDigests: [
             { alg: 'SHA3-512', value: '35'.repeat(64) },
             { alg: 'SHA-256', value: '46'.repeat(32) },
@@ -5266,7 +5265,7 @@ function buildCases() {
       fn: async () => {
         const manifestBytes = textBytes('auth-status-signer-pin-detail');
         const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
           pinnedPqPublicKeyFileBytes: pqpkBytes,
@@ -5544,7 +5543,7 @@ function buildCases() {
         const manifestBytes = textBytes('pinning-no-pin');
         const { qsigBytes } = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
         });
@@ -5573,7 +5572,7 @@ function buildCases() {
         const { qsigBytes } = buildQsigFixture(manifestBytes);
         const { pqpkBytes: wrongPqpkBytes } = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
           pinnedPqPublicKeyFileBytes: wrongPqpkBytes,
@@ -5597,7 +5596,7 @@ function buildCases() {
         const manifestBytes = textBytes('pinning-matching-pin');
         const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
           pinnedPqPublicKeyFileBytes: pqpkBytes,
@@ -5617,7 +5616,7 @@ function buildCases() {
         const stellarSig = await buildStellarSignatureFixture(manifestBytes);
         const wrongSigner = (await createStellarSignerMaterial()).signer;
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
           expectedEd25519Signer: wrongSigner,
@@ -5636,11 +5635,11 @@ function buildCases() {
     {
       name: 'manifest-side verification fails closed when bundled PQ signer verifies but explicit user pin mismatches',
       fn: async () => {
-        const manifestBytes = textBytes('manifest-bundle-pq-user-pin-mismatch');
+        const manifestBytes = textBytes('legacy-bundle-pq-user-pin-mismatch');
         const matching = buildQsigFixture(manifestBytes);
         const wrong = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           bundlePublicKeys: [{
             id: 'pk-good',
@@ -5775,7 +5774,7 @@ function buildCases() {
         const { qsigBytes } = buildQsigFixture(manifestBytes);
         const badQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'bad.qsig', bytes: badQsigBytes }],
         });
@@ -5809,7 +5808,7 @@ function buildCases() {
         const { qsigBytes } = buildQsigFixture(manifestBytes);
         const badQsigBytes = appendUnknownCriticalQsigMetadata(qsigBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'critical.qsig', bytes: badQsigBytes }],
         });
@@ -6127,7 +6126,7 @@ function buildCases() {
         const manifestBytes = textBytes('current-format-slh-manifest');
         const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes, { suite: 'slhdsa-shake-128s' });
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
           pinnedPqPublicKeyFileBytes: pqpkBytes,
@@ -6144,7 +6143,7 @@ function buildCases() {
         const manifestBytes = textBytes('current-format-fingerprint-warning-clean');
         const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
           pinnedPqPublicKeyFileBytes: pqpkBytes,
@@ -6163,7 +6162,7 @@ function buildCases() {
         const manifestBytes = textBytes('current-format-stellar-xdr-manifest');
         const sigBytes = (await buildStellarXdrSignatureFixture(manifestBytes)).bytes;
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.sig', bytes: sigBytes }],
         });
@@ -6180,7 +6179,7 @@ function buildCases() {
           embeddedPublicKey: unpackPqpk(buildQsigFixture(manifestBytes).pqpkBytes).keyBytes,
         });
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           bundlePublicKeys: [{
             id: 'pk-good',
@@ -6358,7 +6357,7 @@ function buildCases() {
         const matching = buildQsigFixture(manifestBytes);
         const wrong = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           bundlePublicKeys: [{
             id: 'pk-wrong',
@@ -6400,7 +6399,7 @@ function buildCases() {
         const qsig = buildQsigFixture(manifestBytes);
         const stellarSig = await buildStellarSignatureFixtureWithSigner(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           bundlePublicKeys: [{
             id: 'pk-stellar',
@@ -6441,7 +6440,7 @@ function buildCases() {
         const qsig = buildQsigFixture(manifestBytes, { suite: 'mldsa-87' });
         const wrongSuite = buildQsigFixture(manifestBytes, { suite: 'slhdsa-shake-128s' });
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           bundlePublicKeys: [{
             id: 'pk-wrong-suite',
@@ -6482,7 +6481,7 @@ function buildCases() {
         const stellarSig = await buildStellarSignatureFixture(manifestBytes);
         const qsig = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           bundlePublicKeys: [{
             id: 'pk-pq',
@@ -6853,7 +6852,7 @@ function buildCases() {
         const sig = buildQsigFixture(manifestBytes);
         const alternateWrapper = mutatePqpkVersionMinor(sig.pqpkBytes, 0x09);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
           pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes, alternateWrapper],
@@ -6875,7 +6874,7 @@ function buildCases() {
         const matching = buildQsigFixture(manifestBytes);
         const distractor = buildQsigFixture(manifestBytes);
 
-        const verification = await verifyManifestSignatures({
+        const verification = await verifyLegacyDetachedSignatures({
           manifestBytes,
           externalSignatures: [{ name: 'archive.qsig', bytes: matching.qsigBytes }],
           pinnedPqPublicKeyFileBytesList: [matching.pqpkBytes, distractor.pqpkBytes],
@@ -7674,7 +7673,7 @@ export async function runSelfTest({ onProgress } = {}) {
   await ensureErasureRuntime();
 
   const cases = buildCases()
-    .filter((item) => !usesDeletedLegacyAttachRuntime(item))
+    .filter((item) => !usesDeletedLegacyRuntime(item))
     .map((item) => ({
       ...item,
       name: prefixSelfTestName(item.name),

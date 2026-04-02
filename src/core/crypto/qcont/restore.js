@@ -1345,7 +1345,7 @@ export async function restoreFromShards(shards, options = {}) {
     verificationOptions.manifestBytes instanceof Uint8Array ||
     verificationOptions.bundleBytes instanceof Uint8Array
   ) {
-    throw new Error('Successor restore does not accept legacy manifest or manifest-bundle artifacts.');
+    throw new Error('Successor restore does not accept legacy manifest or legacy bundle artifacts.');
   }
 
   const prepared = [];
