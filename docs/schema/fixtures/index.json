@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "manifest-v3-valid-per-chunk",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.valid.per-chunk.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": true
+      }
+    },
+    {
+      "id": "manifest-v3-valid-single-container",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.valid.single-container.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": true
+      }
+    },
+    {
+      "id": "manifest-v3-invalid-unknown-field",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.invalid.unknown-field.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "manifest-v3-invalid-qenc-format",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.invalid.qenc-format.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "manifest-v3-invalid-iv-strategy",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.invalid.iv-strategy.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "manifest-v3-invalid-rs-codec-id",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.invalid.rs-codec-id.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "manifest-v3-invalid-unsafe-integer",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.invalid.unsafe-integer.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "manifest-v3-schema-valid-semantic-invalid-rs-parity",
+      "schema": "qv-manifest-v3.schema.json",
+      "file": "fixtures/qv-manifest-v3.schema-valid.semantic-invalid.rs-parity.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "manifest",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "bundle-v2-valid",
+      "schema": "qv-manifest-bundle-v2.schema.json",
+      "file": "fixtures/qv-manifest-bundle-v2.valid.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "bundle",
+        "expectParseSuccess": true
+      }
+    },
+    {
+      "id": "bundle-v2-invalid-signature-unknown-field",
+      "schema": "qv-manifest-bundle-v2.schema.json",
+      "file": "fixtures/qv-manifest-bundle-v2.invalid.signature-unknown-field.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "bundle",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "bundle-v2-invalid-authpolicy-unsafe-integer",
+      "schema": "qv-manifest-bundle-v2.schema.json",
+      "file": "fixtures/qv-manifest-bundle-v2.invalid.authpolicy-unsafe-integer.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "bundle",
+        "expectParseSuccess": false
+      }
+    },
+    {
+      "id": "bundle-v2-schema-valid-semantic-invalid-manifest-digest",
+      "schema": "qv-manifest-bundle-v2.schema.json",
+      "file": "fixtures/qv-manifest-bundle-v2.schema-valid.semantic-invalid.manifest-digest.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "bundle",
+        "expectParseSuccess": false
+      }
+    }
+  ]
+}

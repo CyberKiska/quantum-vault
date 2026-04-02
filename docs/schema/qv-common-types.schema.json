@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantum-vault.local/schema/qv-common-types.schema.json",
+  "title": "Quantum Vault shared JSON Schema definitions",
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "safeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "minimumTwoInteger": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 9007199254740991
+    },
+    "uint32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "positiveUint32": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "sha3_512Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "sha3_256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "base64String": {
+      "type": "string",
+      "minLength": 4,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "manifestCanonicalizationLabel": {
+      "const": "QV-JSON-RFC8785-v1"
+    },
+    "bundleCanonicalizationLabel": {
+      "const": "QV-BUNDLE-JSON-v1"
+    },
+    "archiveManifestSchemaId": {
+      "const": "quantum-vault-archive-manifest/v3"
+    },
+    "archiveManifestType": {
+      "const": "archive"
+    },
+    "bundleType": {
+      "const": "QV-Manifest-Bundle"
+    },
+    "cryptoProfileId": {
+      "const": "QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2"
+    },
+    "kdfTreeId": {
+      "const": "QV-KDF-TREE-v2"
+    },
+    "aadPolicyId": {
+      "const": "QV-AAD-HEADER-CHUNK-v1"
+    },
+    "qencFormat": {
+      "const": "QVv1-5-0"
+    },
+    "sha3_512Alg": {
+      "const": "SHA3-512"
+    },
+    "primaryAnchor": {
+      "const": "qencHash"
+    },
+    "containerIdRole": {
+      "const": "secondary-header-id"
+    },
+    "containerIdAlg": {
+      "const": "SHA3-512(qenc-header-bytes)"
+    },
+    "noncePolicyIdSingleContainer": {
+      "const": "QV-GCM-RAND96-v1"
+    },
+    "noncePolicyIdPerChunk": {
+      "const": "QV-GCM-KMACPFX64-CTR32-v3"
+    },
+    "nonceModeSingleContainer": {
+      "const": "random96"
+    },
+    "nonceModePerChunk": {
+      "const": "kmac-prefix64-ctr32"
+    },
+    "aeadModeSingleContainer": {
+      "const": "single-container-aead"
+    },
+    "aeadModePerChunk": {
+      "const": "per-chunk-aead"
+    },
+    "ivStrategySingleContainer": {
+      "const": "single-iv"
+    },
+    "ivStrategyPerChunk": {
+      "const": "kmac-prefix64-ctr32-v3"
+    },
+    "rsCodecId": {
+      "const": "QV-RS-ErasureCodes-v1"
+    },
+    "authPolicyCommitmentAlg": {
+      "const": "SHA3-512"
+    },
+    "authPolicyLevel": {
+      "enum": [
+        "integrity-only",
+        "any-signature",
+        "strong-pq-signature"
+      ]
+    },
+    "allSignatureSuites": {
+      "enum": [
+        "mldsa-44",
+        "mldsa-65",
+        "mldsa-87",
+        "slhdsa-shake-128s",
+        "slhdsa-shake-192s",
+        "slhdsa-shake-256s",
+        "slhdsa-shake-256f",
+        "ed25519"
+      ]
+    },
+    "pqSignatureSuites": {
+      "enum": [
+        "mldsa-44",
+        "mldsa-65",
+        "mldsa-87",
+        "slhdsa-shake-128s",
+        "slhdsa-shake-192s",
+        "slhdsa-shake-256s",
+        "slhdsa-shake-256f"
+      ]
+    },
+    "mlDsaSuites": {
+      "enum": [
+        "mldsa-44",
+        "mldsa-65",
+        "mldsa-87"
+      ]
+    },
+    "slhDsaSuites": {
+      "enum": [
+        "slhdsa-shake-128s",
+        "slhdsa-shake-192s",
+        "slhdsa-shake-256s",
+        "slhdsa-shake-256f"
+      ]
+    },
+    "publicKeyEncoding": {
+      "enum": [
+        "base64",
+        "stellar-address"
+      ]
+    },
+    "signatureFormat": {
+      "enum": [
+        "qsig",
+        "stellar-sig"
+      ]
+    },
+    "timestampType": {
+      "const": "opentimestamps"
+    },
+    "bodyDefinitionId": {
+      "const": "QV-QCONT-SHARDBODY-v1"
+    },
+    "shareCommitmentInput": {
+      "const": "raw-shamir-share-bytes"
+    },
+    "manifestTargetType": {
+      "const": "canonical-manifest"
+    }
+  }
+}

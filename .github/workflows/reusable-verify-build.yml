@@ -64,6 +64,9 @@ jobs:
       - name: Self-test
         run: npm run selftest
 
+      - name: Schema fixtures
+        run: npm run schema:fixtures
+
       - name: Build
         env:
           BASE_PATH: ${{ inputs.base-path }}

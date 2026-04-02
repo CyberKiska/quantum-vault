@@ -1,0 +1,68 @@
+{
+  "schema": "quantum-vault-archive-manifest/v3",
+  "version": 3,
+  "manifestType": "archive",
+  "canonicalization": "QV-JSON-RFC8785-v1",
+  "cryptoProfileId": "QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2",
+  "kdfTreeId": "QV-KDF-TREE-v2",
+  "noncePolicyId": "QV-GCM-RAND96-v1",
+  "nonceMode": "random96",
+  "counterBits": 0,
+  "maxChunkCount": 1,
+  "aadPolicyId": "QV-AAD-HEADER-CHUNK-v1",
+  "qenc": {
+    "format": "QVv1-5-0",
+    "aeadMode": "single-container-aead",
+    "ivStrategy": "single-iv",
+    "chunkSize": 65536,
+    "chunkCount": 1,
+    "payloadLength": 2048,
+    "hashAlg": "SHA3-512",
+    "qencHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "primaryAnchor": "qencHash",
+    "containerId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "containerIdRole": "secondary-header-id",
+    "containerIdAlg": "SHA3-512(qenc-header-bytes)"
+  },
+  "sharding": {
+    "shamir": {
+      "threshold": 4,
+      "shareCount": 5
+    },
+    "reedSolomon": {
+      "n": 5,
+      "k": 3,
+      "parity": 2,
+      "codecId": "QV-RS-ErasureCodes-v1"
+    }
+  },
+  "shardBinding": {
+    "bodyDefinitionId": "QV-QCONT-SHARDBODY-v1",
+    "bodyDefinition": {
+      "includes": [
+        "fragment-len32-stream"
+      ],
+      "excludes": [
+        "qcont-header",
+        "embedded-manifest",
+        "embedded-manifest-digest",
+        "embedded-bundle",
+        "embedded-bundle-digest",
+        "external-signatures"
+      ]
+    },
+    "shardBodyHashAlg": "SHA3-512",
+    "shardBodyHashes": [
+      "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+      "33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"
+    ]
+  },
+  "authPolicyCommitment": {
+    "alg": "SHA3-512",
+    "canonicalization": "QV-JSON-RFC8785-v1",
+    "value": "86832b8833ca3b661666bd5be1c586ad49264934767505d8a8007e9836db7b492c6eee1b43161a125b5e8fb7ad4998ebfe26edd990edb75f02946194598c2c10"
+  }
+}

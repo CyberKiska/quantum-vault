@@ -365,7 +365,7 @@ Current policy satisfaction is existential, not exclusive:
 
 ### 6.2 Strong PQ suite registry
 
-Current policy evaluation is based on normalized signature suite identifiers, not on wrapper type or file extension.
+Current policy evaluation is based on signature suite identifiers, not on wrapper type or file extension. Bundle parsing requires canonical suite identifiers on input; broader verifier flows may normalize other detached-artifact inputs before policy evaluation.
 
 Current initial strong-PQ suites are:
 
@@ -375,7 +375,7 @@ Current initial strong-PQ suites are:
 
 Current evaluation rule:
 
-- policy is evaluated against normalized suite identifiers and verifier results
+- policy is evaluated against canonical suite identifiers after parsing/normalization and against verifier results
 - broad family names such as `ML-DSA` or `SLH-DSA` are not sufficient by themselves
 
 ### 6.3 Wrapper versus suite

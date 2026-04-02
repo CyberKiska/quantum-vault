@@ -27,6 +27,7 @@ The repository selftests remain implementation-coupled material, so future chang
 Current implementation grounding:
 
 - `src/core/crypto/selftest.js`
+- `docs/schema/`
 - `docs/format-spec.md`
 - `docs/appendices/canonicalization-profile.md`
 - `docs/appendices/external-artifacts.md`
@@ -37,6 +38,7 @@ Implemented now:
 
 - selftests covering signature-policy counting, `publicKeyRef`, OTS linkage, restore selection, malformed parsing, and nonce/AEAD invariants
 - regression vectors for KMAC customization semantics and per-chunk IV derivation
+- checked-in JSON Schema fixtures under `docs/schema/fixtures/`, including schema-valid but runtime-invalid cases that exercise the bytes/schema/semantics boundary explicitly
 - local-development example artifact sets for single-archive, signature-focused, and bundle-focused flows
 
 Not yet first-class in the current implementation:
@@ -54,7 +56,7 @@ Not yet first-class in the current implementation:
 
 An interoperable implementation should currently be able to:
 
-- parse and validate canonical manifests and canonical bundles under `QV-C14N-v1`
+- parse and validate canonical manifests under `QV-JSON-RFC8785-v1` and canonical bundles under `QV-BUNDLE-JSON-v1`
 - verify detached signatures only against canonical manifest bytes
 - reject malformed or ambiguous `publicKeyRef` bindings
 - link `.ots` evidence only to detached signature bytes
@@ -81,6 +83,7 @@ Current usage note:
 | Vector class | Current repository coverage |
 | --- | --- |
 | canonicalization behavior | canonical manifest and bundle normalization through parser/canonicalizer paths |
+| schema grammar behavior | JSON Schema validation of valid and invalid manifest/bundle fixtures, plus schema-valid but runtime-invalid boundary cases |
 | detached-signature policy counting | duplicate proof deduplication, unique-signature counting, and bundle-plus-external interactions |
 | `publicKeyRef` fail-closed behavior | authoritative bundled-key verification, incompatible reference rejection, and suite-mismatch rejection |
 | OTS linkage | external and embedded `.ots` linkage, unrelated proof rejection, and per-signature evidence deduplication |
