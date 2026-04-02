@@ -1,18 +1,10 @@
+import { startsWithAscii } from '../core/crypto/byte-prefix.js';
 import { bytesEqual } from '../core/crypto/bytes.js';
 import { isSupportedStellarSignatureDocumentBytes } from '../core/crypto/auth/stellar-sig.js';
 import { parseArchiveStateDescriptorBytes, parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
 import { readFileAsUint8Array } from '../utils.js';
 
 const QCONT_MAGIC = 'QVC1';
-
-function startsWithAscii(bytes, ascii) {
-  if (!(bytes instanceof Uint8Array)) return false;
-  if (bytes.length < ascii.length) return false;
-  for (let i = 0; i < ascii.length; i += 1) {
-    if (bytes[i] !== ascii.charCodeAt(i)) return false;
-  }
-  return true;
-}
 
 export async function classifyRestoreInputFiles(files) {
   const shardFiles = [];

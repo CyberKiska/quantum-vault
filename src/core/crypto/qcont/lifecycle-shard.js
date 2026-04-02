@@ -107,7 +107,7 @@ function ensureEqual(actual, expected, field) {
   }
 }
 
-function isLifecycleParsedShard(shard) {
+export function isLifecycleParsedShard(shard) {
   return (
     shard?.archiveStateBytes instanceof Uint8Array &&
     shard?.cohortBindingBytes instanceof Uint8Array &&

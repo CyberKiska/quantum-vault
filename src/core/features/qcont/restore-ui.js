@@ -71,6 +71,27 @@ function setRestoreActionAvailability(prefix, actionButton) {
   actionButton.disabled = !(readyForThreshold && readyForSelection);
 }
 
+function renderSelectionInfoUi(prefix, actionButton, nextState, summaryText, helpText, mode = 'invalid') {
+  const elements = getSuccessorSelectionElements(prefix);
+  if (elements.container) {
+    elements.container.style.display = 'block';
+    elements.container.className = 'verification-section successor-selection';
+  }
+  if (elements.summary) elements.summary.textContent = summaryText;
+  if (elements.help) elements.help.textContent = helpText;
+  [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
+    if (group) group.style.display = 'none';
+  });
+  successorSelectionState.set(prefix, {
+    ...nextState,
+    mode,
+    selectionRequired: true,
+    selectionComplete: false,
+  });
+  setRestoreActionAvailability(prefix, actionButton);
+  return successorSelectionState.get(prefix);
+}
+
 function clearSuccessorSelectionUi(prefix, actionButton) {
   const elements = getSuccessorSelectionElements(prefix);
   if (elements.container) {
@@ -173,16 +194,28 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   try {
     const classified = await classifyRestoreInputFiles(files);
     if (!classified.shardFiles.length) {
-      clearSuccessorSelectionUi(prefix, actionButton);
-      return successorSelectionState.get(prefix);
+      return renderSelectionInfoUi(
+        prefix,
+        actionButton,
+        nextState,
+        'No supported successor .qcont shards were found in the selected files.',
+        'Load successor .qcont shards plus any optional archive-state descriptors, lifecycle bundles, detached signatures, .pqpk signer pins, or .ots proofs.',
+        'unsupported'
+      );
     }
 
     const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
     const successorShards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
 
     if (!successorShards.length) {
-      clearSuccessorSelectionUi(prefix, actionButton);
-      return successorSelectionState.get(prefix);
+      return renderSelectionInfoUi(
+        prefix,
+        actionButton,
+        nextState,
+        'No supported successor .qcont shards were found in the selected files.',
+        'Load successor .qcont shards to choose an archive-state, same-state cohort, or lifecycle bundle.',
+        'unsupported'
+      );
     }
 
     elements.container.style.display = 'block';
@@ -320,19 +353,14 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       selectionComplete,
     });
   } catch (error) {
-    elements.container.style.display = 'block';
-    elements.container.className = 'verification-section successor-selection';
-    elements.summary.textContent = 'Successor restore selection could not be derived from the selected files.';
-    elements.help.textContent = error?.message || String(error);
-    [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
-      if (group) group.style.display = 'none';
-    });
-    successorSelectionState.set(prefix, {
-      ...nextState,
-      mode: 'invalid',
-      selectionRequired: true,
-      selectionComplete: false,
-    });
+    renderSelectionInfoUi(
+      prefix,
+      actionButton,
+      nextState,
+      'Successor restore selection could not be derived from the selected files.',
+      error?.message || String(error),
+      'invalid'
+    );
   }
 
   const current = successorSelectionState.get(prefix);
@@ -375,7 +403,7 @@ async function readVerificationOptionsFromDom({
   };
 }
 
-function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
+export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   const policy = authenticity?.policy;
   const verification = authenticity?.verification;
   const status = authenticity?.status;
@@ -412,22 +440,13 @@ function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   }
   if (!verification) return;
 
-  const counts = verification.counts;
-  const hasSuccessorCounts = (
-    Object.prototype.hasOwnProperty.call(counts, 'validArchiveApproval') ||
-    Object.prototype.hasOwnProperty.call(counts, 'validMaintenance') ||
-    Object.prototype.hasOwnProperty.call(counts, 'validSourceEvidence')
+  const counts = verification.counts || {};
+  onLog(
+    `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal ?? 0}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal ?? 0}.`
   );
-  if (hasSuccessorCounts) {
-    onLog(
-      `Archive-approval counts: valid=${counts.validArchiveApproval}, strong-pq=${counts.validArchiveApprovalStrongPq}, pinned=${counts.archiveApprovalPinnedValidTotal}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal}.`
-    );
-    onLog(
-      `Detached signature totals across all families: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}, maintenance=${counts.validMaintenance}, source-evidence=${counts.validSourceEvidence}.`
-    );
-  } else {
-    onLog(`Signature counts: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}.`);
-  }
+  onLog(
+    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, pinned=${counts.pinnedValidTotal ?? 0}, bundle-pinned=${counts.bundlePinnedValidTotal ?? 0}, user-pinned=${counts.userPinnedValidTotal ?? 0}, maintenance=${counts.validMaintenance ?? 0}, source-evidence=${counts.validSourceEvidence ?? 0}.`
+  );
   for (const warning of verification.warnings || []) {
     onWarn(warning);
   }
@@ -438,6 +457,17 @@ function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
       onWarn(`Signature failed: ${item.name} (${item.error || 'unknown error'})`);
     }
   }
+}
+
+export function logRestoreSelectionSummary(result, onLog) {
+  onLog(`Selected archiveId: ${result.archiveId}`);
+  onLog(`Selected stateId: ${result.stateId}`);
+  onLog(`Selected cohortId: ${result.cohortId}`);
+  onLog(`Selected lifecycle bundle digest: ${result.lifecycleBundleDigestHex}`);
+  if (Array.isArray(result.embeddedLifecycleBundleDigestsUsed) && result.embeddedLifecycleBundleDigestsUsed.length > 0) {
+    onLog(`Embedded lifecycle bundle digests used: ${result.embeddedLifecycleBundleDigestsUsed.join(', ')}`);
+  }
+  onLog(`Selection source: ${result.selectionSource || 'embedded'}`);
 }
 
 /**
@@ -498,41 +528,34 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
   }
 
   const status = authenticity?.status || {};
-  const archiveApprovalVerified = status.archiveApprovalSignatureVerified ?? status.signatureVerified;
-  const hasSuccessorStates = (
-    'archiveApprovalSignatureVerified' in status ||
-    'maintenanceSignatureVerified' in status ||
-    'sourceEvidenceSignatureVerified' in status
-  );
+  const archiveApprovalVerified = status.archiveApprovalSignatureVerified === true;
   const cohortInspection = result.lifecycleVerification?.cohorts || {};
   addSection('Archive Approval');
   addPolar(
-    archiveApprovalVerified === true,
-    hasSuccessorStates ? 'Archive-approval signature verified' : 'Detached signature verified (canonical manifest)',
-    hasSuccessorStates ? 'No verified archive-approval signature over archive-state' : 'No verified detached signature over canonical manifest',
+    archiveApprovalVerified,
+    'Archive-approval signature verified',
+    'No verified archive-approval signature over archive-state',
   );
   addPolar(
     status.strongPqSignatureVerified === true,
-    hasSuccessorStates ? 'Strong PQ archive-approval signature verified' : 'Strong PQ detached signature verified',
-    hasSuccessorStates ? 'Strong PQ archive-approval signature not present' : 'Strong PQ detached signature not present',
+    'Strong PQ archive-approval signature verified',
+    'Strong PQ archive-approval signature not present',
     archiveApprovalVerified === true && status.strongPqSignatureVerified !== true,
   );
-  if (hasSuccessorStates) {
-    addSection('Selection');
-    if (cohortInspection.forkDetected === true) {
-      addPolar(false, '', 'Same-state cohort fork remains known for this archive state', true);
-    }
-    if (status.bundleCohortMixed === true) {
-      addPolar(false, '', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', true);
-    } else {
-      addPolar(true, 'One lifecycle bundle variant selected for policy evaluation', '');
-    }
+  addSection('Selection');
+  if (cohortInspection.forkDetected === true) {
+    addPolar(false, '', 'Same-state cohort fork remains known for this archive state', true);
+  }
+  if (status.bundleCohortMixed === true) {
+    addPolar(false, '', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', true);
+  } else {
+    addPolar(true, 'One lifecycle bundle variant selected for policy evaluation', '');
   }
   addSection('Pinning & Evidence');
   addPolar(
     status.bundlePinned === true,
-    hasSuccessorStates ? 'Bundle signer pinned (lifecycle bundle signer material)' : 'Bundle signer pinned (manifest bundle signer material)',
-    'Bundle signer not pinned',
+    'Lifecycle-bundle signer pinned',
+    'Lifecycle-bundle signer not pinned',
     archiveApprovalVerified === true && status.bundlePinned !== true,
   );
   if (status.userPinProvided === true || status.userPinned === true) {
@@ -561,34 +584,30 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
       appendStatusLine(false, `OTS proof not yet complete (${incompleteCount}) — calendars may still be pending`, true);
     }
   }
-  if (hasSuccessorStates) {
-    if (status.sourceEvidencePresent !== true) {
-      addNeutral('No source-evidence objects on this archive (optional provenance).');
-    } else {
-      addPolar(
-        status.sourceEvidenceSignatureVerified === true,
-        'Source-evidence signature verified',
-        'Source-evidence present but no verified signature',
-      );
-    }
+  if (status.sourceEvidencePresent !== true) {
+    addNeutral('No source-evidence objects on this archive (optional provenance).');
+  } else {
+    addPolar(
+      status.sourceEvidenceSignatureVerified === true,
+      'Source-evidence signature verified',
+      'Source-evidence present but no verified signature',
+    );
   }
-  if (hasSuccessorStates) {
-    addSection('Maintenance & Provenance');
-    if (status.transitionRecordPresent !== true) {
-      addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
-    } else {
-      addPolar(true, 'Transition record present', 'Transition record missing');
-      addPolar(
-        status.transitionChainValid === true,
-        'Transition-chain references valid',
-        'Transition-chain references invalid or broken',
-      );
-      addPolar(
-        status.maintenanceSignatureVerified === true,
-        'Maintenance signature verified',
-        'No verified maintenance signature on transition record(s)',
-      );
-    }
+  addSection('Maintenance & Provenance');
+  if (status.transitionRecordPresent !== true) {
+    addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
+  } else {
+    addPolar(true, 'Transition record present', 'Transition record missing');
+    addPolar(
+      status.transitionChainValid === true,
+      'Transition-chain references valid',
+      'Transition-chain references invalid or broken',
+    );
+    addPolar(
+      status.maintenanceSignatureVerified === true,
+      'Maintenance signature verified',
+      'No verified maintenance signature on transition record(s)',
+    );
   }
   addSection('Policy');
   addPolar(status.policySatisfied === true, 'Archive policy satisfied', 'Archive policy not satisfied');
@@ -641,19 +660,7 @@ export function initQcontRestoreUI() {
         verification: verificationOptions,
       });
 
-      if (result.archiveId) {
-        log(`Selected archiveId: ${result.archiveId}`);
-        log(`Selected stateId: ${result.stateId}`);
-        log(`Selected cohortId: ${result.cohortId}`);
-      } else {
-        log(`Selected manifest digest: ${result.manifestDigestHex}`);
-      }
-      log(`Selected bundle digest: ${result.lifecycleBundleDigestHex || result.bundleDigestHex}`);
-      const embeddedDigests = result.embeddedLifecycleBundleDigestsUsed || result.embeddedBundleDigestsUsed;
-      if (Array.isArray(embeddedDigests) && embeddedDigests.length > 0) {
-        log(`Embedded shard bundle digests used: ${embeddedDigests.join(', ')}`);
-      }
-      log(`Selection source: ${result.selectionSource || result.manifestSource}`);
+      logRestoreSelectionSummary(result, log);
       logVerificationSummary(result.authenticity, log, logWarning, logSuccess);
 
       const { qencBytes, privKey, containerId, containerHash, privateKeyHash, recoveredQencHash, recoveredPrivHash, qencOk, qkeyOk } = result;

@@ -1,4 +1,4 @@
-import { parseLifecycleShard, reshareSameState } from '../../../app/crypto-service.js';
+import { isLifecycleParsedShard, parseLifecycleShard, reshareSameState } from '../../../app/crypto-service.js';
 import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './restore-ui.js';
 import { bindRsParamsUI } from './rs-params-display.js';
 import { updateShardSelectionStatus } from '../ui/shards-status.js';
@@ -165,7 +165,22 @@ export function initQcontReshareUI() {
       }
 
       const shardBytes = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-      const shards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
+      const parsedShards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: false })));
+      const shards = parsedShards.map((shard, index) => {
+        if (isLifecycleParsedShard(shard)) {
+          return shard;
+        }
+        const errors = Array.isArray(shard?.diagnostics?.errors) ? shard.diagnostics.errors : [];
+        const legacyRejected = errors.some((message) => /unsupported shard format|unsupported shard artifactfamily|qvqcont-6/i.test(String(message || '')));
+        if (legacyRejected) {
+          throw new Error('Legacy shards are not supported for resharing.');
+        }
+        throw new Error(
+          errors.length > 0
+            ? `Failed to parse successor shard input: ${errors.join('; ')}`
+            : `Failed to parse successor shard input at selected shard ${index + 1}.`
+        );
+      });
       const n = parsePositiveInteger(nInput, 'reshare n');
       const k = parsePositiveInteger(kInput, 'reshare k');
       const reasonCode = String(reasonCodeInput?.value || 'cohort-rotation').trim() || 'cohort-rotation';
@@ -233,6 +248,9 @@ export function initQcontReshareUI() {
       buildReshareResultSummary(result);
       logSuccess('Same-state resharing completed successfully.');
     } catch (error) {
+      if (/legacy shards are not supported for resharing/i.test(String(error?.message || error))) {
+        showToast('Legacy shards are not supported for resharing.', 'warning');
+      }
       logError(error);
     } finally {
       setButtonsDisabled(false);

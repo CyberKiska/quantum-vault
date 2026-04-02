@@ -10,6 +10,7 @@ import {
 import { attachLifecycleBundleToShards as attachLifecycleShardBundle } from '../core/crypto/qcont/lifecycle-attach.js';
 import {
     buildLifecycleQcontShards as buildSuccessorShardSet,
+    isLifecycleParsedShard as isParsedSuccessorLifecycleShard,
     parseLifecycleShard as parseLifecycleQcontShardBytes,
     reshareSameState as reshareSameStateShardSet,
 } from '../core/crypto/qcont/lifecycle-shard.js';
@@ -54,6 +55,10 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
 
 export async function parseLifecycleShard(bytes, options = {}) {
     return parseLifecycleQcontShardBytes(bytes, options);
+}
+
+export function isLifecycleParsedShard(shard) {
+    return isParsedSuccessorLifecycleShard(shard);
 }
 
 export async function reshareSameState(shards, params, options = {}) {
