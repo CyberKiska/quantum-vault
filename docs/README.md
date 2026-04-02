@@ -30,20 +30,32 @@ Publication note:
 
 - `docs/internal/` and `examples/` are excluded from published releases via `.gitignore`
 - internal planning material has been absorbed into the published owner docs and is not referenced as required reading in the release surface
+- `docs/process/roadmap/lifecycle/` remains published as historical transition/design material, not as the active normative or execution surface for current behavior
 
 Current release status:
 
-- the documentation set covers two coexisting artifact tracks: the legacy manifest/bundle family and the successor lifecycle family
+Implemented now:
+
+- the documentation set is successor-first and treats the v2 lifecycle family as the present baseline
 - the regular-user product surface now creates successor lifecycle archives by default in both Lite and Pro
-- beginning with v1.5.3, legacy manifest/bundle creation became compatibility-only rather than a normal product path on the shipped UI surface
-- legacy manifest/bundle creation is no longer a normal product path; legacy attach/restore material remains compatibility-only during the documented phase-out window
-- current published docs MUST distinguish implemented now, shipped-but-legacy, and future-only material explicitly; deferred work such as RFC 4998-style renewal, state-changing continuity records, and governance objects MUST remain clearly non-current
+- current published docs MUST distinguish implemented now, deprecated v1 context, and deferred roadmap material explicitly
+
+Deprecated v1 context:
+
+- beginning with v1.5.3, v1 manifest/bundle creation became deprecated rather than a normal product path on the shipped UI surface
+- v1 attach/restore material remains published only for previously created archives during the documented phase-out window
+
+Deferred roadmap:
+
+- RFC 4998-style renewal
+- state-changing continuity records
+- governance objects and trust-root programs
 
 Current product surfaces:
 
 - Lite: regular-user successor archive creation/export of `.qcont`, `*.archive-state.json`, and `*.lifecycle-bundle.json`, successor restore, and explicit ambiguity resolution when successor archive/state/cohort or lifecycle-bundle selection is required
 - Pro: all Lite successor workflows plus standalone `*.cohort-binding.json` export, explicit successor artifact export/attach/inspection, and same-state resharing controls
-- Legacy: compatibility-only attach/restore/documentation for previously created legacy archives; no normal legacy creation path remains on the shipped UI surface
+- Deprecated v1: transition-only attach/restore/documentation for previously created archives; no normal v1 creation path remains on the shipped UI surface
 
 Current release-gate note:
 
@@ -65,9 +77,12 @@ Current release-gate note:
    Files in `docs/internal/` are internal references and planning artifacts, not authoritative product docs.
 
 4. Distinguish current behavior from future direction.
-   Every core doc should label statements as implemented now, required for compatibility now, or recommended future direction.
+   Every core doc should label statements as implemented now, deprecated v1 context still needed during the phase-out window, or recommended future direction.
 
-5. Shared vocabulary lives in `docs/glossary.md`.
+5. Owner docs MUST keep the status split explicit.
+   Core owner docs should mark successor-default current behavior, deferred roadmap material, and deprecated v1 context separately rather than mixing them into one narrative.
+
+6. Shared vocabulary lives in `docs/glossary.md`.
    If a core term meaning changes, update the glossary and the owning document in the same change.
 
 ## Current source-of-truth map
@@ -75,8 +90,8 @@ Current release-gate note:
 | Topic | Working source now | Destination owner |
 | --- | --- | --- |
 | Product overview and workflow | `README.md` | `README.md` + `WHITEPAPER.md` |
-| Artifact formats, canonicalization, verifier flow (legacy manifest bundle and successor lifecycle) | `format-spec.md` | `format-spec.md` |
-| Successor lifecycle design history and Phase 0 frozen contracts (informative) | `docs/process/roadmap/lifecycle/` | Informative only; normative bytes/policy remain in `format-spec.md` and `trust-and-policy.md` |
+| Artifact formats, canonicalization, verifier flow (legacy manifest bundle and successor lifecycle) | `format-spec.md`, `src/core/crypto/qcont/restore.js`, `src/core/crypto/qcont/lifecycle-shard.js`, `src/core/crypto/lifecycle/artifacts.js`, `docs/schema/` | `format-spec.md` |
+| Successor lifecycle design history and Phase 0 frozen contracts (informative) | `docs/process/roadmap/lifecycle/` plus the shipped successor implementation and schemas | Historical transition record only; normative bytes/policy remain in `format-spec.md` and `trust-and-policy.md` |
 | Archive policy, proof counting, pinning, role semantics | `trust-and-policy.md` | `trust-and-policy.md` |
 | Threat model, assumptions, invariants, claim boundaries | `security-model.md` | `security-model.md` |
 | Archive classes, OAIS mapping, renewal, migration | `long-term-archive.md` | `long-term-archive.md` |
@@ -96,7 +111,7 @@ Current release-gate note:
 | `docs/WHITEPAPER.md` | Informative system-level design and rationale doc | Release Candidate |
 | `docs/format-spec.md` | Normative format/verifier doc | Release Candidate |
 | `docs/schema/` | Machine-readable JSON Schema grammar layer and fixture corpus for manifest-family and **successor lifecycle** artifacts (`qv-archive-state-descriptor-v1`, `qv-cohort-binding-v1`, `qv-lifecycle-bundle-v1`, `qv-transition-record-v1`, `qv-source-evidence-v1`, plus manifest schemas) | Release Candidate |
-| `docs/process/roadmap/lifecycle/` | Informative lifecycle roadmap, resharing design, implementation plan | Active; not normative for bytes |
+| `docs/process/roadmap/lifecycle/` | Historical successor transition roadmap, resharing rationale, and frozen design record | Historical; phases 0-7 implemented, later phases deferred; not normative for bytes |
 | `docs/appendices/canonicalization-profile.md` | Compatibility appendix for current manifest and bundle canonicalization labels | Release Candidate |
 | `docs/appendices/external-artifacts.md` | Compatibility appendix for detached artifact acceptance/linkage | Release Candidate |
 | `docs/appendices/interoperability-and-test-vectors.md` | Compatibility appendix for examples, vectors, and malformed coverage | Release Candidate |
@@ -121,16 +136,20 @@ docs/
   format-spec.md
   schema/
     qv-common-types.schema.json
-    qv-manifest-v3.schema.json
-    qv-manifest-bundle-v2.schema.json
     qv-archive-state-descriptor-v1.schema.json
     qv-cohort-binding-v1.schema.json
     qv-lifecycle-bundle-v1.schema.json
     qv-transition-record-v1.schema.json
     qv-source-evidence-v1.schema.json
+    archive/
+      README.md
+      qv-manifest-v3.schema.json
+      qv-manifest-bundle-v2.schema.json
     fixtures/
       index.json
   process/roadmap/lifecycle/
+    roadmap-archive-lifecycle.md
+    implementation-questions-and-reading.md
     resharing-design.md
     implementation-plan-lifecycle.md
   appendices/

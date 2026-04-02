@@ -107,7 +107,7 @@ function ensureEqual(actual, expected, field) {
   }
 }
 
-function isLifecycleParsedShard(shard) {
+export function isLifecycleParsedShard(shard) {
   return (
     shard?.archiveStateBytes instanceof Uint8Array &&
     shard?.cohortBindingBytes instanceof Uint8Array &&
@@ -587,8 +587,8 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
     if (!keyMatch) {
       throw new Error(
-        'Secret key does not match this .qenc container (key commitment mismatch). ' +
-        'Ensure you are using the correct secretKey.qkey for this container.'
+        'Private key does not match this .qenc container (key commitment mismatch). ' +
+        'Ensure you are using the correct privateKey.qkey for this container.'
       );
     }
   } catch (error) {

@@ -1,8 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseArchiveManifestBytes } from '../src/core/crypto/manifest/archive-manifest.js';
-import { parseManifestBundleBytes } from '../src/core/crypto/manifest/manifest-bundle.js';
+import { sha3_512 } from '@noble/hashes/sha3.js';
 import {
   parseArchiveStateDescriptorBytes,
   parseCohortBindingBytes,
@@ -10,11 +9,21 @@ import {
   parseSourceEvidenceBytes,
   parseLifecycleBundleBytes,
 } from '../src/core/crypto/lifecycle/artifacts.js';
+import { toHex } from '../src/core/crypto/bytes.js';
 import { canonicalizeJsonToBytes } from '../src/core/crypto/manifest/jcs.js';
 import { SchemaValidationError, createSchemaRegistry } from './lib/json-schema-lite.mjs';
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const schemaDir = resolve(thisDir, '../docs/schema');
+const ACTIVE_SCHEMA_FILES = Object.freeze([
+  'qv-common-types.schema.json',
+  'qv-archive-state-descriptor-v1.schema.json',
+  'qv-cohort-binding-v1.schema.json',
+  'qv-transition-record-v1.schema.json',
+  'qv-source-evidence-v1.schema.json',
+  'qv-lifecycle-bundle-v1.schema.json',
+]);
+const ACTIVE_SCHEMA_SET = new Set(ACTIVE_SCHEMA_FILES);
 
 function schemaUriForFile(fileName) {
   return `https://quantum-vault.local/schema/${fileName}`;
@@ -29,18 +38,8 @@ async function readFileBytes(filePath) {
 }
 
 async function loadSchemaRegistry() {
-  const schemaFiles = [
-    'qv-common-types.schema.json',
-    'qv-manifest-v3.schema.json',
-    'qv-manifest-bundle-v2.schema.json',
-    'qv-archive-state-descriptor-v1.schema.json',
-    'qv-cohort-binding-v1.schema.json',
-    'qv-transition-record-v1.schema.json',
-    'qv-source-evidence-v1.schema.json',
-    'qv-lifecycle-bundle-v1.schema.json'
-  ];
   const entries = [];
-  for (const fileName of schemaFiles) {
+  for (const fileName of ACTIVE_SCHEMA_FILES) {
     const schema = await readJsonFile(resolve(schemaDir, fileName));
     entries.push({
       uri: schemaUriForFile(fileName),
@@ -60,42 +59,9 @@ function formatError(error) {
 async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
   const runtime = fixture.runtime;
   const bytes = runtime.useRawJsonBytes === true ? rawJsonBytes : canonicalizeJsonToBytes(instance);
-  if (runtime.artifact === 'manifest') {
-    if (runtime.expectParseSuccess) {
-      parseArchiveManifestBytes(bytes);
-      return;
-    }
-    let failed = false;
-    try {
-      parseArchiveManifestBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('manifest parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return;
-  }
-  if (runtime.artifact === 'bundle') {
-    if (runtime.expectParseSuccess) {
-      parseManifestBundleBytes(bytes);
-      return;
-    }
-    let failed = false;
-    try {
-      parseManifestBundleBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('bundle parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return;
-  }
   if (runtime.artifact === 'archive-state') {
     if (runtime.expectParseSuccess) {
-      parseArchiveStateDescriptorBytes(bytes);
-      return;
+      return parseArchiveStateDescriptorBytes(bytes);
     }
     let failed = false;
     try {
@@ -106,12 +72,11 @@ async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
     if (!failed) {
       throw new Error('archive-state parser unexpectedly accepted schema-valid semantic-invalid fixture');
     }
-    return;
+    return null;
   }
   if (runtime.artifact === 'cohort-binding') {
     if (runtime.expectParseSuccess) {
-      parseCohortBindingBytes(bytes);
-      return;
+      return parseCohortBindingBytes(bytes);
     }
     let failed = false;
     try {
@@ -122,12 +87,11 @@ async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
     if (!failed) {
       throw new Error('cohort-binding parser unexpectedly accepted schema-valid semantic-invalid fixture');
     }
-    return;
+    return null;
   }
   if (runtime.artifact === 'transition-record') {
     if (runtime.expectParseSuccess) {
-      parseTransitionRecordBytes(bytes);
-      return;
+      return parseTransitionRecordBytes(bytes);
     }
     let failed = false;
     try {
@@ -138,12 +102,11 @@ async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
     if (!failed) {
       throw new Error('transition-record parser unexpectedly accepted schema-valid semantic-invalid fixture');
     }
-    return;
+    return null;
   }
   if (runtime.artifact === 'source-evidence') {
     if (runtime.expectParseSuccess) {
-      parseSourceEvidenceBytes(bytes);
-      return;
+      return parseSourceEvidenceBytes(bytes);
     }
     let failed = false;
     try {
@@ -154,12 +117,11 @@ async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
     if (!failed) {
       throw new Error('source-evidence parser unexpectedly accepted schema-valid semantic-invalid fixture');
     }
-    return;
+    return null;
   }
   if (runtime.artifact === 'lifecycle-bundle') {
     if (runtime.expectParseSuccess) {
-      await parseLifecycleBundleBytes(bytes);
-      return;
+      return parseLifecycleBundleBytes(bytes);
     }
     let failed = false;
     try {
@@ -170,18 +132,26 @@ async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
     if (!failed) {
       throw new Error('lifecycle-bundle parser unexpectedly accepted schema-valid semantic-invalid fixture');
     }
-    return;
+    return null;
   }
   throw new Error(`Unsupported runtime artifact kind: ${runtime.artifact}`);
+}
+
+function computeExpectedDigestHex(instance) {
+  return toHex(sha3_512(canonicalizeJsonToBytes(instance)));
 }
 
 export async function runSchemaFixtureCheck() {
   const registry = await loadSchemaRegistry();
   const index = await readJsonFile(resolve(schemaDir, 'fixtures/index.json'));
   const results = [];
+  const fixtures = index.fixtures || [];
 
-  for (const fixture of index.fixtures || []) {
+  for (const fixture of fixtures) {
     try {
+      if (!ACTIVE_SCHEMA_SET.has(fixture.schema)) {
+        throw new Error(`fixture references unsupported schema: ${fixture.schema}`);
+      }
       const instancePath = resolve(schemaDir, fixture.file);
       const instance = await readJsonFile(instancePath);
       const rawJsonBytes = await readFileBytes(instancePath);
@@ -197,13 +167,26 @@ export async function runSchemaFixtureCheck() {
       if (fixture.expectSchemaValid === true && !schemaValid) {
         throw schemaError;
       }
+      let parsed = null;
       if (fixture.runtime) {
-        await assertRuntimeExpectation(fixture, instance, rawJsonBytes);
+        parsed = await assertRuntimeExpectation(fixture, instance, rawJsonBytes);
       }
 
       if (fixture.expectSchemaValid === false) {
         if (!(schemaError instanceof SchemaValidationError)) {
           throw new Error('schema validation unexpectedly succeeded');
+        }
+      }
+      if (fixture.expectedDigestHex != null) {
+        if (!(fixture.expectSchemaValid === true && fixture.runtime?.expectParseSuccess === true)) {
+          throw new Error('expectedDigestHex is only supported for schema-valid runtime-valid fixtures');
+        }
+        const actualDigestHex = computeExpectedDigestHex(instance);
+        if (actualDigestHex !== fixture.expectedDigestHex) {
+          throw new Error(`digest mismatch: expected ${fixture.expectedDigestHex}, got ${actualDigestHex}`);
+        }
+        if (parsed?.digest?.value !== fixture.expectedDigestHex) {
+          throw new Error(`runtime digest mismatch: expected ${fixture.expectedDigestHex}, got ${parsed?.digest?.value ?? 'missing'}`);
         }
       }
 

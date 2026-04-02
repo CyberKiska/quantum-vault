@@ -1,8 +1,8 @@
 import { kmac256 } from './kmac.js';
 
-const CONFIG = {
+const CONFIG = Object.freeze({
     seedLength: 64,
-};
+});
 
 const SEED_LENGTH = CONFIG.seedLength;
 
@@ -11,18 +11,21 @@ export function generateBaseSeed() {
 
     // CSPRNG health check: consecutive outputs must differ.
     const probe = crypto.getRandomValues(new Uint8Array(SEED_LENGTH));
-    let identical = true;
-    for (let i = 0; i < seed.length; i += 1) {
-        if (seed[i] !== probe[i]) {
-            identical = false;
-            break;
+    try {
+        let identical = true;
+        for (let i = 0; i < seed.length; i += 1) {
+            if (seed[i] !== probe[i]) {
+                identical = false;
+                break;
+            }
         }
+        if (identical) {
+            throw new Error('CSPRNG health check failed: consecutive outputs are identical');
+        }
+        return seed;
+    } finally {
+        probe.fill(0);
     }
-    if (identical) {
-        throw new Error('CSPRNG health check failed: consecutive outputs are identical');
-    }
-
-    return seed;
 }
 
 export function mixEntropy(baseSeed, userEntropy = new Uint8Array(0)) {

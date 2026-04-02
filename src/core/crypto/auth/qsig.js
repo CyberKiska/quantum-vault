@@ -649,6 +649,7 @@ export function verifyQsigAgainstBytes({
   const warnings = [];
   const fail = (error) => ({
     ok: false,
+    selfSigned: false,
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -751,6 +752,7 @@ export function verifyQsigAgainstBytes({
     const computedFpHex = bytesToHex(computedFp);
     return {
       ok: true,
+      selfSigned: false,
       bundlePinned,
       userPinned,
       signerPinned: bundlePinned || userPinned,
@@ -783,16 +785,22 @@ export function verifyQsigAgainstBytes({
     !bundlePinned &&
     !userPinned
   ) {
-    warnings.push('Using signer public key embedded in .qsig; verification succeeded but signer identity is not pinned.');
+    warnings.push('Detached PQ signature verified only with the signer public key embedded in the .qsig itself; this is cryptographic self-verification, not bundled or user-pinned trust.');
   }
 
   const computedFp = appendSignerBindingWarnings(parsed, verifiedCandidate.publicKey, warnings);
   const computedFpHex = bytesToHex(computedFp);
+  const selfSigned = (
+    verifiedCandidate.keySource === 'embedded-signature-key' &&
+    bundlePinned !== true &&
+    userPinned !== true
+  );
 
   const suite = suiteInfo(parsed.suiteId);
   const suiteInfoNormalized = getSignatureSuiteInfo(suite.normalizedSuite);
   return {
     ok: true,
+    selfSigned,
     bundlePinned,
     userPinned,
     signerPinned: bundlePinned || userPinned,

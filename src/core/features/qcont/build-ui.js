@@ -2,16 +2,10 @@
 
 import { buildQcontShards } from '../../../app/crypto-service.js';
 import { PRO_DEFAULT_AUTH_POLICY_LEVEL } from '../../crypto/constants.js';
+import { describeAuthPolicyHelp } from './auth-policy-help.js';
 import { log, logError } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams } from '../../../utils.js';
-
-function describeAuthPolicyHelp(authPolicyLevel) {
-    if (authPolicyLevel === 'integrity-only') {
-        return 'Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.';
-    }
-    return 'Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.';
-}
 
 export function initQcontBuildUI() {
     const qencForQcontInput = document.getElementById('qencForQcontInput');

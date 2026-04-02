@@ -1,10 +1,12 @@
 // UI-layer shard preview helpers.
 // Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
-import { LEGACY_QCONT_FORMAT_VERSION, QCONT_FORMAT_VERSION } from '../core/crypto/constants.js';
 import { parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
-import { parseManifestBundleBytesPreviewOnly } from '../core/crypto/manifest/manifest-bundle.js';
-import { LIFECYCLE_QCONT_FORMAT_VERSION } from '../core/crypto/qcont/lifecycle-shard.js';
+import { parseJsonBytesStrict } from '../core/crypto/manifest/strict-json.js';
+import {
+  LIFECYCLE_ARTIFACT_FAMILY,
+  LIFECYCLE_QCONT_FORMAT_VERSION,
+} from '../core/crypto/qcont/lifecycle-shard.js';
 
 export async function parseQcontShardPreviewFile(file) {
   const decoder = new TextDecoder();
@@ -33,75 +35,48 @@ export async function parseQcontShardPreviewFile(file) {
   if (metaLen <= 0) throw new Error('Invalid shard metadata length');
   offset += 2;
   await ensureBytes(offset + metaLen);
-  const metaJSON = JSON.parse(decoder.decode(bytes.subarray(offset, offset + metaLen)));
-  if (metaJSON?.alg?.fmt === LEGACY_QCONT_FORMAT_VERSION) {
-    throw new Error('Legacy shard format is not supported');
+  const metaJSON = parseJsonBytesStrict(bytes.subarray(offset, offset + metaLen));
+  if (metaJSON?.alg?.fmt !== LIFECYCLE_QCONT_FORMAT_VERSION) {
+    throw new Error(`Unsupported shard format: expected ${LIFECYCLE_QCONT_FORMAT_VERSION}`);
   }
-  if (metaJSON?.alg?.fmt !== QCONT_FORMAT_VERSION && metaJSON?.alg?.fmt !== LIFECYCLE_QCONT_FORMAT_VERSION) {
-    throw new Error(`Unsupported shard format: expected ${QCONT_FORMAT_VERSION} or ${LIFECYCLE_QCONT_FORMAT_VERSION}`);
+  if (metaJSON?.artifactFamily !== LIFECYCLE_ARTIFACT_FAMILY) {
+    throw new Error(`Unsupported shard artifactFamily: expected ${LIFECYCLE_ARTIFACT_FAMILY}`);
   }
   if (metaJSON?.hasKeyCommitment !== true) {
     throw new Error('Shard metadata must indicate hasKeyCommitment=true');
   }
   offset += metaLen;
 
-  let authPolicyLevel;
-  let artifactFamily = 'legacy';
-  let archiveId = null;
-  let stateId = null;
-  let cohortId = null;
-  let lifecycleBundleDigestHex = null;
-  if (metaJSON?.alg?.fmt === LIFECYCLE_QCONT_FORMAT_VERSION) {
-    artifactFamily = 'successor';
-    archiveId = String(metaJSON.archiveId || '');
-    stateId = String(metaJSON.stateId || '');
-    cohortId = String(metaJSON.cohortId || '');
-    await ensureBytes(offset + 4);
-    const archiveStateLen = dv.getUint32(offset, false);
-    if (archiveStateLen <= 0 || archiveStateLen > MAX_MANIFEST_LEN) {
-      throw new Error('Invalid embedded archive-state length');
-    }
-    offset += 4 + archiveStateLen + DIGEST_LEN;
+  const archiveId = String(metaJSON.archiveId || '');
+  const stateId = String(metaJSON.stateId || '');
+  const cohortId = String(metaJSON.cohortId || '');
 
-    await ensureBytes(offset + 4);
-    const cohortBindingLen = dv.getUint32(offset, false);
-    if (cohortBindingLen <= 0 || cohortBindingLen > MAX_MANIFEST_LEN) {
-      throw new Error('Invalid embedded cohort-binding length');
-    }
-    offset += 4 + cohortBindingLen + DIGEST_LEN;
-
-    await ensureBytes(offset + 4);
-    const lifecycleBundleLen = dv.getUint32(offset, false);
-    if (lifecycleBundleLen <= 0 || lifecycleBundleLen > MAX_BUNDLE_LEN) {
-      throw new Error('Invalid embedded lifecycle-bundle length');
-    }
-    offset += 4;
-    await ensureBytes(offset + lifecycleBundleLen + DIGEST_LEN + 4);
-    const lifecycleBundleBytes = bytes.subarray(offset, offset + lifecycleBundleLen);
-    const parsedLifecycleBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
-    authPolicyLevel = parsedLifecycleBundle.lifecycleBundle.authPolicy.level;
-    lifecycleBundleDigestHex = parsedLifecycleBundle.digest.value;
-    offset += lifecycleBundleLen + DIGEST_LEN;
-  } else {
-    await ensureBytes(offset + 4);
-    const manifestLen = dv.getUint32(offset, false);
-    if (manifestLen <= 0 || manifestLen > MAX_MANIFEST_LEN) {
-      throw new Error('Invalid embedded manifest length');
-    }
-    offset += 4 + manifestLen + DIGEST_LEN;
-
-    await ensureBytes(offset + 4);
-    const bundleLen = dv.getUint32(offset, false);
-    if (bundleLen <= 0 || bundleLen > MAX_BUNDLE_LEN) {
-      throw new Error('Invalid embedded bundle length');
-    }
-    offset += 4;
-    await ensureBytes(offset + bundleLen + DIGEST_LEN + 4);
-    const bundleBytes = bytes.subarray(offset, offset + bundleLen);
-    const parsedBundle = parseManifestBundleBytesPreviewOnly(bundleBytes);
-    authPolicyLevel = parsedBundle.bundle.authPolicy.level;
-    offset += bundleLen + DIGEST_LEN;
+  await ensureBytes(offset + 4);
+  const archiveStateLen = dv.getUint32(offset, false);
+  if (archiveStateLen <= 0 || archiveStateLen > MAX_MANIFEST_LEN) {
+    throw new Error('Invalid embedded archive-state length');
   }
+  offset += 4 + archiveStateLen + DIGEST_LEN;
+
+  await ensureBytes(offset + 4);
+  const cohortBindingLen = dv.getUint32(offset, false);
+  if (cohortBindingLen <= 0 || cohortBindingLen > MAX_MANIFEST_LEN) {
+    throw new Error('Invalid embedded cohort-binding length');
+  }
+  offset += 4 + cohortBindingLen + DIGEST_LEN;
+
+  await ensureBytes(offset + 4);
+  const lifecycleBundleLen = dv.getUint32(offset, false);
+  if (lifecycleBundleLen <= 0 || lifecycleBundleLen > MAX_BUNDLE_LEN) {
+    throw new Error('Invalid embedded lifecycle-bundle length');
+  }
+  offset += 4;
+  await ensureBytes(offset + lifecycleBundleLen + DIGEST_LEN + 4);
+  const lifecycleBundleBytes = bytes.subarray(offset, offset + lifecycleBundleLen);
+  const parsedLifecycleBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
+  const authPolicyLevel = parsedLifecycleBundle.lifecycleBundle.authPolicy.level;
+  const lifecycleBundleDigestHex = parsedLifecycleBundle.digest.value;
+  offset += lifecycleBundleLen + DIGEST_LEN;
 
   await ensureBytes(offset + 4);
   const encapLen = dv.getUint32(offset, false);
@@ -127,7 +102,6 @@ export async function parseQcontShardPreviewFile(file) {
   }
 
   return {
-    artifactFamily,
     containerId: metaJSON.containerId,
     archiveId,
     stateId,
@@ -145,7 +119,6 @@ function classifyNonShardFile(file) {
   const name = String(file?.name || '').toLowerCase();
   if (name.endsWith('.qsig')) return 'signature';
   if (name.endsWith('.pqpk')) return 'pubkey';
-  if (name.endsWith('.qvmanifest.json')) return 'manifest';
   if (name.endsWith('.sig')) return 'signature';
   if (name.endsWith('.ots')) return 'timestamp';
   return 'other';
@@ -158,7 +131,7 @@ export async function assessShardSelection(files) {
 
   const parsed = [];
   let parseErrors = 0;
-  const attachments = { signature: 0, manifest: 0, pubkey: 0, timestamp: 0, other: 0 };
+  const attachments = { signature: 0, pubkey: 0, timestamp: 0, other: 0 };
   for (const file of files) {
     const lowerName = String(file?.name || '').toLowerCase();
     const explicitShardName = lowerName.endsWith('.qcont');
@@ -199,15 +172,6 @@ export async function assessShardSelection(files) {
     };
   }
 
-  const artifactFamilies = new Set(parsed.map((item) => item.artifactFamily));
-  if (artifactFamilies.size > 1) {
-    return {
-      state: 'invalid',
-      ready: false,
-      message: 'Selected shards mix legacy and successor artifact families.',
-    };
-  }
-
   const base = parsed[0];
   const uniqueIndices = new Set(parsed.map((item) => item.shardIndex));
   const uniqueCount = uniqueIndices.size;
@@ -219,34 +183,32 @@ export async function assessShardSelection(files) {
     : `Insufficient: ${uniqueCount}/${base.n} unique shards selected (need >=${base.t}).`;
   message += ` Policy: ${base.authPolicyLevel}.`;
 
-  if (base.artifactFamily === 'successor') {
-    const states = new Map();
-    for (const item of parsed) {
-      const stateKey = `${item.archiveId}:${item.stateId}`;
-      if (!states.has(stateKey)) {
-        states.set(stateKey, {
-          cohortIds: new Set(),
-          bundleDigestsByCohort: new Map(),
-        });
-      }
-      const entry = states.get(stateKey);
-      entry.cohortIds.add(item.cohortId);
-      if (!entry.bundleDigestsByCohort.has(item.cohortId)) {
-        entry.bundleDigestsByCohort.set(item.cohortId, new Set());
-      }
-      entry.bundleDigestsByCohort.get(item.cohortId).add(item.lifecycleBundleDigestHex);
+  const states = new Map();
+  for (const item of parsed) {
+    const stateKey = `${item.archiveId}:${item.stateId}`;
+    if (!states.has(stateKey)) {
+      states.set(stateKey, {
+        cohortIds: new Set(),
+        bundleDigestsByCohort: new Map(),
+      });
     }
-    if (states.size > 1) {
-      message += ' Explicit successor archive/state selection is still required below.';
+    const entry = states.get(stateKey);
+    entry.cohortIds.add(item.cohortId);
+    if (!entry.bundleDigestsByCohort.has(item.cohortId)) {
+      entry.bundleDigestsByCohort.set(item.cohortId, new Set());
+    }
+    entry.bundleDigestsByCohort.get(item.cohortId).add(item.lifecycleBundleDigestHex);
+  }
+  if (states.size > 1) {
+    message += ' Explicit archive/state selection is still required below.';
+  } else {
+    const [onlyState] = [...states.values()];
+    if (onlyState?.cohortIds.size > 1) {
+      message += ' Explicit same-state cohort selection is still required below.';
     } else {
-      const [onlyState] = [...states.values()];
-      if (onlyState?.cohortIds.size > 1) {
-        message += ' Explicit same-state cohort selection is still required below.';
-      } else {
-        const [onlyCohortDigests] = [...(onlyState?.bundleDigestsByCohort?.values() || [])];
-        if (onlyCohortDigests && onlyCohortDigests.size > 1) {
-          message += ' Explicit lifecycle-bundle selection is still required below.';
-        }
+      const [onlyCohortDigests] = [...(onlyState?.bundleDigestsByCohort?.values() || [])];
+      if (onlyCohortDigests && onlyCohortDigests.size > 1) {
+        message += ' Explicit lifecycle-bundle selection is still required below.';
       }
     }
   }
@@ -260,7 +222,6 @@ export async function assessShardSelection(files) {
 
   const verificationParts = [];
   if (attachments.signature > 0) verificationParts.push(`${attachments.signature} signature(s)`);
-  if (attachments.manifest > 0) verificationParts.push(`${attachments.manifest} manifest`);
   if (attachments.pubkey > 0) verificationParts.push(`${attachments.pubkey} public key(s)`);
   if (attachments.timestamp > 0) verificationParts.push(`${attachments.timestamp} timestamp(s)`);
   if (verificationParts.length > 0) {

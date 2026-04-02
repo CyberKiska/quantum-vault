@@ -5,36 +5,35 @@ Type: Normative
 Audience: archive creators, signers, custodians, restore operators, implementers of policy evaluation, auditors
 Scope: current-state normative semantics for signatures, archive authenticity policy, proof counting, pinning, and restore authorization
 Out of scope: byte-level encoding, complete threat model, long-term archive classes, full governance framework
-Primary implementation sources: implementation code, `docs/format-spec.md`
-Historical consolidation source: `process/IMPLEMENTATION-NOTES.md`
+Primary implementation sources: `src/core/crypto/qcont/restore.js`, `src/core/crypto/lifecycle/artifacts.js`, `src/core/crypto/auth/qsig.js`, `src/core/crypto/auth/stellar-sig.js`
 
 ## Role
 
 This document defines what signatures, pinning, and policy outcomes mean in Quantum Vault today.
-It is the semantic counterpart to `format-spec.md`.
-
-Quantum Vault currently supports **two coexisting format tracks** (see `format-spec.md` Scope):
-
-- **Legacy track:** canonical manifest (`quantum-vault-archive-manifest/v3`), mutable `QV-Manifest-Bundle` v2, and `QVqcont-6` shards.
-- **Successor lifecycle track:** archive-state descriptor, `QV-Lifecycle-Bundle` v1, and `QVqcont-7` shards.
-
-Sections below apply to **both** tracks unless explicitly scoped to **legacy** or **successor** semantics.
+It is the semantic counterpart to [`format-spec.md`](format-spec.md).
 
 Division of labor:
 
-- `format-spec.md` defines how signatures, pins, timestamps, manifests, bundles, lifecycle objects, and shards are represented and processed
+- `format-spec.md` defines how signatures, pins, timestamps, lifecycle objects, and shards are represented and processed
 - `trust-and-policy.md` defines what those processed results mean for policy evaluation and restore authorization
 
 ## Scope
 
-This document covers the current semantics of detached signatures, archive authenticity policy, proof counting, signer pinning, and restore authorization for **both** the legacy manifest-bundle model and the **successor lifecycle** model.
+This document defines the current semantics of:
 
-It does not define byte-level encoding, the full threat model, long-term archive classes, or a complete governance framework.
+- detached signatures and signer identity material
+- archive authenticity policy
+- proof counting and strong-PQ evaluation
+- bundled pinning and user-supplied pinning
+- restore authorization and result reporting
+- the separation among archive approval, maintenance signatures, source evidence, and OTS evidence
+
+This document does not define byte-level encoding, the full threat model, long-term archive classes, or a complete governance framework.
 
 ## Normative status
 
 This document is normative for the current semantics of detached signatures, pinning, archive authenticity policy, proof counting, and restore authorization.
-Use it for compatibility-required meaning, not just for explanatory prose.
+Use it for compatibility-required meaning, not just explanatory prose.
 
 Conformance:
 
@@ -48,13 +47,13 @@ Conformance:
 
 Internal current-state grounding:
 
-- `src/core/crypto/constants.js`, `src/core/crypto/qcont/build.js`, `src/core/features/lite-mode.js`, and `src/core/features/qcont/build-ui.js` for current built-in policy defaults and archive-policy object construction
-- `src/core/crypto/auth/verify-signatures.js`, `src/core/crypto/auth/signature-identity.js`, and `src/core/crypto/auth/signature-suites.js` for proof normalization, deduplication, suite handling, and policy counting inputs
-- `src/core/crypto/auth/qsig.js` and `src/core/crypto/auth/stellar-sig.js` for current detached-signature wrapper acceptance and verification behavior
+- `src/core/crypto/qcont/restore.js` for restore-time policy gating, proof counting, pinning, and reporting behavior
+- `src/core/crypto/lifecycle/artifacts.js` for lifecycle bundle semantics, detached-signature target registry, and `publicKeyRef` compatibility rules
+- `src/core/crypto/auth/qsig.js` and `src/core/crypto/auth/stellar-sig.js` for detached-signature verification behavior
+- `src/core/crypto/auth/signature-identity.js` and `src/core/crypto/auth/signature-suites.js` for proof normalization, deduplication, and suite handling
 - `src/core/crypto/auth/opentimestamps.js` for current evidence linkage and heuristic completeness reporting
-- `src/core/crypto/qcont/restore.js` for restore-time policy gating and reporting behavior (legacy manifest-bundle path and **successor lifecycle** path)
-- `src/core/crypto/lifecycle/artifacts.js` for successor lifecycle bundle semantics, detached-signature target registry, and `publicKeyRef` compatibility rules
-- `docs/format-spec.md`, `docs/security-model.md`, and `docs/glossary.md` for format constraints, security invariants, and shared terminology
+- `src/core/features/lite-mode.js` and `src/core/features/qcont/build-ui.js` for current built-in policy defaults and user-facing guidance
+- [`format-spec.md`](format-spec.md), [`security-model.md`](security-model.md), and [`glossary.md`](glossary.md) for format constraints, security invariants, and shared terminology
 
 External references already used elsewhere in the repository:
 
@@ -62,33 +61,36 @@ External references already used elsewhere in the repository:
 - FIPS 205 for SLH-DSA suite family context
 - RFC 8032 for Ed25519 verification context
 - SEP-0023 for Stellar address encoding context
-- OpenTimestamps project documentation for the current evidence ecosystem Quantum Vault interoperates with
 
-## Current implementation status
+## Current implementation surface
 
 Implemented now:
 
-- current policy levels `integrity-only`, `any-signature`, and `strong-pq-signature` (for **both** legacy and successor bundles)
-- **Successor lifecycle** artifacts: `QV-Lifecycle-Bundle` v1, archive-state descriptor signing, `QVqcont-7` shards, and restore-time evaluation described in **§11**
-- current proof-counting and strong-PQ suite evaluation rules
-- current bundle pinning and user pinning semantics (legacy `attachments.signatures`; successor `attachments.archiveApprovalSignatures` and related families per §11)
-- current restore authorization behavior and status vocabulary
-- current OTS evidence linkage and heuristic completeness reporting (detached signature bytes as targets; see §8 and §11)
+- one supported shard wire family: `QVqcont-7`
+- one archive-approval payload: canonical `quantum-vault-archive-state-descriptor/v1` bytes
+- one mutable authenticity bundle: `QV-Lifecycle-Bundle` v1
+- detached authenticity artifacts accepted by the shipped implementation: `.qsig`, `.sig`, `.pqpk`, and `.ots`
+- archive authenticity policy levels `integrity-only`, `any-signature`, and `strong-pq-signature`
+- archive-state-centric archive approval
+- `QV-Lifecycle-Bundle` v1 attachment families and their distinct policy roles
+- proof counting by unique detached proof identity
+- separate status channels for archive approval, maintenance signatures, source-evidence signatures, OTS evidence, bundle pinning, and user pinning
+- fail-closed restore when ambiguity remains in `archiveId`, `stateId`, `cohortId`, or embedded lifecycle-bundle digest; explicit operator selection is a warned override, not an automatic winner selection
 
-Not yet first-class in the current implementation:
+Deferred roadmap:
 
-- first-class policy-profile identifiers or enforcement beyond the current built-in levels
-- institution-level governance objects and change-control mechanisms for policy meaning
-- institutional trust-root programs or repository-level authority models
-- first-class migration, renewal, or external approval claim types
+- first-class policy-profile identifiers
+- institution-level governance and change-control objects
+- trust-root programs
+- state-changing continuity or renewal authority semantics
 
 ## Future work and non-normative notes
 
 Statements explicitly labeled as future or recommended direction are non-normative.
-Likely future expansion areas, but not current policy semantics, include:
+Likely future expansion areas include:
 
-- first-class profile identifiers for distinct archive classes or operating contexts
-- institution-level governance and change-control mechanisms for policy evolution
+- first-class profile identifiers for distinct operating contexts
+- institution-level governance and change-control mechanisms
 - renewal and migration authority semantics
 - tighter integration of long-term evidence lifecycle requirements with restore policy
 
@@ -97,158 +99,140 @@ Likely future expansion areas, but not current policy semantics, include:
 This document currently defines:
 
 - the distinction among integrity, signature validity, pinning, and policy satisfaction
-- the current archive authenticity policy object (including how it applies to **legacy** manifests and **successor** archive-state descriptors)
-- the meaning of `integrity-only`, `any-signature`, and `strong-pq-signature`
-- current proof-counting and strong-PQ evaluation rules
-- current bundle pinning and user pinning semantics
-- **Successor lifecycle** policy semantics and attachment taxonomy (**§11**)
-- current restore authorization consequences
+- the current archive authenticity policy object and policy levels
+- the meaning of archive-approval, maintenance, and source-evidence signatures
+- proof-counting and strong-PQ evaluation rules
+- pinning semantics and status vocabulary
+- restore authorization consequences
 
 This document does not currently define:
 
 - archive classes for long-term preservation
 - a full crypto-policy object
 - institutional trust-root programs
-- migration authority semantics beyond current attachment and restore behavior
-
-Those remain future coverage and are preserved in the appendix.
+- migration or renewal authority semantics beyond current attachment and restore behavior
 
 ## 2. Core distinctions and current model
 
-Quantum Vault currently distinguishes four separate states:
+Quantum Vault distinguishes the following states:
 
 1. `integrity verified`
-   The reconstructed `.qenc`, shard body, and related commitments are internally consistent. For the **legacy** path, manifest digest, bundle digest, and embedded bundle agreement are part of integrity checks. For the **successor** path, archive-state, cohort-binding, and lifecycle-bundle digest checks apply as defined in `format-spec.md`.
+   Structural, digest, commitment, and reconstruction checks are internally consistent.
 
-2. `signature verified`
-   At least one detached signature cryptographically verifies over the exact **signable** canonical bytes for that path: **legacy** path — canonical **manifest** bytes; **successor** path — for archive-approval signatures, canonical **archive-state descriptor** bytes (see §11).
+2. `archive approval signature verified`
+   At least one detached archive-approval signature cryptographically verifies over the exact canonical archive-state descriptor bytes.
 
 3. `signer identity pinned`
-   A verified signature is linked to expected signer identity material supplied either by the bundle or by the user.
+   A verified signature is linked to expected signer identity material supplied either by the lifecycle bundle or by the restore operator.
 
 4. `archive policy satisfied`
-   The archive's declared authenticity policy is satisfied by the available verified signatures that **count toward policy** (legacy: `attachments.signatures`; successor: `attachments.archiveApprovalSignatures` only — see §11.1).
+   The archive's declared authenticity policy is satisfied by the available verified archive-approval signatures that count toward policy.
+
+5. `maintenance signature verified`
+   At least one detached maintenance signature verifies over a declared transition record.
+
+6. `source-evidence signature verified`
+   At least one detached source-evidence signature verifies over a declared source-evidence object.
+
+7. `OTS evidence linked`
+   At least one OpenTimestamps proof linked correctly to detached signature bytes.
 
 These states MUST remain distinct in code, logs, UI, and documentation.
 
 Current mandatory separation:
 
 - integrity does not imply provenance
-- signature validity does not imply signer pinning
+- archive-approval signature validity does not imply signer pinning
 - signer pinning does not replace policy evaluation
-- timestamps do not satisfy archive signature policy
-- **successor:** maintenance and source-evidence detached signatures do not satisfy archive policy (§11)
+- maintenance signatures do not satisfy archive policy
+- source-evidence signatures do not satisfy archive policy
+- OTS evidence does not satisfy archive policy
 
-## 3. Current role model and lifecycle authority
+Current restore reporting uses distinct status fields including:
 
-Quantum Vault's current implementation encodes artifact verification and restore-policy behavior, not a complete institutional workflow.
-The role model below therefore distinguishes:
+- `archiveApprovalSignatureVerified`
+- `strongPqSignatureVerified`
+- `maintenanceSignatureVerified`
+- `sourceEvidenceSignatureVerified`
+- `otsEvidenceLinked`
+- `signerPinned`
+- `bundlePinned`
+- `userPinned`
+- `policySatisfied`
 
-- roles that are directly reflected in current archive creation, attachment, restore, or verification behavior
-- operational roles that matter for provenance or stewardship but are not yet first-class signed claim types or trust-root objects
+## 3. Current role model and authority boundary
 
-### 3.1 Current role definitions
+Quantum Vault encodes artifact verification and restore-policy behavior, not a complete institutional workflow.
+The current role model therefore distinguishes:
+
+- roles that are directly reflected in archive creation, attachment, restore, or verification behavior
+- operational roles that matter for provenance or stewardship but are not yet first-class trust objects
 
 | Role | Current meaning | What the implementation knows directly |
 | --- | --- | --- |
-| Archive creator | Entity that creates the archive, chooses split parameters, and selects the archive authenticity policy during split | The chosen split parameters and committed `authPolicy` are represented in the current track's signable object and mutable bundle; creator identity is not first-class unless preserved through detached signatures or external records |
-| Auditor / source verifier | Entity that verifies the source data before archiving and bears provenance responsibility for confirming "this is the data" | This role is operational today; Quantum Vault does not automatically distinguish "audited this data" from the narrower claim "signed the current signable archive description" |
-| Signer | Entity that cryptographically signs the current signable archive description using supported detached signer tooling | The verifier can determine that a signer key signed the current signable archive description; broader semantic meaning remains external unless the workflow documents it |
-| Custodian | Entity that stores one or more `.qcont` shards or related detached artifacts | Shard custody is operational; custodian identity is not encoded as a first-class trust object in the current format family |
-| Restoration quorum | Operational set of custodians or participants able to supply enough consistent shards to meet the threshold required for restore | Threshold and shard consistency are enforced by the current format and restore logic, but quorum membership is not a first-class policy object |
-| Restore operator | Entity coordinating restore, supplying shard cohorts and optional external signatures, pins, or timestamps | Restore input selection, pinning input, and policy evaluation are reflected in current restore behavior |
-| Verifier / relying party | Entity evaluating integrity, signature validity, pinning, timestamp linkage, and policy outcome | This role is directly reflected in current verify/restore behavior and status reporting |
-| Policy maintainer | Entity that defines shipped defaults and the current "strong PQ" suite registry used by policy evaluation | Product defaults and the strong-PQ suite registry are reflected in the current codebase and documentation |
-
-Important current distinction:
-
-- `Auditor / source verifier` is not the same role as the later `Verifier / relying party`
-- the first role concerns pre-archive source-data responsibility
-- the second role concerns later artifact verification and restore authorization
-
-### 3.2 Current operational role patterns
-
-The main operational pattern motivating this document is an auditor-led archival workflow:
-
-1. an auditor or source verifier verifies the source data before archiving
-2. the archive creator encrypts and shards the verified data with Quantum Vault
-3. the signer signs the current signable archive description
-4. custodians hold the resulting `.qcont` shards
-5. a restoration quorum later supplies enough consistent shards for recovery
-6. the restore operator reconstructs the archive and restore policy decides whether decryption may proceed
-
-In the common case, the auditor and signer may be the same entity.
-That is a valid and expected workflow, but the current implementation still distinguishes:
-
-- cryptographic proof that a signer key signed the current signable archive description
-- operational or provenance responsibility for having verified the source data before archiving
-
-Current meaning in that workflow:
-
-- integrity is established by the current structural checks, digest checks, commitments, and reconstruction checks
-- authenticity or provenance is strengthened by detached signatures and optional pinning, not by hashes alone
-- source-data verification performed before encrypt or split is operationally important, but it is not yet a first-class signed claim type in the Quantum Vault artifact family
-
-Another current operational pattern is personal distributed archival storage:
-
-- the archive creator, signer, and restore operator may all be the same person
-- independent custodians still hold shards for recoverability
-- `integrity-only` may be acceptable when recoverability matters more than signer-authenticated provenance
-- when signer-authenticated provenance matters, `any-signature` or `strong-pq-signature` remain the relevant current policy levels
-
-### 3.3 Current lifecycle authority boundaries
-
-Current lifecycle authority is partly enforced by format and policy semantics, and partly external to the implementation.
-
-| Action | Current authority model | What Quantum Vault enforces today |
-| --- | --- | --- |
-| Create and split archive | Archive creator chooses split parameters and `authPolicy` | The chosen policy is committed via `authPolicyCommitment` and carried in the current track's mutable bundle |
-| Sign archive description | Signer signs the current signable archive description with supported detached tooling | Verification proves signature validity over the correct canonical bytes for the selected track |
-| Attach signatures, signer material, or timestamps | Attach operator may bundle valid detached artifacts after archive creation | Attach validates linkage and MUST NOT mutate the current track's signable bytes |
-| Store or distribute shards | Custodians hold shards under an external custody arrangement | Current format enforces shard integrity and threshold reconstruction rules, not custodian identity rules |
-| Restore archive | Restore operator gathers a consistent shard cohort and any optional external artifacts | Restore enforces integrity, signature verification, pinning semantics, and archive-policy gating |
-| Satisfy restoration quorum | Enough custodians or participants supply enough consistent shards to meet threshold | Threshold and cohort consistency are enforced; quorum membership itself is not a first-class signed or policy object |
-| Re-sign, renew evidence, rewrap, reencryption, custody transfer, or deprecate policy | Any such authority is external unless and until the format family defines first-class approval or lifecycle claim objects | Current implementation has no first-class authority object for these actions |
+| Archive creator | Party that creates the archive, chooses split parameters, and selects `authPolicy` at split time | The chosen policy and split parameters are represented in the archive-state descriptor, cohort binding, and lifecycle bundle |
+| Signer | Party producing detached signatures over archive-state, transition-record, or source-evidence bytes | The verifier can determine that a signer key signed a specific canonical target |
+| Custodian | Holder of one or more `.qcont` shards or related detached artifacts | Shard custody is operational; custodian identity is not a first-class policy object |
+| Restore operator | Party coordinating restore and supplying optional lifecycle bundles, signatures, pins, or timestamps | Restore input selection and user pinning are directly reflected in restore behavior |
+| Verifier / relying party | Party evaluating integrity, signature validity, pinning, OTS linkage, and policy outcome | This role is directly reflected in current verify and restore behavior |
+| Policy maintainer | Party defining shipped defaults and the current strong-PQ suite registry | Product defaults and the strong-PQ registry are reflected in the current codebase and docs |
 
 Current boundary to preserve:
 
-- Quantum Vault can enforce that artifacts are structurally valid, signatures verify, pins match, and archive policy is or is not satisfied
-- Quantum Vault cannot, by itself, prove that a particular person was organizationally authorized to audit data, approve a migration, or authorize a custody transfer unless an external workflow records that meaning
+- Quantum Vault can enforce that artifacts are structurally valid, signatures verify, pins match or fail, and archive policy is or is not satisfied
+- Quantum Vault cannot, by itself, prove that a signer was organizationally authorized to approve plaintext, migration, custody transfer, or governance actions
+
+Current authority boundary for lifecycle state-change events:
+
+| Event | Current Quantum Vault enforcement | What remains external |
+| --- | --- | --- |
+| Create and split archive | Policy and split parameters are committed in the archive-state descriptor and lifecycle bundle | Who authorized the creation or the policy choice |
+| Sign archive-state descriptor | Verification proves a signer key signed the canonical archive-state bytes under a supported suite | Whether the signer was organizationally authorized to approve the archive content |
+| Attach signatures, signer material, or timestamps | Attach validates linkage and MUST NOT mutate canonical archive-state or cohort-binding bytes | Who authorized the attach operation |
+| Store or distribute shards | Shard integrity and threshold reconstruction rules are enforced | Custodian identity and custody authorization |
+| Restore archive | Integrity, signature verification, pinning semantics, and archive-policy gating are enforced | Who authorized the restore or what purpose it serves |
+| Re-sign, renew evidence, rewrap, reencryption, custody transfer, or policy deprecation | No first-class authority object for any of these actions exists in the current format family; enforcement is external to Quantum Vault | Organizational authorization, migration rationale, and continuity records for all of these events |
+
+The last row is intentional. Until the format family defines first-class continuity records or authority claim objects for state-changing lifecycle events, Quantum Vault cannot and does not enforce authorization for those events at the artifact level.
 
 ## 4. Meaning of signatures in the current implementation
 
-Current Quantum Vault semantics are intentionally narrow:
+Current Quantum Vault signature semantics are intentionally narrow:
 
-- **Legacy path:** a detached signature in the manifest-bundle model means a signer key signed the **canonical manifest bytes**
-- **Successor path:** archive-approval detached signatures mean a signer key signed the **canonical archive-state descriptor** bytes (see §11)
-- it does not, by itself, encode that the signer audited the plaintext, approved preservation class, authorized a migration, or confirmed custody transfer
-- broader semantic claims may exist in an external workflow, but they are not currently first-class signed claim types in the Quantum Vault format family
+- an `archive-approval` signature means a signer key signed the canonical archive-state descriptor bytes
+- a `maintenance` signature means a signer key signed the canonical bytes of one declared transition record
+- a `source-evidence` signature means a signer key signed the canonical bytes of one declared source-evidence object
+- a signature does not, by itself, encode that the signer audited plaintext, approved archive class, authorized reencryption, or confirmed custody transfer
 
 Current supported detached signature wrappers:
 
 - Quantum Signer `.qsig`
 - Stellar WebSigner `.sig`
 
-Current signing targets (path-dependent):
+### 4.1 Source-evidence v1 privacy design
 
-- **Legacy:** canonical **manifest** bytes only; never mutable bundle bytes; never detached timestamp artifacts
-- **Successor:** canonical **archive-state descriptor** bytes for `archiveApprovalSignatures`; canonical **transition-record** bytes for `maintenanceSignatures`; canonical **source-evidence** object bytes for `sourceEvidenceSignatures`; mutable **lifecycle-bundle** bytes are never the archive-approval signable payload
+`quantum-vault-source-evidence/v1` objects are intentionally digest-first.
+The schema limits optional fields to `mediaType` and `externalSourceSignatureRefs`.
+There are no first-class path, username, host, or free-form operator note fields in v1.
+Privacy defaults are structural: sensitive fields are absent from the schema by design, not suppressed at runtime from a richer optional set.
+
+This means:
+
+- a source-evidence object records what was witnessed (a digest and optional media type) without embedding the originating path, operator identity, or workflow notes into the bundled artifact
+- adding path, username, or operator note fields to a future source-evidence schema requires a new schema version, not a runtime configuration flag
+- attach implementations MUST NOT extend source-evidence with fields outside the current `quantum-vault-source-evidence/v1` schema; additional context should travel in provenance records outside the artifact family until a successor schema version is defined
 
 Current verification semantics:
 
-- **Legacy:** bundled and external detached signatures are verified against the exact canonical manifest bytes
-- **Successor:** bundled detached signatures are verified against the exact canonical bytes for their declared `targetType` / `targetDigest` (see `format-spec.md` and §11)
-- wrapper-specific parsing, context handling, and normalized suite evaluation are part of signature validity, not optional reporting details
+- bundled detached signatures are verified against the exact canonical bytes for their declared `targetType`, `targetRef`, and `targetDigest`
+- external signatures supplied at restore are interpreted as archive-approval signatures over the selected archive-state bytes
+- wrapper-specific parsing, context handling, and normalized suite evaluation are part of signature validity
 - if a bundled signature carries `publicKeyRef`, the referenced bundled signer material constrains safe verification for that bundled signature
-- a bundled signature with a bad, incompatible, or non-verifying `publicKeyRef` binding is rejected rather than treated as merely "unpinned"
+- a bundled signature with a bad, incompatible, ambiguous, or non-verifying `publicKeyRef` binding is rejected rather than treated as merely unpinned
 
 ## 5. Archive authenticity policy object
 
-**Legacy path:** Archive authenticity policy is fixed at archive creation time, committed into the canonical manifest via `authPolicyCommitment`, and carried concretely in the manifest bundle as `authPolicy`.
-
-**Successor path:** The same logical `authPolicy` object shape is carried inside `QV-Lifecycle-Bundle` v1. Policy is committed via `authPolicyCommitment` in the **archive-state descriptor** (not the manifest). Restore evaluates policy against **archive-approval** detached signatures only (§11).
-
-The following object shape applies to **both** paths for the mutable `authPolicy` field:
+Archive authenticity policy is committed by `authPolicyCommitment` in the archive-state descriptor and carried concretely in the lifecycle bundle as `authPolicy`.
 
 Current object shape:
 
@@ -265,9 +249,9 @@ Current object shape:
 
 | Policy level | Current minimum requirement | Unsigned restore allowed | Ed25519-only signatures sufficient |
 | --- | --- | --- | --- |
-| `integrity-only` | No detached signature required | Yes | Yes, but not required |
-| `any-signature` | `minValidSignatures` valid detached signatures | No | Yes |
-| `strong-pq-signature` | `minValidSignatures` valid detached signatures and at least one valid strong PQ detached signature | No | No |
+| `integrity-only` | No detached archive-approval signature required | Yes | Yes, but not required |
+| `any-signature` | `minValidSignatures` valid archive-approval signatures | No | Yes |
+| `strong-pq-signature` | `minValidSignatures` valid archive-approval signatures and at least one valid strong-PQ archive-approval signature | No | No |
 
 ### 5.2 Current defaults
 
@@ -275,124 +259,63 @@ Current shipped defaults:
 
 - Lite mode default: `integrity-only`
 - Pro mode default: `strong-pq-signature`
-- builder fallback must not silently weaken the Pro default
+- builder fallback MUST NOT silently weaken the Pro default
 
 ### 5.3 What policy does and does not prove
 
 Current policy semantics:
 
-- `integrity-only` allows recovery but does not provide signer-authenticated provenance
-- `any-signature` requires at least one valid detached signature but does not require a PQ signature
-- `strong-pq-signature` requires at least one valid detached signature from the current strong-PQ registry
+- `integrity-only` allows recovery but does not provide signer-authenticated archive approval
+- `any-signature` requires at least one valid archive-approval signature but does not require a PQ suite specifically
+- `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature
 
 Current policy non-claims:
 
 - policy satisfaction does not imply signer pinning
 - policy satisfaction does not imply timestamp evidence
-- policy satisfaction does not imply a broader organizational approval workflow
+- policy satisfaction does not imply maintenance approval
+- policy satisfaction does not imply source-review approval
+- policy satisfaction does not imply a broader organizational workflow
 
 ### 5.4 Recommended policy profiles
 
-The profiles in this section are recommended operational profiles built from the current implemented policy object.
-They are descriptive guidance for operators and documentation, not first-class `policyId` values or archive-class fields in the current format family.
+The profiles in this section are recommended operational profiles built from the implemented policy object.
+They are descriptive guidance, not first-class on-wire `policyId` values.
 
 | Recommended profile | Current policy object | Typical use | Current consequence |
 | --- | --- | --- | --- |
-| Personal recovery profile | `level = integrity-only`, `minValidSignatures = 1` | Personal or family archival storage where recoverability is primary and signer-authenticated provenance is optional | Restore is allowed if reconstruction integrity holds; detached signatures may still be attached later but are not required |
-| Signature-required recovery profile | `level = any-signature`, `minValidSignatures = 1` | Distributed storage where restore must block unless at least one detached signature exists, but interoperability with Ed25519 or mixed signature sets is acceptable | Restore blocks unless at least one valid detached signature verifies over the canonical manifest |
-| Auditor-led archival profile | `level = strong-pq-signature`, `minValidSignatures = 1` | Verified data where provenance responsibility matters and the auditor and signer may be the same entity | Restore blocks unless at least one valid strong-PQ detached signature exists; signer identity material should be preserved with the archive |
-| Multi-approver archival profile | `level = strong-pq-signature`, `minValidSignatures > 1` | Dual-control or committee-style archival approval where more than one valid signature is required | Restore blocks unless the signature count threshold is met and at least one valid strong-PQ detached signature is present |
+| Personal recovery profile | `level = integrity-only`, `minValidSignatures = 1` | Personal or family archival storage where recoverability is primary and signer-authenticated provenance is optional | Restore is allowed if reconstruction integrity holds |
+| Signature-required recovery profile | `level = any-signature`, `minValidSignatures = 1` | Distributed storage where unsigned restore must fail, but Ed25519 interoperability is acceptable | Restore blocks unless at least one valid archive-approval signature verifies over canonical archive-state bytes |
+| Auditor-led archival profile | `level = strong-pq-signature`, `minValidSignatures = 1` | Verified data where long-lived archive approval matters | Restore blocks unless at least one valid strong-PQ archive-approval signature exists |
+| Multi-approver archival profile | `level = strong-pq-signature`, `minValidSignatures > 1` | Dual-control or committee-style archival approval | Restore blocks unless the signature threshold is met and at least one valid strong-PQ archive-approval signature exists |
 
-Current profile guidance:
-
-- use `integrity-only` only when recoverability is intentionally allowed without signer-authenticated provenance
-- use `any-signature` when "unsigned restore must fail" is more important than requiring a PQ signature specifically
-- use `strong-pq-signature` when long-lived provenance matters or when the archive is intended for auditor-led or archival-grade workflows
-- increase `minValidSignatures` only when operators are prepared to preserve enough independent valid signatures over time
-- preserve signer identity material and any linked timestamp evidence with the bundle even though pinning and timestamps do not satisfy policy by themselves
-
-Current non-claim for these profiles:
-
-- these are recommended operating patterns over the existing policy object
-- they do not create new on-wire profile identifiers
-- they do not, by themselves, define archive classes or institutional governance programs
-
-### 5.5 Governance and change-control expectations
-
-Quantum Vault does not yet implement a first-class governance object or trust-root program.
-This section therefore records the current documentation-level change-control expectations needed to keep policy meaning stable and auditable.
-
-#### 5.5.1 Current hard boundary between bundle updates and policy changes
+### 5.5 Current hard boundary between lifecycle-bundle updates and state changes
 
 The following MUST remain distinct:
 
-- adding or replacing bundled signatures, bundled signer material, or bundled timestamps is a bundle-level update and MUST NOT mutate the canonical manifest bytes
+- adding or replacing bundled signatures, bundled signer material, timestamps, transition records, or source-evidence objects is a lifecycle-bundle update and MUST NOT mutate canonical archive-state or cohort-binding bytes
 - changing `authPolicy.level` or `authPolicy.minValidSignatures` changes restore-relevant semantics and therefore changes `authPolicyCommitment`
-- a change to `authPolicyCommitment` requires a new canonical manifest and new detached signatures over the new canonical manifest bytes
-
-#### 5.5.2 Current governance expectations for policy meaning
-
-Current maintainers and operators should treat the following as change-controlled policy meaning:
-
-- the interpretation of `integrity-only`, `any-signature`, and `strong-pq-signature`
-- the normalized suite registry that determines which suites count as strong PQ
-- the meaning of shipped defaults in Lite and Pro modes
-- any future recommended policy profile names published in this document
-
-Current expectation for maintainers:
-
-- publish any change to the meaning of `strong-pq-signature` as a documented project policy change
-- preserve a clear change record when adding or removing suites from the strong-PQ registry
-- avoid silently weakening shipped defaults or changing profile descriptions without corresponding documentation updates
-
-Current expectation for archive operators:
-
-- preserve the policy object, signer material, detached signatures, and relevant software/documentation context with the archive package
-- do not treat later documentation guidance as retroactively changing the committed policy of an already-created archive
-- if organizational policy meaning changes materially, create a new archive state or external governance record rather than pretending the original committed policy meant something different all along
-
-#### 5.5.3 Current limitations of governance enforcement
-
-The current implementation does not yet provide:
-
-- a first-class `policyId` or `policyVersion`
-- a first-class trust-root list or external authority program
-- a first-class lifecycle approval object for migration, renewal, custody transfer, or policy deprecation
-- automatic publication or validation of governance advisories
-
-Therefore:
-
-- governance expectations here are normative documentation guidance for maintainers and operators
-- they are not yet fully represented as machine-validated policy objects in the current format family
+- a change to `authPolicyCommitment` requires a new archive-state descriptor and new archive-approval signatures over the new canonical archive-state bytes
 
 ## 6. Signature evaluation and counting semantics
 
 ### 6.1 Policy satisfaction rule
 
-**Legacy path:** An archive satisfies authenticity policy if:
+An archive satisfies authenticity policy if:
 
-- at least `minValidSignatures` detached signatures are cryptographically valid over the exact canonical manifest bytes
-- at least one of those valid signatures satisfies the policy level's suite requirement
-
-**Successor path:** An archive satisfies authenticity policy if:
-
-- at least `minValidSignatures` **archive-approval** detached signatures (in `attachments.archiveApprovalSignatures`) are cryptographically valid over the exact canonical **archive-state descriptor** bytes and satisfy suite rules
-- **`maintenanceSignatures` and `sourceEvidenceSignatures` do not count** toward `minValidSignatures` or policy satisfaction
+- at least `minValidSignatures` archive-approval detached signatures are cryptographically valid over the exact canonical archive-state descriptor bytes
 - at least one of those valid archive-approval signatures satisfies the policy level's suite requirement when `strong-pq-signature` is selected
-
-See §11 for attachment taxonomy and failure modes.
+- maintenance signatures and source-evidence signatures are not counted toward `minValidSignatures`
 
 Current policy satisfaction is existential, not exclusive:
 
-- `strong-pq-signature` requires at least one strong PQ detached signature
+- `strong-pq-signature` requires at least one strong-PQ archive-approval signature
 - extra Ed25519 or other supported signatures may coexist
 - policy does not mean "only PQ signatures may be present"
 
 ### 6.2 Strong PQ suite registry
 
-Current policy evaluation is based on signature suite identifiers, not on wrapper type or file extension. Bundle parsing requires canonical suite identifiers on input; broader verifier flows may normalize other detached-artifact inputs before policy evaluation.
-
-Current initial strong-PQ suites are:
+Current strong-PQ suites are:
 
 - `mldsa-87`
 - `slhdsa-shake-256s`
@@ -400,14 +323,14 @@ Current initial strong-PQ suites are:
 
 Current evaluation rule:
 
-- policy is evaluated against canonical suite identifiers after parsing/normalization and against verifier results
+- policy is evaluated against canonical suite identifiers after parsing and normalization
 - broad family names such as `ML-DSA` or `SLH-DSA` are not sufficient by themselves
 
 ### 6.3 Wrapper versus suite
 
 Current wrapper distinction:
 
-- `.qsig` and `.sig` are transport/encoding wrappers
+- `.qsig` and `.sig` are transport or encoding wrappers
 - policy strength is determined by the normalized suite and verifier result, not by wrapper alone
 
 ### 6.4 Counting rules
@@ -415,28 +338,27 @@ Current wrapper distinction:
 Current counting rules are:
 
 - `minValidSignatures` counts unique detached proof identities, not repeated verification results for the same proof
-- semantically equivalent Stellar v2 proofs are deduplicated even if JSON serialization differs
-- invalid extra signatures are reported but ignored for policy counting
-- `strong-pq-signature` requires at least one valid strong-PQ detached signature in addition to `minValidSignatures`
+- semantically equivalent Stellar proofs are deduplicated even if JSON serialization differs
+- invalid extra signatures are reported but ignored for archive-policy counting
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting
+- `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature in addition to `minValidSignatures`
 
 ## 7. Signer identity and pinning semantics
 
 Pinned signer identity is an additional trust signal.
-It is not a default hard blocker in the current implementation.
+It is not the same thing as policy satisfaction.
 
 ### 7.1 Current pin sources
 
 Current signer pin sources are:
 
-- `bundlePinned`: a verified signature matched bundled signer material explicitly linked from the manifest bundle
+- `bundlePinned`: a verified signature matched bundled signer material explicitly linked from the lifecycle bundle
 - `userPinned`: signer identity material came from restore-time user input
 - `signerPinned = bundlePinned || userPinned`
 
 Current bundle pin sources include:
 
-- **Legacy:** bundled PQ public key attachment referenced by `attachments.signatures[].publicKeyRef`
-- **Legacy:** bundled Stellar signer identifier referenced by `attachments.signatures[].publicKeyRef`
-- **Successor:** bundled `attachments.publicKeys[]` referenced by `publicKeyRef` on entries in `archiveApprovalSignatures`, `maintenanceSignatures`, or `sourceEvidenceSignatures` (see §11)
+- lifecycle-bundle `attachments.publicKeys[]` entries referenced by `publicKeyRef`
 
 Current user pin sources include:
 
@@ -447,28 +369,30 @@ Current user pin sources include:
 
 Current pinning rules are:
 
-- signer pinning is optional
+- signer pinning is optional unless a specific verification path declares an authoritative `publicKeyRef`
 - a matching pin strengthens provenance reporting
 - lack of pinning does not by itself block restore if archive policy is satisfied
-- valid signature and pinned signature are separate states and must stay separate
-- if a bundled signature references bundled signer material via `publicKeyRef`, failure of that bundled reference is a verification failure for that bundled signature, not merely an absence of pinning
+- valid signature and pinned signature are separate states and MUST stay separate
+- if a bundled signature references bundled signer material via `publicKeyRef`, failure of that reference is a verification failure for that bundled signature, not merely an absence of pinning
+- ambiguous user-supplied PQ pin matches fail closed
+- mismatched expected Stellar signer input fails closed for that verification path
 
 Current required distinct status fields:
 
-- `signatureVerified`
+- `archiveApprovalSignatureVerified`
 - `policySatisfied`
 - `signerPinned`
 - `bundlePinned`
 - `userPinned`
 
-It is forbidden to collapse these into a single generic state such as `trusted`.
+It is forbidden to collapse these into one generic state such as `trusted`.
 
 ### 7.3 Current status vocabulary
 
 Allowed current status terms include:
 
 - `integrity verified`
-- `signature verified`
+- `archive approval signature verified`
 - `strong PQ signature verified`
 - `archive policy satisfied`
 - `bundle signer pinned`
@@ -480,16 +404,16 @@ Allowed current status terms include:
 Terms that should not be used loosely:
 
 - `trusted archive`
-- `authenticated shard cohort`
+- `authenticated cohort`
 
 ## 8. Timestamp and evidence interaction with policy
 
 Current `.ots` semantics are deliberately limited:
 
 - `.ots` is an evidence object
-- it targets detached signature bytes, not the bundle itself
+- it targets detached signature bytes, not lifecycle-bundle bytes
 - linkage is performed by stamped `SHA-256(detachedSignatureBytes)`
-- a bundle timestamp entry references a detached signature by `targetRef`
+- a bundled timestamp entry references a detached signature by `targetRef`
 
 Current policy rule:
 
@@ -498,10 +422,9 @@ Current policy rule:
 Current handling rules:
 
 - OTS may be bundled or supplied externally
-- if multiple OTS proofs target the same detached signature, restore may prefer one apparently complete proof for reporting
-- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from proof naming hints or proof size; they are not a cryptographic guarantee that a full external OpenTimestamps attestation chain was validated
+- if multiple OTS proofs target the same detached signature, reporting may prefer one apparently complete proof
+- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size; they are not a cryptographic guarantee that a full external attestation chain was validated
 - unrelated or ambiguous `.ots` inputs fail closed
-- current handling is linkage-focused and report-focused; it does not claim full external timestamp attestation validation
 
 ## 9. Attach and restore policy lifecycle
 
@@ -512,125 +435,88 @@ At split stage, the archive creator chooses:
 - split parameters
 - archive authenticity policy
 
-**Legacy outputs** include:
+Current outputs include:
 
-- `.qcont` shards (`QVqcont-6`)
-- canonical signable manifest
-- initial manifest bundle
+- `QVqcont-7` shards
+- an archive-state descriptor
+- a lifecycle bundle
+- a cohort binding for operator-facing workflows
 
-The initial manifest bundle contains:
+The initial lifecycle bundle contains:
 
-- embedded canonical manifest
-- concrete `authPolicy`
-- empty or initial attachments
-
-**Successor outputs** include `QVqcont-7` shards carrying an archive-state descriptor, cohort binding, and initial `QV-Lifecycle-Bundle` v1 (see `format-spec.md` Section 8).
+- the archive-state descriptor and its digest
+- the current cohort binding and its digest
+- the concrete `authPolicy`
+- empty or initial attachment arrays
 
 ### 9.2 Attach stage
 
-**Legacy** `attach` behavior:
+Current attach behavior:
 
-- validates detached signatures against canonical manifest bytes
-- validates `.ots` target linkage
+- validates detached signatures against the correct canonical target bytes
+- validates OTS target linkage
 - imports public keys and signer identifiers
-- writes updated bundle
-- may rewrite embedded bundles across a full shard cohort
-- MUST NOT mutate canonical manifest bytes
-
-**Successor** attach updates `QV-Lifecycle-Bundle` v1 attachments and may rewrite embedded lifecycle bundles across shards; it MUST NOT mutate canonical **archive-state** or **cohort-binding** bytes (`format-spec.md`, implementation in `lifecycle-attach.js`).
+- writes an updated lifecycle bundle
+- may rewrite embedded lifecycle bundles across a full shard cohort
+- MUST NOT mutate canonical archive-state or cohort-binding bytes
 
 ### 9.3 Restore evaluation
 
 Current restore policy evaluation occurs after structural and reconstruction checks.
 
-**Legacy manifest-bundle restore** uses the following decision logic:
+Restore decision logic:
 
-- `integrity-only`: allow restore if structural/reconstruction integrity holds; report weak provenance status
-- `any-signature`: allow restore only if at least one valid detached signature exists over canonical **manifest** bytes
-- `strong-pq-signature`: allow restore only if at least one valid strong-PQ detached signature exists over canonical **manifest** bytes
+- `integrity-only`: allow restore if structural and reconstruction integrity holds
+- `any-signature`: allow restore only if at least `minValidSignatures` archive-approval signatures verify over canonical archive-state bytes
+- `strong-pq-signature`: allow restore only if the count threshold is met and at least one valid strong-PQ archive-approval signature is present
 
-**Successor lifecycle restore** (see `format-spec.md` and **§11**) uses the same three policy **levels** but evaluates **only** `attachments.archiveApprovalSignatures` over canonical **archive-state descriptor** bytes. Restore must also resolve cohort and lifecycle-bundle selection without heuristic auto-selection across multiple embedded bundle digests or mixed cohorts when the implementation requires explicit disambiguation.
+Current ambiguity rule:
+
+- restore fails closed by default when ambiguity remains in `archiveId`, `stateId`, `cohortId`, or embedded lifecycle-bundle digest after explicit filtering
+- if an operator explicitly selects a cohort or lifecycle-bundle variant in an otherwise ambiguous case, restore may proceed, but the result MUST be reported as an explicit operator choice with warning rather than as an automatic winner selection
 
 Current pinning consequence:
 
-- pinning affects status/provenance reporting
-- pinning does not block restore by default
+- pinning affects provenance reporting
+- pinning does not block restore by default once archive policy is satisfied
 
 ## 10. Conflict and ambiguity handling
 
-Current or current-intended handling is:
+Current handling is:
 
-- valid but unpinned signatures may still satisfy policy
+- valid but unpinned archive-approval signatures may still satisfy policy
 - invalid extra signatures do not count if another signature satisfies policy
-- no satisfying signature blocks restore for `any-signature` and `strong-pq-signature`
+- self-verified PQ signatures do not count toward trust or policy
+- no satisfying archive-approval signature blocks restore for `any-signature` and `strong-pq-signature`
 - bundle pinning and user pinning are tracked separately and may both be true
 - timestamp evidence does not upgrade an otherwise unsatisfied signature policy
 - malformed or ambiguously linked evidence is rejected rather than silently tolerated
+- Quantum Vault does not auto-select among ambiguous cohorts or lifecycle-bundle variants
 
-Current restore must not fail solely because:
+Current restore MUST NOT fail solely because:
 
 - no signer is pinned
-- OTS proof is absent
+- OTS evidence is absent
 - a non-satisfying signature is present alongside a satisfying one
 
-## 11. Successor lifecycle bundles (normative)
+## 11. Same-state resharing semantics
 
-Quantum Vault implements a **successor lifecycle** artifact family **alongside** the legacy manifest bundle family. Byte layout, canonicalization labels, and shard format identifiers are normative in `format-spec.md`. Informative design rationale and Phase 0 frozen contracts are in `docs/process/roadmap/lifecycle/` (for example `resharing-design.md`, `implementation-plan-lifecycle.md`).
+Same-state resharing reconstructs one predecessor successor cohort, preserves exact archive-state descriptor bytes, and emits a new cohort plus a required transition record.
+It is a maintenance path, not an archive re-approval path.
 
-### 11.1 Format tracks and transition
+Current same-state resharing rules:
 
-Quantum Vault is **phasing out** the **legacy** model in favor of the **successor lifecycle** model: archive-state-centric approval, `QV-Lifecycle-Bundle` v1, and `QVqcont-7` shards.
-
-The **legacy** model (`quantum-vault-archive-manifest/v3`, `QV-Manifest-Bundle` v2, `QVqcont-6`) remains **supported** for **compatibility** with existing archives and tooling, but it is no longer the normal creation path on the shipped Lite or Pro UI surface. Beginning with release **v1.5.3**, legacy creation became compatibility-only on the regular-user surface. Legacy is **not** removed from the implementation while the documented compatibility window remains open.
-
-| Track | Signable approval object | Mutable bundle | Typical shard metadata `alg.fmt` |
-| --- | --- | --- | --- |
-| Legacy | Canonical **manifest** bytes | `QV-Manifest-Bundle` v2 | `QVqcont-6` |
-| Successor | Canonical **archive-state descriptor** bytes | `QV-Lifecycle-Bundle` v1 | `QVqcont-7` |
-
-### 11.2 Attachment families (`QV-Lifecycle-Bundle` v1)
-
-The lifecycle bundle carries `authPolicy` and five attachment arrays (all mandatory; may be empty except as required by policy semantics):
-
-- `attachments.publicKeys[]` — bundled signer identity material for verification and optional pinning
-- `attachments.archiveApprovalSignatures[]` — **archive policy**; `signatureFamily` **archive-approval**; `targetType` **archive-state**; signs canonical **archive-state descriptor** bytes
-- `attachments.maintenanceSignatures[]` — **maintenance / provenance** over transition records; `targetType` **transition-record**; **MUST NOT** be counted toward archive policy satisfaction
-- `attachments.sourceEvidenceSignatures[]` — **source-evidence** provenance; `targetType` **source-evidence**; **MUST NOT** be counted toward archive policy satisfaction
-- `attachments.timestamps[]` — OpenTimestamps evidence; `targetDigest` is **SHA-256** over the **detached signature bytes** referenced by `targetRef`; **MUST NOT** satisfy archive policy by itself
-
-### 11.3 Policy satisfaction, pinning, and OTS (successor)
-
-- **Archive policy** (`integrity-only`, `any-signature`, `strong-pq-signature`) is evaluated using **only** verified signatures in `archiveApprovalSignatures` that meet `minValidSignatures` and suite rules. **Maintenance** and **source-evidence** signatures are reported separately and **do not** satisfy archive policy.
-- **OTS** linkage does not satisfy archive policy; semantics match §8 (detached signature bytes as targets).
-- **Pinning:** If a bundled signature declares `publicKeyRef`, resolution uses bundled `publicKeys[]` and MUST fail closed on unknown, ambiguous, incompatible, or non-verifying bindings (not merely “unpinned”).
-- **Integrity, signature validity, pinning, policy satisfaction, and OTS evidence** remain **distinct** reporting channels (§§2–8).
-
-### 11.4 Restore semantics (successor)
-
-Successor restore groups candidate shards by `archiveId`, `stateId`, and `cohortId`, and requires exact byte equality for embedded **archive-state** and **cohort-binding** objects within a cohort. If more than one embedded **lifecycle-bundle** digest appears for an otherwise consistent cohort and the operator does not supply an explicit lifecycle bundle or selected digest, restore **fails closed** (no heuristic “richest bundle” or lexical winner). If multiple valid **cohorts** exist for the same archive state (same-state fork), restore **rejects** mixed cohorts without auto-selecting by timestamp, attachment count, or lexical order.
-
-### 11.5 Same-state resharing semantics (successor)
-
-Same-state resharing reconstructs one predecessor successor cohort, preserves exact archive-state descriptor bytes, and emits a new cohort plus a required transition record. It is a **threshold-shard reconstruction and maintenance path**, not a substitute for full restore-policy evaluation.
-
-- resharing does **not** produce a restore authorization decision
-- resharing does **not** rerun archive policy as the user-facing Restore flow does
-- preserved archive-approval signatures remain archive-approval evidence over the unchanged archive state; new maintenance signatures over the transition record remain separate maintenance evidence and **do not** satisfy archive policy
-
-### 11.6 Source-evidence v1 (privacy posture)
-
-`quantum-vault-source-evidence/v1` objects carried in `lifecycleBundle.sourceEvidence[]` are intentionally **digest-first**; optional fields are limited (for example optional `mediaType` and `externalSourceSignatureRefs` per schema). There are **no** first-class path, username, or free-form operator note fields in v1; privacy defaults are **structural** (omit sensitive fields), not runtime redaction of rich optional fields.
-
----
+- resharing does not produce a restore authorization decision
+- resharing does not rerun archive policy as the user-facing Restore flow does
+- preserved archive-approval signatures remain archive-approval evidence over the unchanged archive state
+- new maintenance signatures over the transition record remain separate maintenance evidence and do not satisfy archive policy
 
 ## 12. Future coverage retained for this document
 
 This document still needs future expansion in the following areas:
 
-- richer signature semantic claim types beyond the two format tracks
-- full crypto-policy object definition
-- archive classes and their consequences
+- richer signature semantic claim types
+- a fuller crypto-policy object definition
 - explicit trust-root models
-- first-class migration, renewal, or external approval claim objects that may span archive states (successor migration continuity remains architecture-blocked per `implementation-plan-lifecycle.md`)
+- first-class migration, renewal, or external approval claim objects that span archive states
 - institution-level deployment patterns and governance mechanisms beyond the current documentation-level expectations
-- audit/compliance framing that does not overclaim certification

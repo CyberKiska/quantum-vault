@@ -7,7 +7,7 @@ import {
     generateKeyPair,
     hashBytes,
     buildQcontShards,
-    parseShardForRestore,
+    parseLifecycleShard,
     restoreFromShards,
     assessShardSelection,
 } from '../../app/crypto-service.js';
@@ -15,14 +15,14 @@ import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
 import {
     buildRestoreResultSummary,
     collectRestoreVerificationOptions,
+    logRestoreSelectionSummary,
+    logVerificationSummary,
     refreshSuccessorSelectionUi,
 } from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import {
-    formatAuthenticityStatusMessage,
-    formatSignatureResultSummary,
     log,
     logError,
     logSuccess,
@@ -36,6 +36,7 @@ import {
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
 import { updateSidebarStatus } from './ui/ui.js';
+import { describeAuthPolicyHelp } from './qcont/auth-policy-help.js';
 
 // Global state for Lite mode
 let liteKeys = null;
@@ -45,16 +46,9 @@ let liteShardsStatusSeq = 0;
 let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
 
-function describeAuthPolicyHelp(authPolicyLevel) {
-    if (authPolicyLevel === 'integrity-only') {
-        return 'Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.';
-    }
-    return 'Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.';
-}
-
 function wipeLiteKeyPair(keyPair) {
-    if (keyPair?.secretKey instanceof Uint8Array) {
-        keyPair.secretKey.fill(0);
+    if (keyPair?.privateKey instanceof Uint8Array) {
+        keyPair.privateKey.fill(0);
     }
     if (keyPair?.publicKey instanceof Uint8Array) {
         keyPair.publicKey.fill(0);
@@ -246,7 +240,7 @@ async function generateLiteKeys() {
             wipeLiteKeyPair(previousKeys);
         }
         
-        const skHash = await hashBytes(liteKeys.secretKey);
+        const skHash = await hashBytes(liteKeys.privateKey);
         const pkHash = await hashBytes(liteKeys.publicKey);
         
         // Log with Lite mode formatting
@@ -362,8 +356,8 @@ function downloadLiteKeys() {
     }
     
     const timestamp = createFilenameTimestamp();
-    // Download secret key first (most important)
-    download(new Blob([liteKeys.secretKey]), `quantum-vault-${timestamp}-secretKey.qkey`);
+    // Download private key first (most important)
+    download(new Blob([liteKeys.privateKey]), `quantum-vault-${timestamp}-privateKey.qkey`);
     
     // Small delay to prevent browser from blocking the second download
     setTimeout(() => {
@@ -457,7 +451,7 @@ async function createLiteShards() {
         
         // 2. Create shards from encrypted container + private key
         const authPolicyLevel = String(authPolicyInput?.value || LITE_DEFAULT_AUTH_POLICY_LEVEL);
-        const splitResult = await buildQcontShards(encBytes, liteKeys.secretKey, {
+        const splitResult = await buildQcontShards(encBytes, liteKeys.privateKey, {
             n: params.n,
             k: params.k
         }, { authPolicyLevel });
@@ -535,7 +529,7 @@ async function restoreLiteShards() {
 
         // Parse shards using shared function
         const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-        const shards = await Promise.all(shardBytesArr.map((arr) => parseShardForRestore(arr, { strict: true })));
+        const shards = await Promise.all(shardBytesArr.map((arr) => parseLifecycleShard(arr, { strict: true })));
         
         // Log restoration start
         const containerId = shards[0]?.metaJSON?.containerId;
@@ -549,79 +543,13 @@ async function restoreLiteShards() {
             verification: verificationOptions,
         });
 
-        if (result.archiveId) {
-            log(`Selected archiveId: ${result.archiveId}`, { isLiteMode: true });
-            log(`Selected stateId: ${result.stateId}`, { isLiteMode: true });
-            log(`Selected cohortId: ${result.cohortId}`, { isLiteMode: true });
-        } else {
-            log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
-        }
-        log(`Selected bundle digest: ${result.lifecycleBundleDigestHex || result.bundleDigestHex}`, { isLiteMode: true });
-        const embeddedDigests = result.embeddedLifecycleBundleDigestsUsed || result.embeddedBundleDigestsUsed;
-        if (Array.isArray(embeddedDigests) && embeddedDigests.length > 0) {
-            log(`Embedded shard bundle digests used: ${embeddedDigests.join(', ')}`, { isLiteMode: true });
-        }
-        if (result.authenticity?.policy) {
-            log(`Archive policy: ${result.authenticity.policy.level}`, { isLiteMode: true });
-        }
-        for (const warning of result.authenticity?.warnings || []) {
-            logWarning(warning, { isLiteMode: true });
-        }
-        for (const evidence of result.authenticity?.timestampEvidence || []) {
-            log(`${evidence.linkLabel}: ${evidence.targetRef}. ${evidence.completionLabel}.`, { isLiteMode: true });
-        }
-        const sourceEvidenceReport = result.authenticity?.sourceEvidenceReport;
-        if (sourceEvidenceReport?.present) {
-            const descriptiveFieldCount = Array.isArray(sourceEvidenceReport.descriptiveFieldNames)
-                ? sourceEvidenceReport.descriptiveFieldNames.length
-                : 0;
-            log(
-                `Source evidence: objects=${sourceEvidenceReport.count}, signed=${sourceEvidenceReport.sourceEvidenceSignatureCount}, verified=${sourceEvidenceReport.verifiedSourceEvidenceSignatureCount}, external-source-signature-refs=${sourceEvidenceReport.externalSourceSignatureRefCount}, descriptive-fields=${descriptiveFieldCount}.`,
-                { isLiteMode: true }
-            );
-        }
-        if (result.authenticity?.verification) {
-            const verification = result.authenticity.verification;
-            const signatureStatus = formatAuthenticityStatusMessage(result.authenticity.status);
-            if (signatureStatus) {
-                if (result.authenticity.status?.signerPinned) {
-                    logSuccess(signatureStatus, { isLiteMode: true });
-                } else {
-                    logWarning(`${signatureStatus.slice(0, -1)}; no signer pin is active.`, { isLiteMode: true });
-                }
-            }
-            const counts = verification.counts || {};
-            const hasSuccessorCounts = (
-                Object.prototype.hasOwnProperty.call(counts, 'validArchiveApproval') ||
-                Object.prototype.hasOwnProperty.call(counts, 'validMaintenance') ||
-                Object.prototype.hasOwnProperty.call(counts, 'validSourceEvidence')
-            );
-            if (hasSuccessorCounts) {
-                log(
-                    `Archive-approval counts: valid=${counts.validArchiveApproval}, strong-pq=${counts.validArchiveApprovalStrongPq}, pinned=${counts.archiveApprovalPinnedValidTotal}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal}`,
-                    { isLiteMode: true }
-                );
-                log(
-                    `Detached signature totals across all families: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}, maintenance=${counts.validMaintenance}, source-evidence=${counts.validSourceEvidence}`,
-                    { isLiteMode: true }
-                );
-            } else {
-                log(
-                    `Signature counts: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}`,
-                    { isLiteMode: true }
-                );
-            }
-            for (const item of verification.results || []) {
-                if (item.ok) {
-                    logSuccess(`Signature OK: ${formatSignatureResultSummary(item)}`, { isLiteMode: true });
-                } else {
-                    logWarning(`Signature failed: ${item.name} (${item.error || 'unknown error'})`, { isLiteMode: true });
-                }
-            }
-            for (const warning of verification.warnings || []) {
-                logWarning(warning, { isLiteMode: true });
-            }
-        }
+        logRestoreSelectionSummary(result, (message) => log(message, { isLiteMode: true }));
+        logVerificationSummary(
+            result.authenticity,
+            (message) => log(message, { isLiteMode: true }),
+            (message) => logWarning(message, { isLiteMode: true }),
+            (message) => logSuccess(message, { isLiteMode: true }),
+        );
 
         const { qencBytes, privKey, containerHash, qencOk, qkeyOk } = result;
         
@@ -776,7 +704,7 @@ function toggleMode() {
         } else {
             // Restore lite keys status to sidebar if previously generated
             hashBytes(liteKeys.publicKey).then(pk => {
-                hashBytes(liteKeys.secretKey).then(sk => updateSidebarStatus(pk, sk));
+                hashBytes(liteKeys.privateKey).then(sk => updateSidebarStatus(pk, sk));
             });
         }
     } else {

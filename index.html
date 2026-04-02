@@ -33,7 +33,7 @@
         <div class="header-group">
           <h1>Quantum Vault</h1>
           <p class="subtitle">PQC encryption & sharding</p>
-          <span class="version-badge">v1.6.0</span>
+          <span class="version-badge">v2.0.0</span>
         </div>
 
         <div class="mode-switch-container">
@@ -220,7 +220,7 @@
                 <h3>Select Shards to Restore</h3>
                 <p class="muted-copy">Load successor <code>.qcont</code> shards and any detached signatures, signer keys, or timestamp proofs you want checked.</p>
                 <label for="liteShardsInput" class="visually-hidden">Select shard and verification files</label>
-                <input type="file" id="liteShardsInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                <input type="file" id="liteShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
               </div>
               <div id="shardsStatus" class="shards-status initially-hidden">
                 <span id="shardsStatusText">0 shards selected</span>
@@ -244,8 +244,8 @@
               <details class="technical-context">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
-                  <small class="muted-copy">Attach all restore artifacts in the main file selector above. A supplied <code>.pqpk</code> file counts as a pinned PQ signer key.</small>
-                  <small class="muted-copy">Legacy <code>.qvmanifest</code> files remain compatibility-only during the documented phase-out window.</small>
+                  <small class="muted-copy">Load successor <code>.qcont</code> shards plus any optional <code>.archive-state.json</code>, <code>.lifecycle-bundle.json</code>, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs in the main selector above.</small>
+                  <small class="muted-copy">A supplied <code>.pqpk</code> file counts as a pinned PQ signer key. Restore remains policy-gated and releases recovered outputs only after the selected archive policy is satisfied.</small>
                 </div>
               </details>
               <details class="verification-section">
@@ -425,7 +425,7 @@
                   <div class="detail-copy">
                     <small class="muted-copy">Split exports successor <code>QVqcont-7</code> shards plus <code>.archive-state.json</code>, <code>.cohort-binding.json</code>, and <code>.lifecycle-bundle.json</code>.</small>
                     <small id="proAuthPolicyHelp" class="muted-copy">Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.</small>
-                    <small class="muted-copy">Legacy manifest/bundle creation is retired from the normal product path and remains compatibility-only.</small>
+                    <small class="muted-copy">Archive approval stays detached from shard creation: sign the exported <code>.archive-state.json</code> later, then use Attach to merge detached evidence into the lifecycle bundle without changing archive-state bytes.</small>
                   </div>
                 </details>
               </div>
@@ -449,7 +449,7 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontAttachInput">Attach inputs</label>
-                  <input type="file" id="qcontAttachInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
                 </div>
                 <p class="muted-copy operation-hint">Load one archive cohort and any detached signatures, signer keys, or timestamp proofs you want to merge.</p>
               </div>
@@ -464,7 +464,7 @@
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor attach can update only the lifecycle bundle or also re-embed that bundle into the selected shard files, depending on what you load.</small>
-                  <small class="muted-copy">Legacy manifest/bundle inputs remain compatibility-only during the documented phase-out window. Attach never changes the signable archive bytes.</small>
+                  <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs. Attach never changes the signable archive-state bytes.</small>
                 </div>
               </details>
               <details class="verification-section">
@@ -613,7 +613,7 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontShardsInput">Restore inputs</label>
-                  <input type="file" id="qcontShardsInput" accept=".qcont,.qvmanifest.json,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
                 </div>
                 <p class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
               </div>
@@ -639,8 +639,8 @@
               <details class="technical-context">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
-                  <small class="muted-copy">Successor restore is the regular-user path. Attach all detached signatures, signer keys, and timestamp proofs in the main selector above.</small>
-                  <small class="muted-copy">A supplied <code>.pqpk</code> file counts as a pinned PQ signer key. Legacy manifest/bundle files remain compatibility-only while the documented phase-out window is open.</small>
+                  <small class="muted-copy">Successor restore is the regular-user path. Load successor <code>.qcont</code> shards plus any optional <code>.archive-state.json</code>, <code>.lifecycle-bundle.json</code>, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs in the main selector above.</small>
+                  <small class="muted-copy">A supplied <code>.pqpk</code> file counts as a pinned PQ signer key. Restore remains policy-gated and detached archive approval stays separate from maintenance, source-evidence, and OTS reporting.</small>
                 </div>
               </details>
               <details class="verification-section">

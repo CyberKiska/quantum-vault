@@ -62,8 +62,9 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStr
         return { Kraw, Kenc, Kiv, aesKey };
     } finally {
         kmacMessage.fill(0);
+        clearKeys(Kraw);
         if (!completed) {
-            clearKeys(Kraw, Kenc, Kiv);
+            clearKeys(Kenc, Kiv);
         }
     }
 }

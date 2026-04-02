@@ -1,10 +1,10 @@
 # Quantum Vault — Implementation Questions & Reading Guide
 
-Status: Frozen decision record plus reading guide
+Status: Historical transition reading guide plus remaining open questions
 Type: Informative architecture / standards / frozen-decision guide
 Audience: contributors, implementers, reviewers, cryptographic auditors
-Scope: lifecycle design questions that remain after the completed Stage A-C baseline
-Relationship: the current normative baseline remains `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`; this document supports the successor design in `resharing-design.md` and the execution plan in `implementation-plan-lifecycle.md`
+Scope: preserved lifecycle design questions and frozen decisions from the successor transition, plus the still-open deferred questions
+Relationship: the current normative baseline remains `docs/format-spec.md`, `docs/trust-and-policy.md`, and `docs/security-model.md`; this document now supports historical interpretation of the successor design in `resharing-design.md` and the execution record in `implementation-plan-lifecycle.md`
 
 ## Purpose
 
@@ -32,6 +32,14 @@ Normative language in this document:
 - uppercase `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are to be interpreted as described in RFC 2119 and RFC 8174 when, and only when, they appear in all capitals
 - explanatory prose outside frozen-decision, wire-contract, and verifier-predicate sections is informative and does not create independent conformance requirements
 - sections labeled **Frozen decision**, **Frozen derivation**, or **Frozen identifier** record completed Phase 0 contracts; later phases may only codify or implement them
+
+## Current reading posture
+
+Most of the architecture questions in this document are now resolved in the shipped implementation and in the current owner docs.
+
+- Sections 1 through 10 should be read primarily as historical rationale and frozen-decision context for the successor migration that is now implemented.
+- Section 12 remains the main place where this file records genuinely open deferred questions.
+- Current behavior should be taken from `docs/format-spec.md`, `docs/trust-and-policy.md`, `docs/security-model.md`, and the shipped successor implementation.
 
 ## 1. Fixed Baseline Inherited From Stage A-C
 

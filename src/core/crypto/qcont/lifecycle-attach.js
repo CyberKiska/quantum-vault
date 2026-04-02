@@ -4,7 +4,7 @@ import { resolveOpenTimestampTarget } from '../auth/opentimestamps.js';
 import { normalizePqPublicKeyPins, unpackPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
 import { getSignatureSuiteInfo } from '../auth/signature-suites.js';
-import { isSupportedStellarSignatureDocument, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
+import { isSupportedStellarSignatureDocumentBytes, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import {
   canonicalizeArchiveStateDescriptor,
   canonicalizeCohortBinding,
@@ -72,13 +72,8 @@ function detectExternalSignatureType(signature) {
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x51 && bytes[2] === 0x53 && bytes[3] === 0x47) {
     return 'qsig';
   }
-  try {
-    const parsed = JSON.parse(new TextDecoder().decode(bytes));
-    if (isSupportedStellarSignatureDocument(parsed)) {
-      return 'stellar-sig';
-    }
-  } catch {
-    // ignore
+  if (isSupportedStellarSignatureDocumentBytes(bytes)) {
+    return 'stellar-sig';
   }
   return 'unknown';
 }
@@ -226,6 +221,9 @@ async function importExternalArchiveApprovalQsig({
     }
   }
 
+  // Embedded-key-only verification may still be imported as unpinned evidence, but
+  // lifecycle attach must not synthesize bundled signer material or a publicKeyRef
+  // without an authoritative .pqpk match.
   const publicKeyAttachment = matchedKey ? buildLifecyclePublicKeyAttachment(matchedKey) : null;
   return {
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],
@@ -258,9 +256,6 @@ async function importExternalArchiveApprovalStellarSig({
   });
   if (!verified.ok) {
     throw new Error(`${signature.name}: ${verified.error}`);
-  }
-  if (String(expectedEd25519Signer || '').trim() && verified.userPinned !== true) {
-    throw new Error(`${signature.name}: signer does not match the expected pinned Stellar signer`);
   }
   const publicKeyAttachment = buildLifecycleStellarSignerAttachment(verified.signer);
   return {
