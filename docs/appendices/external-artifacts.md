@@ -39,6 +39,7 @@ Internal current-state grounding:
 - `src/core/crypto/auth/stellar-sig.js`
 - `src/core/crypto/auth/opentimestamps.js`
 - `src/core/crypto/auth/signature-identity.js`
+- `src/core/crypto/lifecycle/artifacts.js`
 - `src/core/crypto/manifest/manifest-bundle.js`
 - `docs/format-spec.md`
 - `docs/trust-and-policy.md`
@@ -52,8 +53,8 @@ External references already used elsewhere in the repository:
 
 Implemented now:
 
-- detached PQ signature verification for the current `.qsig` wrapper and context
-- Stellar detached-signature verification for the current `stellar-signature/v2` JSON profiles
+- detached PQ signature verification for the current `.qsig` wrapper and context across the legacy manifest track and successor lifecycle targets
+- Stellar detached-signature verification for the current `stellar-signature/v2` JSON profiles across the same path-dependent target contracts
 - detached PQ public-key wrapper parsing for user pinning and bundled signer references
 - OpenTimestamps linkage to detached signature bytes
 - proof-identity deduplication for policy counting
@@ -74,8 +75,8 @@ Not yet first-class in the current implementation:
 
 | Artifact family | Current acceptance boundary | Current linkage target |
 | --- | --- | --- |
-| `.qsig` | binary wrapper with magic `PQSG`, detached PQ signature major version `2`, and context `quantum-signer/v2` | canonical manifest bytes |
-| `.sig` | JSON document accepted only when it matches the supported `stellar-signature/v2` schema/profile combinations | canonical manifest bytes |
+| `.qsig` | binary wrapper with magic `PQSG`, detached PQ signature major version `2`, and context `quantum-signer/v2` | legacy canonical manifest bytes or successor declared lifecycle target bytes |
+| `.sig` | JSON document accepted only when it matches the supported `stellar-signature/v2` schema/profile combinations | same path-dependent target rule as `.qsig` |
 | `.pqpk` | binary wrapper with magic `PQPK` and detached PQ public-key major version `1` | signer pinning and `publicKeyRef` resolution |
 | `.ots` | OpenTimestamps proof with the supported proof header and SHA-256 stamped digest operation | detached signature bytes |
 
@@ -90,15 +91,17 @@ Current detection rules:
 
 Current detached-signature linkage rules are:
 
-- both bundled and external signatures are verified over canonical manifest bytes only
-- bundled signatures MUST declare `target.type = "canonical-manifest"`
-- bundled signatures MUST declare `target.digestAlg = "SHA3-512"`
-- bundled signatures MUST carry a `target.digestValue` equal to the bundle's `manifestDigest.value`
-- external signatures are verified directly against the selected canonical manifest bytes rather than bundle bytes
+- both bundled and external signatures are verified over the correct canonical target bytes for the selected track
+- **Legacy bundled signatures** MUST declare `target.type = "canonical-manifest"`
+- **Legacy bundled signatures** MUST declare `target.digestAlg = "SHA3-512"`
+- **Legacy bundled signatures** MUST carry a `target.digestValue` equal to the bundle's `manifestDigest.value`
+- **Successor lifecycle signatures** MUST declare `signatureFamily`, `targetType`, `targetRef`, and `targetDigest` consistent with the selected archive-state, transition-record, or source-evidence object
+- external signatures are verified directly against the selected signable object or declared lifecycle target bytes rather than mutable bundle bytes
 
 Current acceptance limits:
 
 - Quantum Vault does not treat the mutable manifest bundle as the signable payload
+- Quantum Vault does not treat the mutable lifecycle bundle as the archive-approval signable payload
 - Quantum Vault does not infer signer algorithms from wrapper filenames or key lengths
 - unsupported detached-signature major versions, contexts, or profile identifiers fail closed
 

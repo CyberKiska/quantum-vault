@@ -492,7 +492,6 @@ export async function verifyManifestSignatures({
       signatureVerified: counts.validTotal > 0,
       strongPqSignatureVerified: counts.validStrongPq > 0,
       signerPinned: counts.pinnedValidTotal > 0,
-      signerIdentityPinned: counts.pinnedValidTotal > 0,
       bundlePinned: counts.bundlePinnedValidTotal > 0,
       userPinned: counts.userPinnedValidTotal > 0,
       userPinProvided,

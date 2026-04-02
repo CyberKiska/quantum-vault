@@ -3,8 +3,35 @@ import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fr
 import { validatePublicKey, validateSecretKey } from './mlkem.js';
 import { buildQcontShards } from './qcont/build.js';
 import { attachManifestBundleToShards } from './qcont/attach.js';
+import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
+import { reconstructLifecycleCohortMaterial } from './qcont/lifecycle-cohort-shared.js';
+import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
+import { buildLifecycleQcontShards, parseLifecycleShard, reshareSameState, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
 import { parseShard, restoreFromShards } from './qcont/restore.js';
 import { parseQencHeader } from './qenc/format.js';
+import {
+  buildArchiveStateDescriptor,
+  buildCohortBinding,
+  buildTransitionRecord,
+  buildSourceEvidence,
+  buildLifecycleBundle,
+  canonicalizeArchiveStateDescriptor as canonicalizeLifecycleArchiveState,
+  canonicalizeCohortBinding,
+  canonicalizeCohortIdPreimage,
+  canonicalizeTransitionRecord,
+  canonicalizeSourceEvidence,
+  canonicalizeLifecycleBundle,
+  computeCohortBindingDigest,
+  deriveCohortId,
+  deriveStateId,
+  generateArchiveId,
+  parseArchiveStateDescriptorBytes,
+  parseCohortBindingBytes,
+  parseTransitionRecordBytes,
+  parseSourceEvidenceBytes,
+  parseLifecycleBundleBytes,
+  verifyLifecycleSignatureEntry,
+} from './lifecycle/artifacts.js';
 import {
   buildInitialManifestBundle,
   canonicalizeManifestBundle,
@@ -13,6 +40,7 @@ import {
   parseManifestBundleBytes,
   parseManifestBundleBytesPreviewOnly,
 } from './manifest/manifest-bundle.js';
+import { formatAuthenticityStatusMessage } from '../features/ui/logging.js';
 import {
   ARCHIVE_MANIFEST_SCHEMA,
   ARCHIVE_MANIFEST_VERSION,
@@ -29,13 +57,21 @@ import {
 } from './manifest/jcs.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
 import { buildAttachedArtifactExports } from '../features/qcont/attach-ui.js';
+import { buildSuccessorSelectionModel } from '../features/qcont/restore-ui.js';
 import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
+import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
+import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
 import { verifyManifestSignatures } from './auth/verify-signatures.js';
 import { unpackPqpk, unpackQsig } from './auth/qsig.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
-import { inspectManifestBundleTimestamps, parseOpenTimestampProof } from './auth/opentimestamps.js';
+import {
+  inspectManifestBundleTimestamps,
+  inspectTimestampEvidence,
+  parseOpenTimestampProof,
+  resolveOpenTimestampTarget,
+} from './auth/opentimestamps.js';
 import {
   DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL,
   LITE_DEFAULT_AUTH_POLICY_LEVEL,
@@ -63,6 +99,19 @@ import { parseJsonTextStrict } from './manifest/strict-json.js';
 
 function textBytes(value) {
   return new TextEncoder().encode(value);
+}
+
+function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, options = {}) {
+  const familyByField = {
+    archiveApprovalSignatures: 'archive-approval',
+    maintenanceSignatures: 'maintenance',
+    sourceEvidenceSignatures: 'source-evidence',
+  };
+  return verifyLifecycleSignatureEntry(bundle, bundle.attachments[field][index], {
+    ...options,
+    expectedFamily: familyByField[field],
+    expectedField: field,
+  });
 }
 
 function legacyCanonicalizeQvC14n(value) {
@@ -122,8 +171,17 @@ function toArrayBufferView(bytes) {
 function fileLike(name, bytes) {
   return {
     name,
+    size: bytes.length,
     async arrayBuffer() {
       return toArrayBufferView(bytes);
+    },
+    slice(start = 0, end = bytes.length) {
+      const sliced = bytes.slice(start, end);
+      return {
+        async arrayBuffer() {
+          return toArrayBufferView(sliced);
+        },
+      };
     },
   };
 }
@@ -156,10 +214,556 @@ function buildTestArchiveManifest(overrides = {}) {
   return buildArchiveManifest(buildManifestParams(overrides));
 }
 
+async function buildLifecycleSampleArtifacts() {
+  const shardBodyHashes = ['11', '22', '33', '44', '55'].map((value) => value.repeat(64));
+  const shareCommitments = ['66', '77', '88', '99', 'aa'].map((value) => value.repeat(64));
+  const archiveState = buildArchiveStateDescriptor({
+    archiveId: 'ab'.repeat(32),
+    parentStateId: null,
+    chunkSize: 65536,
+    chunkCount: 3,
+    payloadLength: 131072,
+    qencHash: 'cd'.repeat(64),
+    containerId: 'ef'.repeat(64),
+    authPolicy: { level: 'strong-pq-signature', minValidSignatures: 1 },
+  });
+  const canonicalArchiveState = canonicalizeLifecycleArchiveState(archiveState);
+  const stateId = canonicalArchiveState.stateId;
+  const cohortBinding = buildCohortBinding({
+    archiveId: archiveState.archiveId,
+    stateId,
+    shamirThreshold: 4,
+    shamirShareCount: 5,
+    rsN: 5,
+    rsK: 3,
+    rsParity: 2,
+    shardBodyHashes,
+    shareCommitments,
+  });
+  const canonicalCohortBinding = canonicalizeCohortBinding(cohortBinding);
+  const cohortId = deriveCohortId({
+    archiveId: archiveState.archiveId,
+    stateId,
+    cohortBindingDigest: canonicalCohortBinding.digest,
+  });
+  const predecessorCohortBindingDigest = { alg: 'SHA3-512', value: '23'.repeat(64) };
+  const predecessorCohortId = deriveCohortId({
+    archiveId: archiveState.archiveId,
+    stateId,
+    cohortBindingDigest: predecessorCohortBindingDigest,
+  });
+  const transitionRecord = buildTransitionRecord({
+    archiveId: archiveState.archiveId,
+    fromStateId: stateId,
+    toStateId: stateId,
+    fromCohortId: predecessorCohortId,
+    toCohortId: cohortId,
+    fromCohortBindingDigest: predecessorCohortBindingDigest,
+    toCohortBindingDigest: canonicalCohortBinding.digest,
+    reasonCode: 'cohort-rotation',
+    performedAt: '2026-03-25T12:34:56.000Z',
+    operatorRole: 'operator',
+    actorHints: { ceremony: 'reshare-01' },
+    notes: null,
+  });
+  const sourceEvidence = buildSourceEvidence({
+    relationType: 'reviewed-source',
+    sourceObjectType: 'archive-manifest-v3',
+    sourceDigests: [
+      { alg: 'SHA3-512', value: '45'.repeat(64) },
+      { alg: 'SHA-256', value: '67'.repeat(32) },
+    ],
+    externalSourceSignatureRefs: ['sig:external-1'],
+  });
+  const lifecycleBundle = await buildLifecycleBundle({
+    archiveState,
+    currentCohortBinding: cohortBinding,
+    authPolicy: { level: 'strong-pq-signature', minValidSignatures: 1 },
+    sourceEvidence: [sourceEvidence],
+    transitions: [transitionRecord],
+    attachments: {
+      publicKeys: [],
+      archiveApprovalSignatures: [],
+      maintenanceSignatures: [],
+      sourceEvidenceSignatures: [],
+      timestamps: [],
+    },
+  });
+  return {
+    archiveState,
+    canonicalArchiveState,
+    stateId,
+    cohortBinding,
+    canonicalCohortBinding,
+    cohortId,
+    transitionRecord,
+    sourceEvidence,
+    lifecycleBundle,
+  };
+}
+
+function buildTransitionRecordCandidate(baseTransitionRecord, actorHints) {
+  return {
+    ...baseTransitionRecord,
+    fromCohortBindingDigest: { ...baseTransitionRecord.fromCohortBindingDigest },
+    toCohortBindingDigest: { ...baseTransitionRecord.toCohortBindingDigest },
+    actorHints,
+  };
+}
+
+function buildBundledMlDsaPublicKey(id, publicKeyBytes, { suite = 'mldsa-87' } = {}) {
+  return {
+    id,
+    kty: 'ml-dsa-public-key',
+    suite,
+    encoding: 'base64',
+    value: bytesToBase64(publicKeyBytes),
+  };
+}
+
+function buildLifecycleQsigEntry({
+  id,
+  signatureFamily,
+  targetType,
+  targetRef,
+  targetDigest,
+  qsigBytes,
+  publicKeyRef = '',
+  suite = 'mldsa-87',
+}) {
+  const entry = {
+    id,
+    signatureFamily,
+    format: 'qsig',
+    suite,
+    targetType,
+    targetRef,
+    targetDigest: { alg: 'SHA3-512', value: targetDigest },
+    signatureEncoding: 'base64',
+    signature: bytesToBase64(qsigBytes),
+  };
+  if (publicKeyRef) {
+    entry.publicKeyRef = publicKeyRef;
+  }
+  return entry;
+}
+
+async function buildSuccessorRestoreSample({
+  payloadBytes = textBytes('successor-restore-sample'),
+  filename = 'successor-restore-sample.bin',
+  authPolicyLevel = 'integrity-only',
+  minValidSignatures = 1,
+  buildOptions = {},
+} = {}) {
+  const pair = await generateKeyPair({ collectUserEntropy: false });
+  const qencBytes = await blobToBytes(await encryptFile(payloadBytes, pair.publicKey, filename));
+  const split = await buildLifecycleQcontShards(
+    qencBytes,
+    pair.secretKey,
+    { n: 5, k: 3 },
+    { ...buildOptions, authPolicyLevel, minValidSignatures }
+  );
+  const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+  return {
+    pair,
+    payloadBytes,
+    qencBytes,
+    split,
+    parsed,
+  };
+}
+
+function rewriteEmbeddedArchiveStateBytes(parsedShards, mutateArchiveState) {
+  const archiveState = cloneJson(parsedShards[0].archiveState);
+  mutateArchiveState(archiveState);
+  const canonicalArchiveState = canonicalizeLifecycleArchiveState(archiveState);
+  return parsedShards.map((shard) => ({
+    ...shard,
+    archiveStateBytes: canonicalArchiveState.bytes,
+  }));
+}
+
+function rewriteEmbeddedCohortBinding(parsedShards, mutateCohortBinding) {
+  const cohortBinding = cloneJson(parsedShards[0].cohortBinding);
+  mutateCohortBinding(cohortBinding);
+  const canonicalCohortBinding = canonicalizeCohortBinding(cohortBinding);
+  const cohortId = deriveCohortId({
+    archiveId: canonicalCohortBinding.cohortBinding.archiveId,
+    stateId: canonicalCohortBinding.cohortBinding.stateId,
+    cohortBindingDigest: canonicalCohortBinding.digest,
+  });
+  const sharding = canonicalCohortBinding.cohortBinding.sharding;
+
+  return parsedShards.map((shard) => ({
+    ...shard,
+    cohortBinding: canonicalCohortBinding.cohortBinding,
+    cohortBindingBytes: canonicalCohortBinding.bytes,
+    cohortBindingDigestHex: canonicalCohortBinding.digest.value,
+    cohortId,
+    metaJSON: {
+      ...shard.metaJSON,
+      cohortId,
+      n: sharding.reedSolomon.n,
+      k: sharding.reedSolomon.k,
+      m: sharding.reedSolomon.parity,
+      t: sharding.shamir.threshold,
+    },
+  }));
+}
+
+function buildLifecycleCohortCandidate(parsedShards) {
+  const first = parsedShards[0];
+  return {
+    archiveId: first.archiveState.archiveId,
+    stateId: first.stateId,
+    cohortId: first.cohortId,
+    archiveStateBytes: first.archiveStateBytes,
+    archiveStateDigestHex: first.archiveStateDigestHex,
+    archiveState: first.archiveState,
+    cohortBindingBytes: first.cohortBindingBytes,
+    cohortBindingDigestHex: first.cohortBindingDigestHex,
+    cohortBinding: first.cohortBinding,
+    shards: parsedShards,
+  };
+}
+
+function rewriteSuccessorPrivateKeyHash(parsedShards, privateKeyHash) {
+  return parsedShards.map((shard) => ({
+    ...shard,
+    metaJSON: {
+      ...shard.metaJSON,
+      privateKeyHash,
+    },
+  }));
+}
+
+function assertZeroizedRecoveredKeyValidationMaterial(refs, label) {
+  const entries = Object.entries(refs || {});
+  assert(entries.length === 4, `${label} should expose all temporary validation buffers`);
+  for (const [field, value] of entries) {
+    assert(value instanceof Uint8Array, `${label} missing ${field} buffer`);
+    assert(value.every((byte) => byte === 0), `${label} did not zeroize ${field}`);
+  }
+}
+
+async function buildSuccessorRecoveredKeyMismatchSample({
+  payloadBytes = textBytes('successor-recovered-key-mismatch'),
+} = {}) {
+  const honest = await buildSuccessorRestoreSample({
+    payloadBytes,
+    authPolicyLevel: 'any-signature',
+  });
+  const signedBundle = await buildSuccessorVerificationBundle(honest.split, {
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+    includeArchiveApproval: true,
+    includeMaintenance: false,
+    includeSourceEvidence: false,
+  });
+  const honestSignedShards = honest.parsed.map((shard) => ({
+    ...shard,
+    lifecycleBundleBytes: signedBundle.bundleBytes,
+    lifecycleBundleDigestHex: signedBundle.digestHex,
+    lifecycleBundle: signedBundle.bundle,
+  }));
+
+  const maliciousPair = await generateKeyPair({ collectUserEntropy: false });
+  try {
+    const { splitSecret } = await import('./splitting/sss.js');
+    const shareCount = Number(honest.split.cohortBinding.sharding.shamir.shareCount);
+    const threshold = Number(honest.split.cohortBinding.sharding.shamir.threshold);
+    const maliciousShares = await splitSecret(maliciousPair.secretKey, shareCount, threshold);
+    const maliciousShareCommitments = await Promise.all(maliciousShares.map((share) => hashBytes(share)));
+
+    const maliciousCohortBinding = cloneJson(honest.split.cohortBinding);
+    maliciousCohortBinding.shareCommitments = maliciousShareCommitments;
+    const canonicalMaliciousCohortBinding = canonicalizeCohortBinding(maliciousCohortBinding);
+    const maliciousCohortId = deriveCohortId({
+      archiveId: honest.split.archiveId,
+      stateId: honest.split.stateId,
+      cohortBindingDigest: canonicalMaliciousCohortBinding.digest,
+    });
+
+    const maliciousLifecycleBundle = cloneJson(signedBundle.bundle);
+    maliciousLifecycleBundle.currentCohortBinding = canonicalMaliciousCohortBinding.cohortBinding;
+    maliciousLifecycleBundle.currentCohortBindingDigest = canonicalMaliciousCohortBinding.digest;
+    const canonicalMaliciousLifecycleBundle = await canonicalizeLifecycleBundle(maliciousLifecycleBundle);
+    const maliciousPrivateKeyHash = await hashBytes(maliciousPair.secretKey);
+
+    const maliciousShards = honestSignedShards.map((shard, index) => ({
+      ...shard,
+      metaJSON: {
+        ...shard.metaJSON,
+        cohortId: maliciousCohortId,
+        privateKeyHash: maliciousPrivateKeyHash,
+      },
+      cohortBindingBytes: canonicalMaliciousCohortBinding.bytes,
+      cohortBindingDigestHex: canonicalMaliciousCohortBinding.digest.value,
+      cohortBinding: canonicalMaliciousCohortBinding.cohortBinding,
+      cohortId: maliciousCohortId,
+      lifecycleBundleBytes: canonicalMaliciousLifecycleBundle.bytes,
+      lifecycleBundleDigestHex: canonicalMaliciousLifecycleBundle.digest.value,
+      lifecycleBundle: canonicalMaliciousLifecycleBundle.lifecycleBundle,
+      share: maliciousShares[index],
+    }));
+
+    return {
+      honest,
+      signedBundle,
+      honestSignedShards,
+      maliciousShards,
+      maliciousCohortId,
+      maliciousPrivateKeyHash,
+    };
+  } finally {
+    maliciousPair.secretKey.fill(0);
+  }
+}
+
+async function rewriteLifecycleBundleSubset(parsedShards, lifecycleBundleBytes, selectedIndices = []) {
+  const selected = new Set(
+    selectedIndices.length > 0
+      ? selectedIndices
+      : parsedShards.map((shard) => shard.shardIndex)
+  );
+  return Promise.all(parsedShards.map(async (shard) => {
+    if (!selected.has(shard.shardIndex)) {
+      return shard;
+    }
+    const rewritten = rewriteLifecycleBundleInShard(shard, lifecycleBundleBytes);
+    return parseLifecycleShard(await blobToBytes(rewritten.blob));
+  }));
+}
+
+async function buildResharePredecessorSample({
+  payloadBytes = textBytes('same-state-reshare-predecessor'),
+  authPolicyLevel = 'integrity-only',
+  minValidSignatures = 1,
+  bundleVariantOptions = null,
+  buildOptions = {},
+} = {}) {
+  const sample = await buildSuccessorRestoreSample({
+    payloadBytes,
+    authPolicyLevel,
+    minValidSignatures,
+    buildOptions,
+  });
+  if (!bundleVariantOptions) {
+    return {
+      ...sample,
+      predecessorLifecycleBundle: sample.split.lifecycleBundle,
+      predecessorLifecycleBundleBytes: sample.split.lifecycleBundleBytes,
+      predecessorLifecycleBundleDigestHex: sample.split.lifecycleBundleDigestHex,
+    };
+  }
+
+  const bundleVariant = await buildSuccessorVerificationBundle(sample.split, bundleVariantOptions);
+  const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+  return {
+    ...sample,
+    parsed: rewritten,
+    predecessorLifecycleBundle: bundleVariant.bundle,
+    predecessorLifecycleBundleBytes: bundleVariant.bundleBytes,
+    predecessorLifecycleBundleDigestHex: bundleVariant.digestHex,
+    bundleVariant,
+  };
+}
+
+async function parseResharedShardSet(reshareResult) {
+  return Promise.all(
+    reshareResult.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob)))
+  );
+}
+
+function buildMaintenanceArtifactsFactory({ keyId = 'pk-maintenance', signatureId = 'maintenance-sig-reshare' } = {}) {
+  return async ({ transitionRecordBytes, transitionRecordDigest, targetRef }) => {
+    const qsig = buildQsigFixture(transitionRecordBytes);
+    return {
+      publicKeys: [
+        buildBundledMlDsaPublicKey(keyId, qsig.signerPublicKey),
+      ],
+      maintenanceSignatures: [
+        buildLifecycleQsigEntry({
+          id: signatureId,
+          signatureFamily: 'maintenance',
+          targetType: 'transition-record',
+          targetRef,
+          targetDigest: transitionRecordDigest.value,
+          qsigBytes: qsig.qsigBytes,
+          publicKeyRef: keyId,
+        }),
+      ],
+    };
+  };
+}
+
+async function buildSuccessorVerificationBundle(split, {
+  authPolicyLevel = split.lifecycleBundle.authPolicy.level,
+  minValidSignatures = split.lifecycleBundle.authPolicy.minValidSignatures,
+  includeArchiveApproval = true,
+  includeMaintenance = false,
+  includeSourceEvidence = false,
+  timestampTargetFamily = '',
+} = {}) {
+  const bundle = cloneJson(split.lifecycleBundle);
+  bundle.authPolicy = {
+    level: authPolicyLevel,
+    minValidSignatures,
+  };
+  bundle.sourceEvidence = [];
+  bundle.transitions = [];
+  bundle.attachments = {
+    publicKeys: [],
+    archiveApprovalSignatures: [],
+    maintenanceSignatures: [],
+    sourceEvidenceSignatures: [],
+    timestamps: [],
+  };
+
+  const fixtures = {};
+  if (includeArchiveApproval || timestampTargetFamily === 'archive-approval') {
+    const qsig = buildQsigFixture(split.archiveStateBytes);
+    fixtures.archiveApproval = qsig;
+    bundle.attachments.publicKeys.push(buildBundledMlDsaPublicKey('pk-archive', qsig.signerPublicKey));
+    if (includeArchiveApproval) {
+      bundle.attachments.archiveApprovalSignatures.push(buildLifecycleQsigEntry({
+        id: 'archive-approval-sig-1',
+        signatureFamily: 'archive-approval',
+        targetType: 'archive-state',
+        targetRef: `state:${split.stateId}`,
+        targetDigest: split.stateId,
+        qsigBytes: qsig.qsigBytes,
+        publicKeyRef: 'pk-archive',
+      }));
+    }
+  }
+
+  let transitionRecord = null;
+  if (includeMaintenance || timestampTargetFamily === 'maintenance') {
+    const predecessorCohortBindingDigest = { alg: 'SHA3-512', value: '23'.repeat(64) };
+    const predecessorCohortId = deriveCohortId({
+      archiveId: split.archiveId,
+      stateId: split.stateId,
+      cohortBindingDigest: predecessorCohortBindingDigest,
+    });
+    transitionRecord = buildTransitionRecord({
+      archiveId: split.archiveId,
+      fromStateId: split.stateId,
+      toStateId: split.stateId,
+      fromCohortId: predecessorCohortId,
+      toCohortId: split.cohortId,
+      fromCohortBindingDigest: predecessorCohortBindingDigest,
+      toCohortBindingDigest: split.cohortBindingDigestHex
+        ? { alg: 'SHA3-512', value: split.cohortBindingDigestHex }
+        : canonicalizeCohortBinding(split.cohortBinding).digest,
+      reasonCode: 'cohort-rotation',
+      performedAt: '2026-03-25T12:34:56.000Z',
+      operatorRole: 'operator',
+      actorHints: { ceremony: 'restore-phase3' },
+      notes: null,
+    });
+    bundle.transitions = [transitionRecord];
+    const canonicalTransition = canonicalizeTransitionRecord(transitionRecord);
+    const qsig = buildQsigFixture(canonicalTransition.bytes);
+    fixtures.maintenance = qsig;
+    bundle.attachments.publicKeys.push(buildBundledMlDsaPublicKey('pk-maintenance', qsig.signerPublicKey));
+    if (includeMaintenance) {
+      bundle.attachments.maintenanceSignatures.push(buildLifecycleQsigEntry({
+        id: 'maintenance-sig-1',
+        signatureFamily: 'maintenance',
+        targetType: 'transition-record',
+        targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+        targetDigest: canonicalTransition.digest.value,
+        qsigBytes: qsig.qsigBytes,
+        publicKeyRef: 'pk-maintenance',
+      }));
+    }
+  }
+
+  let sourceEvidence = null;
+  if (includeSourceEvidence || timestampTargetFamily === 'source-evidence') {
+    sourceEvidence = buildSourceEvidence({
+      relationType: 'reviewed-source',
+      sourceObjectType: 'archive-manifest-v3',
+      sourceDigests: [
+        { alg: 'SHA3-512', value: '45'.repeat(64) },
+        { alg: 'SHA-256', value: '67'.repeat(32) },
+      ],
+      externalSourceSignatureRefs: ['sig:external-restore-phase3'],
+    });
+    bundle.sourceEvidence = [sourceEvidence];
+    const canonicalSourceEvidence = canonicalizeSourceEvidence(sourceEvidence);
+    const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+    fixtures.sourceEvidence = qsig;
+    bundle.attachments.publicKeys.push(buildBundledMlDsaPublicKey('pk-source-evidence', qsig.signerPublicKey));
+    if (includeSourceEvidence) {
+      bundle.attachments.sourceEvidenceSignatures.push(buildLifecycleQsigEntry({
+        id: 'source-evidence-sig-1',
+        signatureFamily: 'source-evidence',
+        targetType: 'source-evidence',
+        targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+        targetDigest: canonicalSourceEvidence.digest.value,
+        qsigBytes: qsig.qsigBytes,
+        publicKeyRef: 'pk-source-evidence',
+      }));
+    }
+  }
+
+  if (timestampTargetFamily) {
+    const targetByFamily = {
+      'archive-approval': { id: 'archive-approval-sig-1', qsigBytes: fixtures.archiveApproval?.qsigBytes },
+      maintenance: { id: 'maintenance-sig-1', qsigBytes: fixtures.maintenance?.qsigBytes },
+      'source-evidence': { id: 'source-evidence-sig-1', qsigBytes: fixtures.sourceEvidence?.qsigBytes },
+    };
+    const target = targetByFamily[timestampTargetFamily];
+    if (!(target?.qsigBytes instanceof Uint8Array)) {
+      throw new Error(`No detached signature bytes are available for timestampTargetFamily=${timestampTargetFamily}`);
+    }
+    const otsBytes = await buildOtsFixture(target.qsigBytes, { completeProof: true });
+    bundle.attachments.timestamps.push({
+      id: `ots-${timestampTargetFamily}`,
+      type: 'opentimestamps',
+      targetRef: target.id,
+      targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(target.qsigBytes)) },
+      proofEncoding: 'base64',
+      proof: bytesToBase64(otsBytes),
+    });
+  }
+
+  const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(bundle));
+  return {
+    bundle: parsed.lifecycleBundle,
+    bundleBytes: parsed.bytes,
+    digestHex: parsed.digest.value,
+    fixtures,
+    transitionRecord,
+    sourceEvidence,
+  };
+}
+
+const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
+  archiveStateCanonical: '{"aadPolicyId":"QV-AAD-HEADER-CHUNK-v1","archiveId":"abababababababababababababababababababababababababababababababab","authPolicyCommitment":{"alg":"SHA3-512","canonicalization":"QV-JSON-RFC8785-v1","value":"2c293897933111ac3037ce108c3ced8f05c0835cc880a3fa8cbcef913bea655ac203dfeca4167aeca4a972e2a7799bc9f08d0d1dbedad99b7afc9e3a61cef05a"},"canonicalization":"QV-JSON-RFC8785-v1","counterBits":32,"cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2","kdfTreeId":"QV-KDF-TREE-v2","maxChunkCount":4294967295,"nonceMode":"kmac-prefix64-ctr32","noncePolicyId":"QV-GCM-KMACPFX64-CTR32-v3","parentStateId":null,"qenc":{"chunkCount":3,"chunkSize":65536,"containerId":"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","containerIdAlg":"SHA3-512(qenc-header-bytes)","containerIdRole":"secondary-header-id","hashAlg":"SHA3-512","payloadLength":131072,"primaryAnchor":"qencHash","qencHash":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"},"schema":"quantum-vault-archive-state-descriptor/v1","stateType":"archive-state","version":1}',
+  stateId: 'e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117',
+  cohortBindingCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","bodyDefinition":{"excludes":["qcont-header","embedded-archive-state","embedded-archive-state-digest","embedded-cohort-binding","embedded-cohort-binding-digest","embedded-lifecycle-bundle","embedded-lifecycle-bundle-digest","external-signatures"],"includes":["fragment-len32-stream"]},"bodyDefinitionId":"QV-QCONT-SHARDBODY-v1","canonicalization":"QV-JSON-RFC8785-v1","cohortType":"shard-cohort","schema":"quantum-vault-cohort-binding/v1","shardBodyHashAlg":"SHA3-512","shardBodyHashes":["11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111","22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222","33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333","44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444","55555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"],"sharding":{"reedSolomon":{"codecId":"QV-RS-ErasureCodes-v1","k":3,"n":5,"parity":2},"shamir":{"shareCount":5,"threshold":4}},"shareCommitment":{"hashAlg":"SHA3-512","input":"raw-shamir-share-bytes"},"shareCommitments":["66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666","77777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777","88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888","99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","version":1}',
+  cohortBindingDigest: '711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c',
+  cohortIdPreimageCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","cohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","type":"quantum-vault-cohort-id-preimage/v1"}',
+  cohortId: 'd14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b',
+  transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"ebf832f7aff98cbe063b84b6835e58321ce5f932a211c888280511e614ae619b","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
+  sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-manifest-v3","version":1}',
+  lifecycleBundleDigest: '87a7d082a65713b689c441fadfdc51f41166945cbf9619a03a6806ee3542e37a31593c4e25ba4fc021d334ea7a979a37bd7b169e451f32fc5c886b74a729dda3',
+});
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function assertNoSignerIdentityPinned(status, label) {
+  assert(
+    !Object.prototype.hasOwnProperty.call(status || {}, 'signerIdentityPinned'),
+    `${label} should expose only signerPinned for archive-approval pinning`
+  );
 }
 
 async function expectFailure(fn, message) {
@@ -172,6 +776,19 @@ async function expectFailure(fn, message) {
   if (!failed) {
     throw new Error(message);
   }
+}
+
+async function expectFailureWithMessage(fn, expectedPattern, message) {
+  try {
+    await fn();
+  } catch (error) {
+    const actualMessage = String(error?.message || error);
+    if (expectedPattern instanceof RegExp && !expectedPattern.test(actualMessage)) {
+      throw new Error(`${message}: received "${actualMessage}"`);
+    }
+    return actualMessage;
+  }
+  throw new Error(message);
 }
 
 function mutateTail(bytes, delta = 1) {
@@ -1272,6 +1889,3243 @@ function buildCases() {
       },
     },
     {
+      name: 'successor archive-state canonical bytes and stateId regression vector remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const expectedArchiveId = generateArchiveId(new Uint8Array(32).fill(0xab));
+
+        assert(expectedArchiveId === sample.archiveState.archiveId, 'archiveId generation regression mismatch');
+        assert(
+          sample.canonicalArchiveState.canonical === LIFECYCLE_SAMPLE_VECTORS.archiveStateCanonical,
+          'archive-state canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(sample.canonicalArchiveState.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.archiveStateCanonical)),
+          'archive-state canonical regression bytes changed unexpectedly'
+        );
+        assert(sample.stateId === LIFECYCLE_SAMPLE_VECTORS.stateId, 'archive-state stateId regression changed unexpectedly');
+
+        const parsed = parseArchiveStateDescriptorBytes(sample.canonicalArchiveState.bytes);
+        assert(parsed.digest.value === LIFECYCLE_SAMPLE_VECTORS.stateId, 'archive-state parser digest regression mismatch');
+      },
+    },
+    {
+      name: 'successor archive-state supports the single-container nonce contract',
+      fn: async () => {
+        const archiveState = buildArchiveStateDescriptor({
+          archiveId: '12'.repeat(32),
+          parentStateId: null,
+          noncePolicyId: NONCE_POLICY_SINGLE_CONTAINER_V1,
+          nonceMode: NONCE_MODE_RANDOM96,
+          counterBits: 0,
+          maxChunkCount: 1,
+          chunkSize: 2048,
+          chunkCount: 1,
+          payloadLength: 2048,
+          qencHash: '34'.repeat(64),
+          containerId: '56'.repeat(64),
+          authPolicy: { level: 'strong-pq-signature', minValidSignatures: 1 },
+        });
+        const canonicalized = canonicalizeLifecycleArchiveState(archiveState);
+        const parsed = parseArchiveStateDescriptorBytes(canonicalized.bytes);
+
+        assert(parsed.archiveState.noncePolicyId === NONCE_POLICY_SINGLE_CONTAINER_V1, 'single-container noncePolicyId mismatch');
+        assert(parsed.archiveState.nonceMode === NONCE_MODE_RANDOM96, 'single-container nonceMode mismatch');
+        assert(parsed.archiveState.counterBits === 0, 'single-container counterBits mismatch');
+        assert(parsed.archiveState.maxChunkCount === 1, 'single-container maxChunkCount mismatch');
+      },
+    },
+    {
+      name: 'successor cohort-binding canonical bytes and cohortId regression vector remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const cohortIdPreimage = canonicalizeCohortIdPreimage({
+          archiveId: sample.archiveState.archiveId,
+          stateId: sample.stateId,
+          cohortBindingDigest: sample.canonicalCohortBinding.digest,
+        });
+
+        assert(
+          sample.canonicalCohortBinding.canonical === LIFECYCLE_SAMPLE_VECTORS.cohortBindingCanonical,
+          'cohort-binding canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(sample.canonicalCohortBinding.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.cohortBindingCanonical)),
+          'cohort-binding canonical regression bytes changed unexpectedly'
+        );
+        assert(
+          sample.canonicalCohortBinding.digest.value === LIFECYCLE_SAMPLE_VECTORS.cohortBindingDigest,
+          'cohort-binding digest regression changed unexpectedly'
+        );
+        assert(sample.cohortId === LIFECYCLE_SAMPLE_VECTORS.cohortId, 'cohortId regression changed unexpectedly');
+        assert(
+          cohortIdPreimage.canonical === LIFECYCLE_SAMPLE_VECTORS.cohortIdPreimageCanonical,
+          'cohortId preimage canonical regression changed unexpectedly'
+        );
+
+        const parsed = parseCohortBindingBytes(sample.canonicalCohortBinding.bytes);
+        assert(parsed.digest.value === LIFECYCLE_SAMPLE_VECTORS.cohortBindingDigest, 'cohort-binding parser digest regression mismatch');
+      },
+    },
+    {
+      name: 'successor transition-record and source-evidence canonical vectors remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+
+        assert(
+          canonicalTransition.canonical === LIFECYCLE_SAMPLE_VECTORS.transitionRecordCanonical,
+          'transition-record canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(canonicalTransition.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.transitionRecordCanonical)),
+          'transition-record canonical regression bytes changed unexpectedly'
+        );
+        assert(
+          canonicalSourceEvidence.canonical === LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceCanonical,
+          'source-evidence canonical regression string changed unexpectedly'
+        );
+        assert(
+          timingSafeEqual(canonicalSourceEvidence.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceCanonical)),
+          'source-evidence canonical regression bytes changed unexpectedly'
+        );
+
+        assert(
+          parseTransitionRecordBytes(canonicalTransition.bytes).digest.value === canonicalTransition.digest.value,
+          'transition-record parser digest regression mismatch'
+        );
+        assert(
+          parseSourceEvidenceBytes(canonicalSourceEvidence.bytes).digest.value === canonicalSourceEvidence.digest.value,
+          'source-evidence parser digest regression mismatch'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects a float',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-float',
+          retryRatio: 1.5,
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.retryRatio/i,
+          'transition-record parser unexpectedly accepted a float inside actorHints'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects integers above Number.MAX_SAFE_INTEGER',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-unsafe-integer',
+          shardOrdinal: 9007199254740992,
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.shardOrdinal/i,
+          'transition-record parser unexpectedly accepted an unsafe integer inside actorHints'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects nested unsafe numeric values inside arrays',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-nested-array',
+          checkpoints: ['alpha', [1, 2, 9007199254740992]],
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.checkpoints\[1\]\[2\]/i,
+          'transition-record parser unexpectedly accepted a nested unsafe integer inside actorHints arrays'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects nested unsafe numeric values inside objects',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-nested-object',
+          operator: {
+            stage: 'witness',
+            counters: {
+              retryBudget: 9007199254740992,
+            },
+          },
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.operator\.counters\.retryBudget/i,
+          'transition-record parser unexpectedly accepted a nested unsafe integer inside actorHints objects'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects negative integers',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+          ceremony: 'phase5-actorhints-negative-integer',
+          retryCount: -1,
+        });
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseTransitionRecordBytes(canonicalizeJsonToBytes(transitionRecord))),
+          /Invalid transitionRecord\.actorHints\.retryCount/i,
+          'transition-record parser unexpectedly accepted a negative integer inside actorHints'
+        );
+      },
+    },
+    {
+      name: 'transition-record actorHints rejects non-finite numeric values on the builder path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const invalidValues = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+        for (const value of invalidValues) {
+          const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {
+            ceremony: 'phase5-actorhints-non-finite',
+            retryCount: value,
+          });
+
+          await expectFailureWithMessage(
+            () => Promise.resolve(canonicalizeTransitionRecord(transitionRecord)),
+            /Invalid transitionRecord\.actorHints\.retryCount/i,
+            'transition-record canonicalization unexpectedly accepted a non-finite numeric actorHints value'
+          );
+        }
+      },
+    },
+    {
+      name: 'transition-record actorHints accepts an empty object',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, {});
+        const canonical = canonicalizeTransitionRecord(transitionRecord);
+        const parsed = parseTransitionRecordBytes(canonical.bytes);
+
+        assert(Object.keys(parsed.transitionRecord.actorHints).length === 0, 'transition-record parser should preserve empty actorHints objects');
+      },
+    },
+    {
+      name: 'transition-record actorHints accepts string boolean and null advisory metadata',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const actorHints = {
+          ceremony: 'phase5-actorhints-advisory',
+          operatorAcknowledged: true,
+          witnessComment: null,
+        };
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, actorHints);
+        const canonical = canonicalizeTransitionRecord(transitionRecord);
+        const parsed = parseTransitionRecordBytes(canonical.bytes);
+
+        assert(parsed.transitionRecord.actorHints.ceremony === actorHints.ceremony, 'transition-record parser lost actorHints string metadata');
+        assert(parsed.transitionRecord.actorHints.operatorAcknowledged === true, 'transition-record parser lost actorHints boolean metadata');
+        assert(parsed.transitionRecord.actorHints.witnessComment === null, 'transition-record parser lost actorHints null metadata');
+      },
+    },
+    {
+      name: 'transition-record actorHints accepts nested arrays and objects composed only of allowed values',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const actorHints = {
+          ceremony: 'phase5-actorhints-nested-valid',
+          operators: [
+            {
+              role: 'operator',
+              ordinal: 2,
+              annotations: [null, true, 'witnessed'],
+            },
+          ],
+          summary: {
+            approved: false,
+            note: 'in-profile nested advisory metadata',
+          },
+        };
+        const transitionRecord = buildTransitionRecordCandidate(sample.transitionRecord, actorHints);
+        const canonical = canonicalizeTransitionRecord(transitionRecord);
+        const parsed = parseTransitionRecordBytes(canonical.bytes);
+
+        assert(parsed.transitionRecord.actorHints.operators[0].ordinal === 2, 'transition-record parser lost nested safe integer metadata');
+        assert(parsed.transitionRecord.actorHints.operators[0].annotations[0] === null, 'transition-record parser lost nested null metadata');
+        assert(parsed.transitionRecord.actorHints.summary.approved === false, 'transition-record parser lost nested boolean metadata');
+      },
+    },
+    {
+      name: 'transition-record canonicalization remains unchanged for in-profile actorHints',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const rebuilt = buildTransitionRecord({
+          ...buildTransitionRecordCandidate(sample.transitionRecord, { ceremony: 'reshare-01' }),
+        });
+        const canonical = canonicalizeTransitionRecord(rebuilt);
+
+        assert(
+          canonical.canonical === LIFECYCLE_SAMPLE_VECTORS.transitionRecordCanonical,
+          'transition-record canonical regression changed unexpectedly for valid actorHints'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence builder omits descriptive fields by default and preserves external signature refs',
+      fn: async () => {
+        const sourceEvidence = buildSourceEvidence({
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-manifest-v3',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '90'.repeat(64) },
+            { alg: 'SHA-256', value: '12'.repeat(32) },
+          ],
+          externalSourceSignatureRefs: ['sig:external-default-profile'],
+          mediaType: 'application/json',
+        });
+
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'mediaType'), 'default profile must omit mediaType');
+        assert(
+          Array.isArray(sourceEvidence.externalSourceSignatureRefs) &&
+          sourceEvidence.externalSourceSignatureRefs.length === 1 &&
+          sourceEvidence.externalSourceSignatureRefs[0] === 'sig:external-default-profile',
+          'external source-signature refs must be preserved'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence builder allows explicit opt-in for mediaType',
+      fn: async () => {
+        const sourceEvidence = buildSourceEvidence({
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-manifest-v3',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '13'.repeat(64) },
+            { alg: 'SHA-256', value: '24'.repeat(32) },
+          ],
+          descriptiveFieldOptIn: ['mediaType'],
+          mediaType: 'application/json',
+        });
+
+        assert(sourceEvidence.mediaType === 'application/json', 'explicit descriptive-field opt-in must preserve mediaType');
+      },
+    },
+    {
+      name: 'successor source-evidence builder suppresses sensitive descriptive inputs by default',
+      fn: async () => {
+        const sourceEvidence = buildSourceEvidence({
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-manifest-v3',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '35'.repeat(64) },
+            { alg: 'SHA-256', value: '46'.repeat(32) },
+          ],
+          localPath: '/Users/alice/private/source.json',
+          username: 'alice',
+          email: 'alice@example.com',
+          operatorNotes: 'internal review notes',
+        });
+
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'localPath'), 'default profile must suppress local paths');
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'username'), 'default profile must suppress usernames');
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'email'), 'default profile must suppress email addresses');
+        assert(!Object.prototype.hasOwnProperty.call(sourceEvidence, 'operatorNotes'), 'default profile must suppress operator notes');
+      },
+    },
+    {
+      name: 'successor lifecycle bundle digest and embedded links remain stable',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalBundle = await canonicalizeLifecycleBundle(sample.lifecycleBundle);
+        const parsed = await parseLifecycleBundleBytes(canonicalBundle.bytes);
+
+        assert(
+          canonicalBundle.digest.value === LIFECYCLE_SAMPLE_VECTORS.lifecycleBundleDigest,
+          'lifecycle bundle digest regression changed unexpectedly'
+        );
+        assert(parsed.digest.value === LIFECYCLE_SAMPLE_VECTORS.lifecycleBundleDigest, 'lifecycle bundle parser digest regression mismatch');
+        assert(parsed.lifecycleBundle.archiveStateDigest.value === sample.stateId, 'lifecycle bundle archiveStateDigest mismatch');
+        assert(
+          parsed.lifecycleBundle.currentCohortBindingDigest.value === LIFECYCLE_SAMPLE_VECTORS.cohortBindingDigest,
+          'lifecycle bundle cohort-binding digest mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle parser rejects version values beyond v1',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.version = 2;
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted version 2'
+        );
+      },
+    },
+    {
+      name: 'successor archive-state parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const duplicateText = `{\"schema\":\"${sample.archiveState.schema}\",${sample.canonicalArchiveState.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveStateDescriptorBytes(textBytes(duplicateText))),
+          'archive-state parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor cohort-binding parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const duplicateText = `{\"schema\":\"${sample.cohortBinding.schema}\",${sample.canonicalCohortBinding.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseCohortBindingBytes(textBytes(duplicateText))),
+          'cohort-binding parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor transition-record parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const duplicateText = `{\"schema\":\"${sample.transitionRecord.schema}\",${canonicalTransition.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseTransitionRecordBytes(textBytes(duplicateText))),
+          'transition-record parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const duplicateText = `{\"schema\":\"${sample.sourceEvidence.schema}\",${canonicalSourceEvidence.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseSourceEvidenceBytes(textBytes(duplicateText))),
+          'source-evidence parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects non-canonical bytes on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const nonCanonical = `{\n  "version": 1,\n  "schema": "${sample.sourceEvidence.schema}",\n  "sourceEvidenceType": "${sample.sourceEvidence.sourceEvidenceType}",\n  "canonicalization": "${sample.sourceEvidence.canonicalization}",\n  "relationType": "${sample.sourceEvidence.relationType}",\n  "sourceObjectType": "${sample.sourceEvidence.sourceObjectType}",\n  "sourceDigests": ${JSON.stringify(sample.sourceEvidence.sourceDigests)},\n  "externalSourceSignatureRefs": ${JSON.stringify(sample.sourceEvidence.externalSourceSignatureRefs)}\n}`;
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseSourceEvidenceBytes(textBytes(nonCanonical))),
+          /canonical json/i,
+          'source-evidence parser unexpectedly accepted non-canonical bytes'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects duplicate digest algorithms',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = {
+          ...cloneJson(sample.sourceEvidence),
+          sourceDigests: [
+            { alg: 'SHA3-512', value: 'aa'.repeat(64) },
+            { alg: 'SHA3-512', value: 'bb'.repeat(64) },
+          ],
+        };
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseSourceEvidenceBytes(canonicalizeJsonToBytes(mutated))),
+          /sourceDigests\.alg/i,
+          'source-evidence parser unexpectedly accepted duplicate digest algorithms'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects duplicate external signature refs',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = {
+          ...cloneJson(sample.sourceEvidence),
+          externalSourceSignatureRefs: ['sig:external-1', 'sig:external-1'],
+        };
+
+        await expectFailureWithMessage(
+          () => Promise.resolve(parseSourceEvidenceBytes(canonicalizeJsonToBytes(mutated))),
+          /externalSourceSignatureRefs/i,
+          'source-evidence parser unexpectedly accepted duplicate external signature refs'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence parser rejects privacy-sensitive wire fields',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const privacyFields = {
+          localPath: '/Users/alice/private/source.json',
+          username: 'alice',
+          email: 'alice@example.com',
+          operatorNotes: 'internal note',
+        };
+
+        for (const [field, value] of Object.entries(privacyFields)) {
+          const mutated = { ...cloneJson(sample.sourceEvidence), [field]: value };
+          await expectFailureWithMessage(
+            () => Promise.resolve(parseSourceEvidenceBytes(canonicalizeJsonToBytes(mutated))),
+            new RegExp(field, 'i'),
+            `source-evidence parser unexpectedly accepted privacy-sensitive field ${field}`
+          );
+        }
+      },
+    },
+    {
+      name: 'successor archive-state parser rejects self-referential stateId fields',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const withStateId = `{\"stateId\":\"${sample.stateId}\",${sample.canonicalArchiveState.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseArchiveStateDescriptorBytes(textBytes(withStateId))),
+          'archive-state parser unexpectedly accepted self-referential stateId'
+        );
+      },
+    },
+    {
+      name: 'successor cohort-binding parser rejects self-referential cohortId fields',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const withCohortId = `{\"cohortId\":\"${sample.cohortId}\",${sample.canonicalCohortBinding.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => Promise.resolve(parseCohortBindingBytes(textBytes(withCohortId))),
+          'cohort-binding parser unexpectedly accepted self-referential cohortId'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle parser rejects duplicate object keys on the parse path',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalBundle = await canonicalizeLifecycleBundle(sample.lifecycleBundle);
+        const duplicateText = `{\"type\":\"${sample.lifecycleBundle.type}\",${canonicalBundle.canonical.slice(1)}`;
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(textBytes(duplicateText)),
+          'lifecycle bundle parser unexpectedly accepted duplicate object keys'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle parser accepts structurally valid entries with unknown publicKeyRef and defers rejection to verifier time',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: 'AA==',
+            publicKeyRef: 'missing-public-key',
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'archiveApprovalSignatures'),
+          'lifecycle signature verifier unexpectedly accepted an unknown publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle accepts valid archive-approval qsig entries and exact OTS linkage over archive-state bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const otsBytes = await buildOtsFixture(qsig.qsigBytes, { completeProof: true });
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          {
+            id: 'pk-1',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(qsig.signerPublicKey),
+          },
+        ];
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-1',
+          },
+        ];
+        mutated.attachments.timestamps = [
+          {
+            id: 'ots-1',
+            type: 'opentimestamps',
+            targetRef: 'sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(otsBytes),
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        assert(parsed.lifecycleBundle.attachments.archiveApprovalSignatures.length === 1, 'expected one archive-approval signature');
+        assert(parsed.lifecycleBundle.attachments.timestamps.length === 1, 'expected one exact OTS attachment');
+
+        const exports = buildAttachedArtifactExports(parsed.lifecycleBundle, 'archive');
+        const pqpkExport = exports.find((entry) => entry.filename.endsWith('.pqpk'));
+        assert(pqpkExport, 'expected successor export to emit a .pqpk file for bundled PQ keys');
+        const unpacked = unpackPqpk(pqpkExport.bytes);
+        assert(timingSafeEqual(unpacked.keyBytes, qsig.signerPublicKey), 'successor PQ export did not preserve the bundled raw public key');
+      },
+    },
+    {
+      name: 'successor archive-approval verification rejects invalid family mappings',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'maintenance',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
+        );
+      },
+    },
+    {
+      name: 'successor archive-approval verification rejects targetRef mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${'f'.repeat(128)}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted a mismatched targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor archive-approval verification rejects targetDigest mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: '0'.repeat(128) },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted a mismatched targetDigest'
+        );
+      },
+    },
+    {
+      name: 'successor archive-approval verification rejects incompatible publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const stellar = await createStellarSignerMaterial();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          {
+            id: 'pk-1',
+            kty: 'ed25519-public-key',
+            suite: 'ed25519',
+            encoding: 'stellar-address',
+            value: stellar.signer,
+          },
+        ];
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-1',
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted an incompatible publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor archive-approval verification rejects non-verifying publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const wrongKey = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          {
+            id: 'pk-1',
+            kty: 'ml-dsa-public-key',
+            suite: 'mldsa-87',
+            encoding: 'base64',
+            value: bytesToBase64(wrongKey.signerPublicKey),
+          },
+        ];
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'pk-1',
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'archiveApprovalSignatures'),
+          'archive-approval verification unexpectedly accepted a non-verifying publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle parser preserves OTS entries even when detached-signature linkage is wrong',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
+        const wrongOts = await buildOtsFixture(textBytes('wrong-signature-bytes'), { completeProof: true });
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.archiveApprovalSignatures = [
+          {
+            id: 'sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+          },
+        ];
+        mutated.attachments.timestamps = [
+          {
+            id: 'ots-1',
+            type: 'opentimestamps',
+            targetRef: 'sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(wrongOts),
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        assert(canonicalBundle.lifecycleBundle.attachments.timestamps.length === 1, 'expected one deferred-invalid OTS attachment');
+      },
+    },
+    {
+      name: 'successor lifecycle bundle accepts valid maintenance qsig entries and exact OTS linkage over transition-record bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const otsBytes = await buildOtsFixture(qsig.qsigBytes, { completeProof: true });
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-maint', qsig.signerPublicKey),
+        ];
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-maint',
+          }),
+        ];
+        mutated.attachments.timestamps = [
+          {
+            id: 'ots-maint-1',
+            type: 'opentimestamps',
+            targetRef: 'maint-sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(otsBytes),
+          },
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        assert(parsed.lifecycleBundle.attachments.maintenanceSignatures.length === 1, 'expected one maintenance signature');
+        assert(parsed.lifecycleBundle.attachments.timestamps.length === 1, 'expected one maintenance OTS attachment');
+        const verification = await verifyLifecycleSignatureEntry(
+          parsed.lifecycleBundle,
+          parsed.lifecycleBundle.attachments.maintenanceSignatures[0]
+        );
+        assert(verification.ok === true, 'expected maintenance signature verification to succeed');
+        assert(
+          verification.targetRef === `transition:sha3-512:${canonicalTransition.digest.value}`,
+          'maintenance verification resolved an unexpected targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor maintenance verification rejects invalid family mappings',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
+        );
+      },
+    },
+    {
+      name: 'successor maintenance verification rejects targetRef mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${'f'.repeat(128)}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted a mismatched targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor maintenance verification rejects targetDigest mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: '0'.repeat(128),
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted a mismatched targetDigest'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects transition records whose successor cohort reference does not match the current cohort',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions[0].toCohortBindingDigest = {
+          alg: 'SHA3-512',
+          value: 'ff'.repeat(64),
+        };
+        mutated.transitions[0].toCohortId = deriveCohortId({
+          archiveId: mutated.transitions[0].archiveId,
+          stateId: mutated.transitions[0].toStateId,
+          cohortBindingDigest: mutated.transitions[0].toCohortBindingDigest,
+        });
+
+        await expectFailure(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          'lifecycle bundle unexpectedly accepted a transition record whose successor cohort reference does not match the current cohort'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects duplicate transition-record digests',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions.push(cloneJson(mutated.transitions[0]));
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /duplicate transition-record digest/i,
+          'lifecycle bundle unexpectedly accepted duplicate transition-record digests'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects transition chains whose predecessor references do not continue the prior record',
+      fn: async () => {
+        const initial = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-broken-chain-parse-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const firstReshare = await reshareSameState(initial.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:30:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-broken-chain-1' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+        const secondReshare = await reshareSameState(await parseResharedShardSet(firstReshare), { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:31:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-broken-chain-2' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const mutated = cloneJson(secondReshare.lifecycleBundle);
+        const brokenFromCohortBindingDigest = { alg: 'SHA3-512', value: 'aa'.repeat(64) };
+        mutated.transitions[1].fromCohortBindingDigest = brokenFromCohortBindingDigest;
+        mutated.transitions[1].fromCohortId = deriveCohortId({
+          archiveId: mutated.transitions[1].archiveId,
+          stateId: mutated.transitions[1].fromStateId,
+          cohortBindingDigest: brokenFromCohortBindingDigest,
+        });
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /does not continue the prior transition chain/i,
+          'lifecycle bundle unexpectedly accepted a broken transition chain'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects unsupported Phase 5 transition types',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions[0].transitionType = 'state-migration';
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /transitionType is not supported in Phase 5/i,
+          'lifecycle bundle unexpectedly accepted an unsupported Phase 5 transition type'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects state-changing transition records in Phase 5',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.transitions[0].toStateId = 'ff'.repeat(64);
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /changes stateId, which is not supported in Phase 5/i,
+          'lifecycle bundle unexpectedly accepted a state-changing transition record in Phase 5'
+        );
+      },
+    },
+    {
+      name: 'successor maintenance verification rejects non-verifying publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
+        const qsig = buildQsigFixture(canonicalTransition.bytes);
+        const wrongKey = buildQsigFixture(canonicalTransition.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-maint', wrongKey.signerPublicKey),
+        ];
+        mutated.attachments.maintenanceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'maint-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-maint',
+          }),
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'maintenanceSignatures'),
+          'maintenance verification unexpectedly accepted a non-verifying publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle accepts valid source-evidence qsig entries over source-evidence bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-source', qsig.signerPublicKey),
+        ];
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-source',
+          }),
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        assert(parsed.lifecycleBundle.attachments.sourceEvidenceSignatures.length === 1, 'expected one source-evidence signature');
+        const verification = await verifyLifecycleSignatureEntry(
+          parsed.lifecycleBundle,
+          parsed.lifecycleBundle.attachments.sourceEvidenceSignatures[0]
+        );
+        assert(verification.ok === true, 'expected source-evidence signature verification to succeed');
+        assert(
+          verification.targetRef === `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+          'source-evidence verification resolved an unexpected targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle bundle rejects duplicate source-evidence digests',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const duplicate = cloneJson(sample.sourceEvidence);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.sourceEvidence = [cloneJson(sample.sourceEvidence), duplicate];
+
+        await expectFailureWithMessage(
+          () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
+          /duplicate source-evidence digest/i,
+          'lifecycle bundle unexpectedly accepted duplicate source-evidence digests'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence verification rejects invalid family mappings',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'maintenance',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence verification rejects targetRef mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${'f'.repeat(128)}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted a mismatched targetRef'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence verification rejects targetDigest mismatches',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: '0'.repeat(128),
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted a mismatched targetDigest'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence verification rejects non-verifying publicKeyRef entries',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const qsig = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const wrongKey = buildQsigFixture(canonicalSourceEvidence.bytes);
+        const mutated = cloneJson(sample.lifecycleBundle);
+        mutated.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-source', wrongKey.signerPublicKey),
+        ];
+        mutated.attachments.sourceEvidenceSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'source-sig-1',
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+            targetDigest: canonicalSourceEvidence.digest.value,
+            qsigBytes: qsig.qsigBytes,
+            publicKeyRef: 'pk-source',
+          }),
+        ];
+
+        const parsed = await parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated));
+        await expectFailure(
+          () => verifyLifecycleSignatureInAttachmentField(parsed.lifecycleBundle, 'sourceEvidenceSignatures'),
+          'source-evidence verification unexpectedly accepted a non-verifying publicKeyRef'
+        );
+      },
+    },
+    {
+      name: 'successor source-evidence signature verification rejects detached signatures over the wrong bytes',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
+        const wrongBytes = textBytes('not-the-canonical-source-evidence-bytes');
+        const qsig = buildQsigFixture(wrongBytes);
+        const signature = buildLifecycleQsigEntry({
+          id: 'source-sig-1',
+          signatureFamily: 'source-evidence',
+          targetType: 'source-evidence',
+          targetRef: `source-evidence:sha3-512:${canonicalSourceEvidence.digest.value}`,
+          targetDigest: canonicalSourceEvidence.digest.value,
+          qsigBytes: qsig.qsigBytes,
+        });
+
+        await expectFailureWithMessage(
+          () => verifyLifecycleSignatureEntry(sample.lifecycleBundle, signature),
+          /did not verify detached signature|verification failed/i,
+          'source-evidence signature verification unexpectedly accepted detached signature bytes over the wrong target'
+        );
+      },
+    },
+    {
+      name: 'successor attach preserves archive-state and cohort-binding bytes while attaching archive-approval signatures',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 3072);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-attach-regression.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        const sig = buildQsigFixture(split.archiveStateBytes);
+
+        const attached = await attachLifecycleBundleToShards(parsed, {
+          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+
+        assert(timingSafeEqual(attached.signableArchiveStateBytes, split.archiveStateBytes), 'attach changed the external signer target bytes');
+        assert(timingSafeEqual(attached.archiveStateBytes, split.archiveStateBytes), 'attach changed archive-state bytes');
+        assert(timingSafeEqual(attached.cohortBindingBytes, split.cohortBindingBytes), 'attach changed cohort-binding bytes');
+
+        const reparsed = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        for (const shard of reparsed) {
+          assert(timingSafeEqual(shard.archiveStateBytes, split.archiveStateBytes), 'rewritten shard archive-state bytes changed unexpectedly');
+          assert(timingSafeEqual(shard.cohortBindingBytes, split.cohortBindingBytes), 'rewritten shard cohort-binding bytes changed unexpectedly');
+        }
+      },
+    },
+    {
+      name: 'successor attach preserves mixed embedded lifecycle-bundle digests inside one cohort during partial rewrites',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 6144);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-partial-rewrite.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigA = buildQsigFixture(split.archiveStateBytes);
+        const firstAttach = await attachLifecycleBundleToShards(parsedOriginal, {
+          signatures: [{ name: 'archive-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigB = buildQsigFixture(firstAttach.archiveStateBytes);
+        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
+          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'archive-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+        const parsedSecondSubset = await Promise.all(secondAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        const mixedCohort = [...parsedSecondSubset, ...parsedFirstAttach.slice(2)];
+        assert(
+          new Set(mixedCohort.map((shard) => `${shard.metaJSON.archiveId}:${shard.metaJSON.stateId}:${shard.metaJSON.cohortId}`)).size === 1,
+          'partial successor rewrite unexpectedly changed the cohort identity'
+        );
+
+        const sigC = buildQsigFixture(split.archiveStateBytes);
+        const mixedAttach = await attachLifecycleBundleToShards(mixedCohort, {
+          lifecycleBundleBytes: secondAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'archive-c.qsig', bytes: sigC.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigC.pqpkBytes],
+        });
+
+        assert(mixedAttach.mixedEmbeddedLifecycleBundleDigests === true, 'expected mixed embedded lifecycle-bundle digests to be reported');
+        assert(mixedAttach.embeddedLifecycleBundleDigests.length === 2, 'expected two embedded lifecycle-bundle digests inside one cohort');
+      },
+    },
+    {
+      name: 'successor shard embedding round-trips archive-state cohort-binding and lifecycle bundle bytes',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'lifecycle-successor.bin'));
+        const archiveIdRandomBytes = new Uint8Array(32).fill(0xab);
+        const split = await buildLifecycleQcontShards(
+          qencBytes,
+          pair.secretKey,
+          { n: 5, k: 3 },
+          { authPolicyLevel: 'integrity-only', archiveIdRandomBytes }
+        );
+
+        assert(split.shards.length === 5, 'expected 5 successor shards');
+        assert(split.archiveId === generateArchiveId(archiveIdRandomBytes), 'successor shard archiveId mismatch');
+        assert(split.stateId === split.archiveStateDigestHex, 'successor shard stateId must equal archive-state digest');
+        assert(split.cohortBinding.stateId === split.stateId, 'successor cohort-binding stateId mismatch');
+        assert(split.lifecycleBundle.archiveStateDigest.value === split.stateId, 'successor lifecycle bundle archiveStateDigest mismatch');
+        assert(
+          split.lifecycleBundle.currentCohortBindingDigest.value === split.cohortBindingDigestHex,
+          'successor lifecycle bundle cohort-binding digest mismatch'
+        );
+
+        for (const shard of split.shards) {
+          const parsed = await parseLifecycleShard(await blobToBytes(shard.blob));
+          assert(parsed.metaJSON.archiveId === split.archiveId, 'successor shard metadata archiveId mismatch');
+          assert(parsed.metaJSON.stateId === split.stateId, 'successor shard metadata stateId mismatch');
+          assert(parsed.metaJSON.cohortId === split.cohortId, 'successor shard metadata cohortId mismatch');
+          assert(parsed.shardIndex === shard.index, 'successor shard index mismatch');
+          assert(parsed.archiveState.archiveId === split.archiveId, 'embedded archive-state archiveId mismatch');
+          assert(parsed.stateId === split.stateId, 'embedded archive-state stateId mismatch');
+          assert(parsed.cohortBinding.stateId === split.stateId, 'embedded cohort-binding stateId mismatch');
+          assert(parsed.cohortId === split.cohortId, 'embedded cohortId mismatch');
+          assert(
+            timingSafeEqual(parsed.archiveStateBytes, split.archiveStateBytes),
+            'embedded archive-state bytes changed unexpectedly'
+          );
+          assert(
+            timingSafeEqual(parsed.cohortBindingBytes, split.cohortBindingBytes),
+            'embedded cohort-binding bytes changed unexpectedly'
+          );
+          assert(
+            timingSafeEqual(parsed.lifecycleBundleBytes, split.lifecycleBundleBytes),
+            'embedded lifecycle bundle bytes changed unexpectedly'
+          );
+        }
+      },
+    },
+    {
+      name: 'successor restore rejects mixed archiveId candidate inputs without explicit selection',
+      fn: async () => {
+        const sampleA = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-archive-a') });
+        const sampleB = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-archive-b') });
+        const mixed = [
+          ...sampleA.parsed.slice(0, 3),
+          sampleB.parsed[0],
+        ];
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted mixed archiveId candidates without explicit selection'
+        );
+      },
+    },
+    {
+      name: 'restore rejects mixed legacy and successor shard families',
+      fn: async () => {
+        const legacyPair = await generateKeyPair({ collectUserEntropy: false });
+        const legacyPayload = textBytes('mixed-legacy-successor-legacy');
+        const legacyQenc = await blobToBytes(await encryptFile(legacyPayload, legacyPair.publicKey, 'mixed-legacy-successor-legacy.bin'));
+        const legacySplit = await buildQcontShards(legacyQenc, legacyPair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const legacyParsed = await Promise.all(legacySplit.shards.slice(0, 2).map(async (item) => parseShard(await blobToBytes(item.blob))));
+        const successorSample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('mixed-legacy-successor-successor') });
+
+        await expectFailure(
+          () => restoreFromShards([...legacyParsed, successorSample.parsed[0]], { onLog: () => {}, onError: () => {} }),
+          'restore unexpectedly accepted mixed legacy and successor shard families'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects mixed stateId candidate inputs without explicit selection',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-state') });
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? {
+                ...shard,
+                stateId: 'aa'.repeat(64),
+                metaJSON: { ...shard.metaJSON, stateId: 'aa'.repeat(64) },
+              }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted mixed stateId candidates without explicit selection'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects mixed cohortId candidate inputs without explicit selection',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-mixed-cohort') });
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? {
+                ...shard,
+                cohortId: 'bb'.repeat(32),
+                metaJSON: { ...shard.metaJSON, cohortId: 'bb'.repeat(32) },
+              }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted mixed cohortId candidates without explicit selection'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects exact archive-state byte mismatches inside one candidate set',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-archive-state-byte-mismatch') });
+        const mutatedBytes = sample.parsed[0].archiveStateBytes.slice();
+        mutatedBytes[mutatedBytes.length - 1] ^= 0x01;
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? { ...shard, archiveStateBytes: mutatedBytes }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted an exact archive-state byte mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor restore rejects exact cohort-binding byte mismatches inside one candidate set',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-cohort-binding-byte-mismatch') });
+        const mutatedBytes = sample.parsed[0].cohortBindingBytes.slice();
+        mutatedBytes[mutatedBytes.length - 1] ^= 0x01;
+        const mixed = sample.parsed.map((shard, index) => (
+          index === 0
+            ? { ...shard, cohortBindingBytes: mutatedBytes }
+            : shard
+        ));
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly accepted an exact cohort-binding byte mismatch'
+        );
+      },
+    },
+    {
+      name: 'successor restore accepts a valid same-cohort shard set with one lifecycle-bundle digest',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-single-bundle'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sig = buildQsigFixture(sample.split.archiveStateBytes);
+        const attached = await attachLifecycleBundleToShards(sample.parsed, {
+          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+        const parsedAttached = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const restored = await restoreFromShards(parsedAttached, { onLog: () => {}, onError: () => {} });
+        assert(restored.archiveId === sample.split.archiveId, 'successor restore archiveId mismatch');
+        assert(restored.stateId === sample.split.stateId, 'successor restore stateId mismatch');
+        assert(restored.cohortId === sample.split.cohortId, 'successor restore cohortId mismatch');
+        assert(restored.lifecycleBundleDigestHex === attached.lifecycleBundleDigestHex, 'successor restore picked the wrong lifecycle-bundle digest');
+        assert(
+          Array.isArray(restored.embeddedLifecycleBundleDigestsUsed) &&
+          restored.embeddedLifecycleBundleDigestsUsed.length === 1 &&
+          restored.embeddedLifecycleBundleDigestsUsed[0] === attached.lifecycleBundleDigestHex,
+          'successor restore should report exactly one embedded lifecycle-bundle digest'
+        );
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
+        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled key material');
+        assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
+      },
+    },
+    {
+      name: 'successor restore sets qkeyOk from the authenticated .qenc key commitment on honest recovery',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-recovered-key-commitment-ok'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const restored = await restoreFromShards(sample.parsed, { onLog: () => {}, onError: () => {} });
+        assert(restored.qkeyOk === true, 'honest successor restore should report qkeyOk=true');
+        assert(restored.privateKeyHashMatchesMetadata === true, 'honest successor restore should report matching privateKeyHash metadata');
+      },
+    },
+    {
+      name: 'successor restore ignores privateKeyHash tampering for correctness and reports it separately',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-privatekeyhash-diagnostics-only'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const tampered = rewriteSuccessorPrivateKeyHash(sample.parsed, 'ff'.repeat(64));
+
+        const baseline = await restoreFromShards(sample.parsed, { onLog: () => {}, onError: () => {} });
+        const restored = await restoreFromShards(tampered, { onLog: () => {}, onError: () => {} });
+
+        assert(baseline.qkeyOk === true, 'baseline successor restore should report qkeyOk=true');
+        assert(restored.qkeyOk === true, 'privateKeyHash tampering must not clear qkeyOk on an honest recovery');
+        assert(restored.privateKeyHashMatchesMetadata === false, 'privateKeyHash tampering should be reported separately');
+        assert(restored.recoveredPrivHash === baseline.recoveredPrivHash, 'privateKeyHash tampering must not change the recovered private key');
+        assert(restored.recoveredQencHash === baseline.recoveredQencHash, 'privateKeyHash tampering must not change the recovered .qenc hash');
+      },
+    },
+    {
+      name: 'successor restore rejects metadata-hash agreement alone when the recovered key fails the embedded .qenc key commitment',
+      fn: async () => {
+        const sample = await buildSuccessorRecoveredKeyMismatchSample();
+
+        assert(sample.signedBundle.bundle.attachments.archiveApprovalSignatures.length === 1, 'malicious sample should still carry archive-approval evidence');
+        assert(sample.signedBundle.bundle.authPolicy.level === 'any-signature', 'malicious sample should still require archive approval');
+        assert(
+          sample.maliciousShards.every((shard, index) => timingSafeEqual(shard.fragments, sample.honestSignedShards[index].fragments)),
+          'malicious sample should preserve the original .qenc fragment stream'
+        );
+        assert(
+          sample.maliciousShards[0].archiveState.qenc.qencHash === sample.honest.split.archiveState.qenc.qencHash,
+          'malicious sample should preserve the archive-state qencHash anchor'
+        );
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(sample.maliciousShards, { onLog: () => {}, onError: () => {} }),
+          /embedded \.qenc key commitment/i,
+          'successor restore unexpectedly accepted a recovered secret key based on shard metadata alone'
+        );
+      },
+    },
+    {
+      name: 'successor restore zeroizes temporary recovered-key validation material on success and failure paths',
+      fn: async () => {
+        const honest = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-recovered-key-zeroize-success'),
+          authPolicyLevel: 'integrity-only',
+        });
+        let successRefs = null;
+        const restored = await restoreFromShards(honest.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          keyValidationHooks: {
+            onFinally: (refs) => {
+              successRefs = refs;
+            },
+          },
+        });
+        assert(restored.qkeyOk === true, 'success-path zeroization coverage expects a valid recovered key');
+        assertZeroizedRecoveredKeyValidationMaterial(successRefs, 'success-path recovered-key validation');
+
+        const malicious = await buildSuccessorRecoveredKeyMismatchSample({
+          payloadBytes: textBytes('successor-recovered-key-zeroize-failure'),
+        });
+        let failureRefs = null;
+        await expectFailureWithMessage(
+          () => restoreFromShards(malicious.maliciousShards, {
+            onLog: () => {},
+            onError: () => {},
+            keyValidationHooks: {
+              onFinally: (refs) => {
+                failureRefs = refs;
+              },
+            },
+          }),
+          /embedded \.qenc key commitment/i,
+          'failure-path zeroization coverage expected key-commitment validation to fail'
+        );
+        assertZeroizedRecoveredKeyValidationMaterial(failureRefs, 'failure-path recovered-key validation');
+      },
+    },
+    {
+      name: 'successor restore requires explicit lifecycle-bundle selection when one cohort carries multiple bundle digests',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-multi-bundle'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sigA = buildQsigFixture(sample.split.archiveStateBytes);
+        const firstAttach = await attachLifecycleBundleToShards(sample.parsed, {
+          signatures: [{ name: 'archive-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigB = buildQsigFixture(sample.split.archiveStateBytes);
+        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
+          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'archive-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+        const parsedSubset = await Promise.all(secondAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        const mixed = [...parsedSubset, ...parsedFirstAttach.slice(2)];
+
+        await expectFailure(
+          () => restoreFromShards(mixed, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly auto-selected one lifecycle-bundle variant from a mixed-digest cohort'
+        );
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { selectedLifecycleBundleDigestHex: secondAttach.lifecycleBundleDigestHex },
+        });
+        assert(restored.lifecycleBundleDigestHex === secondAttach.lifecycleBundleDigestHex, 'explicit lifecycle-bundle digest selection picked the wrong bundle');
+        assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded lifecycle-bundle digests should be reported honestly');
+        assert(restored.authenticity.status.cohortForkDetected === false, 'mixed bundle variants within one cohort must not be reported as a cohort fork');
+        assert(restored.lifecycleVerification.cohorts.forkDetected === false, 'mixed bundle variants within one cohort must not be treated as a same-state fork');
+      },
+    },
+    {
+      name: 'successor restore accepts an uploaded lifecycle bundle only when its digests match the selected state and cohort',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-uploaded-lifecycle-bundle-accept'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sig = buildQsigFixture(sample.split.archiveStateBytes);
+        const attached = await attachLifecycleBundleToShards(sample.parsed, {
+          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+        const parsedAttached = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const restored = await restoreFromShards(parsedAttached, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: attached.lifecycleBundleBytes },
+        });
+        assert(restored.selectionSource === 'uploaded-lifecycle-bundle', `unexpected successor selection source: ${restored.selectionSource}`);
+        assert(restored.lifecycleBundleDigestHex === attached.lifecycleBundleDigestHex, 'uploaded lifecycle bundle should drive the selected digest');
+      },
+    },
+    {
+      name: 'successor restore rejects an uploaded lifecycle bundle whose digests do not match the selected state and cohort',
+      fn: async () => {
+        const sampleA = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-uploaded-lifecycle-bundle-a'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sampleB = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-uploaded-lifecycle-bundle-b'),
+          authPolicyLevel: 'any-signature',
+        });
+        const sigA = buildQsigFixture(sampleA.split.archiveStateBytes);
+        const attachedA = await attachLifecycleBundleToShards(sampleA.parsed, {
+          signatures: [{ name: 'archive-approval-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const sigB = buildQsigFixture(sampleB.split.archiveStateBytes);
+        const attachedB = await attachLifecycleBundleToShards(sampleB.parsed, {
+          signatures: [{ name: 'archive-approval-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+        const parsedAttachedA = await Promise.all(attachedA.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        await expectFailure(
+          () => restoreFromShards(parsedAttachedA, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { lifecycleBundleBytes: attachedB.lifecycleBundleBytes },
+          }),
+          'successor restore unexpectedly accepted an uploaded lifecycle bundle from a different state/cohort'
+        );
+      },
+    },
+    {
+      name: 'successor restore uses an uploaded archive-state descriptor to disambiguate mixed candidate inputs',
+      fn: async () => {
+        const sampleA = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-uploaded-archive-state-a') });
+        const sampleB = await buildSuccessorRestoreSample({ payloadBytes: textBytes('successor-uploaded-archive-state-b') });
+        const mixed = [
+          ...sampleA.parsed.slice(0, 4),
+          sampleB.parsed[0],
+        ];
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { archiveStateBytes: sampleA.split.archiveStateBytes },
+        });
+        assert(restored.archiveId === sampleA.split.archiveId, 'uploaded archive-state should select the intended archiveId');
+        assert(restored.selectionSource === 'uploaded-archive-state', `unexpected selection source: ${restored.selectionSource}`);
+      },
+    },
+    {
+      name: 'successor restore keeps archive approval, maintenance, source evidence, pinning, policy, and OTS as distinct states',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-state-separation'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: true,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'maintenance',
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
+        assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
+        assert(restored.authenticity.status.transitionRecordPresent === true, 'expected transition record presence reporting');
+        assert(restored.authenticity.status.transitionChainValid === true, 'expected structural transition-chain validity reporting');
+        assert(restored.authenticity.status.sourceEvidencePresent === true, 'expected source-evidence presence reporting');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
+        assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
+        assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
+        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
+        assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
+        assert(restored.lifecycleVerification.transitions.present === true, 'expected lifecycle transition reporting');
+        assert(restored.lifecycleVerification.transitions.chainValid === true, 'expected structural transition-chain validity in lifecycle reporting');
+        assert(restored.lifecycleVerification.transitions.records.length === 1, 'expected one transition record in the lifecycle report');
+        assert(restored.lifecycleVerification.sourceEvidence.present === true, 'expected source-evidence reporting');
+        assert(restored.lifecycleVerification.sourceEvidence.count === 1, 'expected one source-evidence object in lifecycle reporting');
+        assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'expected verified source-evidence reporting');
+        assert(
+          restored.lifecycleVerification.sourceEvidence.records[0].externalSourceSignatureRefs[0] === 'sig:external-restore-phase3',
+          'expected external source-signature refs to be preserved in reporting'
+        );
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 1, 'only one archive-approval signature should count toward archive policy');
+        assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 1, 'only archive-approval pinning should drive archive trust status');
+        assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
+        assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
+        assert(restored.authenticity.verification.counts.pinnedValidTotal === 3, 'all verified detached signature families should still contribute to aggregate pinning counts');
+      },
+    },
+    {
+      name: 'successor restore does not let maintenance or source-evidence pinning imply archive-approval pinning',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-pinning-family-separation'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'integrity-only',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'maintenance',
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
+        assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === false, 'maintenance/source-evidence must not imply archive-approval verification');
+        assert(restored.authenticity.status.signerPinned === false, 'maintenance/source-evidence must not imply archive-approval signer pinning');
+        assert(restored.authenticity.status.bundlePinned === false, 'maintenance/source-evidence must not imply archive-approval bundle pinning');
+        assert(restored.authenticity.status.userPinned === false, 'maintenance/source-evidence must not imply archive-approval user pinning');
+        assert(restored.authenticity.status.sourceEvidencePresent === true, 'expected source-evidence presence reporting');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
+        assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
+        assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected OTS linkage reporting');
+        assert(restored.authenticity.status.policySatisfied === true, 'integrity-only policy should remain satisfied');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'archive policy counting must remain archive-approval only');
+        assert(restored.authenticity.verification.counts.archiveApprovalPinnedValidTotal === 0, 'archive-approval pinning count must remain zero without archive-approval signatures');
+        assert(restored.authenticity.verification.counts.archiveApprovalBundlePinnedValidTotal === 0, 'archive-approval bundle pinning count must remain zero without archive-approval signatures');
+        assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
+        assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
+        assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'source-evidence reporting must remain separate from archive approval');
+        assert(restored.authenticity.verification.counts.pinnedValidTotal === 2, 'aggregate detached-signature pinning may still reflect non-archive families');
+      },
+    },
+    {
+      name: 'successor restore ignores archive-approval signatures created over lifecycle-bundle bytes and still enforces archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-policy-wrong-archive-approval-target'),
+          authPolicyLevel: 'any-signature',
+        });
+        const wrongTargetSig = buildQsigFixture(sample.split.lifecycleBundleBytes);
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments = {
+          publicKeys: [
+            buildBundledMlDsaPublicKey('pk-wrong-target', wrongTargetSig.signerPublicKey),
+          ],
+          archiveApprovalSignatures: [
+            buildLifecycleQsigEntry({
+              id: 'archive-approval-wrong-target',
+              signatureFamily: 'archive-approval',
+              targetType: 'archive-state',
+              targetRef: `state:${sample.split.stateId}`,
+              targetDigest: sample.split.stateId,
+              qsigBytes: wrongTargetSig.qsigBytes,
+              publicKeyRef: 'pk-wrong-target',
+            }),
+          ],
+          maintenanceSignatures: [],
+          sourceEvidenceSignatures: [],
+          timestamps: [],
+        };
+
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, canonicalizeJsonToBytes(bundle));
+        await expectFailureWithMessage(
+          () => restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} }),
+          /no verified archive-approval signature satisfies archive policy/i,
+          'successor restore unexpectedly satisfied policy with archive-approval signatures created over lifecycle-bundle bytes'
+        );
+      },
+    },
+    {
+      name: 'lifecycle Shamir combine uses copied zeroized share buffers (restore/reshare shared helper)',
+      fn: async () => {
+        const { splitSecret } = await import('./splitting/sss.js');
+        const secret = new Uint8Array(32);
+        secret.fill(0x37);
+        const shares = await splitSecret(secret, 5, 4);
+        const sortedShares = [0, 1, 2, 3].map((i) => ({ shardIndex: i, share: shares[i] }));
+        const before0 = shares[0].slice();
+        const before1 = shares[1].slice();
+        const { secret: recovered, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, 4);
+        assert(timingSafeEqual(shares[0], before0), 'original share 0 must not be mutated');
+        assert(timingSafeEqual(shares[1], before1), 'original share 1 must not be mutated');
+        assert(shareCopiesCleared === true, 'temporary share copies should be zeroized');
+        assert(timingSafeEqual(recovered, secret), 'reconstructed secret must match');
+      },
+    },
+    {
+      name: 'lifecycle attach merge rejects duplicate attachment id with differing content',
+      fn: async () => {
+        const a = {
+          id: 'key-a',
+          kty: 'ml-dsa-public-key',
+          suite: 'mldsa-87',
+          encoding: 'base64',
+          value: 'YQ==',
+        };
+        const b = {
+          id: 'key-a',
+          kty: 'ml-dsa-public-key',
+          suite: 'mldsa-87',
+          encoding: 'base64',
+          value: 'Yg==',
+        };
+        await expectFailure(
+          async () => {
+            mergeLifecycleAttachmentEntriesById([a], [b]);
+          },
+          'attach merge unexpectedly accepted conflicting duplicate ids'
+        );
+        const merged = mergeLifecycleAttachmentEntriesById([a], [cloneJson(a)]);
+        assert(merged.length === 1, 'duplicate identical entries should collapse to one row');
+      },
+    },
+    {
+      name: 'successor restore does not let maintenance, source-evidence, or OTS satisfy archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-policy-archive-approval-only'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'maintenance',
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        await expectFailure(
+          () => restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} }),
+          'successor restore unexpectedly let maintenance/source-evidence/OTS satisfy archive policy'
+        );
+      },
+    },
+    {
+      name: 'successor restore does not let source-evidence-only signatures satisfy archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-policy-source-evidence-only'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: false,
+          includeSourceEvidence: true,
+          timestampTargetFamily: null,
+        });
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} }),
+          /archive-approval signature satisfies archive policy/i,
+          'successor restore unexpectedly let source-evidence-only signatures satisfy archive policy'
+        );
+      },
+    },
+    {
+      name: 'successor restore reports and ignores unresolved publicKeyRef entries when another archive-approval signature satisfies policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-publickeyref-fail-closed'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const validQsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.publicKeys = [
+          buildBundledMlDsaPublicKey('pk-valid', validQsig.signerPublicKey),
+        ];
+        bundle.attachments.archiveApprovalSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'archive-approval-valid',
+            signatureFamily: 'archive-approval',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: sample.split.stateId,
+            qsigBytes: validQsig.qsigBytes,
+            publicKeyRef: 'pk-valid',
+          }),
+          {
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.split.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'missing-public-key',
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+        });
+        assert(restored.authenticity.status.policySatisfied === true, 'valid archive-approval signature should still satisfy policy');
+        assert(restored.authenticity.verification.results.some((item) => item.ok === false), 'expected one invalid archive-approval result');
+        assert(
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('did not verify and were ignored')),
+          'expected unresolved publicKeyRef entry to produce an ignore warning'
+        );
+      },
+    },
+    {
+      name: 'successor restore still fails when unresolved publicKeyRef entries leave archive policy unsatisfied',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-publickeyref-policy-required'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.archiveApprovalSignatures = [
+          {
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            format: 'qsig',
+            suite: 'mldsa-87',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: { alg: 'SHA3-512', value: sample.split.stateId },
+            signatureEncoding: 'base64',
+            signature: bytesToBase64(qsig.qsigBytes),
+            publicKeyRef: 'missing-public-key',
+          },
+        ];
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(sample.parsed, {
+            onLog: () => {},
+            onError: () => {},
+            verification: { lifecycleBundleBytes: canonicalizeJsonToBytes(bundle) },
+          }),
+          /no verified archive-approval signature satisfies archive policy/i,
+          'successor restore unexpectedly satisfied policy with only an unresolved publicKeyRef entry'
+        );
+      },
+    },
+    {
+      name: 'successor restore reports and ignores mismatched OTS linkage in an uploaded lifecycle bundle',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-restore-ots-fail-closed'),
+          authPolicyLevel: 'any-signature',
+        });
+        const qsig = buildQsigFixture(sample.split.archiveStateBytes);
+        const wrongOts = await buildOtsFixture(textBytes('wrong-detached-signature-bytes'), { completeProof: true });
+        const bundle = cloneJson(sample.split.lifecycleBundle);
+        bundle.authPolicy = { level: 'any-signature', minValidSignatures: 1 };
+        bundle.attachments.archiveApprovalSignatures = [
+          buildLifecycleQsigEntry({
+            id: 'archive-approval-sig-1',
+            signatureFamily: 'archive-approval',
+            targetType: 'archive-state',
+            targetRef: `state:${sample.split.stateId}`,
+            targetDigest: sample.split.stateId,
+            qsigBytes: qsig.qsigBytes,
+          }),
+        ];
+        bundle.attachments.timestamps = [
+          {
+            id: 'ots-1',
+            type: 'opentimestamps',
+            targetRef: 'archive-approval-sig-1',
+            targetDigest: { alg: 'SHA-256', value: toHex(await digestSha256(qsig.qsigBytes)) },
+            proofEncoding: 'base64',
+            proof: bytesToBase64(wrongOts),
+          },
+        ];
+
+        const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+        const restored = await restoreFromShards(sample.parsed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+        });
+        assert(restored.authenticity.status.policySatisfied === true, 'mismatched OTS linkage must not block archive policy');
+        assert(restored.authenticity.timestampEvidence.length === 0, 'mismatched OTS linkage should be ignored for evidence reporting');
+        assert(
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('did not link cleanly and was ignored')),
+          'expected mismatched OTS linkage to produce an explicit warning'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing keeps the archive state unchanged while emitting a new cohort and required transition record',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-same-state-reshare-valid'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:30:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-valid-reshare' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.archiveId === sample.split.archiveId, 'reshare archiveId changed unexpectedly');
+        assert(reshared.stateId === sample.split.stateId, 'reshare stateId changed unexpectedly');
+        assert(reshared.predecessorCohortId === sample.split.cohortId, 'reshare predecessor cohortId mismatch');
+        assert(reshared.cohortId !== sample.split.cohortId, 'reshare should emit a fresh successor cohortId');
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'reshare changed archive-state bytes');
+        assert(reshared.archiveStateDigestHex === sample.split.archiveStateDigestHex, 'reshare changed archive-state digest');
+        assert(reshared.archiveState.qenc.qencHash === sample.split.archiveState.qenc.qencHash, 'reshare changed qencHash');
+        assert(reshared.archiveState.qenc.containerId === sample.split.archiveState.qenc.containerId, 'reshare changed containerId');
+        assert(reshared.transitionRecord.fromStateId === sample.split.stateId, 'transition fromStateId mismatch');
+        assert(reshared.transitionRecord.toStateId === sample.split.stateId, 'transition toStateId mismatch');
+        assert(reshared.transitionRecord.fromCohortId === sample.split.cohortId, 'transition fromCohortId mismatch');
+        assert(reshared.transitionRecord.toCohortId === reshared.cohortId, 'transition toCohortId mismatch');
+        assert(reshared.lifecycleBundle.transitions.length === sample.predecessorLifecycleBundle.transitions.length + 1, 'reshare did not append exactly one transition record');
+        assert(reshared.maintenanceSignatureCountAdded === 0, 'reshare should not require maintenance signatures by default');
+        assert(reshared.lifecycleBundle.attachments.maintenanceSignatures.length === sample.predecessorLifecycleBundle.attachments.maintenanceSignatures.length, 'unexpected maintenance signature carry-forward delta');
+        assert(reshared.zeroization.attempted === true, 'reshare should attempt best-effort zeroization');
+        assert(reshared.zeroization.privateKeyBytesCleared === true, 'reshare should clear reconstructed private key bytes');
+        assert(reshared.zeroization.shareCopiesCleared === true, 'reshare should report cleared in-memory predecessor share copies');
+        assert(reshared.semantics.sameStateAvailabilityMaintenance === true, 'reshare should report availability-maintenance semantics');
+        assert(reshared.semantics.archiveReapprovalPerformed === false, 'reshare must not report archive re-approval');
+        assert(reshared.semantics.plaintextDecrypted === false, 'reshare must not report plaintext decryption');
+        assert(reshared.semantics.sourceEvidenceCreated === false, 'reshare must not report fresh source evidence');
+        assert(reshared.semantics.compromiseRepairClaimed === false, 'reshare must not claim compromise repair');
+        assert(
+          reshared.operationalWarnings.some((warning) => warning.includes('cannot be proven')),
+          'reshare should warn that predecessor shard destruction cannot be proven'
+        );
+        assert(
+          reshared.operationalWarnings.some((warning) => warning.includes('does not revoke leaked predecessor quorum material')),
+          'reshare should warn that same-state resharing does not repair old-quorum leakage'
+        );
+
+        const reparsed = await parseResharedShardSet(reshared);
+        assert(reparsed.length === 5, 'expected five reshared successor shards');
+        assert(reparsed.every((shard) => shard.stateId === sample.split.stateId), 'reshared shard stateId mismatch');
+        assert(reparsed.every((shard) => shard.cohortId === reshared.cohortId), 'reshared shard cohortId mismatch');
+      },
+    },
+    {
+      name: 'same-state resharing preserves identical archive-state bytes and stateId for non-default stateType archives',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('phase4-nondefault-state-type-reshare'),
+          authPolicyLevel: 'integrity-only',
+          buildOptions: {
+            stateType: 'sealed-audit-snapshot',
+          },
+        });
+        assert(sample.split.archiveState.stateType === 'sealed-audit-snapshot', 'test setup expected a non-default stateType');
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:30:30.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-nondefault-state-type' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'non-default stateType resharing changed archive-state bytes');
+        assert(reshared.stateId === sample.split.stateId, 'non-default stateType resharing changed stateId');
+        const parsed = parseArchiveStateDescriptorBytes(reshared.archiveStateBytes);
+        assert(parsed.archiveState.stateType === 'sealed-audit-snapshot', 'resharing should preserve the predecessor stateType bytes exactly');
+      },
+    },
+    {
+      name: 'same-state resharing with preserved archive-state bytes still emits a new cohort binding and new cohortId',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-new-cohort'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:30:45.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-preserved-state-new-cohort' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'preserved-state resharing changed archive-state bytes');
+        assert(!timingSafeEqual(reshared.cohortBindingBytes, sample.split.cohortBindingBytes), 'preserved-state resharing should emit new cohort-binding bytes');
+        assert(reshared.cohortBindingDigestHex !== sample.split.cohortBindingDigestHex, 'preserved-state resharing should emit a new cohort-binding digest');
+        assert(reshared.cohortId !== sample.split.cohortId, 'preserved-state resharing should emit a new cohortId');
+      },
+    },
+    {
+      name: 'same-state resharing ignores local authPolicyCommitment object serialization when archive-state bytes are identical',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-auth-policy-commitment-local-serialization'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const originalCommitmentJson = JSON.stringify(sample.parsed[0].archiveState.authPolicyCommitment);
+        const reorderedCommitment = {
+          value: sample.parsed[0].archiveState.authPolicyCommitment.value,
+          canonicalization: sample.parsed[0].archiveState.authPolicyCommitment.canonicalization,
+          alg: sample.parsed[0].archiveState.authPolicyCommitment.alg,
+        };
+        assert(
+          JSON.stringify(reorderedCommitment) !== originalCommitmentJson,
+          'test setup expected a different local authPolicyCommitment serialization order'
+        );
+        const locallyReordered = sample.parsed.map((shard) => ({
+          ...shard,
+          archiveState: {
+            ...cloneJson(shard.archiveState),
+            authPolicyCommitment: {
+              value: shard.archiveState.authPolicyCommitment.value,
+              canonicalization: shard.archiveState.authPolicyCommitment.canonicalization,
+              alg: shard.archiveState.authPolicyCommitment.alg,
+            },
+          },
+        }));
+
+        const reshared = await reshareSameState(locallyReordered, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:31:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-auth-policy-commitment-local-serialization' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(timingSafeEqual(reshared.archiveStateBytes, sample.split.archiveStateBytes), 'resharing changed canonical archive-state bytes');
+        assert(reshared.archiveStateDigestHex === sample.split.archiveStateDigestHex, 'resharing changed archive-state digest');
+        assert(reshared.stateId === sample.split.stateId, 'resharing changed stateId');
+        assert(reshared.cohortId !== sample.split.cohortId, 'resharing should still rotate the cohortId');
+      },
+    },
+    {
+      name: 'same-state resharing rejects preserved archive-state qencHash mismatches against the unchanged .qenc',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-qenchash-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.qenc.qencHash = 'aa'.repeat(64);
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:31:15.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-qenchash-mismatch' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /qencHash mismatch/i,
+          'same-state resharing unexpectedly accepted preserved archive-state bytes with a mismatched qencHash'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects preserved archive-state containerId mismatches against the unchanged .qenc',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-containerid-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.qenc.containerId = 'bb'.repeat(64);
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:31:30.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-containerid-mismatch' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /containerId mismatch/i,
+          'same-state resharing unexpectedly accepted preserved archive-state bytes with a mismatched containerId'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects preserved archive-state qenc metadata mismatches against the unchanged .qenc',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-qenc-meta-mismatch'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.qenc.chunkSize += 1;
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:31:45.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-qenc-meta-mismatch' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /qenc\.chunkSize mismatch/i,
+          'same-state resharing unexpectedly accepted preserved archive-state bytes with mismatched qenc metadata'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects accidental archive-state mutation instead of rebuilding from local defaults',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-preserved-state-mutation-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = rewriteEmbeddedArchiveStateBytes(sample.parsed, (archiveState) => {
+          archiveState.stateType = 'mutated-archive-state';
+        });
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:32:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-preserved-state-mutation-reject' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          /archive-state digest|stateId/i,
+          'same-state resharing unexpectedly treated schema-valid but byte-different archive-state bytes as the same state'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing allows changed n/k with derived successor t while keeping codecId frozen under the v1 schema',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-same-state-reshare-nkt-change'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 7, k: 5 }, {
+          transition: {
+            reasonCode: 'capacity-adjustment',
+            performedAt: '2026-03-26T09:31:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-nkt-change' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.stateId === sample.split.stateId, 'changed n/k/t resharing changed stateId unexpectedly');
+        assert(reshared.cohortBinding.sharding.reedSolomon.n === 7, 'successor n mismatch');
+        assert(reshared.cohortBinding.sharding.reedSolomon.k === 5, 'successor k mismatch');
+        assert(reshared.cohortBinding.sharding.reedSolomon.parity === 2, 'successor parity mismatch');
+        assert(reshared.cohortBinding.sharding.shamir.threshold === 6, 'successor t mismatch');
+        assert(reshared.cohortBinding.sharding.reedSolomon.codecId === 'QV-RS-ErasureCodes-v1', 'successor codecId should remain schema-frozen');
+        assert(reshared.cohortBinding.sharding.shamir.threshold !== sample.split.cohortBinding.sharding.shamir.threshold, 'successor threshold should differ from predecessor threshold');
+      },
+    },
+    {
+      name: 'lifecycle cohort runtime-supported tuples pass across build reconstruction and resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-supported-cohort-tuples'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const erasureRuntime = resolveErasureRuntime();
+        let reconstructed = null;
+
+        try {
+          assert(sample.split.cohortBinding.sharding.reedSolomon.n === 5, 'build path emitted unexpected supported n');
+          assert(sample.split.cohortBinding.sharding.reedSolomon.k === 3, 'build path emitted unexpected supported k');
+          assert(sample.split.cohortBinding.sharding.reedSolomon.parity === 2, 'build path emitted unexpected supported parity');
+          assert(sample.split.cohortBinding.sharding.shamir.threshold === 4, 'build path emitted unexpected supported threshold');
+
+          reconstructed = await reconstructLifecycleCohortMaterial(
+            buildLifecycleCohortCandidate(sample.parsed),
+            {
+              erasureRuntime,
+              digestHex: hashBytes,
+              validateQencMeta: () => {},
+            }
+          );
+          assert(reconstructed.shareCopiesCleared === true, 'reconstruction should report cleared copied share buffers');
+
+          const reshared = await reshareSameState(sample.parsed, { n: 7, k: 5 }, {
+            transition: {
+              reasonCode: 'capacity-adjustment',
+              performedAt: '2026-03-27T12:00:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-supported-cohort-tuples' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          });
+
+          assert(reshared.cohortBinding.sharding.reedSolomon.n === 7, 'resharing path emitted unexpected supported n');
+          assert(reshared.cohortBinding.sharding.reedSolomon.k === 5, 'resharing path emitted unexpected supported k');
+          assert(reshared.cohortBinding.sharding.reedSolomon.parity === 2, 'resharing path emitted unexpected supported parity');
+          assert(reshared.cohortBinding.sharding.shamir.threshold === 6, 'resharing path emitted unexpected supported threshold');
+        } finally {
+          if (reconstructed?.privKey instanceof Uint8Array) {
+            reconstructed.privKey.fill(0);
+          }
+        }
+      },
+    },
+    {
+      name: 'cohort-binding parser semantics remain unchanged for schema-valid runtime-unsupported tuples in this consolidation-only patch',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-consolidation-only-parser-surface'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const oddParity = cloneJson(sample.split.cohortBinding);
+        oddParity.sharding.reedSolomon.k = 4;
+        oddParity.sharding.reedSolomon.parity = 1;
+        oddParity.sharding.shamir.threshold = 4;
+        const parsedOddParity = parseCohortBindingBytes(canonicalizeJsonToBytes(oddParity));
+        assert(parsedOddParity.cohortBinding.sharding.reedSolomon.parity === 1, 'parser/build semantics unexpectedly rejected schema-valid odd parity');
+
+        const thresholdMismatch = cloneJson(sample.split.cohortBinding);
+        thresholdMismatch.sharding.shamir.threshold = 3;
+        const parsedThresholdMismatch = parseCohortBindingBytes(canonicalizeJsonToBytes(thresholdMismatch));
+        assert(parsedThresholdMismatch.cohortBinding.sharding.shamir.threshold === 3, 'parser/build semantics unexpectedly rejected schema-valid threshold mismatch');
+      },
+    },
+    {
+      name: 'odd-parity runtime-unsupported tuples share one error surface across build reconstruction and resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-odd-parity-error-surface'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const oddParityParsed = rewriteEmbeddedCohortBinding(sample.parsed, (cohortBinding) => {
+          cohortBinding.sharding.reedSolomon.k = 4;
+          cohortBinding.sharding.reedSolomon.parity = 1;
+          cohortBinding.sharding.shamir.threshold = 4;
+        });
+        const unsupportedPattern = /Unsupported cohort parameters: parity must be even under QV-RS-ErasureCodes-v1/i;
+
+        await expectFailureWithMessage(
+          () => buildLifecycleQcontShards(sample.qencBytes, sample.pair.secretKey, { n: 5, k: 4 }, {
+            authPolicyLevel: 'integrity-only',
+          }),
+          unsupportedPattern,
+          'lifecycle build unexpectedly accepted an odd-parity runtime-unsupported tuple'
+        );
+
+        await expectFailureWithMessage(
+          () => reconstructLifecycleCohortMaterial(buildLifecycleCohortCandidate(oddParityParsed), {
+            erasureRuntime: resolveErasureRuntime(),
+            digestHex: hashBytes,
+            validateQencMeta: () => {},
+          }),
+          unsupportedPattern,
+          'lifecycle reconstruction unexpectedly accepted an odd-parity runtime-unsupported tuple'
+        );
+
+        await expectFailureWithMessage(
+          () => reshareSameState(sample.parsed, { n: 5, k: 4 }, {
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          unsupportedPattern,
+          'same-state resharing unexpectedly accepted an odd-parity runtime-unsupported tuple'
+        );
+      },
+    },
+    {
+      name: 'threshold-mismatch runtime-unsupported tuples share one error surface across reconstruction and resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-threshold-mismatch-error-surface'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const thresholdMismatchParsed = rewriteEmbeddedCohortBinding(sample.parsed, (cohortBinding) => {
+          cohortBinding.sharding.shamir.threshold = 3;
+        });
+        const unsupportedPattern = /Unsupported cohort parameters: t must equal k \+ \(parity\/2\) under QV-RS-ErasureCodes-v1/i;
+
+        await expectFailureWithMessage(
+          () => reconstructLifecycleCohortMaterial(buildLifecycleCohortCandidate(thresholdMismatchParsed), {
+            erasureRuntime: resolveErasureRuntime(),
+            digestHex: hashBytes,
+            validateQencMeta: () => {},
+          }),
+          unsupportedPattern,
+          'lifecycle reconstruction unexpectedly accepted a threshold-mismatched runtime-unsupported tuple'
+        );
+
+        await expectFailureWithMessage(
+          () => reshareSameState(sample.parsed, { n: 5, k: 3, t: 3 }, {
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          unsupportedPattern,
+          'same-state resharing unexpectedly accepted a threshold-mismatched runtime-unsupported tuple'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects mixed predecessor cohorts',
+      fn: async () => {
+        const sampleA = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-mixed-predecessor-a'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const sampleB = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-mixed-predecessor-b'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const mixed = [
+          ...sampleA.parsed.slice(0, 3),
+          ...sampleB.parsed.slice(0, 2),
+        ];
+
+        await expectFailure(
+          () => reshareSameState(mixed, { n: 5, k: 3 }, { onLog: () => {}, onWarn: () => {} }),
+          'same-state resharing unexpectedly accepted mixed predecessor cohorts'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing fails closed on mixed predecessor lifecycle-bundle digests unless explicitly disambiguated',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-predecessor-bundle-disambiguation'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'integrity-only',
+          minValidSignatures: 1,
+          includeArchiveApproval: true,
+          includeMaintenance: false,
+          includeSourceEvidence: false,
+        });
+        const mixed = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes, [0, 1]);
+
+        await expectFailure(
+          () => reshareSameState(mixed, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:35:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-predecessor-bundle-mixed' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          'same-state resharing unexpectedly accepted mixed predecessor lifecycle-bundle digests without explicit selection'
+        );
+
+        const resharedByDigest = await reshareSameState(mixed, { n: 5, k: 3 }, {
+          selectedLifecycleBundleDigestHex: bundleVariant.digestHex,
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:36:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-predecessor-bundle-selected-digest' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+        assert(resharedByDigest.predecessorLifecycleBundleDigestHex === bundleVariant.digestHex, 'digest-selected predecessor bundle mismatch');
+
+        const resharedByBytes = await reshareSameState(mixed, { n: 5, k: 3 }, {
+          lifecycleBundleBytes: sample.predecessorLifecycleBundleBytes,
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:37:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-predecessor-bundle-selected-bytes' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+        assert(resharedByBytes.predecessorLifecycleBundleDigestHex === sample.predecessorLifecycleBundleDigestHex, 'byte-selected predecessor bundle mismatch');
+      },
+    },
+    {
+      name: 'same-state resharing rejects predecessor share-commitment failure when too few valid shares remain',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-share-commitment-failure'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = sample.parsed.map((shard, index) => (
+          index < 2
+            ? { ...shard, share: mutateTail(shard.share) }
+            : shard
+        ));
+
+        await expectFailure(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:38:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-share-commitment-failure' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          'same-state resharing unexpectedly accepted too few valid predecessor shares after share-commitment filtering'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects predecessor shard-body hash failure beyond RS tolerance',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-shard-body-hash-failure'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mutated = sample.parsed.map((shard, index) => (
+          index < 2
+            ? { ...shard, fragments: mutateTail(shard.fragments) }
+            : shard
+        ));
+
+        await expectFailure(
+          () => reshareSameState(mutated, { n: 5, k: 3 }, {
+            transition: {
+              reasonCode: 'cohort-rotation',
+              performedAt: '2026-03-26T09:39:00.000Z',
+              operatorRole: 'operator',
+              actorHints: { ceremony: 'phase4-shard-body-hash-failure' },
+              notes: null,
+            },
+            onLog: () => {},
+            onWarn: () => {},
+          }),
+          'same-state resharing unexpectedly accepted too many corrupted predecessor shard bodies'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects archive-state mutation attempts',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-archive-state-mutation-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        await expectFailure(
+          () => reshareSameState(sample.parsed, {
+            n: 5,
+            k: 3,
+            archiveId: 'aa'.repeat(32),
+          }, { onLog: () => {}, onWarn: () => {} }),
+          'same-state resharing unexpectedly accepted an archiveId override'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing rejects forbidden state-level field overrides',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-forbidden-state-field-reject'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        await expectFailure(
+          () => reshareSameState(sample.parsed, {
+            n: 5,
+            k: 3,
+            qencHash: 'ff'.repeat(64),
+          }, { onLog: () => {}, onWarn: () => {} }),
+          'same-state resharing unexpectedly accepted a qencHash override'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing preserves archive-approval signatures across resharing',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-archive-approval-survives'),
+          authPolicyLevel: 'any-signature',
+          bundleVariantOptions: {
+            authPolicyLevel: 'any-signature',
+            minValidSignatures: 1,
+            includeArchiveApproval: true,
+            includeMaintenance: false,
+            includeSourceEvidence: false,
+          },
+        });
+
+        const predecessorSignature = sample.predecessorLifecycleBundle.attachments.archiveApprovalSignatures[0];
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:32:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-archive-approval' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.lifecycleBundle.attachments.archiveApprovalSignatures.length === 1, 'archive-approval signature should carry forward exactly once');
+        assert(
+          reshared.lifecycleBundle.attachments.archiveApprovalSignatures[0].signature === predecessorSignature.signature,
+          'archive-approval signature bytes changed unexpectedly during resharing'
+        );
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should remain valid after resharing');
+        assert(restored.authenticity.status.policySatisfied === true, 'archive policy should still be satisfied after resharing');
+      },
+    },
+    {
+      name: 'same-state resharing preserves prior OTS linkage over archive-approval signatures',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-archive-approval-ots-survives'),
+          authPolicyLevel: 'any-signature',
+          bundleVariantOptions: {
+            authPolicyLevel: 'any-signature',
+            minValidSignatures: 1,
+            includeArchiveApproval: true,
+            includeMaintenance: false,
+            includeSourceEvidence: false,
+            timestampTargetFamily: 'archive-approval',
+          },
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:33:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-archive-approval-ots' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should still verify after resharing');
+        assert(restored.authenticity.status.otsEvidenceLinked === true, 'archive-approval OTS linkage should remain valid after resharing');
+      },
+    },
+    {
+      name: 'same-state resharing emits a required transition record and supports optional maintenance signatures',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase4-transition-record-and-maintenance'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T09:34:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase4-maintenance-signature' },
+            notes: null,
+          },
+          buildMaintenanceArtifacts: buildMaintenanceArtifactsFactory(),
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(reshared.lifecycleBundle.transitions.length === sample.predecessorLifecycleBundle.transitions.length + 1, 'reshare should always emit one new transition record');
+        assert(reshared.maintenanceSignatureCountAdded === 1, 'reshare should report the added maintenance signature');
+        assert(reshared.lifecycleBundle.attachments.maintenanceSignatures.length === 1, 'reshare should embed the new maintenance signature');
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'optional maintenance signature should verify after resharing');
+        assert(restored.authenticity.verification.counts.validArchiveApproval === 0, 'maintenance signatures must not count toward archive policy');
+      },
+    },
+    {
+      name: 'same-state resharing reports an unsigned transition record distinctly from maintenance-signature verification',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-unsigned-transition-record'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:10:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-unsigned-transition-record' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.transitionRecordPresent === true, 'unsigned resharing should still report a transition record');
+        assert(restored.authenticity.status.transitionChainValid === true, 'unsigned resharing should still report structural transition-chain validity');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === false, 'unsigned resharing must not imply maintenance-signature verification');
+        assert(restored.lifecycleVerification.transitions.records.length === 1, 'unsigned resharing should surface one transition record');
+        assert(restored.lifecycleVerification.transitions.records[0].maintenanceSignatureCount === 0, 'unsigned resharing should report zero maintenance signatures on the transition');
+      },
+    },
+    {
+      name: 'same-state resharing reports signed transition records and per-signature maintenance purpose labels',
+      fn: async () => {
+        const signatureId = 'maintenance-sig-phase5-purpose';
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-signed-transition-record'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:11:00.000Z',
+            operatorRole: 'operator',
+            actorHints: {
+              ceremony: 'phase5-signed-transition-record',
+              maintenanceSignaturePurposes: {
+                [signatureId]: ['maintenance-authorization', 'witness', 'unknown-purpose-label'],
+              },
+              maintenanceSignaturePurpose: 'operator-attestation',
+            },
+            notes: null,
+          },
+          buildMaintenanceArtifacts: buildMaintenanceArtifactsFactory({ signatureId }),
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.transitionRecordPresent === true, 'signed resharing should report a transition record');
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'signed resharing should verify the maintenance signature');
+        assert(restored.lifecycleVerification.transitions.records.length === 1, 'signed resharing should surface one transition record');
+        assert(restored.lifecycleVerification.transitions.records[0].verifiedMaintenanceSignatureCount === 1, 'signed resharing should report one verified maintenance signature');
+        assert(
+          restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('maintenance-authorization'),
+          'signed resharing should surface the per-signature maintenance-authorization label'
+        );
+        assert(
+          restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('witness'),
+          'signed resharing should surface the per-signature witness label'
+        );
+        assert(
+          !restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('operator-attestation'),
+          'per-signature maintenance purpose labels should take precedence over the global fallback'
+        );
+        assert(
+          !restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('unknown-purpose-label'),
+          'unknown maintenance purpose labels should be ignored outside the Phase 5 allow-list'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing falls back to the global maintenance purpose label when no per-signature label is present',
+      fn: async () => {
+        const signatureId = 'maintenance-sig-phase5-global-fallback';
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-global-maintenance-purpose-fallback'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const reshared = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:11:30.000Z',
+            operatorRole: 'operator',
+            actorHints: {
+              ceremony: 'phase5-global-maintenance-purpose-fallback',
+              maintenanceSignaturePurpose: 'operator-attestation',
+              maintenanceSignaturePurposes: {
+                [signatureId]: 'unsupported-purpose-label',
+              },
+            },
+            notes: null,
+          },
+          buildMaintenanceArtifacts: buildMaintenanceArtifactsFactory({ signatureId }),
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'global fallback coverage still expects a verified maintenance signature');
+        assert(
+          restored.lifecycleVerification.transitions.records[0].maintenancePurposeLabels.includes('operator-attestation'),
+          'global maintenance purpose label should be used when no per-signature allow-listed label is present'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing produces a valid same-state transition chain across multiple cohorts',
+      fn: async () => {
+        const initial = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-valid-transition-chain'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const firstReshare = await reshareSameState(initial.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:12:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-chain-1' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const secondReshare = await reshareSameState(await parseResharedShardSet(firstReshare), { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:13:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-chain-2' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const restored = await restoreFromShards(await parseResharedShardSet(secondReshare), {
+          onLog: () => {},
+          onError: () => {},
+        });
+        assert(restored.authenticity.status.transitionChainValid === true, 'two-step resharing should report a valid structural transition chain');
+        assert(restored.lifecycleVerification.transitions.records.length === 2, 'two-step resharing should report two transition records');
+        assert(
+          restored.lifecycleVerification.transitions.records[0].toCohortId === restored.lifecycleVerification.transitions.records[1].fromCohortId,
+          'transition chain should link predecessor and successor cohortIds'
+        );
+        assert(
+          restored.lifecycleVerification.transitions.records[1].toCohortId === secondReshare.cohortId,
+          'final transition record should resolve to the selected current cohort'
+        );
+      },
+    },
+    {
+      name: 'successor restore accepts an explicitly selected same-state cohort while warning about known forks',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase5-same-state-fork'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const successor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T10:14:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase5-same-state-fork' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const successorParsed = await parseResharedShardSet(successor);
+        const predecessorOnly = await restoreFromShards(sample.parsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        const successorOnly = await restoreFromShards(successorParsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        assert(predecessorOnly.stateId === successorOnly.stateId, 'same-state fork setup should preserve one stateId');
+        assert(predecessorOnly.cohortId !== successorOnly.cohortId, 'same-state fork setup should produce distinct cohortIds');
+
+        const mixed = [
+          ...sample.parsed.slice(0, 4),
+          ...successorParsed.slice(0, 4),
+        ];
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { lifecycleBundleBytes: successor.lifecycleBundleBytes },
+        });
+        assert(restored.cohortId === successorOnly.cohortId, 'explicit lifecycle-bundle selection should restore the selected cohort');
+        assert(restored.lifecycleVerification.cohorts.forkDetected === true, 'same-state fork should still be reported');
+        assert(
+          restored.lifecycleVerification.cohorts.knownCohortIdsForState.includes(predecessorOnly.cohortId),
+          'fork reporting should include the predecessor cohortId'
+        );
+        assert(
+          restored.lifecycleVerification.cohorts.knownCohortIdsForState.includes(successorOnly.cohortId),
+          'fork reporting should include the successor cohortId'
+        );
+        assert(
+          restored.authenticity.warnings.some((warning) => warning.includes('did not auto-select a winner')),
+          'explicit fork selection should still warn that no winner was auto-selected'
+        );
+      },
+    },
+    {
+      name: 'successor restore accepts explicit selectedCohortId for same-state fork disambiguation',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase7-selected-cohort-restore'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const successor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:05:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selected-cohort-restore' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const successorParsed = await parseResharedShardSet(successor);
+        const successorOnly = await restoreFromShards(successorParsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        const mixed = [
+          ...sample.parsed.slice(0, 4),
+          ...successorParsed.slice(0, 4),
+        ];
+
+        const restored = await restoreFromShards(mixed, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { selectedCohortId: successorOnly.cohortId },
+        });
+
+        assert(restored.cohortId === successorOnly.cohortId, 'explicit selectedCohortId should restore the chosen cohort');
+        assert(restored.lifecycleVerification.cohorts.forkDetected === true, 'same-state fork should still be reported after explicit cohort selection');
+        assert(
+          restored.authenticity.warnings.some((warning) => warning.includes('did not auto-select a winner')),
+          'explicit cohort selection should still warn that no winner was auto-selected'
+        );
+      },
+    },
+    {
+      name: 'same-state resharing accepts explicit selectedCohortId for predecessor fork disambiguation',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase7-selected-cohort-reshare'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const firstSuccessor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:15:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selected-cohort-reshare-1' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const firstSuccessorParsed = await parseResharedShardSet(firstSuccessor);
+        const selectedPredecessor = await restoreFromShards(firstSuccessorParsed.slice(0, 4), { onLog: () => {}, onError: () => {} });
+        const mixed = [
+          ...sample.parsed.slice(0, 4),
+          ...firstSuccessorParsed.slice(0, 4),
+        ];
+
+        const secondSuccessor = await reshareSameState(mixed, { n: 5, k: 3 }, {
+          selectedCohortId: selectedPredecessor.cohortId,
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:16:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selected-cohort-reshare-2' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        assert(secondSuccessor.predecessorCohortId === selectedPredecessor.cohortId, 'explicit selectedCohortId should choose the intended predecessor cohort');
+        assert(secondSuccessor.cohortId !== selectedPredecessor.cohortId, 'resharing should still emit a fresh successor cohort');
+      },
+    },
+    {
+      name: 'regular-user build service defaults to successor lifecycle shard exports',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('phase7-regular-user-successor-build');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-regular-user-successor-build.bin'));
+
+        const split = await buildRegularUserShardSet(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+          authPolicyLevel: 'strong-pq-signature',
+        });
+
+        assert(split.formatVersion === 'QVqcont-7', 'regular-user build service should default to successor shard format');
+        assert(split.archiveStateBytes instanceof Uint8Array, 'regular-user build should export archive-state bytes');
+        assert(split.cohortBindingBytes instanceof Uint8Array, 'regular-user build should export cohort-binding bytes');
+        assert(split.lifecycleBundleBytes instanceof Uint8Array, 'regular-user build should export lifecycle-bundle bytes');
+        assert(!(split.manifestBytes instanceof Uint8Array), 'regular-user build should not default to legacy manifest exports');
+
+        const parsed = await parseLifecycleShard(await blobToBytes(split.shards[0].blob));
+        assert(parsed.metaJSON.alg.fmt === 'QVqcont-7', 'regular-user build should emit successor qcont shards');
+      },
+    },
+    {
+      name: 'regular-user build service retains explicit legacy compatibility builds only when requested',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = textBytes('phase7-explicit-legacy-build');
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-explicit-legacy-build.bin'));
+
+        const split = await buildRegularUserShardSet(qencBytes, pair.secretKey, { n: 5, k: 3 }, {
+          artifactFamily: 'legacy',
+          authPolicyLevel: 'integrity-only',
+        });
+
+        assert(split.formatVersion === 'QVqcont-6', 'explicit legacy compatibility builds should still emit legacy shard format');
+        assert(split.manifestBytes instanceof Uint8Array, 'explicit legacy compatibility builds should still export canonical manifest bytes');
+      },
+    },
+    {
+      name: 'successor selection model surfaces same-state cohorts for explicit operator choice',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase7-selection-model-cohort'),
+          authPolicyLevel: 'integrity-only',
+        });
+
+        const successor = await reshareSameState(sample.parsed, { n: 5, k: 3 }, {
+          transition: {
+            reasonCode: 'cohort-rotation',
+            performedAt: '2026-03-26T11:25:00.000Z',
+            operatorRole: 'operator',
+            actorHints: { ceremony: 'phase7-selection-model-cohort' },
+            notes: null,
+          },
+          onLog: () => {},
+          onWarn: () => {},
+        });
+
+        const successorParsed = await parseResharedShardSet(successor);
+        const model = buildSuccessorSelectionModel([
+          ...sample.parsed.slice(0, 4),
+          ...successorParsed.slice(0, 4),
+        ]);
+
+        assert(model.states.length === 1, 'same-state fork selection model should keep one archive/state entry');
+        assert(model.states[0].cohorts.length === 2, 'same-state fork selection model should surface both cohorts');
+        assert(model.hasAmbiguity === true, 'same-state fork selection model should require explicit operator choice');
+      },
+    },
+    {
+      name: 'successor shard assessment reports lifecycle-bundle selection requirements for mixed embedded bundle variants',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-selection-status.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.secretKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigA = buildQsigFixture(split.archiveStateBytes);
+        const firstAttach = await attachLifecycleBundleToShards(parsedOriginal, {
+          signatures: [{ name: 'phase7-a.qsig', bytes: sigA.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
+        });
+        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+
+        const sigB = buildQsigFixture(firstAttach.archiveStateBytes);
+        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
+          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
+          signatures: [{ name: 'phase7-b.qsig', bytes: sigB.qsigBytes }],
+          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
+        });
+
+        const mixedFiles = [
+          ...await Promise.all(secondAttach.shards.map(async (item, index) => (
+            fileLike(`phase7-mixed-${index + 1}.qcont`, await blobToBytes(item.blob))
+          ))),
+          ...await Promise.all(firstAttach.shards.slice(2).map(async (item, index) => (
+            fileLike(`phase7-original-${index + 3}.qcont`, await blobToBytes(item.blob))
+          ))),
+        ];
+
+        const assessment = await assessShardSelectionPreview(mixedFiles);
+        assert(assessment.ready === true, 'mixed bundle-variant assessment should still report threshold readiness');
+        assert(
+          assessment.message.includes('Explicit lifecycle-bundle selection is still required below.'),
+          'successor shard assessment should report explicit lifecycle-bundle selection requirements'
+        );
+      },
+    },
+    {
+      name: 'authenticity status message keeps signer pin detail alongside strong PQ detail',
+      fn: async () => {
+        const manifestBytes = textBytes('auth-status-signer-pin-detail');
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
+        const verification = await verifyManifestSignatures({
+          manifestBytes,
+          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+          pinnedPqPublicKeyFileBytes: pqpkBytes,
+        });
+        assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
+
+        const message = formatAuthenticityStatusMessage({
+          archiveApprovalSignatureVerified: true,
+          strongPqSignatureVerified: verification.status.strongPqSignatureVerified,
+          signerPinned: true,
+          bundlePinned: false,
+          userPinned: false,
+        });
+
+        assert(message.includes('strong PQ present'), 'status message should report strong PQ detail');
+        assert(message.includes('signer pin active'), 'status message should preserve signer pin detail when no bundle/user pin flags are present');
+      },
+    },
+    {
       name: '.qcont reconstruction',
       fn: async () => {
         const { publicKey, secretKey } = await generateKeyPair({ collectUserEntropy: false });
@@ -1420,6 +5274,7 @@ function buildCases() {
         assert(verification.status.signerPinned === true, 'matching pin must mark signer as pinned');
         assert(verification.status.bundlePinned === false, 'external signature should not set bundlePinned');
         assert(verification.status.userPinned === true, 'matching external pin must set userPinned');
+        assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
       },
     },
     {
@@ -1747,6 +5602,8 @@ function buildCases() {
         assert(restored.authenticity.status.bundlePinned === false, 'external .pqpk should not set bundlePinned');
         assert(restored.authenticity.status.userPinned === true, 'external .pqpk should set userPinned');
         assert(restored.authenticity.status.policySatisfied, 'expected policySatisfied');
+        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'legacy verification status');
+        assertNoSignerIdentityPinned(restored.authenticity.status, 'legacy restore authenticity status');
       },
     },
     {
@@ -2379,6 +6236,90 @@ function buildCases() {
           evidence.some((item) => item.completionLabel === 'OTS proof appears incomplete'),
           'timestamp evidence should report complete and incomplete states honestly'
         );
+      },
+    },
+    {
+      name: 'resolveOpenTimestampTarget rejects cached OTS digests that do not match detached signature bytes',
+      fn: async () => {
+        const sig = buildQsigFixture(textBytes('ots-cache-mismatch-negative'));
+        const unrelatedBytes = textBytes('not-the-detached-signature');
+        const timestampBytes = await buildOtsFixture(unrelatedBytes, { completeProof: true });
+        const forgedCachedDigestHex = toHex(await digestSha256(unrelatedBytes));
+
+        await expectFailureWithMessage(
+          () => resolveOpenTimestampTarget({
+            timestampBytes,
+            timestampName: 'archive.qsig.ots',
+            signatures: [{
+              id: 'sig:external-1',
+              name: 'archive.qsig',
+              source: 'external',
+              ok: true,
+              bytes: sig.qsigBytes,
+              otsStampedDigestHex: forgedCachedDigestHex,
+            }],
+          }),
+          /does not match any detached signature/,
+          'OpenTimestamps resolver unexpectedly trusted cached otsStampedDigestHex over detached-signature bytes'
+        );
+      },
+    },
+    {
+      name: 'resolveOpenTimestampTarget links OTS only from SHA-256 of detached signature bytes',
+      fn: async () => {
+        const sig = buildQsigFixture(textBytes('ots-byte-binding-positive'));
+        const timestampBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: true });
+        const staleCachedDigestHex = toHex(await digestSha256(textBytes('stale-ots-cache')));
+
+        const resolved = await resolveOpenTimestampTarget({
+          timestampBytes,
+          timestampName: 'archive.qsig.ots',
+          signatures: [{
+            id: 'sig:external-1',
+            name: 'archive.qsig',
+            source: 'external',
+            ok: true,
+            bytes: sig.qsigBytes,
+            otsStampedDigestHex: staleCachedDigestHex,
+          }],
+        });
+
+        assert(resolved.targetRef === 'sig:external-1', 'OTS linkage must preserve the detached signature targetRef');
+        assert(resolved.targetName === 'archive.qsig', 'OTS linkage must preserve the detached signature target name');
+        assert(resolved.targetSource === 'external', 'OTS linkage must preserve the detached signature target source');
+        assert(resolved.targetVerified === true, 'OTS linkage must preserve detached signature verification state');
+        assert(
+          resolved.stampedDigestHex === toHex(await digestSha256(sig.qsigBytes)),
+          'OTS linkage must be bound to SHA-256(detached-signature-bytes)'
+        );
+      },
+    },
+    {
+      name: 'inspectTimestampEvidence preserves reporting semantics while ignoring stale OTS digest caches',
+      fn: async () => {
+        const sig = buildQsigFixture(textBytes('ots-reporting-semantics'));
+        const timestampBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: false });
+
+        const evidence = await inspectTimestampEvidence({
+          bundle: {},
+          externalTimestamps: [{ name: 'archive.qsig.ots', bytes: timestampBytes }],
+          signatureArtifacts: [{
+            id: 'sig:external-1',
+            name: 'archive.qsig',
+            source: 'external',
+            ok: true,
+            bytes: sig.qsigBytes,
+            otsStampedDigestHex: toHex(await digestSha256(textBytes('stale-reporting-cache'))),
+          }],
+        });
+
+        assert(evidence.length === 1, 'expected one OTS evidence entry');
+        assert(evidence[0].targetRef === 'sig:external-1', 'timestamp evidence must retain the linked detached signature targetRef');
+        assert(evidence[0].targetName === 'archive.qsig', 'timestamp evidence must retain the linked detached signature target name');
+        assert(evidence[0].targetSource === 'external', 'timestamp evidence must report the detached signature source');
+        assert(evidence[0].targetVerified === true, 'timestamp evidence must retain detached signature verification status');
+        assert(evidence[0].linkLabel === 'External OTS evidence linked to signature', 'timestamp evidence must preserve existing reporting labels');
+        assert(evidence[0].completionLabel === 'OTS proof appears incomplete', 'timestamp evidence must preserve proof completion reporting');
       },
     },
     {

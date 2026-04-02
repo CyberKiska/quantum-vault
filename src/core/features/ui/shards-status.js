@@ -39,7 +39,7 @@ export async function updateShardSelectionStatus({ files, statusDiv, statusText,
     if (count === 0) {
         statusDiv.style.display = 'none';
         if (actionButton) actionButton.disabled = true;
-        return;
+        return { state: 'empty', ready: false };
     }
 
     statusDiv.style.display = 'block';
@@ -51,4 +51,5 @@ export async function updateShardSelectionStatus({ files, statusDiv, statusText,
     const assessment = await assessShardSelection(files);
     if (!isCurrent()) return;
     applyAssessment(statusDiv, statusText, actionButton, assessment);
+    return assessment;
 }

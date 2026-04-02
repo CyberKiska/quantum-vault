@@ -1,5 +1,6 @@
 import { bytesEqual } from '../core/crypto/bytes.js';
 import { isSupportedStellarSignatureDocument } from '../core/crypto/auth/stellar-sig.js';
+import { parseArchiveStateDescriptorBytes, parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
 import { parseArchiveManifestBytes } from '../core/crypto/manifest/archive-manifest.js';
 import { parseManifestBundleBytes } from '../core/crypto/manifest/manifest-bundle.js';
 import { readFileAsUint8Array } from '../utils.js';
@@ -30,6 +31,8 @@ export async function classifyRestoreInputFiles(files) {
   const ignoredFileNames = [];
   let manifestBytes = null;
   let bundleBytes = null;
+  let archiveStateBytes = null;
+  let lifecycleBundleBytes = null;
   const pinnedPqPublicKeyFileBytesList = [];
 
   for (const file of files) {
@@ -71,6 +74,33 @@ export async function classifyRestoreInputFiles(files) {
       signatures.push({ name, bytes });
       continue;
     }
+
+    try {
+      const parsedLifecycleBundle = await parseLifecycleBundleBytes(bytes);
+      if (lifecycleBundleBytes && !bytesEqual(lifecycleBundleBytes, parsedLifecycleBundle.bytes)) {
+        throw new Error('Multiple different lifecycle bundle files were provided. Keep only one.');
+      }
+      lifecycleBundleBytes = parsedLifecycleBundle.bytes;
+      continue;
+    } catch (error) {
+      if (lowerName.endsWith('.lifecycle-bundle.json')) {
+        throw error;
+      }
+    }
+
+    try {
+      const parsedArchiveState = parseArchiveStateDescriptorBytes(bytes);
+      if (archiveStateBytes && !bytesEqual(archiveStateBytes, parsedArchiveState.bytes)) {
+        throw new Error('Multiple different archive-state descriptor files were provided. Keep only one.');
+      }
+      archiveStateBytes = parsedArchiveState.bytes;
+      continue;
+    } catch (error) {
+      if (lowerName.endsWith('.archive-state.json')) {
+        throw error;
+      }
+    }
+
     if (parsedJson?.type === 'QV-Manifest-Bundle') {
       const parsedBundle = parseManifestBundleBytes(bytes);
       if (bundleBytes && !bytesEqual(bundleBytes, parsedBundle.bytes)) {
@@ -100,6 +130,8 @@ export async function classifyRestoreInputFiles(files) {
     shardFiles,
     manifestBytes,
     bundleBytes,
+    archiveStateBytes,
+    lifecycleBundleBytes,
     signatures,
     timestamps,
     pinnedPqPublicKeyFileBytes: pinnedPqPublicKeyFileBytesList[0] || null,

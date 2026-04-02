@@ -5,6 +5,60 @@ export function ensureObject(value, field) {
   return value;
 }
 
+function isPlainJsonObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function normalizeIJsonFreeformValue(value, field, stack) {
+  if (value === null) return null;
+
+  const valueType = typeof value;
+  if (valueType === 'boolean' || valueType === 'string') {
+    return value;
+  }
+  if (valueType === 'number') {
+    if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`Invalid ${field}`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (stack.has(value)) {
+      throw new Error(`Invalid ${field}`);
+    }
+    stack.add(value);
+    try {
+      return value.map((entry, index) => normalizeIJsonFreeformValue(entry, `${field}[${index}]`, stack));
+    } finally {
+      stack.delete(value);
+    }
+  }
+  if (!isPlainJsonObject(value)) {
+    throw new Error(`Invalid ${field}`);
+  }
+  if (stack.has(value)) {
+    throw new Error(`Invalid ${field}`);
+  }
+  stack.add(value);
+  try {
+    const normalized = Object.getPrototypeOf(value) === null ? Object.create(null) : {};
+    for (const key of Object.keys(value)) {
+      normalized[key] = normalizeIJsonFreeformValue(value[key], `${field}.${key}`, stack);
+    }
+    return normalized;
+  } finally {
+    stack.delete(value);
+  }
+}
+
+export function ensureIJsonFreeformValue(value, field) {
+  return normalizeIJsonFreeformValue(value, field, new Set());
+}
+
 export function ensureString(value, field) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`Invalid ${field}`);

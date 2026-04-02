@@ -5,7 +5,7 @@ Type: Normative
 Audience: implementers, security auditors, reviewers, maintainers
 Scope: current-state normative baseline for security boundaries, adversary assumptions, hard invariants, security claims, and failure semantics
 Out of scope: byte-level field definitions, archive-class policy, evidence-renewal architecture, whitepaper rationale
-Primary implementation sources: `README.md`, `series/SERIES-STANDARTS.md`, `format-spec.md`, `trust-and-policy.md`
+Primary implementation sources: implementation code, `docs/format-spec.md`, `docs/trust-and-policy.md`
 
 ## Role
 
@@ -42,7 +42,8 @@ Internal current-state grounding:
 
 - `src/app/session-wipe.js` and `src/app/browser-entropy-collector.js` for browser-session secret handling and entropy collection posture
 - `src/core/crypto/index.js`, `src/core/crypto/aead.js`, and `src/core/crypto/qenc/format.js` for encryption, AAD boundaries, and key-commitment behavior
-- `src/core/crypto/qcont/restore.js`, `src/core/crypto/manifest/archive-manifest.js`, and `src/core/crypto/manifest/manifest-bundle.js` for reconstruction, manifest, and bundle integrity behavior
+- `src/core/crypto/qcont/restore.js`, `src/core/crypto/qcont/lifecycle-shard.js`, `src/core/crypto/manifest/archive-manifest.js`, and `src/core/crypto/manifest/manifest-bundle.js` for reconstruction, manifest, bundle, and successor lifecycle integrity behavior
+- `src/core/crypto/lifecycle/artifacts.js` for successor lifecycle bundle and detached-signature target semantics
 - `src/core/crypto/auth/verify-signatures.js`, `src/core/crypto/auth/qsig.js`, `src/core/crypto/auth/stellar-sig.js`, and `src/core/crypto/auth/opentimestamps.js` for authenticity and evidence handling
 - `index.html`, `README.md`, `docs/series/SERIES-STANDARTS.md`, `docs/format-spec.md`, `docs/trust-and-policy.md`, `docs/long-term-archive.md`, and `docs/glossary.md` for delivery, client-only assumptions, threat framing, and cross-document constraints
 
@@ -64,6 +65,8 @@ Implemented now:
 - fail-closed parsing and deterministic restore behavior for the current artifact family
 - best-effort in-memory secret wiping and no intended persistent secret storage
 - explicit separation among integrity, signature validity, pinning, and policy satisfaction
+- **Successor lifecycle** artifacts (QVqcont-7 shards, `QV-Lifecycle-Bundle` v1) with archive-state–centric approval and fail-closed restore selection rules described in `format-spec.md` Section 8
+- successor-default regular-user creation in Lite and Pro, with legacy manifest/bundle handling retained only as a compatibility surface for existing archives
 
 Not yet provided by the current implementation:
 
@@ -87,8 +90,8 @@ This document applies to the current Quantum Vault artifact family and restore f
 
 - `.qenc` encrypted containers
 - `.qcont` threshold shards
-- canonical `*.qvmanifest.json`
-- mutable `*.extended.qvmanifest.json` bundles
+- canonical `*.qvmanifest.json` and mutable `*.extended.qvmanifest.json` bundles for the legacy track
+- archive-state descriptors, cohort bindings, lifecycle bundles, transition records, and source-evidence objects for the successor lifecycle track
 - detached `.qsig`, `.sig`, `.pqpk`, and `.ots` inputs as currently supported
 
 It also assumes the current supporting tool ecosystem:
@@ -121,9 +124,10 @@ Terminology used here follows `docs/glossary.md` and `format-spec.md`:
 | ML-KEM public key file (`publicKey.qkey`) | Integrity, correct binding | Used to encapsulate the shared secret for `.qenc` creation |
 | Shared secret and derived symmetric secrets (`Kraw`, `Kenc`, `Kiv`) | Confidentiality | Ephemeral runtime-only symmetric `secretKey` material |
 | `.qenc` container | Confidentiality, fixity, parse safety | Public metadata plus authenticated ciphertext |
-| `.qcont` shards | Threshold secrecy, recoverability, integrity | Carry one share, RS fragments, embedded manifest, embedded bundle |
-| Canonical manifest | Fixity, signature target integrity | Immutable detached-signature payload |
-| Manifest bundle | Policy transport, authenticity metadata integrity | Mutable object carrying policy and attachments |
+| `.qcont` shards | Threshold secrecy, recoverability, integrity | Carry one share, RS fragments, and embedded authenticity material; legacy shards embed manifest and bundle, successor shards embed archive-state, cohort binding, and lifecycle bundle |
+| Canonical manifest / archive-state descriptor | Fixity, signature target integrity | Immutable detached-signature payload for the selected track |
+| Manifest bundle / lifecycle bundle | Policy transport, authenticity metadata integrity | Mutable object carrying policy and attachments for the selected track |
+| Cohort binding and transition records | Cohort integrity, lineage integrity | Successor-only lifecycle objects used for cohort identity and same-state resharing provenance |
 | Detached signatures and public-key attachments | Provenance, signer binding | Current external authenticity material |
 | OTS evidence | Evidence linkage | Supplementary only; not a policy-satisfying signature substitute |
 
@@ -205,10 +209,10 @@ The current system aims to keep the following goals separate:
    Plaintext should remain unavailable to an adversary who only captures archive artifacts without the required decryption material.
 
 2. Integrity and fixity
-   Modified `.qenc`, `.qcont`, manifest, and bundle data should be detected rather than silently accepted.
+   Modified `.qenc`, `.qcont`, and the current track's signable and mutable authenticity objects should be detected rather than silently accepted.
 
 3. Authenticity and provenance
-   Detached signatures should allow the verifier to determine whether a signer key signed the canonical manifest bytes.
+   Detached signatures should allow the verifier to determine whether a signer key signed the current signable archive description: canonical manifest bytes for legacy archives or canonical archive-state bytes for successor archive approval.
 
 4. Threshold secrecy
    Fewer than the required number of shards should not reconstruct the ML-KEM private key.
@@ -279,7 +283,7 @@ Current confidentiality and AEAD invariants:
 - key commitment is mandatory and MUST be verified before decryption
 - KMAC domain strings for KDF and IV derivation MUST remain explicit, non-colliding, and stable for the artifact instance
 
-### 7.3 Manifest, bundle, and authenticity invariants
+### 7.3 Legacy manifest, bundle, and authenticity invariants
 
 Current authenticity invariants:
 
@@ -311,6 +315,22 @@ Current parser and verifier invariants:
 - cryptographic meaning MUST NOT depend on mutable filesystem metadata
 - malformed or ambiguously linked evidence MUST be rejected rather than silently downgraded
 
+### 7.6 Successor lifecycle and same-state resharing (claim boundaries)
+
+The **successor** track separates archive-state approval from cohort-level sharding (`format-spec.md`, `trust-and-policy.md` §11). Invariants include:
+
+- archive-approval signatures MUST verify over canonical **archive-state descriptor** bytes, not mutable lifecycle-bundle bytes
+- maintenance and source-evidence detached signatures MUST NOT satisfy archive policy
+- restore MUST NOT auto-select a lifecycle bundle digest, cohort, or fork winner by heuristic when disambiguation is required
+
+**Same-state resharing** (availability maintenance) produces a new cohort and `cohortId` but preserves archive-state bytes and existing archive-approval signatures. The implementation does **not** claim to:
+
+- revoke or repair compromise of previously leaked predecessor quorum material
+- perform implicit archive re-approval or plaintext decryption as part of resharing
+- solve host-compromise, HNDL, or algorithm migration beyond the stated cryptographic profile
+
+Operational warnings emitted by resharing flows are advisory; they are not a substitute for external custody policy.
+
 ## 8. Security claims and their conditions
 
 | Claim | Holds if | Does not imply |
@@ -319,7 +339,7 @@ Current parser and verifier invariants:
 | `.qenc` / `.qcont` integrity and fixity | AEAD checks, hashes, commitments, manifest digests, and shard checks all verify | Provenance or signer identity |
 | Threshold secrecy | Fewer than the required shards are available and Shamir/recovery invariants hold | Availability or recoverability |
 | Threshold recoverability | A sufficient consistent shard cohort is available and policy permits restore | That every shard source was honest or that provenance is strong |
-| A verified detached signature | The signature cryptographically verifies over the exact canonical manifest bytes under a supported suite/wrapper | That the signer audited plaintext, approved archive class, or authorized migration |
+| A verified detached signature | The signature cryptographically verifies over the exact canonical **signable** bytes for the path (legacy: manifest bytes; successor archive-approval: archive-state descriptor bytes) under a supported suite/wrapper | That the signer audited plaintext, approved archive class, or authorized migration |
 | Archive policy satisfied | The required valid signature set exists under the current policy semantics | Signer pinning, timestamp evidence, or broader organizational approval |
 | OTS evidence linked | The evidence object targets a detached signature under the supported linkage checks | A full independent third-party time proof or policy satisfaction by itself |
 

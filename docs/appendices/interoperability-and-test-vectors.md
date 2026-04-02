@@ -36,7 +36,7 @@ Current implementation grounding:
 
 Implemented now:
 
-- selftests covering signature-policy counting, `publicKeyRef`, OTS linkage, restore selection, malformed parsing, and nonce/AEAD invariants
+- selftests covering signature-policy counting, `publicKeyRef`, OTS linkage, restore selection, malformed parsing, nonce/AEAD invariants, and **successor lifecycle** bundle and shard parsing (see `docs/schema/fixtures/index.json` for lifecycle fixture entries)
 - regression vectors for KMAC customization semantics and per-chunk IV derivation
 - checked-in JSON Schema fixtures under `docs/schema/fixtures/`, including schema-valid but runtime-invalid cases that exercise the bytes/schema/semantics boundary explicitly
 - local-development example artifact sets for single-archive, signature-focused, and bundle-focused flows
@@ -47,6 +47,12 @@ Not yet first-class in the current implementation:
 - machine-readable manifest of all malformed cases outside the source tree
 - a cross-language conformance harness distributed separately from the repository
 
+Current release boundary:
+
+- the repository currently ships selftest-backed coverage for both legacy manifest/bundle artifacts and successor lifecycle artifacts
+- the shipped Lite and Pro build/export flow now emits successor lifecycle shards by default, while legacy manifest/bundle coverage is retained only for the compatibility window
+- a standalone externally versioned vector corpus is future work and MUST NOT be implied by the current release surface
+
 ## Future work and non-normative notes
 
 - A future release may promote the current repository examples and selftests into a versioned external vector corpus.
@@ -56,11 +62,12 @@ Not yet first-class in the current implementation:
 
 An interoperable implementation should currently be able to:
 
-- parse and validate canonical manifests under `QV-JSON-RFC8785-v1` and canonical bundles under `QV-BUNDLE-JSON-v1`
-- verify detached signatures only against canonical manifest bytes
-- reject malformed or ambiguous `publicKeyRef` bindings
+- parse and validate canonical manifests and successor signable lifecycle artifacts under `QV-JSON-RFC8785-v1`, plus manifest bundles and lifecycle bundles under `QV-BUNDLE-JSON-v1`
+- verify detached signatures against the correct canonical target for the selected track: canonical manifest bytes for legacy archives, canonical archive-state bytes for successor archive approval, and declared lifecycle targets for maintenance or source evidence
+- reject malformed or ambiguous `publicKeyRef` bindings and successor `targetType` / `targetRef` / `targetDigest` mismatches
 - link `.ots` evidence only to detached signature bytes
 - reject malformed `.qenc`, `.qcont`, `.qsig`, `.pqpk`, and detached-signature inputs in the fail-closed cases covered by the repository selftests
+- reject mixed legacy/successor shard families and reject ambiguous successor archive/state/cohort or multi-bundle candidate sets without explicit disambiguation
 
 ## 2. Current local-development example-artifact sources
 
@@ -82,12 +89,12 @@ Current usage note:
 
 | Vector class | Current repository coverage |
 | --- | --- |
-| canonicalization behavior | canonical manifest and bundle normalization through parser/canonicalizer paths |
-| schema grammar behavior | JSON Schema validation of valid and invalid manifest/bundle fixtures, plus schema-valid but runtime-invalid boundary cases |
+| canonicalization behavior | canonical manifest, archive-state, cohort-binding, transition-record, source-evidence, and bundle normalization through parser/canonicalizer paths |
+| schema grammar behavior | JSON Schema validation of valid and invalid manifest-family and successor-lifecycle fixtures, plus schema-valid but runtime-invalid boundary cases |
 | detached-signature policy counting | duplicate proof deduplication, unique-signature counting, and bundle-plus-external interactions |
-| `publicKeyRef` fail-closed behavior | authoritative bundled-key verification, incompatible reference rejection, and suite-mismatch rejection |
+| `publicKeyRef` and target-contract fail-closed behavior | authoritative bundled-key verification, incompatible reference rejection, suite-mismatch rejection, and successor target-family mismatch rejection |
 | OTS linkage | external and embedded `.ots` linkage, unrelated proof rejection, and per-signature evidence deduplication |
-| restore selection | richer-bundle preference when canonical manifest bytes are identical, uploaded-bundle override rules, and mixed embedded-bundle reporting |
+| restore selection | legacy richer-bundle selection when canonical manifest bytes are identical, successor archive/state/cohort grouping, explicit lifecycle-bundle override rules, and mixed embedded-bundle reporting |
 | `.qenc` correctness | chunked roundtrip, nonce-policy bounds, KMAC regression vectors, IV-derivation regression vector, tamper failure, and key-commitment enforcement |
 | malformed input handling | invalid magic, oversize framing, unsupported major versions, duplicate shard indices, and other fail-closed parser cases |
 
@@ -105,6 +112,8 @@ The selftests currently exercise at least the following compatibility-relevant n
 - missing `.qenc` key commitment
 - duplicate shard indices
 - unrelated `.ots` evidence
+- mixed legacy and successor shard families
+- ambiguous successor lifecycle-bundle selection within one cohort
 
 These are current compatibility expectations, not merely advisory checks.
 

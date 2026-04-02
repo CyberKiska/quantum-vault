@@ -8,9 +8,9 @@ import { setButtonsDisabled, readFileAsUint8Array, download, validateRsParams } 
 
 function describeAuthPolicyHelp(authPolicyLevel) {
     if (authPolicyLevel === 'integrity-only') {
-        return 'Without an external signature, restore will verify integrity only, not archive authenticity.';
+        return 'Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.';
     }
-    return 'Without an external detached signature attached later, restore will block and the file will not be decrypted.';
+    return 'Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.';
 }
 
 export function initQcontBuildUI() {
@@ -31,9 +31,9 @@ export function initQcontBuildUI() {
 
     buildQcontBtn?.addEventListener('click', async () => {
         if (!qencForQcontInput?.files?.[0]) { showToast('Select a .qenc container to split.', 'warning'); return; }
-        if (!privKeyForQcontInput?.files?.[0]) { showToast('Select a secret .qkey to split.', 'warning'); return; }
+        if (!privKeyForQcontInput?.files?.[0]) { showToast('Select a private .qkey to split.', 'warning'); return; }
         const privKeyFile = privKeyForQcontInput.files[0];
-        if (privKeyFile.size !== 3168) { showToast(`Secret .qkey must be exactly 3168 bytes (got ${privKeyFile.size} B).`, 'warning'); return; }
+        if (privKeyFile.size !== 3168) { showToast(`Private .qkey must be exactly 3168 bytes (got ${privKeyFile.size} B).`, 'warning'); return; }
         setButtonsDisabled(true);
         try {
             const qencBytes = await readFileAsUint8Array(qencForQcontInput.files[0]);
@@ -57,15 +57,22 @@ export function initQcontBuildUI() {
                 download(blob, name);
                 log(`Saved ${name} (${blob.size} B)`);
             });
-            const manifestName = `${baseName}.qvmanifest.json`;
-            download(new Blob([result.manifestBytes], { type: 'application/json' }), manifestName);
-            log(`Saved ${manifestName} (${result.manifestBytes.length} B) SHA3-512=${result.manifestDigestHex}`);
+            const archiveStateName = `${baseName}.archive-state.json`;
+            download(new Blob([result.archiveStateBytes], { type: 'application/json' }), archiveStateName);
+            log(`Saved ${archiveStateName} (${result.archiveStateBytes.length} B) SHA3-512=${result.archiveStateDigestHex}`);
+            const cohortBindingName = `${baseName}.cohort-binding.json`;
+            download(new Blob([result.cohortBindingBytes], { type: 'application/json' }), cohortBindingName);
+            log(`Saved ${cohortBindingName} (${result.cohortBindingBytes.length} B) SHA3-512=${result.cohortBindingDigestHex}`);
+            const lifecycleBundleName = `${baseName}.lifecycle-bundle.json`;
+            download(new Blob([result.lifecycleBundleBytes], { type: 'application/json' }), lifecycleBundleName);
+            log(`Saved ${lifecycleBundleName} (${result.lifecycleBundleBytes.length} B) SHA3-512=${result.lifecycleBundleDigestHex}`);
             log(`Archive policy: ${authPolicyLevel}`);
             if (authPolicyLevel === 'integrity-only') {
-                log('This archive can be restored without signatures, but provenance will remain inauthentic unless you sign and attach the manifest bundle.');
+                log('Next actions: sign the exported archive-state later if you need archive approval, attach detached evidence when ready, or proceed to Restore for integrity-only recovery.');
             } else {
-                log('Sign this .qvmanifest.json file. Later, use Attach to emit a self-contained .extended.qvmanifest.json bundle.');
+                log('Next actions: sign the exported .archive-state.json file externally, use Attach to merge that detached archive-approval signature into the lifecycle bundle, or proceed to Restore after the evidence is attached.');
             }
+            log('Same-state resharing later emits maintenance transition records and preserves archive-approval signatures because the archive-state descriptor bytes stay unchanged.');
             log('.qcont shards built. Distribute files across storage providers.');
         } catch (e) { logError(e); } finally { setButtonsDisabled(false); }
     });

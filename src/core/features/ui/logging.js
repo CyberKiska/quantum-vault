@@ -117,9 +117,13 @@ export function formatSignatureResultSummary(result) {
 }
 
 export function formatAuthenticityStatusMessage(status = {}) {
-    if (status?.signatureVerified !== true) {
+    const signatureVerified = status?.archiveApprovalSignatureVerified ?? status?.signatureVerified;
+    if (signatureVerified !== true) {
         return '';
     }
+    const label = Object.prototype.hasOwnProperty.call(status, 'archiveApprovalSignatureVerified')
+        ? 'Archive-approval signatures verified'
+        : 'Signatures verified';
     const details = [];
     if (status?.strongPqSignatureVerified === true) {
         details.push('strong PQ present');
@@ -130,12 +134,12 @@ export function formatAuthenticityStatusMessage(status = {}) {
     if (status?.userPinned === true) {
         details.push('user pin matched');
     }
-    if (status?.signerPinned === true && details.length === 0) {
+    if (status?.signerPinned === true && status?.bundlePinned !== true && status?.userPinned !== true) {
         details.push('signer pin active');
     }
     return details.length > 0
-        ? `Signatures verified (${details.join(', ')}).`
-        : 'Signatures verified.';
+        ? `${label} (${details.join(', ')}).`
+        : `${label}.`;
 }
 
 // Log hash with appropriate formatting based on mode
@@ -151,7 +155,7 @@ export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, option
     
     if (isLiteMode) {
         log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
-        logHash('Secret Key', privateKeyHash, { isLiteMode, elementId });
+        logHash('Private Key', privateKeyHash, { isLiteMode, elementId });
         logHash('Public Key', publicKeyHash, { isLiteMode, elementId });
     } else {
         log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
@@ -159,7 +163,7 @@ export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, option
         if (seedInfo.hasUserEntropy) {
             log('User entropy successfully collected and mixed.', { elementId, isLiteMode });
         }
-        logHash('Secret Key Hash', privateKeyHash, { isLiteMode, elementId });
+        logHash('Private Key Hash', privateKeyHash, { isLiteMode, elementId });
         logHash('Public Key Hash', publicKeyHash, { isLiteMode, elementId });
     }
 }

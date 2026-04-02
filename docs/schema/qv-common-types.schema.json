@@ -40,6 +40,18 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "archiveIdHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stateIdHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "cohortIdHex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "base64String": {
       "type": "string",
       "minLength": 4,
@@ -54,11 +66,26 @@
     "archiveManifestSchemaId": {
       "const": "quantum-vault-archive-manifest/v3"
     },
+    "archiveStateSchemaId": {
+      "const": "quantum-vault-archive-state-descriptor/v1"
+    },
+    "cohortBindingSchemaId": {
+      "const": "quantum-vault-cohort-binding/v1"
+    },
+    "transitionRecordSchemaId": {
+      "const": "quantum-vault-transition-record/v1"
+    },
+    "sourceEvidenceSchemaId": {
+      "const": "quantum-vault-source-evidence/v1"
+    },
     "archiveManifestType": {
       "const": "archive"
     },
     "bundleType": {
       "const": "QV-Manifest-Bundle"
+    },
+    "lifecycleBundleType": {
+      "const": "QV-Lifecycle-Bundle"
     },
     "cryptoProfileId": {
       "const": "QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2"
@@ -174,6 +201,19 @@
     "timestampType": {
       "const": "opentimestamps"
     },
+    "sha256Alg": {
+      "const": "SHA-256"
+    },
+    "sha3_256Alg": {
+      "const": "SHA3-256"
+    },
+    "sourceDigestAlg": {
+      "enum": [
+        "SHA3-512",
+        "SHA3-256",
+        "SHA-256"
+      ]
+    },
     "bodyDefinitionId": {
       "const": "QV-QCONT-SHARDBODY-v1"
     },
@@ -182,6 +222,30 @@
     },
     "manifestTargetType": {
       "const": "canonical-manifest"
+    },
+    "signatureFamily": {
+      "enum": [
+        "archive-approval",
+        "maintenance",
+        "source-evidence"
+      ]
+    },
+    "lifecycleTargetType": {
+      "enum": [
+        "archive-state",
+        "transition-record",
+        "source-evidence"
+      ]
+    },
+    "nullableString": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "const": null
+        }
+      ]
     }
   }
 }

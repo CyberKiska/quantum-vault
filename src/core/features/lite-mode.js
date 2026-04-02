@@ -7,12 +7,16 @@ import {
     generateKeyPair,
     hashBytes,
     buildQcontShards,
-    parseShard,
+    parseShardForRestore,
     restoreFromShards,
     assessShardSelection,
 } from '../../app/crypto-service.js';
 import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
-import { collectRestoreVerificationOptions } from './qcont/restore-ui.js';
+import {
+    buildRestoreResultSummary,
+    collectRestoreVerificationOptions,
+    refreshSuccessorSelectionUi,
+} from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
@@ -43,9 +47,9 @@ let unregisterLiteSessionWipe = null;
 
 function describeAuthPolicyHelp(authPolicyLevel) {
     if (authPolicyLevel === 'integrity-only') {
-        return 'Without an external signature, restore will verify integrity only, not archive authenticity.';
+        return 'Without an external archive-approval signature over the archive-state descriptor, restore verifies integrity only and does not claim archive approval.';
     }
-    return 'Without an external detached signature attached later, restore will block and the file will not be decrypted.';
+    return 'Without an external detached archive-approval signature over the archive-state descriptor, restore will block before the file is decrypted.';
 }
 
 function wipeLiteKeyPair(keyPair) {
@@ -313,13 +317,15 @@ async function updateShardsStatus() {
     
     const files = [...(shardsInput.files || [])];
     const requestId = ++liteShardsStatusSeq;
-    await updateShardSelectionStatus({
+    const assessment = await updateShardSelectionStatus({
         files,
         statusDiv,
         statusText,
         actionButton: restoreBtn,
         isCurrent: () => requestId === liteShardsStatusSeq
     });
+    if (requestId !== liteShardsStatusSeq) return;
+    await refreshSuccessorSelectionUi('liteRestore', files, restoreBtn, assessment || { ready: false });
 }
 
 // Update create shards button state
@@ -463,8 +469,10 @@ async function createLiteShards() {
             const shardName = `${baseName}.part${index + 1}-of-${qconts.length}.qcont`;
             download(blob, shardName);
         });
-        const manifestName = `${baseName}.qvmanifest.json`;
-        download(new Blob([splitResult.manifestBytes], { type: 'application/json' }), manifestName);
+        const archiveStateName = `${baseName}.archive-state.json`;
+        download(new Blob([splitResult.archiveStateBytes], { type: 'application/json' }), archiveStateName);
+        const lifecycleBundleName = `${baseName}.lifecycle-bundle.json`;
+        download(new Blob([splitResult.lifecycleBundleBytes], { type: 'application/json' }), lifecycleBundleName);
         
         // Log shard creation
         logShardCreation(qconts.length, params, payloadLabel, { isLiteMode: true });
@@ -476,10 +484,12 @@ async function createLiteShards() {
         }
         log(`Archive policy: ${authPolicyLevel}`, { isLiteMode: true });
         if (authPolicyLevel === 'integrity-only') {
-            log(`Saved ${manifestName}. This archive can be restored without signatures, but provenance will remain inauthentic unless you sign and attach the manifest bundle.`, { isLiteMode: true });
+            log(`Next actions: sign ${archiveStateName} later if you need archive approval, attach detached evidence when ready, or proceed to Restore for integrity-only recovery.`, { isLiteMode: true });
         } else {
-            log(`Saved ${manifestName}. Sign this file, then use Attach in Pro mode to emit an .extended.qvmanifest.json bundle and optionally rewrite the shards.`, { isLiteMode: true });
+            log(`Next actions: sign ${archiveStateName} externally, then attach that detached archive-approval signature to ${lifecycleBundleName} without changing the signed bytes.`, { isLiteMode: true });
         }
+        log(`Saved ${lifecycleBundleName}. This mutable lifecycle bundle carries detached evidence separately from the signable archive-state descriptor.`, { isLiteMode: true });
+        log('Same-state resharing later is maintenance, not archive re-approval, because the archive-state descriptor stays unchanged while a new cohort and transition record are emitted.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
         
     } catch (error) {
@@ -489,60 +499,6 @@ async function createLiteShards() {
         updateCreateShardsButton();
         setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
     }
-}
-
-function buildLiteRestoreResultPanel(result, containerOk, decryptOk) {
-    const panel = document.getElementById('liteRestoreResult');
-    if (!panel) return;
-
-    panel.replaceChildren();
-    panel.style.display = 'block';
-
-    const allOk = containerOk && decryptOk && result.authenticity?.status?.policySatisfied;
-
-    const header = document.createElement('h4');
-    header.textContent = 'Restore Result';
-    panel.appendChild(header);
-
-    const addItem = (ok, text, warn) => {
-        const item = document.createElement('div');
-        item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-        item.textContent = `${warn ? '⚠' : (ok ? '✓' : '✗')} ${text}`;
-        panel.appendChild(item);
-    };
-
-    addItem(result.qencOk, `Container integrity${result.qencOk ? ' verified' : ' FAILED'}`);
-    addItem(result.qkeyOk, `Secret key integrity${result.qkeyOk ? ' verified' : ' FAILED'}`);
-    if (containerOk) {
-        addItem(decryptOk, `Decryption & file integrity${decryptOk ? ' verified' : ' FAILED'}`);
-    }
-
-    const status = result.authenticity?.status || {};
-    addItem(status.signatureVerified === true, 'Signature verified', status.signatureVerified !== true);
-    addItem(status.strongPqSignatureVerified === true, 'Strong PQ signature verified', status.signatureVerified === true && status.strongPqSignatureVerified !== true);
-    addItem(status.bundlePinned === true, 'Bundle signer pinned', status.signatureVerified === true && status.bundlePinned !== true);
-    if (status.bundleCohortMixed === true) {
-        addItem(false, 'Mixed embedded bundle cohort used', true);
-    }
-    if (status.userPinProvided === true || status.userPinned === true) {
-        addItem(status.userPinned === true, 'User signer pinned', status.userPinProvided === true && status.userPinned !== true);
-    }
-    addItem(status.policySatisfied === true, 'Archive policy satisfied', status.policySatisfied !== true);
-
-    const timestampEvidence = Array.isArray(result.authenticity?.timestampEvidence) ? result.authenticity.timestampEvidence : [];
-    if (timestampEvidence.length > 0) {
-        const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
-        const incompleteCount = timestampEvidence.length - completeCount;
-        addItem(true, `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`);
-        if (completeCount > 0) {
-            addItem(true, `OTS proof appears complete (${completeCount})`);
-        }
-        if (incompleteCount > 0) {
-            addItem(false, `OTS proof appears incomplete (${incompleteCount})`, true);
-        }
-    }
-
-    panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
 }
 
 async function restoreLiteShards() {
@@ -579,7 +535,7 @@ async function restoreLiteShards() {
 
         // Parse shards using shared function
         const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-        const shards = shardBytesArr.map((arr) => parseShard(arr, { strict: true }));
+        const shards = await Promise.all(shardBytesArr.map((arr) => parseShardForRestore(arr, { strict: true })));
         
         // Log restoration start
         const containerId = shards[0]?.metaJSON?.containerId;
@@ -593,10 +549,17 @@ async function restoreLiteShards() {
             verification: verificationOptions,
         });
 
-        log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
-        log(`Selected bundle digest: ${result.bundleDigestHex}`, { isLiteMode: true });
-        if (Array.isArray(result.embeddedBundleDigestsUsed) && result.embeddedBundleDigestsUsed.length > 0) {
-            log(`Embedded shard bundle digests used: ${result.embeddedBundleDigestsUsed.join(', ')}`, { isLiteMode: true });
+        if (result.archiveId) {
+            log(`Selected archiveId: ${result.archiveId}`, { isLiteMode: true });
+            log(`Selected stateId: ${result.stateId}`, { isLiteMode: true });
+            log(`Selected cohortId: ${result.cohortId}`, { isLiteMode: true });
+        } else {
+            log(`Selected manifest digest: ${result.manifestDigestHex}`, { isLiteMode: true });
+        }
+        log(`Selected bundle digest: ${result.lifecycleBundleDigestHex || result.bundleDigestHex}`, { isLiteMode: true });
+        const embeddedDigests = result.embeddedLifecycleBundleDigestsUsed || result.embeddedBundleDigestsUsed;
+        if (Array.isArray(embeddedDigests) && embeddedDigests.length > 0) {
+            log(`Embedded shard bundle digests used: ${embeddedDigests.join(', ')}`, { isLiteMode: true });
         }
         if (result.authenticity?.policy) {
             log(`Archive policy: ${result.authenticity.policy.level}`, { isLiteMode: true });
@@ -606,6 +569,16 @@ async function restoreLiteShards() {
         }
         for (const evidence of result.authenticity?.timestampEvidence || []) {
             log(`${evidence.linkLabel}: ${evidence.targetRef}. ${evidence.completionLabel}.`, { isLiteMode: true });
+        }
+        const sourceEvidenceReport = result.authenticity?.sourceEvidenceReport;
+        if (sourceEvidenceReport?.present) {
+            const descriptiveFieldCount = Array.isArray(sourceEvidenceReport.descriptiveFieldNames)
+                ? sourceEvidenceReport.descriptiveFieldNames.length
+                : 0;
+            log(
+                `Source evidence: objects=${sourceEvidenceReport.count}, signed=${sourceEvidenceReport.sourceEvidenceSignatureCount}, verified=${sourceEvidenceReport.verifiedSourceEvidenceSignatureCount}, external-source-signature-refs=${sourceEvidenceReport.externalSourceSignatureRefCount}, descriptive-fields=${descriptiveFieldCount}.`,
+                { isLiteMode: true }
+            );
         }
         if (result.authenticity?.verification) {
             const verification = result.authenticity.verification;
@@ -617,7 +590,27 @@ async function restoreLiteShards() {
                     logWarning(`${signatureStatus.slice(0, -1)}; no signer pin is active.`, { isLiteMode: true });
                 }
             }
-            log(`Signature counts: valid=${verification.counts.validTotal}, strong-pq=${verification.counts.validStrongPq}, pinned=${verification.counts.pinnedValidTotal}, bundle-pinned=${verification.counts.bundlePinnedValidTotal}, user-pinned=${verification.counts.userPinnedValidTotal}`, { isLiteMode: true });
+            const counts = verification.counts || {};
+            const hasSuccessorCounts = (
+                Object.prototype.hasOwnProperty.call(counts, 'validArchiveApproval') ||
+                Object.prototype.hasOwnProperty.call(counts, 'validMaintenance') ||
+                Object.prototype.hasOwnProperty.call(counts, 'validSourceEvidence')
+            );
+            if (hasSuccessorCounts) {
+                log(
+                    `Archive-approval counts: valid=${counts.validArchiveApproval}, strong-pq=${counts.validArchiveApprovalStrongPq}, pinned=${counts.archiveApprovalPinnedValidTotal}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal}`,
+                    { isLiteMode: true }
+                );
+                log(
+                    `Detached signature totals across all families: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}, maintenance=${counts.validMaintenance}, source-evidence=${counts.validSourceEvidence}`,
+                    { isLiteMode: true }
+                );
+            } else {
+                log(
+                    `Signature counts: valid=${counts.validTotal}, strong-pq=${counts.validStrongPq}, pinned=${counts.pinnedValidTotal}, bundle-pinned=${counts.bundlePinnedValidTotal}, user-pinned=${counts.userPinnedValidTotal}`,
+                    { isLiteMode: true }
+                );
+            }
             for (const item of verification.results || []) {
                 if (item.ok) {
                     logSuccess(`Signature OK: ${formatSignatureResultSummary(item)}`, { isLiteMode: true });
@@ -634,7 +627,9 @@ async function restoreLiteShards() {
         
         if (!qencOk || !qkeyOk) {
             logError('Hash verification failed for container', { isLiteMode: true });
-            buildLiteRestoreResultPanel(result, false, false);
+            buildRestoreResultSummary(result, 'liteRestoreResult', {
+                liteDecrypt: { containerOk: false, decryptOk: false },
+            });
             return;
         }
         
@@ -645,7 +640,9 @@ async function restoreLiteShards() {
 
         if (!integrityOk) {
             logError('File integrity check failed - hashes do not match', { isLiteMode: true });
-            buildLiteRestoreResultPanel(result, true, false);
+            buildRestoreResultSummary(result, 'liteRestoreResult', {
+                liteDecrypt: { containerOk: true, decryptOk: false },
+            });
             return;
         }
 
@@ -676,7 +673,9 @@ async function restoreLiteShards() {
         logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
         logSuccess('Container restored successfully from a policy-satisfying archive cohort', { isLiteMode: true });
-        buildLiteRestoreResultPanel(result, true, true);
+        buildRestoreResultSummary(result, 'liteRestoreResult', {
+            liteDecrypt: { containerOk: true, decryptOk: true },
+        });
         
     } catch (error) {
         logError(error, { isLiteMode: true });
