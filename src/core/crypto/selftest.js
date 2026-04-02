@@ -47,6 +47,7 @@ import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
 import {
+  inspectLifecycleTimestampEvidence,
   parseOpenTimestampProof,
   resolveOpenTimestampTarget,
 } from './auth/opentimestamps.js';
@@ -79,34 +80,6 @@ function textBytes(value) {
   return new TextEncoder().encode(value);
 }
 
-const DELETED_LEGACY_RUNTIME_MARKERS = [
-  'attachManifestBundleToShards',
-  'buildQcontShards(',
-  'parseShard(',
-  'buildArchiveManifest(',
-  'parseArchiveManifestBytes(',
-  'buildInitialManifestBundle(',
-  'parseManifestBundleBytes(',
-  'parseManifestBundleBytesPreviewOnly(',
-  'canonicalizeArchiveManifest(',
-  'canonicalizeManifestBundle(',
-  'verifyLegacyDetachedSignatures(',
-  'inspectManifestBundleTimestamps(',
-  'parseManifestBundleTimestamps(',
-  'inspectTimestampEvidence(',
-  'buildTestArchiveManifest(',
-  'buildManifestParams(',
-  'legacyCanonicalizeQvC14n',
-];
-
-// Transitional C-11 guard: the legacy manifest/bundle runtime was deleted, so omit
-// selftests that still exercise that removed path until the later selftest rewrite.
-function usesDeletedLegacyRuntime(testCase) {
-  if (typeof testCase?.fn !== 'function') return false;
-  const body = testCase.fn.toString();
-  return DELETED_LEGACY_RUNTIME_MARKERS.some((marker) => body.includes(marker));
-}
-
 function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, options = {}) {
   const familyByField = {
     archiveApprovalSignatures: 'archive-approval',
@@ -118,52 +91,6 @@ function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, opt
     expectedFamily: familyByField[field],
     expectedField: field,
   });
-}
-
-function legacyCanonicalizeQvC14n(value) {
-  function serializeNumber(numberValue) {
-    if (!Number.isFinite(numberValue)) {
-      throw new Error('Legacy QV-C14N-v1 does not allow non-finite numbers');
-    }
-    return JSON.stringify(numberValue);
-  }
-
-  function serializeArray(arr) {
-    const items = arr.map((item) => {
-      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') return 'null';
-      return serializeValue(item);
-    });
-    return `[${items.join(',')}]`;
-  }
-
-  function serializeObject(obj) {
-    const keys = Object.keys(obj).sort();
-    const fields = [];
-    for (const key of keys) {
-      const item = obj[key];
-      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue;
-      fields.push(`${JSON.stringify(key)}:${serializeValue(item)}`);
-    }
-    return `{${fields.join(',')}}`;
-  }
-
-  function serializeValue(item) {
-    if (item === null) return 'null';
-    const t = typeof item;
-    if (t === 'boolean') return item ? 'true' : 'false';
-    if (t === 'number') return serializeNumber(item);
-    if (t === 'string') return JSON.stringify(item);
-    if (t === 'bigint') throw new Error('Legacy QV-C14N-v1 does not allow bigint values');
-    if (Array.isArray(item)) return serializeArray(item);
-    if (t === 'object') return serializeObject(item);
-    throw new Error(`Unsupported legacy QV-C14N-v1 value type: ${t}`);
-  }
-
-  return serializeValue(value);
-}
-
-function legacyCanonicalizeQvC14nToBytes(value) {
-  return textBytes(legacyCanonicalizeQvC14n(value));
 }
 
 async function blobToBytes(blob) {
@@ -196,28 +123,44 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function buildManifestParams(overrides = {}) {
-  return {
-    aeadMode: 'per-chunk-aead',
-    qencFormat: FORMAT_VERSION,
-    ivStrategy: IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
-    chunkSize: 65536,
-    chunkCount: 3,
-    payloadLength: 131072,
-    qencHash: 'a'.repeat(128),
-    containerId: 'b'.repeat(128),
-    shamirThreshold: 4,
-    shamirShareCount: 5,
-    rsN: 5,
-    rsK: 3,
-    rsParity: 2,
-    rsCodecId: 'QV-RS-ErasureCodes-v1',
-    ...overrides,
-  };
+function buildShardMetaEnvelopeBytes(metaJSON) {
+  const metaBytes = canonicalizeJsonToBytes(metaJSON);
+  const minLifecycleShardHeaderBytes = 4 + 2 + 4 + 64 + 4 + 64 + 4 + 64 + 4 + 12 + 16 + 2 + 1 + 2 + 2;
+  const bytes = new Uint8Array(Math.max(6 + metaBytes.length, minLifecycleShardHeaderBytes));
+  const view = new DataView(bytes.buffer);
+  bytes.set(textBytes('QVC1'), 0);
+  view.setUint16(4, metaBytes.length, false);
+  bytes.set(metaBytes, 6);
+  return bytes;
 }
 
-function buildTestArchiveManifest(overrides = {}) {
-  return buildArchiveManifest(buildManifestParams(overrides));
+function buildLegacyFormatShardBytes(fmt = 'QVqcont-6') {
+  return buildShardMetaEnvelopeBytes({
+    alg: { fmt },
+  });
+}
+
+function buildMockLegacyParsedShard({
+  shardIndex = 0,
+  archiveId = 'aa'.repeat(32),
+  stateId = 'bb'.repeat(64),
+  cohortId = 'cc'.repeat(32),
+} = {}) {
+  return {
+    shardIndex,
+    archiveId,
+    stateId,
+    cohortId,
+    manifestBytes: textBytes('{}'),
+    bundleBytes: textBytes('{}'),
+    metaJSON: {
+      alg: { fmt: 'QVqcont-6' },
+      archiveId,
+      stateId,
+      cohortId,
+    },
+    diagnostics: { errors: [], warnings: [] },
+  };
 }
 
 async function buildLifecycleSampleArtifacts() {
@@ -1505,30 +1448,26 @@ function buildCases() {
       },
     },
     {
-      name: '.qenc + private.qkey -> split',
+      name: '.qenc + private.qkey -> successor lifecycle split',
       fn: async () => {
         const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('split-check');
+        const payload = textBytes('successor-split-check');
         const encrypted = await encryptFile(payload, publicKey, 'split.txt');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
-        const shards = split.shards;
+        const split = await buildLifecycleQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
+        const parsed = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
 
-        assert(shards.length === 5, `expected 5 shards, got ${shards.length}`);
-        assert(split.manifest.schema === ARCHIVE_MANIFEST_SCHEMA, `unexpected manifest schema: ${split.manifest.schema}`);
-        assert(split.manifest.version === ARCHIVE_MANIFEST_VERSION, `unexpected manifest version: ${split.manifest.version}`);
-        assert(split.manifest.canonicalization === MANIFEST_CANONICALIZATION_LABEL, `unexpected manifest canonicalization: ${split.manifest.canonicalization}`);
-        assert(split.bundle.type === MANIFEST_BUNDLE_TYPE, `unexpected bundle type: ${split.bundle.type}`);
-        assert(split.bundle.version === MANIFEST_BUNDLE_VERSION, `unexpected bundle version: ${split.bundle.version}`);
-        assert(split.bundle.bundleCanonicalization === BUNDLE_CANONICALIZATION_LABEL, `unexpected bundle canonicalization: ${split.bundle.bundleCanonicalization}`);
-        assert(split.bundle.manifestCanonicalization === MANIFEST_CANONICALIZATION_LABEL, `unexpected bundle manifestCanonicalization: ${split.bundle.manifestCanonicalization}`);
-        for (const shard of shards) {
-          const parsed = parseShard(await blobToBytes(shard.blob));
-          assert(parsed.metaJSON.n === 5, 'shard metadata n mismatch');
-          assert(parsed.metaJSON.k === 3, 'shard metadata k mismatch');
-          assert(parsed.metaJSON.t === 4, 'shard metadata t mismatch');
-          assert(parsed.metaJSON.hasEmbeddedBundle === true, 'shard metadata must indicate embedded bundle');
-          assert(typeof parsed.metaJSON.bundleDigest === 'string' && parsed.metaJSON.bundleDigest.length === 128, 'bundle digest metadata missing');
+        assert(split.shards.length === 5, `expected 5 shards, got ${split.shards.length}`);
+        assert(split.archiveState.schema === 'quantum-vault-archive-state-descriptor/v1', 'unexpected archive-state schema');
+        assert(split.cohortBinding.schema === 'quantum-vault-cohort-binding/v1', 'unexpected cohort-binding schema');
+        assert(split.lifecycleBundle.type === 'QV-Lifecycle-Bundle', 'unexpected lifecycle-bundle type');
+        for (const shard of parsed) {
+          assert(shard.metaJSON.n === 5, 'shard metadata n mismatch');
+          assert(shard.metaJSON.k === 3, 'shard metadata k mismatch');
+          assert(shard.metaJSON.t === 4, 'shard metadata t mismatch');
+          assert(shard.archiveStateDigestHex === split.archiveStateDigestHex, 'embedded archive-state digest mismatch');
+          assert(shard.cohortBindingDigestHex === split.cohortBindingDigestHex, 'embedded cohort-binding digest mismatch');
+          assert(shard.lifecycleBundleDigestHex === split.lifecycleBundleDigestHex, 'embedded lifecycle-bundle digest mismatch');
         }
       },
     },
@@ -1550,229 +1489,6 @@ function buildCases() {
         assert(
           canonicalizeJson(parsed) === '{"__proto__":{"polluted":1},"constructor":{"safe":2},"prototype":{"safe":3}}',
           'special-key canonicalization output mismatch'
-        );
-      },
-    },
-    {
-      name: 'RFC 8785 canonicalization is byte-identical to legacy QV-C14N-v1 for covered manifest-family shapes and authPolicy variants',
-      fn: async () => {
-        const authPolicies = [
-          { level: 'integrity-only', minValidSignatures: 1 },
-          { level: 'any-signature', minValidSignatures: 2 },
-          { level: 'strong-pq-signature', minValidSignatures: 3 },
-        ];
-        const manifestCases = [
-          {
-            label: 'per-chunk',
-            overrides: {},
-          },
-          {
-            label: 'single-container',
-            overrides: {
-              aeadMode: 'single-container-aead',
-              ivStrategy: IV_STRATEGY_SINGLE_IV,
-              chunkCount: 1,
-              payloadLength: 2048,
-              qencHash: 'c'.repeat(128),
-              containerId: 'd'.repeat(128),
-            },
-          },
-        ];
-
-        for (const manifestCase of manifestCases) {
-          for (const authPolicy of authPolicies) {
-            const manifest = buildTestArchiveManifest({
-              ...manifestCase.overrides,
-              authPolicyLevel: authPolicy.level,
-              minValidSignatures: authPolicy.minValidSignatures,
-            });
-            const bundle = buildInitialManifestBundle({ manifest, authPolicy });
-            const normalizedAuthPolicy = normalizeAuthPolicy(authPolicy);
-            const strictManifestBytes = canonicalizeArchiveManifest(manifest).bytes;
-            const strictBundleBytes = canonicalizeManifestBundle(bundle).bytes;
-            const strictAuthPolicyBytes = canonicalizeJsonToBytes(normalizedAuthPolicy);
-            const label = `${manifestCase.label}/${authPolicy.level}/${authPolicy.minValidSignatures}`;
-
-            assert(
-              timingSafeEqual(strictManifestBytes, legacyCanonicalizeQvC14nToBytes(manifest)),
-              `current archive-state descriptor shape diverged from legacy QV-C14N-v1 bytes for ${label}`
-            );
-            assert(
-              timingSafeEqual(strictAuthPolicyBytes, legacyCanonicalizeQvC14nToBytes(normalizedAuthPolicy)),
-              `current authPolicy shape diverged from legacy QV-C14N-v1 bytes for ${label}`
-            );
-            assert(
-              timingSafeEqual(strictBundleBytes, legacyCanonicalizeQvC14nToBytes(bundle)),
-              `current bundle shape diverged from legacy QV-C14N-v1 bytes for ${label}`
-            );
-          }
-        }
-      },
-    },
-    {
-      name: 'manifest parser rejects duplicate object keys on the parse path',
-      fn: async () => {
-        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('manifest-duplicate-keys');
-        const encrypted = await encryptFile(payload, publicKey, 'manifest-duplicate-keys.bin');
-        const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
-        const manifestText = new TextDecoder().decode(split.manifestBytes);
-        const duplicateText = `{\"schema\":\"${ARCHIVE_MANIFEST_SCHEMA}\",${manifestText.slice(1)}`;
-
-        await expectFailure(
-          () => Promise.resolve(parseArchiveManifestBytes(textBytes(duplicateText))),
-          'manifest parser unexpectedly accepted duplicate object keys'
-        );
-      },
-    },
-    {
-      name: 'manifest parser rejects lone surrogate escapes on the parse path',
-      fn: async () => {
-        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('manifest-lone-surrogate');
-        const encrypted = await encryptFile(payload, publicKey, 'manifest-lone-surrogate.bin');
-        const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
-        const manifestText = new TextDecoder().decode(split.manifestBytes);
-        const malformedText = manifestText.replace('"manifestType":"archive"', '"manifestType":"\\ud800"');
-
-        await expectFailure(
-          () => Promise.resolve(parseArchiveManifestBytes(textBytes(malformedText))),
-          'manifest parser unexpectedly accepted a lone surrogate escape'
-        );
-      },
-    },
-    {
-      name: 'manifest parser rejects unknown signed fields',
-      fn: async () => {
-        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('manifest-unknown-fields');
-        const encrypted = await encryptFile(payload, publicKey, 'manifest-unknown-fields.bin');
-        const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
-        const manifestText = new TextDecoder().decode(split.manifestBytes);
-        const malformedText = `{\"unexpectedField\":1,${manifestText.slice(1)}`;
-
-        await expectFailure(
-          () => Promise.resolve(parseArchiveManifestBytes(textBytes(malformedText))),
-          'manifest parser unexpectedly accepted an unknown signed field'
-        );
-      },
-    },
-    {
-      name: 'manifest bundle parser rejects duplicate object keys on the parse path',
-      fn: async () => {
-        const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('bundle-duplicate-keys');
-        const encrypted = await encryptFile(payload, publicKey, 'bundle-duplicate-keys.bin');
-        const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 });
-        const bundleText = new TextDecoder().decode(split.bundleBytes);
-        const duplicateText = `{\"type\":\"${MANIFEST_BUNDLE_TYPE}\",${bundleText.slice(1)}`;
-
-        await expectFailure(
-          () => Promise.resolve(parseManifestBundleBytes(textBytes(duplicateText))),
-          'manifest bundle parser unexpectedly accepted duplicate object keys'
-        );
-      },
-    },
-    {
-      name: 'manifest builder and parser enforce the same documented current constraints',
-      fn: async () => {
-        const validManifest = buildTestArchiveManifest({
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const invalidManifestCases = [
-          {
-            label: 'qenc.format',
-            overrides: { qencFormat: 'NOT-QV' },
-            mutate(manifest) {
-              manifest.qenc.format = 'NOT-QV';
-            },
-          },
-          {
-            label: 'qenc.ivStrategy',
-            overrides: { ivStrategy: 'made-up-iv' },
-            mutate(manifest) {
-              manifest.qenc.ivStrategy = 'made-up-iv';
-            },
-          },
-          {
-            label: 'rsCodecId',
-            overrides: { rsCodecId: 'OTHER-CODEC' },
-            mutate(manifest) {
-              manifest.sharding.reedSolomon.codecId = 'OTHER-CODEC';
-            },
-          },
-          {
-            label: 'qenc.chunkSize safe-integer bound',
-            overrides: { chunkSize: 9007199254740992 },
-            mutate(manifest) {
-              manifest.qenc.chunkSize = 9007199254740992;
-            },
-          },
-        ];
-
-        for (const invalidCase of invalidManifestCases) {
-          await expectFailure(
-            () => Promise.resolve(buildArchiveManifest(buildManifestParams(invalidCase.overrides))),
-            `builder unexpectedly accepted invalid ${invalidCase.label}`
-          );
-          const mutated = cloneJson(validManifest);
-          invalidCase.mutate(mutated);
-          await expectFailure(
-            () => Promise.resolve(parseArchiveManifestBytes(canonicalizeJsonToBytes(mutated))),
-            `parser unexpectedly accepted invalid ${invalidCase.label}`
-          );
-        }
-
-        const validBundle = buildInitialManifestBundle({
-          manifest: validManifest,
-          authPolicy: { level: 'any-signature', minValidSignatures: 2 },
-        });
-
-        await expectFailure(
-          () => Promise.resolve(buildInitialManifestBundle({
-            manifest: validManifest,
-            authPolicy: { level: 'any-signature', minValidSignatures: 9007199254740992 },
-          })),
-          'bundle builder unexpectedly accepted an unsafe authPolicy.minValidSignatures'
-        );
-
-        const mutatedBundle = cloneJson(validBundle);
-        mutatedBundle.authPolicy.minValidSignatures = 9007199254740992;
-        await expectFailure(
-          () => Promise.resolve(parseManifestBundleBytes(canonicalizeJsonToBytes(mutatedBundle))),
-          'bundle parser unexpectedly accepted an unsafe authPolicy.minValidSignatures'
-        );
-      },
-    },
-    {
-      name: 'bundle preview parsing is isolated behind an explicit preview-only API',
-      fn: async () => {
-        const manifest = buildTestArchiveManifest({
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const bundle = buildInitialManifestBundle({
-          manifest,
-          authPolicy: { level: 'any-signature', minValidSignatures: 2 },
-        });
-        const canonical = canonicalizeManifestBundle(bundle);
-        const previewBytes = textBytes(JSON.stringify(bundle, null, 2));
-
-        await expectFailure(
-          () => Promise.resolve(parseManifestBundleBytes(previewBytes)),
-          'canonical bundle parser unexpectedly accepted preview-only non-canonical bytes'
-        );
-
-        const preview = parseManifestBundleBytesPreviewOnly(previewBytes);
-        assert(preview.bundle.type === MANIFEST_BUNDLE_TYPE, 'preview-only bundle parser returned an unexpected bundle type');
-        assert(
-          timingSafeEqual(preview.bytes, canonical.bytes),
-          'preview-only bundle parser did not preserve canonical bundle bytes'
         );
       },
     },
@@ -1884,23 +1600,6 @@ function buildCases() {
         await expectFailure(
           () => Promise.resolve(canonicalizeJsonToBytes(BigInt(1))),
           'canonicalizer unexpectedly accepted bigint'
-        );
-      },
-    },
-    {
-      name: 'canonical manifest byte identity remains stable for a representative current manifest',
-      fn: async () => {
-        const manifest = buildTestArchiveManifest({
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const expected = '{"aadPolicyId":"QV-AAD-HEADER-CHUNK-v1","authPolicyCommitment":{"alg":"SHA3-512","canonicalization":"QV-JSON-RFC8785-v1","value":"d40373eb7006f8d120acff9e34fe2b6e3cc8eca0cf3e78b48037026aae88d2c230a8b5cb1560710e43c46e6398c2e02bbb8bb0a56d86ca49059b50fcf90eb429"},"canonicalization":"QV-JSON-RFC8785-v1","counterBits":32,"cryptoProfileId":"QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2","kdfTreeId":"QV-KDF-TREE-v2","manifestType":"archive","maxChunkCount":4294967295,"nonceMode":"kmac-prefix64-ctr32","noncePolicyId":"QV-GCM-KMACPFX64-CTR32-v3","qenc":{"aeadMode":"per-chunk-aead","chunkCount":3,"chunkSize":65536,"containerId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","containerIdAlg":"SHA3-512(qenc-header-bytes)","containerIdRole":"secondary-header-id","format":"QVv1-5-0","hashAlg":"SHA3-512","ivStrategy":"kmac-prefix64-ctr32-v3","payloadLength":131072,"primaryAnchor":"qencHash","qencHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"schema":"quantum-vault-legacy-manifest/v3","sharding":{"reedSolomon":{"codecId":"QV-RS-ErasureCodes-v1","k":3,"n":5,"parity":2},"shamir":{"shareCount":5,"threshold":4}},"version":3}';
-        const canonicalized = canonicalizeArchiveManifest(manifest);
-
-        assert(canonicalized.canonical === expected, 'canonical manifest regression string changed unexpectedly');
-        assert(
-          timingSafeEqual(canonicalized.bytes, textBytes(expected)),
-          'canonical manifest regression bytes changed unexpectedly'
         );
       },
     },
@@ -2275,6 +1974,30 @@ function buildCases() {
       },
     },
     {
+      name: 'archive-state canonicalization is idempotent across parse/canonicalize round-trips',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const first = canonicalizeLifecycleArchiveState(sample.archiveState);
+        const parsed = parseArchiveStateDescriptorBytes(first.bytes);
+        const second = canonicalizeLifecycleArchiveState(parsed.archiveState);
+
+        assert(timingSafeEqual(first.bytes, second.bytes), 'archive-state canonical bytes changed after parse/canonicalize round-trip');
+        assert(first.digest.value === second.digest.value, 'archive-state digest changed after parse/canonicalize round-trip');
+      },
+    },
+    {
+      name: 'lifecycle-bundle canonicalization is idempotent across parse/canonicalize round-trips',
+      fn: async () => {
+        const sample = await buildLifecycleSampleArtifacts();
+        const first = await canonicalizeLifecycleBundle(sample.lifecycleBundle);
+        const parsed = await parseLifecycleBundleBytes(first.bytes);
+        const second = await canonicalizeLifecycleBundle(parsed.lifecycleBundle);
+
+        assert(timingSafeEqual(first.bytes, second.bytes), 'lifecycle-bundle canonical bytes changed after parse/canonicalize round-trip');
+        assert(first.digest.value === second.digest.value, 'lifecycle-bundle digest changed after parse/canonicalize round-trip');
+      },
+    },
+    {
       name: 'successor lifecycle bundle parser rejects version values beyond v1',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
@@ -2284,6 +2007,16 @@ function buildCases() {
         await expectFailure(
           () => parseLifecycleBundleBytes(canonicalizeJsonToBytes(mutated)),
           'lifecycle bundle unexpectedly accepted version 2'
+        );
+      },
+    },
+    {
+      name: 'successor lifecycle shard parser rejects a QVqcont-6 shard blob',
+      fn: async () => {
+        await expectFailureWithMessage(
+          () => parseLifecycleShard(buildLegacyFormatShardBytes()),
+          /expected QVqcont-7, got QVqcont-6/i,
+          'successor lifecycle shard parser unexpectedly accepted a QVqcont-6 shard blob'
         );
       },
     },
@@ -3287,16 +3020,32 @@ function buildCases() {
     {
       name: 'restore rejects mixed legacy and successor shard families',
       fn: async () => {
-        const legacyPair = await generateKeyPair({ collectUserEntropy: false });
-        const legacyPayload = textBytes('mixed-legacy-successor-legacy');
-        const legacyQenc = await blobToBytes(await encryptFile(legacyPayload, legacyPair.publicKey, 'mixed-legacy-successor-legacy.bin'));
-        const legacySplit = await buildQcontShards(legacyQenc, legacyPair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const legacyParsed = await Promise.all(legacySplit.shards.slice(0, 2).map(async (item) => parseShard(await blobToBytes(item.blob))));
         const successorSample = await buildSuccessorRestoreSample({ payloadBytes: textBytes('mixed-legacy-successor-successor') });
+        const legacyParsed = [
+          buildMockLegacyParsedShard({ shardIndex: 0 }),
+          buildMockLegacyParsedShard({ shardIndex: 1 }),
+        ];
 
-        await expectFailure(
+        await expectFailureWithMessage(
           () => restoreFromShards([...legacyParsed, successorSample.parsed[0]], { onLog: () => {}, onError: () => {} }),
+          /non-successor parsed input indices: 0, 1/i,
           'restore unexpectedly accepted mixed legacy and successor shard families'
+        );
+      },
+    },
+    {
+      name: 'restoreFromShards rejects a pure set of legacy shards',
+      fn: async () => {
+        const legacyParsed = [
+          buildMockLegacyParsedShard({ shardIndex: 0 }),
+          buildMockLegacyParsedShard({ shardIndex: 1 }),
+          buildMockLegacyParsedShard({ shardIndex: 2 }),
+        ];
+
+        await expectFailureWithMessage(
+          () => restoreFromShards(legacyParsed, { onLog: () => {}, onError: () => {} }),
+          /non-successor parsed input indices: 0, 1, 2/i,
+          'restoreFromShards unexpectedly accepted a pure set of legacy shards'
         );
       },
     },
@@ -4576,6 +4325,26 @@ function buildCases() {
       },
     },
     {
+      name: 'reshareSameState rejects mixed legacy and successor predecessor shards',
+      fn: async () => {
+        const sample = await buildResharePredecessorSample({
+          payloadBytes: textBytes('phase6-mixed-legacy-successor-predecessors'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const mixed = [
+          sample.parsed[0],
+          buildMockLegacyParsedShard({ shardIndex: 1 }),
+          sample.parsed[1],
+        ];
+
+        await expectFailureWithMessage(
+          () => reshareSameState(mixed, { n: 5, k: 3 }, { onLog: () => {}, onWarn: () => {} }),
+          /parsed successor lifecycle shards/i,
+          'reshareSameState unexpectedly accepted mixed legacy and successor predecessor shards'
+        );
+      },
+    },
+    {
       name: 'same-state resharing fails closed on mixed predecessor lifecycle-bundle digests unless explicitly disambiguated',
       fn: async () => {
         const sample = await buildResharePredecessorSample({
@@ -5178,7 +4947,7 @@ function buildCases() {
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-explicit-legacy-build.bin'));
 
         const split = await buildRegularUserShardSet(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
-          artifactFamily: 'legacy',
+          legacyMode: true,
           authPolicyLevel: 'integrity-only',
         });
 
@@ -5263,18 +5032,19 @@ function buildCases() {
     {
       name: 'authenticity status message keeps signer pin detail alongside strong PQ detail',
       fn: async () => {
-        const manifestBytes = textBytes('auth-status-signer-pin-detail');
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
+        const messageBytes = textBytes('auth-status-signer-pin-detail');
+        const { qsigBytes, pqpkBytes } = buildQsigFixture(messageBytes);
+        const verification = verifyQsigAgainstBytes({
+          messageBytes,
+          qsigBytes,
           pinnedPqPublicKeyFileBytes: pqpkBytes,
         });
-        assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
+        assert(verification.ok === true, 'matching .pqpk should preserve detached PQ verification');
+        assertNoSignerIdentityPinned(verification, 'qsig verification result');
 
         const message = formatAuthenticityStatusMessage({
           archiveApprovalSignatureVerified: true,
-          strongPqSignatureVerified: verification.status.strongPqSignatureVerified,
+          strongPqSignatureVerified: verification.strongPq,
           signerPinned: true,
           bundlePinned: false,
           userPinned: false,
@@ -5285,17 +5055,17 @@ function buildCases() {
       },
     },
     {
-      name: '.qcont reconstruction',
+      name: 'successor lifecycle qcont reconstruction',
       fn: async () => {
         const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const payload = createLargeDeterministicPayload(256 * 1024);
         const encrypted = await encryptFile(payload, publicKey, 'restore.txt');
         const qencBytes = await blobToBytes(encrypted);
-        const built = await buildQcontShards(qencBytes, privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const built = await buildLifecycleQcontShards(qencBytes, privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const builtShards = built.shards;
         const shardBytes = await Promise.all(builtShards.map((shard) => blobToBytes(shard.blob)));
         const oneCorrupted = shardBytes.map((bytes, idx) => (idx === 0 ? mutateTail(bytes) : bytes.slice()));
-        const parsedShards = oneCorrupted.map((bytes) => parseShard(bytes));
+        const parsedShards = await Promise.all(oneCorrupted.map((bytes) => parseLifecycleShard(bytes)));
 
         const restored = await restoreFromShards(parsedShards, { onLog: () => {}, onError: () => {} });
         assert(restored.qencOk, 'reconstructed qenc hash mismatch');
@@ -5304,78 +5074,6 @@ function buildCases() {
         const { decryptedBlob } = await decryptFile(restored.qencBytes, restored.privKey);
         const decrypted = await blobToBytes(decryptedBlob);
         assert((await hashBytes(payload)) === (await hashBytes(decrypted)), 'reconstructed payload mismatch');
-      },
-    },
-    {
-      name: 'restore rejects mixed manifest cohorts without selector',
-      fn: async () => {
-        const pairA = await generateKeyPair({ collectUserEntropy: false });
-        const pairB = await generateKeyPair({ collectUserEntropy: false });
-        const payloadA = textBytes('cohort-a');
-        const payloadB = textBytes('cohort-b');
-
-        const qencA = await blobToBytes(await encryptFile(payloadA, pairA.publicKey, 'a.bin'));
-        const qencB = await blobToBytes(await encryptFile(payloadB, pairB.publicKey, 'b.bin'));
-
-        const splitA = await buildQcontShards(qencA, pairA.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const splitB = await buildQcontShards(qencB, pairB.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-
-        const mixed = [
-          ...(await Promise.all(splitA.shards.slice(0, 3).map((item) => blobToBytes(item.blob)))),
-          ...(await Promise.all(splitB.shards.slice(0, 2).map((item) => blobToBytes(item.blob)))),
-        ];
-        const parsed = mixed.map((bytes) => parseShard(bytes));
-
-        await expectFailure(
-          () => restoreFromShards(parsed, { onLog: () => {}, onError: () => {} }),
-          'restore unexpectedly accepted mixed manifest cohorts without selector'
-        );
-      },
-    },
-    {
-      name: 'restore uses uploaded manifest to select correct cohort',
-      fn: async () => {
-        const pairA = await generateKeyPair({ collectUserEntropy: false });
-        const pairB = await generateKeyPair({ collectUserEntropy: false });
-        const payloadA = textBytes('selector-a');
-        const payloadB = textBytes('selector-b');
-
-        const qencA = await blobToBytes(await encryptFile(payloadA, pairA.publicKey, 'sa.bin'));
-        const qencB = await blobToBytes(await encryptFile(payloadB, pairB.publicKey, 'sb.bin'));
-
-        const splitA = await buildQcontShards(qencA, pairA.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const splitB = await buildQcontShards(qencB, pairB.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-
-        const selectedShardBytes = await Promise.all(splitA.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
-        const distractorShardBytes = await blobToBytes(splitB.shards[0].blob);
-        const parsed = [...selectedShardBytes, distractorShardBytes].map((bytes) => parseShard(bytes));
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: { manifestBytes: splitA.manifestBytes },
-        });
-
-        assert(restored.qencOk, 'restore with uploaded manifest failed qenc hash check');
-        assert(restored.manifestSource === 'uploaded-manifest', `unexpected manifest source: ${restored.manifestSource}`);
-      },
-    },
-    {
-      name: 'parseShard rejects tampered embedded manifest digest',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('manifest-tamper');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'tamper.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 });
-        const shardBytes = await blobToBytes(split.shards[0].blob);
-        const tampered = mutateQcontManifestByte(shardBytes);
-
-        await expectFailure(
-          async () => {
-            parseShard(tampered);
-          },
-          'parseShard unexpectedly accepted tampered embedded manifest'
-        );
       },
     },
     {
@@ -5428,7 +5126,7 @@ function buildCases() {
       },
     },
     {
-      name: 'stellar verifier and guard paths reject duplicate-key .sig JSON while valid current-format proofs still pass',
+      name: 'stellar sig verifier rejects a .sig document with duplicate object keys',
       fn: async () => {
         const messageBytes = textBytes('stellar-strict-json-duplicate-keys');
         const fixture = await buildStellarSignatureFixture(messageBytes);
@@ -5475,7 +5173,7 @@ function buildCases() {
       },
     },
     {
-      name: 'qsig verifier reports embedded-key-only verification as selfSigned',
+      name: 'qsig verifier with no pinned key returns selfSigned indicator',
       fn: async () => {
         const messageBytes = textBytes('qsig-self-signed-low-level');
         const { qsigBytes } = buildQsigFixture(messageBytes);
@@ -5538,261 +5236,26 @@ function buildCases() {
       },
     },
     {
-      name: 'pinning: embedded-key-only PQ signature stays visible but does not satisfy trusted verification',
+      name: 'verification rejects unsupported .qsig major version',
       fn: async () => {
-        const manifestBytes = textBytes('pinning-no-pin');
-        const { qsigBytes } = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-        });
-
-        assert(verification.results.length === 1, 'expected one detached PQ verification result');
-        assert(verification.results[0].ok === true, 'embedded-key-only detached PQ signature should remain cryptographically valid');
-        assert(verification.results[0].selfSigned === true, 'embedded-key-only detached PQ signature should be surfaced as selfSigned');
-        assert(verification.results[0].countedForPolicy === false, 'embedded-key-only detached PQ signature must not count for policy');
-        assert(verification.status.signatureVerified === false, 'embedded-key-only detached PQ signature must not satisfy signatureVerified');
-        assert(verification.status.strongPqSignatureVerified === false, 'embedded-key-only detached PQ signature must not satisfy strong PQ status');
-        assert(verification.status.signerPinned === false, 'signature should remain unpinned without a pin');
-        assert(verification.status.bundlePinned === false, 'external signature without bundle key must not set bundlePinned');
-        assert(verification.status.userPinned === false, 'external signature without user pin must not set userPinned');
-        assert(verification.counts.validTotal === 0, 'embedded-key-only detached PQ signature must not count toward validTotal');
-        assert(verification.counts.validStrongPq === 0, 'embedded-key-only detached PQ signature must not count toward validStrongPq');
-        assert(
-          verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
-          'embedded-key-only detached PQ signature should emit an explicit trust/policy warning'
-        );
-      },
-    },
-    {
-      name: 'pinning: wrong PQ pin now fails detached PQ verification closed',
-      fn: async () => {
-        const manifestBytes = textBytes('pinning-wrong-pin');
-        const { qsigBytes } = buildQsigFixture(manifestBytes);
-        const { pqpkBytes: wrongPqpkBytes } = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pinnedPqPublicKeyFileBytes: wrongPqpkBytes,
-        });
-
-        assert(verification.results[0].ok === false, 'wrong pin must now fail detached PQ verification closed');
-        assert(verification.results[0].selfSigned === false, 'wrong pin failure must not degrade into selfSigned');
-        assert(verification.status.signatureVerified === false, 'wrong pin must not satisfy trusted signature verification');
-        assert(verification.status.signerPinned === false, 'wrong pin must not mark signer as pinned');
-        assert(verification.status.userPinned === false, 'wrong pin must not set userPinned');
-        assert(verification.counts.validTotal === 0, 'wrong pin must not let a selfSigned detached PQ signature count for policy');
-        assert(
-          String(verification.results[0].error || '').includes('Provided PQ signer keys did not match this verified signature'),
-          'wrong pin should emit an explicit mismatch failure'
-        );
-      },
-    },
-    {
-      name: 'pinning: valid PQ signature with matching pin remains valid and pinned',
-      fn: async () => {
-        const manifestBytes = textBytes('pinning-matching-pin');
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pinnedPqPublicKeyFileBytes: pqpkBytes,
-        });
-
-        assert(verification.status.signatureVerified === true, 'matching pin must preserve signature verification');
-        assert(verification.status.signerPinned === true, 'matching pin must mark signer as pinned');
-        assert(verification.status.bundlePinned === false, 'external signature should not set bundlePinned');
-        assert(verification.status.userPinned === true, 'matching external pin must set userPinned');
-        assertNoSignerIdentityPinned(verification.status, 'legacy verification status');
-      },
-    },
-    {
-      name: 'manifest-side verification fails closed on wrong explicit Stellar signer',
-      fn: async () => {
-        const manifestBytes = textBytes('manifest-stellar-expected-signer-mismatch');
-        const stellarSig = await buildStellarSignatureFixture(manifestBytes);
-        const wrongSigner = (await createStellarSignerMaterial()).signer;
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
-          expectedEd25519Signer: wrongSigner,
-        });
-
-        assert(verification.results.length === 1, 'expected one Stellar verification result');
-        assert(verification.results[0].ok === false, 'wrong explicit Stellar signer must fail manifest-side verification');
-        assert(verification.status.signatureVerified === false, 'wrong explicit Stellar signer must not satisfy signatureVerified');
-        assert(verification.status.userPinned === false, 'wrong explicit Stellar signer must not set userPinned');
-        assert(
-          String(verification.results[0].error || '').includes('Provided expected signer did not match the verified signer'),
-          'wrong explicit Stellar signer should surface a mismatch failure'
-        );
-      },
-    },
-    {
-      name: 'manifest-side verification fails closed when bundled PQ signer verifies but explicit user pin mismatches',
-      fn: async () => {
-        const manifestBytes = textBytes('legacy-bundle-pq-user-pin-mismatch');
-        const matching = buildQsigFixture(manifestBytes);
-        const wrong = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          bundlePublicKeys: [{
-            id: 'pk-good',
-            kty: 'ml-dsa-public-key',
-            suite: 'mldsa-87',
-            encoding: 'base64',
-            value: bytesToBase64(matching.pqpkBytes),
-            legacy: false,
-          }],
-          bundleSignatures: [{
-            id: 'sig-qsig',
-            format: 'qsig',
-            suite: 'mldsa-87',
-            target: {
-              type: 'canonical-manifest',
-              digestAlg: 'SHA3-512',
-              digestValue: toHex(sha3_512(manifestBytes)),
-            },
-            signatureEncoding: 'base64',
-            signature: bytesToBase64(matching.qsigBytes),
-            publicKeyRef: 'pk-good',
-            legacy: false,
-          }],
-          pinnedPqPublicKeyFileBytes: wrong.pqpkBytes,
-        });
-
-        assert(verification.results.length === 1, 'expected one bundled PQ verification result');
-        assert(verification.results[0].ok === false, 'wrong explicit user .pqpk must fail even when bundled PQ signer verifies');
-        assert(verification.status.signatureVerified === false, 'wrong explicit user .pqpk must not satisfy signatureVerified');
-        assert(verification.status.bundlePinned === false, 'wrong explicit user .pqpk failure must not set bundlePinned');
-        assert(verification.status.userPinned === false, 'wrong explicit user .pqpk failure must not set userPinned');
-        assert(
-          String(verification.results[0].error || '').includes('Provided PQ signer keys did not match the bundled signer key'),
-          'wrong explicit user .pqpk should surface a bundled mismatch failure'
-        );
-      },
-    },
-    {
-      name: 'policy counting ignores duplicate detached signatures',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('duplicate-policy-count');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes } = buildQsigFixture(split.manifestBytes);
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [
-                { name: 'duplicate-a.qsig', bytes: qsigBytes },
-                { name: 'duplicate-b.qsig', bytes: qsigBytes },
-              ],
-            },
-          }),
-          'duplicate detached signatures unexpectedly satisfied minValidSignatures'
-        );
-      },
-    },
-    {
-      name: 'policy counting accepts two unique detached signatures',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('unique-policy-count');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'unique-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sigA = buildQsigFixture(split.manifestBytes);
-        const sigB = buildQsigFixture(split.manifestBytes);
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: {
-            signatures: [
-              { name: 'unique-a.qsig', bytes: sigA.qsigBytes },
-              { name: 'unique-b.qsig', bytes: sigB.qsigBytes },
-            ],
-            pinnedPqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
-          },
-        });
-
-        assert(restored.authenticity.status.policySatisfied === true, 'two unique signatures should satisfy minValidSignatures');
-        assert(restored.authenticity.verification.counts.validTotal === 2, 'expected two unique signatures in policy counts');
-      },
-    },
-    {
-      name: 'policy counting ignores a duplicate detached signature repeated in bundle and external inputs',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('bundle-external-duplicate-policy-count');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'bundle-external-duplicate-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pqPublicKeyFileBytesList: [pqpkBytes],
-        });
-        const updatedShards = await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-
-        await expectFailure(
-          () => restoreFromShards(updatedShards, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-            },
-          }),
-          'bundle + external duplicate detached signature unexpectedly satisfied minValidSignatures'
-        );
-      },
-    },
-    {
-      name: 'verification reports unsupported .qsig major version as an invalid detached signature result',
-      fn: async () => {
-        const manifestBytes = textBytes('bad-qsig-major');
-        const { qsigBytes } = buildQsigFixture(manifestBytes);
+        const messageBytes = textBytes('bad-qsig-major');
+        const { qsigBytes } = buildQsigFixture(messageBytes);
         const badQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'bad.qsig', bytes: badQsigBytes }],
-        });
-
-        assert(verification.results.length === 1, 'expected one invalid .qsig result');
-        assert(verification.results[0].ok === false, 'unsupported .qsig major version must fail closed');
-        assert(
-          String(verification.results[0].error || '').includes('Unsupported detached PQ signature major version'),
-          'expected unsupported .qsig major version error'
+        await expectFailureWithMessage(
+          () => Promise.resolve(verifyQsigAgainstBytes({
+            messageBytes,
+            qsigBytes: badQsigBytes,
+          })),
+          /Unsupported detached PQ signature major version/i,
+          'unsupported .qsig major version must fail closed'
         );
-        assert(verification.status.signatureVerified === false, 'malformed .qsig must not satisfy signatureVerified');
       },
     },
     {
       name: 'parser rejects unsupported .pqpk major version',
       fn: async () => {
-        const manifestBytes = textBytes('bad-pqpk-major');
-        const { pqpkBytes } = buildQsigFixture(manifestBytes);
+        const messageBytes = textBytes('bad-pqpk-major');
+        const { pqpkBytes } = buildQsigFixture(messageBytes);
         const badPqpkBytes = mutatePqpkMajorVersion(pqpkBytes, 0x02);
 
         await expectFailure(
@@ -5802,24 +5265,19 @@ function buildCases() {
       },
     },
     {
-      name: 'verification reports unknown critical .qsig metadata TLV tags as invalid detached signature results',
+      name: 'verification rejects unknown critical .qsig metadata TLV tags',
       fn: async () => {
-        const manifestBytes = textBytes('bad-qsig-critical-tag');
-        const { qsigBytes } = buildQsigFixture(manifestBytes);
+        const messageBytes = textBytes('bad-qsig-critical-tag');
+        const { qsigBytes } = buildQsigFixture(messageBytes);
         const badQsigBytes = appendUnknownCriticalQsigMetadata(qsigBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'critical.qsig', bytes: badQsigBytes }],
-        });
-
-        assert(verification.results.length === 1, 'expected one invalid .qsig result');
-        assert(verification.results[0].ok === false, 'critical-tag .qsig must fail closed');
-        assert(
-          String(verification.results[0].error || '').includes('Unknown critical authMeta TLV tag'),
-          'expected critical authMeta tag failure'
+        await expectFailureWithMessage(
+          () => Promise.resolve(verifyQsigAgainstBytes({
+            messageBytes,
+            qsigBytes: badQsigBytes,
+          })),
+          /Unknown critical authMeta TLV tag/i,
+          'critical-tag .qsig must fail closed'
         );
-        assert(verification.status.signatureVerified === false, 'invalid .qsig must not satisfy signatureVerified');
       },
     },
     {
@@ -5849,98 +5307,6 @@ function buildCases() {
       },
     },
     {
-      name: 'manifest bundle rejects duplicate detached signature payload bytes under different ids',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('duplicate-bundle-signatures');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-bundle-signatures.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pqPublicKeyFileBytesList: [pqpkBytes],
-        });
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        const duplicateSignature = {
-          ...parsedBundle.bundle.attachments.signatures[0],
-          id: 'sig-duplicate',
-        };
-        const mutatedBundle = {
-          ...parsedBundle.bundle,
-          attachments: {
-            ...parsedBundle.bundle.attachments,
-            signatures: [
-              ...parsedBundle.bundle.attachments.signatures,
-              duplicateSignature,
-            ],
-          },
-        };
-
-        await expectFailure(
-          () => Promise.resolve(canonicalizeManifestBundle(mutatedBundle)),
-          'manifest bundle unexpectedly accepted duplicate detached signature payload bytes'
-        );
-      },
-    },
-    {
-      name: 'policy counting ignores semantically duplicate Stellar SEP-53 proofs with different JSON formatting',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('duplicate-stellar-sep53-policy-count');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-stellar-sep53-policy-count.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSig = await buildStellarSignatureFixture(split.manifestBytes);
-        const duplicateBytes = rewriteStellarSignatureDocument(stellarSig.bytes, { pretty: true });
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [
-                { name: 'stellar-a.sig', bytes: stellarSig.bytes },
-                { name: 'stellar-b.sig', bytes: duplicateBytes },
-              ],
-            },
-          }),
-          'semantically duplicate Stellar SEP-53 proofs unexpectedly satisfied minValidSignatures'
-        );
-      },
-    },
-    {
-      name: 'attach deduplicates semantically identical Stellar XDR proofs with reordered JSON arrays',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('duplicate-stellar-xdr-attach');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'duplicate-stellar-xdr-attach.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const stellarSig = await buildStellarXdrSignatureFixture(split.manifestBytes);
-        const duplicateBytes = rewriteStellarSignatureDocument(stellarSig.bytes, {
-          reverseHashes: true,
-          reverseManageDataEntries: true,
-          pretty: true,
-        });
-
-        const attached = await attachManifestBundleToShards([], {
-          manifestBytes: split.manifestBytes,
-          signatures: [
-            { name: 'stellar-a.sig', bytes: stellarSig.bytes },
-            { name: 'stellar-b.sig', bytes: duplicateBytes },
-          ],
-          embedIntoShards: false,
-        });
-
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        assert(parsedBundle.bundle.attachments.signatures.length === 1, 'semantically duplicate Stellar proofs should collapse to one stored signature');
-      },
-    },
-    {
       name: 'auth policy defaults: Lite integrity-only, Pro strong-pq, builder fallback matches Pro',
       fn: async () => {
         assert(LITE_DEFAULT_AUTH_POLICY_LEVEL === 'integrity-only', 'Lite default auth policy must remain integrity-only');
@@ -5953,740 +5319,9 @@ function buildCases() {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('default-auth-policy');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'default-policy.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 });
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 });
 
-        assert(split.bundle.authPolicy.level === PRO_DEFAULT_AUTH_POLICY_LEVEL, 'builder fallback must emit the Pro default policy');
-      },
-    },
-    {
-      name: 'restore any-signature policy rejects unsigned archive',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('strict-authn');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'strict.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
-        const parsed = shardBytes.map((bytes) => parseShard(bytes));
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-          }),
-          'restore unexpectedly allowed any-signature archive without signatures'
-        );
-      },
-    },
-    {
-      name: 'restore any-signature policy accepts valid external PQ signature',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('pre-attach-signature');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'signed.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
-        const parsed = shardBytes.map((bytes) => parseShard(bytes));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: {
-            signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-            pinnedPqPublicKeyFileBytes: pqpkBytes,
-          },
-        });
-
-        assert(restored.authenticity.status.signatureVerified, 'expected signatureVerified');
-        assert(restored.authenticity.status.strongPqSignatureVerified, 'expected strongPqSignatureVerified');
-        assert(restored.authenticity.status.signerPinned, 'expected signerPinned from external .pqpk');
-        assert(restored.authenticity.status.bundlePinned === false, 'external .pqpk should not set bundlePinned');
-        assert(restored.authenticity.status.userPinned === true, 'external .pqpk should set userPinned');
-        assert(restored.authenticity.status.policySatisfied, 'expected policySatisfied');
-        assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'legacy verification status');
-        assertNoSignerIdentityPinned(restored.authenticity.status, 'legacy restore authenticity status');
-      },
-    },
-    {
-      name: 'restore any-signature policy rejects wrong explicit Stellar signer',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('legacy-stellar-expected-signer-mismatch');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy-stellar-expected-signer-mismatch.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSig = await buildStellarSignatureFixture(split.manifestBytes);
-        const wrongSigner = (await createStellarSignerMaterial()).signer;
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
-              expectedEd25519Signer: wrongSigner,
-            },
-          }),
-          'wrong explicit Stellar signer unexpectedly satisfied legacy any-signature policy'
-        );
-      },
-    },
-    {
-      name: 'restore any-signature policy rejects wrong explicit PQ signer pin',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('legacy-pq-user-pin-mismatch');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy-pq-user-pin-mismatch.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const qsig = buildQsigFixture(split.manifestBytes);
-        const wrongPin = buildQsigFixture(split.manifestBytes);
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [{ name: 'archive.qsig', bytes: qsig.qsigBytes }],
-              pinnedPqPublicKeyFileBytes: wrongPin.pqpkBytes,
-            },
-          }),
-          'wrong explicit PQ pin unexpectedly satisfied legacy any-signature policy'
-        );
-      },
-    },
-    {
-      name: 'restore strong-pq-signature policy rejects a selfSigned external PQ signature without a pin',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('strong-pq-valid');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'strong-pq-valid.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes } = buildQsigFixture(split.manifestBytes);
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-            },
-          }),
-          'selfSigned external PQ signature unexpectedly satisfied strong-pq-signature policy'
-        );
-      },
-    },
-    {
-      name: 'restore rejects detached PQ signature with unsupported qsig context',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('unsupported-qsig-context');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'unsupported-qsig-context.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes } = buildQsigFixture(split.manifestBytes, { ctx: 'quantum-signer/v3' });
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-            },
-          }),
-          'restore unexpectedly accepted detached PQ signature with unsupported context'
-        );
-      },
-    },
-    {
-      name: 'restore any-signature policy accepts one valid Ed25519 signature',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('any-signature-ed25519');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'any-signature-ed25519.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: { signatures: [{ name: 'archive.sig', bytes: stellarSigBytes }] },
-        });
-
-        assert(restored.authenticity.status.signatureVerified === true, 'expected signatureVerified');
-        assert(restored.authenticity.status.strongPqSignatureVerified === false, 'Ed25519 must not satisfy strong PQ status');
-        assert(restored.authenticity.status.policySatisfied === true, 'expected policySatisfied');
-      },
-    },
-    {
-      name: 'current-format SLH-DSA detached signature verifies against canonical manifest',
-      fn: async () => {
-        const manifestBytes = textBytes('current-format-slh-manifest');
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes, { suite: 'slhdsa-shake-128s' });
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pinnedPqPublicKeyFileBytes: pqpkBytes,
-        });
-
-        assert(verification.status.signatureVerified === true, 'current SLH-DSA detached signature should verify');
-        assert(verification.status.strongPqSignatureVerified === false, 'SLH-DSA-128s should not count as strong PQ in current policy table');
-        assert(verification.status.userPinned === true, 'current SLH-DSA detached signature should match the provided current .pqpk');
-      },
-    },
-    {
-      name: 'current-format detached PQ signature does not emit a false fingerprint mismatch warning',
-      fn: async () => {
-        const manifestBytes = textBytes('current-format-fingerprint-warning-clean');
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pinnedPqPublicKeyFileBytes: pqpkBytes,
-        });
-
-        assert(verification.status.signatureVerified === true, 'current detached PQ signature should verify');
-        assert(
-          verification.warnings.every((warning) => !warning.includes('Signer fingerprint in .qsig metadata does not match')),
-          'valid detached PQ signature unexpectedly emitted a fingerprint mismatch warning'
-        );
-      },
-    },
-    {
-      name: 'current-format Stellar XDR proof verifies against canonical manifest',
-      fn: async () => {
-        const manifestBytes = textBytes('current-format-stellar-xdr-manifest');
-        const sigBytes = (await buildStellarXdrSignatureFixture(manifestBytes)).bytes;
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.sig', bytes: sigBytes }],
-        });
-
-        assert(verification.status.signatureVerified === true, 'current Stellar XDR proof should verify');
-        assert(verification.status.strongPqSignatureVerified === false, 'Stellar XDR proof must not count as strong PQ');
-      },
-    },
-    {
-      name: 'bundled qsig warns when authenticated signer binding disagrees with the authoritative verification key',
-      fn: async () => {
-        const manifestBytes = textBytes('bundle-qsig-signer-binding-warning');
-        const misleadingBinding = buildQsigFixture(manifestBytes, {
-          embeddedPublicKey: unpackPqpk(buildQsigFixture(manifestBytes).pqpkBytes).keyBytes,
-        });
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          bundlePublicKeys: [{
-            id: 'pk-good',
-            kty: 'ml-dsa-public-key',
-            suite: 'mldsa-87',
-            encoding: 'base64',
-            value: bytesToBase64(misleadingBinding.pqpkBytes),
-            legacy: false,
-          }],
-          bundleSignatures: [{
-            id: 'sig-qsig',
-            format: 'qsig',
-            suite: 'mldsa-87',
-            target: {
-              type: 'canonical-manifest',
-              digestAlg: 'SHA3-512',
-              digestValue: toHex(sha3_512(manifestBytes)),
-            },
-            signatureEncoding: 'base64',
-            signature: bytesToBase64(misleadingBinding.qsigBytes),
-            publicKeyRef: 'pk-good',
-            legacy: false,
-          }],
-        });
-
-        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
-        assert(verification.results[0].ok === true, 'authoritative bundled qsig should still verify with its referenced key');
-        assert(
-          verification.warnings.some((warning) => warning.includes('Embedded signer public key does not match the verification key')),
-          'mismatched authenticated signer public key should be surfaced'
-        );
-        assert(
-          verification.warnings.some((warning) => warning.includes('Signer fingerprint in .qsig metadata does not match the verification key')),
-          'mismatched authenticated signer fingerprint should be surfaced'
-        );
-      },
-    },
-    {
-      name: 'restore ignores malformed extra .qsig signatures when one satisfying signature exists',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('invalid-extra-signatures');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'invalid-extra-signatures.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-        const malformedQsigBytes = mutateQsigMajorVersion(qsigBytes, 0x01);
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: {
-            signatures: [
-              { name: 'archive-good.qsig', bytes: qsigBytes },
-              { name: 'archive-bad.qsig', bytes: malformedQsigBytes },
-            ],
-            pinnedPqPublicKeyFileBytes: pqpkBytes,
-          },
-        });
-
-        assert(restored.authenticity.status.policySatisfied === true, 'one satisfying signature should still pass policy');
-        assert(restored.authenticity.verification.results.some((item) => item.ok === false), 'expected an invalid signature result');
-        assert(
-          restored.authenticity.warnings.some((warning) => warning.includes('did not verify and were ignored')),
-          'invalid extra signatures should produce an explicit warning'
-        );
-      },
-    },
-    {
-      name: 'attach upgrades manifest into bundle and qcont-only restore succeeds',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('post-attach-signature');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pqPublicKeyFileBytesList: [pqpkBytes],
-        });
-        assert(
-          timingSafeEqual(attached.manifestBytes, split.manifestBytes),
-          'attach must not mutate canonical manifest bytes'
-        );
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        assert(parsedBundle.bundle.attachments.signatures.length === 1, 'expected attached bundle signature');
-        assert(parsedBundle.bundle.attachments.publicKeys.length === 1, 'expected attached bundle public key');
-
-        const updatedShards = await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        for (const updatedShard of updatedShards) {
-          assert(
-            timingSafeEqual(updatedShard.manifestBytes, split.manifestBytes),
-            'embedded attach must preserve canonical manifest bytes inside rewritten shards'
-          );
-        }
-        const restored = await restoreFromShards(updatedShards, { onLog: () => {}, onError: () => {} });
-        assert(restored.authenticity.status.policySatisfied, 'attached restore should satisfy archive policy');
-        assert(restored.authenticity.status.signatureVerified, 'attached restore should verify signature');
-        assert(restored.authenticity.status.signerPinned, 'bundle-attached PQ key should mark signer as pinned during restore');
-        assert(restored.authenticity.status.bundlePinned === true, 'bundle-attached PQ key should set bundlePinned');
-        assert(restored.authenticity.status.userPinned === false, 'bundle-attached PQ key alone should not set userPinned');
-        assert(restored.authenticity.verification.counts.pinnedValidTotal === 1, 'expected one pinned bundled signature');
-        assert(restored.authenticity.verification.counts.bundlePinnedValidTotal === 1, 'expected one bundle-pinned bundled signature');
-      },
-    },
-    {
-      name: 'restore accepts uploaded bundle for stale shards with same manifest',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('stale-shards-with-uploaded-bundle');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stale.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const originalShards = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const allShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-        const attached = await attachManifestBundleToShards(allShards, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pqPublicKeyFileBytesList: [pqpkBytes],
-        });
-
-        const restored = await restoreFromShards(originalShards, {
-          onLog: () => {},
-          onError: () => {},
-          verification: { bundleBytes: attached.bundleBytes },
-        });
-
-        assert(restored.manifestSource === 'uploaded-bundle', `unexpected manifest source: ${restored.manifestSource}`);
-        assert(restored.authenticity.status.policySatisfied, 'uploaded bundle should satisfy archive policy for stale shards');
-        assert(restored.authenticity.status.signerPinned, 'uploaded bundle PQ key should mark signer as pinned');
-        assert(restored.authenticity.status.bundlePinned === true, 'uploaded bundle PQ key should set bundlePinned');
-        assert(restored.authenticity.status.userPinned === false, 'uploaded bundle without user pin should not set userPinned');
-        assert(restored.authenticity.verification.counts.pinnedValidTotal === 1, 'uploaded bundle should preserve pinned bundled signature');
-        assert(restored.authenticity.verification.counts.bundlePinnedValidTotal === 1, 'uploaded bundle should preserve bundle-pinned count');
-      },
-    },
-    {
-      name: 'restore can report both bundlePinned and userPinned for the same bundled PQ signature',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('bundle-and-user-pin');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'bundle-and-user-pin.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(split.manifestBytes);
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: qsigBytes }],
-          pqPublicKeyFileBytesList: [pqpkBytes],
-        });
-
-        const restored = await restoreFromShards(
-          await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob)))),
-          {
-            onLog: () => {},
-            onError: () => {},
-            verification: { pinnedPqPublicKeyFileBytes: pqpkBytes },
-          }
-        );
-
-        assert(restored.authenticity.status.bundlePinned === true, 'bundled signature should remain bundlePinned');
-        assert(restored.authenticity.status.userPinned === true, 'matching external PQ pin should set userPinned');
-        assert(restored.authenticity.verification.counts.bundlePinnedValidTotal === 1, 'expected bundle-pinned count for bundled PQ signature');
-        assert(restored.authenticity.verification.counts.userPinnedValidTotal === 1, 'expected user-pinned count for bundled PQ signature');
-      },
-    },
-    {
-      name: 'bundled qsig publicKeyRef is authoritative and cannot fall back to embedded signer key',
-      fn: async () => {
-        const manifestBytes = textBytes('bundle-authoritative-qsig-key');
-        const matching = buildQsigFixture(manifestBytes);
-        const wrong = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          bundlePublicKeys: [{
-            id: 'pk-wrong',
-            kty: 'ml-dsa-public-key',
-            suite: 'mldsa-87',
-            encoding: 'base64',
-            value: bytesToBase64(wrong.pqpkBytes),
-            legacy: false,
-          }],
-          bundleSignatures: [{
-            id: 'sig-qsig',
-            format: 'qsig',
-            suite: 'mldsa-87',
-            target: {
-              type: 'canonical-manifest',
-              digestAlg: 'SHA3-512',
-              digestValue: toHex(sha3_512(manifestBytes)),
-            },
-            signatureEncoding: 'base64',
-            signature: bytesToBase64(matching.qsigBytes),
-            publicKeyRef: 'pk-wrong',
-            legacy: false,
-          }],
-        });
-
-        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
-        assert(verification.results[0].ok === false, 'bundled qsig with wrong referenced key must fail');
-        assert(
-          String(verification.results[0].error || '').includes('Bundled PQ public key did not verify'),
-          'expected authoritative bundled key failure'
-        );
-        assert(verification.status.signatureVerified === false, 'failed bundled qsig must not satisfy signatureVerified');
-      },
-    },
-    {
-      name: 'bundled qsig publicKeyRef must not reference a Stellar signer attachment',
-      fn: async () => {
-        const manifestBytes = textBytes('bundle-qsig-stellar-ref');
-        const qsig = buildQsigFixture(manifestBytes);
-        const stellarSig = await buildStellarSignatureFixtureWithSigner(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          bundlePublicKeys: [{
-            id: 'pk-stellar',
-            kty: 'ed25519-public-key',
-            suite: 'ed25519',
-            encoding: 'stellar-address',
-            value: stellarSig.signer,
-            legacy: false,
-          }],
-          bundleSignatures: [{
-            id: 'sig-qsig',
-            format: 'qsig',
-            suite: 'mldsa-87',
-            target: {
-              type: 'canonical-manifest',
-              digestAlg: 'SHA3-512',
-              digestValue: toHex(sha3_512(manifestBytes)),
-            },
-            signatureEncoding: 'base64',
-            signature: bytesToBase64(qsig.qsigBytes),
-            publicKeyRef: 'pk-stellar',
-            legacy: false,
-          }],
-        });
-
-        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
-        assert(verification.results[0].ok === false, 'incompatible qsig publicKeyRef must fail closed');
-        assert(
-          String(verification.results[0].error || '').includes('must reference a bundled PQ public key'),
-          'expected qsig publicKeyRef compatibility error'
-        );
-      },
-    },
-    {
-      name: 'bundled qsig publicKeyRef must match the referenced PQ suite',
-      fn: async () => {
-        const manifestBytes = textBytes('bundle-qsig-suite-mismatch');
-        const qsig = buildQsigFixture(manifestBytes, { suite: 'mldsa-87' });
-        const wrongSuite = buildQsigFixture(manifestBytes, { suite: 'slhdsa-shake-128s' });
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          bundlePublicKeys: [{
-            id: 'pk-wrong-suite',
-            kty: 'slh-dsa-public-key',
-            suite: 'slhdsa-shake-128s',
-            encoding: 'base64',
-            value: bytesToBase64(wrongSuite.pqpkBytes),
-            legacy: false,
-          }],
-          bundleSignatures: [{
-            id: 'sig-qsig',
-            format: 'qsig',
-            suite: 'mldsa-87',
-            target: {
-              type: 'canonical-manifest',
-              digestAlg: 'SHA3-512',
-              digestValue: toHex(sha3_512(manifestBytes)),
-            },
-            signatureEncoding: 'base64',
-            signature: bytesToBase64(qsig.qsigBytes),
-            publicKeyRef: 'pk-wrong-suite',
-            legacy: false,
-          }],
-        });
-
-        assert(verification.results.length === 1, 'expected one bundled qsig verification result');
-        assert(verification.results[0].ok === false, 'qsig suite mismatch must fail closed');
-        assert(
-          String(verification.results[0].error || '').includes('publicKeyRef suite mismatch for qsig'),
-          'expected qsig suite-mismatch error'
-        );
-      },
-    },
-    {
-      name: 'bundled stellar-sig publicKeyRef must not reference a PQ public key attachment',
-      fn: async () => {
-        const manifestBytes = textBytes('bundle-stellar-pq-ref');
-        const stellarSig = await buildStellarSignatureFixture(manifestBytes);
-        const qsig = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          bundlePublicKeys: [{
-            id: 'pk-pq',
-            kty: 'ml-dsa-public-key',
-            suite: 'mldsa-87',
-            encoding: 'base64',
-            value: bytesToBase64(qsig.pqpkBytes),
-            legacy: false,
-          }],
-          bundleSignatures: [{
-            id: 'sig-stellar',
-            format: 'stellar-sig',
-            suite: 'ed25519',
-            target: {
-              type: 'canonical-manifest',
-              digestAlg: 'SHA3-512',
-              digestValue: toHex(sha3_512(manifestBytes)),
-            },
-            signatureEncoding: 'base64',
-            signature: bytesToBase64(stellarSig.bytes),
-            publicKeyRef: 'pk-pq',
-            legacy: false,
-          }],
-        });
-
-        assert(verification.results.length === 1, 'expected one bundled stellar-sig verification result');
-        assert(verification.results[0].ok === false, 'incompatible stellar-sig publicKeyRef must fail closed');
-        assert(
-          String(verification.results[0].error || '').includes('must reference a bundled Stellar signer'),
-          'expected stellar-sig publicKeyRef compatibility error'
-        );
-        assert(verification.status.signatureVerified === false, 'incompatible stellar-sig binding must not satisfy signatureVerified');
-      },
-    },
-    {
-      name: 'attach persists Stellar signer identifier in bundle and restore marks it pinned',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('stellar-bundle-pin');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stellar-bundle-pin.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSig = await buildStellarSignatureFixtureWithSigner(split.manifestBytes);
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
-          expectedEd25519Signer: stellarSig.signer,
-        });
-
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        const stellarSignature = parsedBundle.bundle.attachments.signatures.find((item) => item.format === 'stellar-sig');
-        assert(stellarSignature?.publicKeyRef, 'expected attached Stellar signature to reference a persisted signer identifier');
-        const signerAttachment = parsedBundle.bundle.attachments.publicKeys.find((item) => item.id === stellarSignature.publicKeyRef);
-        assert(signerAttachment?.encoding === 'stellar-address', 'expected Stellar signer attachment encoding');
-        assert(signerAttachment?.value === stellarSig.signer, 'expected persisted Stellar signer identifier');
-
-        const restored = await restoreFromShards(
-          await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob)))),
-          { onLog: () => {}, onError: () => {} }
-        );
-
-        assert(restored.authenticity.status.signatureVerified === true, 'expected bundled Stellar signature to verify');
-        assert(restored.authenticity.status.signerPinned === true, 'expected bundled Stellar signer identifier to mark signer as pinned');
-        assert(restored.authenticity.status.bundlePinned === true, 'bundled Stellar signer identifier should set bundlePinned');
-        assert(restored.authenticity.status.userPinned === false, 'bundled Stellar signer identifier alone should not set userPinned');
-        assert(restored.authenticity.verification.counts.validTotal === 1, 'expected one bundled Stellar signature');
-        assert(restored.authenticity.verification.counts.pinnedValidTotal === 1, 'expected one pinned bundled Stellar signature');
-        assert(restored.authenticity.verification.counts.bundlePinnedValidTotal === 1, 'expected one bundle-pinned bundled Stellar signature');
-      },
-    },
-    {
-      name: 'attach accepts current-format detached signatures and preserves signer references',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('attach-current-format-signatures');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach-current-format-signatures.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const manifestBytes = split.manifestBytes;
-        const { qsigBytes: mlQsigBytes, pqpkBytes: mlPqpkBytes } = buildQsigFixture(manifestBytes);
-        const stellarSigner = await createStellarSignerMaterial();
-        const stellarSep53Bytes = (await buildStellarSignatureFixture(manifestBytes, stellarSigner)).bytes;
-        const stellarXdrBytes = (await buildStellarXdrSignatureFixture(manifestBytes, stellarSigner)).bytes;
-
-        const attached = await attachManifestBundleToShards([], {
-          manifestBytes,
-          signatures: [
-            { name: 'MLbundle.qsig', bytes: mlQsigBytes },
-            { name: 'stellar-sep53.sig', bytes: stellarSep53Bytes },
-            { name: 'stellar-xdr.sig', bytes: stellarXdrBytes },
-          ],
-          pqPublicKeyFileBytesList: [mlPqpkBytes],
-        });
-
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        assert(parsedBundle.bundle.attachments.signatures.length === 3, 'current-format attach should import all detached signatures');
-        assert(parsedBundle.bundle.attachments.publicKeys.length === 2, 'current-format attach should dedupe shared Stellar signer and retain one PQ key');
-        assert(parsedBundle.bundle.attachments.signatures.every((item) => item.publicKeyRef), 'attached current-format signatures should retain signer references when available');
-      },
-    },
-    {
-      name: 'attach dedupes semantically identical .pqpk wrappers for the same signer',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('attach-semantic-pqpk-dedupe');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'attach-semantic-pqpk-dedupe.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const sig = buildQsigFixture(split.manifestBytes);
-        const alternateWrapper = mutatePqpkVersionMinor(sig.pqpkBytes, 0x07);
-
-        const attached = await attachManifestBundleToShards([], {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-          pqPublicKeyFileBytesList: [sig.pqpkBytes, alternateWrapper],
-        });
-
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        assert(parsedBundle.bundle.attachments.publicKeys.length === 1, 'attach should persist one PQ public key per signer identity');
-        assert(parsedBundle.bundle.attachments.signatures.length === 1, 'attach should persist one detached signature');
-        assert(
-          parsedBundle.bundle.attachments.signatures[0].publicKeyRef === parsedBundle.bundle.attachments.publicKeys[0].id,
-          'attached detached signature should reference the deduped PQ public key attachment'
-        );
-      },
-    },
-    {
-      name: 'export attached artifacts emits a text file for bundled Stellar signer identifiers',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('stellar-export-attachment');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'stellar-export-attachment.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSig = await buildStellarSignatureFixtureWithSigner(split.manifestBytes);
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.sig', bytes: stellarSig.bytes }],
-          expectedEd25519Signer: stellarSig.signer,
-        });
-
-        const bundle = parseManifestBundleBytes(attached.bundleBytes).bundle;
-        const exports = buildAttachedArtifactExports(bundle, 'archive');
-        const signerExport = exports.find((item) => item.filename.endsWith('.stellar.txt'));
-        assert(signerExport, 'expected a text export for the bundled Stellar signer identifier');
-        assert(new TextDecoder().decode(signerExport.bytes) === `${stellarSig.signer}\n`, 'expected Stellar signer export to preserve the signer address');
-      },
-    },
-    {
-      name: 'attach maps OpenTimestamps by stamped SHA-256 and preserves completion state',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('ots-target-selection');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sigA = buildQsigFixture(split.manifestBytes);
-        const sigB = buildQsigFixture(split.manifestBytes);
-        const otsA = await buildOtsFixture(sigA.qsigBytes, { completeProof: false });
-        const otsB = await buildOtsFixture(sigB.qsigBytes, { completeProof: true });
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [
-            { name: 'archive-a.qsig', bytes: sigA.qsigBytes },
-            { name: 'archive-b.qsig', bytes: sigB.qsigBytes },
-          ],
-          timestamps: [
-            { name: 'archive-a-initial.qsig.ots', bytes: otsA },
-            { name: 'archive-b-completed.qsig.ots', bytes: otsB },
-          ],
-          pqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
-        });
-        const parsedBundle = parseManifestBundleBytes(attached.bundleBytes);
-        assert(parsedBundle.bundle.attachments.timestamps.length === 2, 'expected two attached OpenTimestamps proofs');
-
-        const signaturesBySigHex = new Map(
-          parsedBundle.bundle.attachments.signatures.map((signature) => [
-            bytesToHex(base64ToBytes(signature.signature)),
-            signature.id,
-          ])
-        );
-        const timestampsByTarget = new Map(parsedBundle.bundle.attachments.timestamps.map((timestamp) => [timestamp.targetRef, timestamp]));
-        const sigAId = signaturesBySigHex.get(bytesToHex(sigA.qsigBytes));
-        const sigBId = signaturesBySigHex.get(bytesToHex(sigB.qsigBytes));
-        assert(sigAId && sigBId, 'expected attached signatures for both qsig inputs');
-        assert(timestampsByTarget.get(sigAId)?.apparentlyComplete === false, 'initial .ots must be marked as apparently incomplete');
-        assert(timestampsByTarget.get(sigAId)?.completeProof === false, 'initial .ots must remain incomplete');
-        assert(timestampsByTarget.get(sigBId)?.apparentlyComplete === true, 'completed .ots must be marked as apparently complete');
-        assert(timestampsByTarget.get(sigBId)?.completeProof === true, 'completed .ots must be marked complete');
-
-        const parsedProof = parseOpenTimestampProof(otsA, { name: 'archive-a-initial.qsig.ots' });
-        assert(parsedProof.completeProof === false, 'OpenTimestamps parser must classify initial proof as incomplete');
-        assert(parsedProof.appearsComplete === false, 'OpenTimestamps parser must report initial proof as apparently incomplete');
-
-        const evidence = await inspectManifestBundleTimestamps(parsedBundle.bundle);
-        assert(evidence.length === 2, 'expected two timestamp evidence entries');
-        assert(evidence.every((item) => item.linkLabel === 'OTS evidence linked to signature'), 'timestamp evidence should use honest linkage wording');
-        assert(
-          evidence.some((item) => item.completionLabel === 'OTS proof appears complete') &&
-          evidence.some((item) => item.completionLabel === 'OTS proof appears incomplete'),
-          'timestamp evidence should report complete and incomplete states honestly'
-        );
-
-        await parseManifestBundleTimestamps(parsedBundle.bundle);
+        assert(split.lifecycleBundle.authPolicy.level === PRO_DEFAULT_AUTH_POLICY_LEVEL, 'builder fallback must emit the Pro default policy');
       },
     },
     {
@@ -6746,12 +5381,12 @@ function buildCases() {
       },
     },
     {
-      name: 'inspectTimestampEvidence preserves reporting semantics while ignoring stale OTS digest caches',
+      name: 'inspectLifecycleTimestampEvidence preserves reporting semantics while ignoring stale OTS digest caches',
       fn: async () => {
         const sig = buildQsigFixture(textBytes('ots-reporting-semantics'));
         const timestampBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: false });
 
-        const evidence = await inspectTimestampEvidence({
+        const evidence = await inspectLifecycleTimestampEvidence({
           bundle: {},
           externalTimestamps: [{ name: 'archive.qsig.ots', bytes: timestampBytes }],
           signatureArtifacts: [{
@@ -6771,447 +5406,6 @@ function buildCases() {
         assert(evidence[0].targetVerified === true, 'timestamp evidence must retain detached signature verification status');
         assert(evidence[0].linkLabel === 'External OTS evidence linked to signature', 'timestamp evidence must preserve existing reporting labels');
         assert(evidence[0].completionLabel === 'OTS proof appears incomplete', 'timestamp evidence must preserve proof completion reporting');
-      },
-    },
-    {
-      name: 'restore links external OpenTimestamps evidence to external detached signatures',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-external-ots');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-external-ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sig = buildQsigFixture(split.manifestBytes);
-        const otsBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: true });
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: {
-            signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-            pinnedPqPublicKeyFileBytes: sig.pqpkBytes,
-            timestamps: [{ name: 'archive.qsig.ots', bytes: otsBytes }],
-          },
-        });
-
-        assert(restored.authenticity.status.policySatisfied === true, 'external signature with external OTS should still satisfy archive policy');
-        assert(restored.authenticity.timestampEvidence.length === 1, 'expected one external timestamp evidence entry');
-        assert(restored.authenticity.timestampEvidence[0].targetVerified === true, 'external OTS should link to a verified detached signature');
-        assert(restored.authenticity.timestampEvidence[0].targetSource === 'external', 'external OTS should report external target source');
-      },
-    },
-    {
-      name: 'classifyRestoreInputFiles accepts multiple different .pqpk files',
-      fn: async () => {
-        const manifestBytes = textBytes('restore-multiple-pqpk-inputs');
-        const sigA = buildQsigFixture(manifestBytes);
-        const sigB = buildQsigFixture(manifestBytes);
-        const classified = await classifyRestoreInputFiles([
-          fileLike('a.pqpk', sigA.pqpkBytes),
-          fileLike('b.pqpk', sigB.pqpkBytes),
-        ]);
-        assert(classified.pinnedPqPublicKeyFileBytesList.length === 2, 'expected restore inputs to preserve two different .pqpk files');
-        assert(classified.pinnedPqPublicKeyFileBytes instanceof Uint8Array, 'expected restore inputs to retain the first .pqpk as a compatibility field');
-      },
-    },
-    {
-      name: 'restore can use multiple provided .pqpk files as candidate user pins',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-multiple-pqpk-pins');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-multiple-pqpk-pins.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
-          authPolicyLevel: 'any-signature',
-          minValidSignatures: 2,
-        });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sigA = buildQsigFixture(split.manifestBytes);
-        const sigB = buildQsigFixture(split.manifestBytes);
-
-        const restored = await restoreFromShards(parsed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: {
-            signatures: [
-              { name: 'archive-a.qsig', bytes: sigA.qsigBytes },
-              { name: 'archive-b.qsig', bytes: sigB.qsigBytes },
-            ],
-            pinnedPqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
-          },
-        });
-
-        assert(restored.authenticity.status.policySatisfied === true, 'multiple restore .pqpk pins should still allow policy-satisfying restore');
-        assert(restored.authenticity.status.userPinned === true, 'at least one provided .pqpk should user-pin a verified signature');
-        assert(restored.authenticity.verification.counts.userPinnedValidTotal === 2, 'expected both detached signatures to match one of the provided .pqpk pins');
-      },
-    },
-    {
-      name: 'multi-pin verification dedupes semantically identical .pqpk wrappers for the same signer',
-      fn: async () => {
-        const manifestBytes = textBytes('multi-pin-semantic-dedupe');
-        const sig = buildQsigFixture(manifestBytes);
-        const alternateWrapper = mutatePqpkVersionMinor(sig.pqpkBytes, 0x09);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-          pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes, alternateWrapper],
-        });
-
-        assert(verification.results.length === 1, 'expected one detached signature result');
-        assert(verification.results[0].ok === true, 'semantically duplicate .pqpk wrappers should still verify');
-        assert(verification.status.userPinned === true, 'duplicate wrappers for one signer should still set userPinned');
-        assert(
-          verification.warnings.every((warning) => !warning.includes('Multiple provided .pqpk files match this detached PQ signature')),
-          'semantically duplicate .pqpk wrappers must not trigger ambiguity'
-        );
-      },
-    },
-    {
-      name: 'multi-pin verification suppresses warnings from non-selected .pqpk candidates when a user pin matches',
-      fn: async () => {
-        const manifestBytes = textBytes('multi-pin-warning-suppression');
-        const matching = buildQsigFixture(manifestBytes);
-        const distractor = buildQsigFixture(manifestBytes);
-
-        const verification = await verifyLegacyDetachedSignatures({
-          manifestBytes,
-          externalSignatures: [{ name: 'archive.qsig', bytes: matching.qsigBytes }],
-          pinnedPqPublicKeyFileBytesList: [matching.pqpkBytes, distractor.pqpkBytes],
-        });
-
-        assert(verification.status.userPinned === true, 'expected a matching .pqpk to set userPinned');
-        assert(
-          verification.warnings.every((warning) => !warning.includes('Pinned PQ signer key suite does not match this .qsig and was ignored.')),
-          'suite-mismatch warnings from non-selected .pqpk candidates should not leak into a matched result'
-        );
-        assert(
-          verification.warnings.every((warning) => !warning.includes('Using signer public key embedded in .qsig')),
-          'embedded-key fallback warnings from non-selected .pqpk candidates should not leak into a matched result'
-        );
-      },
-    },
-    {
-      name: 'restore links external OpenTimestamps evidence to bundled detached signatures',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-bundled-ots');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-bundled-ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sig = buildQsigFixture(split.manifestBytes);
-        const otsBytes = await buildOtsFixture(sig.qsigBytes, { completeProof: false });
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-          pqPublicKeyFileBytesList: [sig.pqpkBytes],
-        });
-        const restored = await restoreFromShards(
-          await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob)))),
-          {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              timestamps: [{ name: 'archive.qsig.ots', bytes: otsBytes }],
-            },
-          }
-        );
-
-        assert(restored.authenticity.status.policySatisfied === true, 'bundled signature plus external OTS should satisfy archive policy');
-        assert(restored.authenticity.timestampEvidence.length === 1, 'expected one external timestamp evidence entry for bundled signature');
-        assert(restored.authenticity.timestampEvidence[0].targetSource === 'bundle', 'external OTS should link to bundled detached signature');
-      },
-    },
-    {
-      name: 'restore deduplicates OTS evidence per detached signature and prefers complete proofs',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-ots-dedupe');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-ots-dedupe.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sigA = buildQsigFixture(split.manifestBytes);
-        const sigB = buildQsigFixture(split.manifestBytes);
-        const embeddedCompleteA = await buildOtsFixture(sigA.qsigBytes, { completeProof: true });
-        const embeddedIncompleteA = await buildOtsFixture(sigA.qsigBytes, { completeProof: false });
-        const embeddedCompleteB = await buildOtsFixture(sigB.qsigBytes, { completeProof: true });
-        const externalIncompleteB = await buildOtsFixture(sigB.qsigBytes, { completeProof: false });
-
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [
-            { name: 'archive-a.qsig', bytes: sigA.qsigBytes },
-            { name: 'archive-b.qsig', bytes: sigB.qsigBytes },
-          ],
-          timestamps: [
-            { name: 'archive-a-complete.qsig.ots', bytes: embeddedCompleteA },
-            { name: 'archive-a-incomplete.qsig.ots', bytes: embeddedIncompleteA },
-            { name: 'archive-b-complete.qsig.ots', bytes: embeddedCompleteB },
-          ],
-          pqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
-        });
-
-        const restored = await restoreFromShards(
-          await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob)))),
-          {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              timestamps: [
-                { name: 'archive-a-complete.external.qsig.ots', bytes: embeddedCompleteA },
-                { name: 'archive-b-incomplete.external.qsig.ots', bytes: externalIncompleteB },
-              ],
-            },
-          }
-        );
-
-        assert(restored.authenticity.timestampEvidence.length === 2, 'expected one preferred OTS evidence entry per detached signature');
-        assert(
-          restored.authenticity.timestampEvidence.every((item) => item.apparentlyComplete === true),
-          'complete OTS proofs should win over incomplete duplicates for the same detached signature'
-        );
-      },
-    },
-    {
-      name: 'attach rejects unrelated OpenTimestamps evidence',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('ots-unrelated');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots-unrelated.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sig = buildQsigFixture(split.manifestBytes);
-        const unrelatedOts = await buildOtsFixture(textBytes('not-a-detached-signature'), { completeProof: false });
-
-        await expectFailure(
-          () => attachManifestBundleToShards(parsed, {
-            manifestBytes: split.manifestBytes,
-            signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-            timestamps: [{ name: 'archive.qsig.ots', bytes: unrelatedOts }],
-            pqPublicKeyFileBytesList: [sig.pqpkBytes],
-          }),
-          'attach unexpectedly accepted unrelated OpenTimestamps evidence'
-        );
-      },
-    },
-    {
-      name: 'restore rejects unrelated external OpenTimestamps evidence',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-unrelated-ots');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-unrelated-ots.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sig = buildQsigFixture(split.manifestBytes);
-        const unrelatedOts = await buildOtsFixture(textBytes('not-a-detached-signature'), { completeProof: false });
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: {
-              signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-              timestamps: [{ name: 'archive.qsig.ots', bytes: unrelatedOts }],
-            },
-          }),
-          'restore unexpectedly accepted unrelated external OpenTimestamps evidence'
-        );
-      },
-    },
-    {
-      name: 'OpenTimestamps evidence never satisfies archive signature policy by itself',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('ots-does-not-satisfy-policy');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'ots-does-not-satisfy-policy.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
-        const parsed = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
-        const otsBytes = await buildOtsFixture(stellarSigBytes, { completeProof: true });
-        const attached = await attachManifestBundleToShards(parsed, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.sig', bytes: stellarSigBytes }],
-          timestamps: [{ name: 'archive.sig.ots', bytes: otsBytes }],
-        });
-        const attachedShards = await Promise.all(attached.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-
-        await expectFailure(
-          () => restoreFromShards(attachedShards, { onLog: () => {}, onError: () => {} }),
-          'OpenTimestamps evidence unexpectedly satisfied strong-pq-signature policy'
-        );
-      },
-    },
-    {
-      name: 'attach updates manifest-only and bundle-only inputs without rewriting shards',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('manifest-only-attach');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'bundle-only.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const sigA = buildQsigFixture(split.manifestBytes);
-        const firstAttach = await attachManifestBundleToShards([], {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive-a.qsig', bytes: sigA.qsigBytes }],
-          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
-        });
-
-        const sigB = buildQsigFixture(split.manifestBytes);
-        const secondAttach = await attachManifestBundleToShards([], {
-          bundleBytes: firstAttach.bundleBytes,
-          signatures: [{ name: 'archive-b.qsig', bytes: sigB.qsigBytes }],
-          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
-        });
-
-        assert(firstAttach.shards.length === 0, 'manifest-only attach must not rewrite shards');
-        assert(secondAttach.shards.length === 0, 'bundle-only attach must not rewrite shards');
-        assert(
-          timingSafeEqual(firstAttach.signableManifestBytes, split.manifestBytes) &&
-          timingSafeEqual(firstAttach.manifestBytes, split.manifestBytes),
-          'manifest-only attach must keep canonical-manifest export separate and unchanged'
-        );
-        assert(firstAttach.manifestDigestHex === split.manifestDigestHex, 'manifest-only attach must preserve the canonical manifest digest');
-        assert(secondAttach.manifestDigestHex === split.manifestDigestHex, 'repeated bundle-only attach must preserve the canonical manifest digest');
-        const parsedBundle = parseManifestBundleBytes(secondAttach.bundleBytes);
-        assert(parsedBundle.bundle.attachments.signatures.length === 2, 'bundle-only attach must merge signatures into the manifest bundle');
-
-        const originalShards = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const restored = await restoreFromShards(originalShards, {
-          onLog: () => {},
-          onError: () => {},
-          verification: { bundleBytes: secondAttach.bundleBytes },
-        });
-        assert(restored.authenticity.status.policySatisfied === true, 'repeated attach cycles must preserve signature validity');
-        assert(restored.authenticity.verification.counts.validTotal === 2, 'repeated attach cycles must preserve both detached signatures');
-      },
-    },
-    {
-      name: 'restore prefers the richer embedded bundle when mixed shards share the same canonical manifest',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-prefer-richer-bundle');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-prefer-richer-bundle.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const originalShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sig = buildQsigFixture(split.manifestBytes);
-        const attached = await attachManifestBundleToShards(originalShards, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-          pqPublicKeyFileBytesList: [sig.pqpkBytes],
-        });
-        const updatedShards = await Promise.all(attached.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-
-        const mixed = [
-          updatedShards[0],
-          updatedShards[1],
-          originalShards[2],
-          originalShards[3],
-        ];
-        const restored = await restoreFromShards(mixed, {
-          onLog: () => {},
-          onError: () => {},
-        });
-
-        assert(restored.manifestSource === 'embedded-preferred-bundle', `unexpected manifest source: ${restored.manifestSource}`);
-        assert(restored.bundleDigestHex === attached.bundleDigestHex, 'restore should prefer the richer embedded bundle digest');
-        assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded shard digests should be surfaced explicitly');
-        assert(
-          Array.isArray(restored.embeddedBundleDigestsUsed) &&
-          restored.embeddedBundleDigestsUsed.length === 2 &&
-          restored.embeddedBundleDigestsUsed.includes(split.bundleDigestHex) &&
-          restored.embeddedBundleDigestsUsed.includes(attached.bundleDigestHex),
-          'restore should report all embedded bundle digests used for reconstruction'
-        );
-        assert(restored.authenticity.status.policySatisfied === true, 'preferred richer embedded bundle should satisfy archive policy');
-        assert(restored.authenticity.status.bundlePinned === true, 'preferred richer embedded bundle should preserve bundled signer pinning');
-        assert(
-          restored.authenticity.warnings.some((warning) => warning.includes('Payload reconstruction used shards from multiple embedded bundle digests')),
-          'mixed embedded bundle cohort should emit an explicit authenticity warning'
-        );
-      },
-    },
-    {
-      name: 'restore with an uploaded bundle still reports mixed embedded bundle cohorts explicitly',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('restore-uploaded-bundle-mixed-cohort');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'restore-uploaded-bundle-mixed-cohort.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'any-signature' });
-        const originalShards = await Promise.all(split.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const sig = buildQsigFixture(split.manifestBytes);
-        const attached = await attachManifestBundleToShards(originalShards, {
-          manifestBytes: split.manifestBytes,
-          signatures: [{ name: 'archive.qsig', bytes: sig.qsigBytes }],
-          pqPublicKeyFileBytesList: [sig.pqpkBytes],
-        });
-        const updatedShards = await Promise.all(attached.shards.map(async (item) => parseShard(await blobToBytes(item.blob))));
-
-        const mixed = [
-          updatedShards[0],
-          updatedShards[1],
-          originalShards[2],
-          originalShards[3],
-        ];
-        const restored = await restoreFromShards(mixed, {
-          onLog: () => {},
-          onError: () => {},
-          verification: { bundleBytes: attached.bundleBytes },
-        });
-
-        assert(restored.manifestSource === 'uploaded-bundle', `unexpected manifest source: ${restored.manifestSource}`);
-        assert(restored.authenticity.status.bundleCohortMixed === true, 'uploaded bundle restore should still surface mixed shard cohorts');
-        assert(
-          Array.isArray(restored.embeddedBundleDigestsUsed) &&
-          restored.embeddedBundleDigestsUsed.length === 2 &&
-          restored.embeddedBundleDigestsUsed.includes(split.bundleDigestHex) &&
-          restored.embeddedBundleDigestsUsed.includes(attached.bundleDigestHex),
-          'uploaded bundle restore should report all embedded bundle digests used for reconstruction'
-        );
-        assert(
-          restored.authenticity.warnings.some((warning) => warning.includes(`selected bundle ${attached.bundleDigestHex}`)),
-          'mixed uploaded-bundle restore should name the selected bundle in its warning'
-        );
-      },
-    },
-    {
-      name: 'strong-pq-signature policy rejects Ed25519-only signatures',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('legacy-signature-only');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'legacy.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'strong-pq-signature' });
-        const parsed = await Promise.all(split.shards.slice(0, 4).map(async (item) => parseShard(await blobToBytes(item.blob))));
-        const stellarSigBytes = (await buildStellarSignatureFixture(split.manifestBytes)).bytes;
-
-        await expectFailure(
-          () => restoreFromShards(parsed, {
-            onLog: () => {},
-            onError: () => {},
-            verification: { signatures: [{ name: 'archive.sig', bytes: stellarSigBytes }] },
-          }),
-          'strong-pq-signature archive unexpectedly accepted Ed25519-only signature'
-        );
-      },
-    },
-    {
-      name: 'restore rejects duplicate shard indices',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = textBytes('duplicate-index');
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'dup.bin'));
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const shardBytes = await Promise.all(split.shards.slice(0, 4).map((item) => blobToBytes(item.blob)));
-        const parsed = [
-          parseShard(shardBytes[0]),
-          parseShard(shardBytes[0]),
-          parseShard(shardBytes[1]),
-          parseShard(shardBytes[2]),
-        ];
-
-        await expectFailure(
-          () => restoreFromShards(parsed, { onLog: () => {}, onError: () => {} }),
-          'restore unexpectedly accepted duplicate shard indices'
-        );
       },
     },
     {
@@ -7251,13 +5445,13 @@ function buildCases() {
         const payload = textBytes('qcont-too-many-errors');
         const encrypted = await encryptFile(payload, pair.publicKey, 'qcont-fail.bin');
         const qencBytes = await blobToBytes(encrypted);
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
         const qconts = split.shards;
         const shardBytes = await Promise.all(qconts.map((shard) => blobToBytes(shard.blob)));
 
         const subset = shardBytes.slice(0, 4).map((bytes) => bytes.slice());
         subset[0] = mutateTail(subset[0]);
-        const parsed = subset.map((bytes) => parseShard(bytes));
+        const parsed = await Promise.all(subset.map((bytes) => parseLifecycleShard(bytes)));
 
         await expectFailure(
           () => restoreFromShards(parsed, { onLog: () => {}, onError: () => {} }),
@@ -7446,7 +5640,7 @@ function buildCases() {
       },
     },
     {
-      name: 'buildQcontShards rejects mismatched private key',
+      name: 'buildLifecycleQcontShards rejects mismatched private key',
       fn: async () => {
         const pairA = await generateKeyPair({ collectUserEntropy: false });
         const pairB = await generateKeyPair({ collectUserEntropy: false });
@@ -7455,8 +5649,8 @@ function buildCases() {
         const qencBytes = await blobToBytes(encrypted);
 
         await expectFailure(
-          () => buildQcontShards(qencBytes, pairB.privateKey, { n: 5, k: 3 }),
-          'buildQcontShards unexpectedly accepted mismatched private key'
+          () => buildLifecycleQcontShards(qencBytes, pairB.privateKey, { n: 5, k: 3 }),
+          'buildLifecycleQcontShards unexpectedly accepted mismatched private key'
         );
       },
     },
@@ -7514,25 +5708,25 @@ function buildCases() {
       },
     },
     {
-      name: 'ADV: parseShard rejects empty input',
+      name: 'ADV: parseLifecycleShard rejects empty input',
       fn: async () => {
         await expectFailure(
-          () => parseShard(new Uint8Array(0), { strict: true }),
-          'parseShard unexpectedly accepted empty Uint8Array'
+          () => parseLifecycleShard(new Uint8Array(0), { strict: true }),
+          'parseLifecycleShard unexpectedly accepted empty Uint8Array'
         );
         await expectFailure(
-          () => parseShard(new Uint8Array(4), { strict: true }),
-          'parseShard unexpectedly accepted 4-byte Uint8Array'
+          () => parseLifecycleShard(new Uint8Array(4), { strict: true }),
+          'parseLifecycleShard unexpectedly accepted 4-byte Uint8Array'
         );
       },
     },
     {
-      name: 'ADV: parseShard rejects invalid magic bytes',
+      name: 'ADV: parseLifecycleShard rejects invalid magic bytes',
       fn: async () => {
         const garbage = createLargeDeterministicPayload(512);
         await expectFailure(
-          () => parseShard(garbage, { strict: true }),
-          'parseShard unexpectedly accepted garbage bytes'
+          () => parseLifecycleShard(garbage, { strict: true }),
+          'parseLifecycleShard unexpectedly accepted garbage bytes'
         );
       },
     },
@@ -7566,19 +5760,19 @@ function buildCases() {
       },
     },
     {
-      name: 'ADV: buildQcontShards rejects invalid RS params',
+      name: 'ADV: buildLifecycleQcontShards rejects invalid RS params',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = textBytes('bad-rs-params');
         const qenc = await blobToBytes(await encryptFile(payload, pair.publicKey, 'rs.bin'));
 
         await expectFailure(
-          () => buildQcontShards(qenc, pair.privateKey, { n: 1, k: 1 }),
-          'buildQcontShards accepted n=1, k=1'
+          () => buildLifecycleQcontShards(qenc, pair.privateKey, { n: 1, k: 1 }),
+          'buildLifecycleQcontShards accepted n=1, k=1'
         );
         await expectFailure(
-          () => buildQcontShards(qenc, pair.privateKey, { n: 3, k: 5 }),
-          'buildQcontShards accepted k > n'
+          () => buildLifecycleQcontShards(qenc, pair.privateKey, { n: 3, k: 5 }),
+          'buildLifecycleQcontShards accepted k > n'
         );
       },
     },
@@ -7631,17 +5825,17 @@ function buildCases() {
       },
     },
     {
-      name: 'ADV: parseShard non-strict returns diagnostics instead of throw',
+      name: 'ADV: parseLifecycleShard non-strict returns diagnostics instead of throw',
       fn: async () => {
         const garbage = createLargeDeterministicPayload(512);
-        const result = parseShard(garbage, { strict: false });
-        assert(Array.isArray(result.diagnostics?.errors), 'non-strict parseShard must return diagnostics.errors');
-        assert(result.diagnostics.errors.length > 0, 'non-strict parseShard must report errors for garbage input');
-        assert(!result.metaJSON, 'non-strict parseShard must not have metaJSON for garbage input');
+        const result = await parseLifecycleShard(garbage, { strict: false });
+        assert(Array.isArray(result.diagnostics?.errors), 'non-strict parseLifecycleShard must return diagnostics.errors');
+        assert(result.diagnostics.errors.length > 0, 'non-strict parseLifecycleShard must report errors for garbage input');
+        assert(!result.metaJSON, 'non-strict parseLifecycleShard must not have metaJSON for garbage input');
       },
     },
     {
-      name: 'chunked split + restore end-to-end (per-chunk-aead)',
+      name: 'chunked lifecycle split + restore end-to-end (per-chunk-aead)',
       fn: async () => {
         const pair = await generateKeyPair({ collectUserEntropy: false });
         const payload = createLargeDeterministicPayload(CHUNK_SIZE + 50000);
@@ -7651,11 +5845,11 @@ function buildCases() {
         const header = parseQencHeader(qencBytes);
         assert(header.metadata.aead_mode === 'per-chunk-aead', 'expected per-chunk-aead');
 
-        const split = await buildQcontShards(qencBytes, pair.privateKey, { n: 7, k: 5 }, { authPolicyLevel: 'integrity-only' });
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 7, k: 5 }, { authPolicyLevel: 'integrity-only' });
         assert(split.shards.length === 7, 'expected 7 shards');
 
         const shardBytes = await Promise.all(split.shards.map(s => blobToBytes(s.blob)));
-        const subset = shardBytes.slice(0, 6).map(b => parseShard(b));
+        const subset = await Promise.all(shardBytes.slice(0, 6).map((bytes) => parseLifecycleShard(bytes)));
 
         const restored = await restoreFromShards(subset, { onLog: () => {}, onError: () => {} });
         assert(restored.qencOk, 'chunked e2e: qenc hash mismatch');
@@ -7673,7 +5867,6 @@ export async function runSelfTest({ onProgress } = {}) {
   await ensureErasureRuntime();
 
   const cases = buildCases()
-    .filter((item) => !usesDeletedLegacyRuntime(item))
     .map((item) => ({
       ...item,
       name: prefixSelfTestName(item.name),
