@@ -136,13 +136,15 @@ docs/
   format-spec.md
   schema/
     qv-common-types.schema.json
-    qv-manifest-v3.schema.json
-    qv-manifest-bundle-v2.schema.json
     qv-archive-state-descriptor-v1.schema.json
     qv-cohort-binding-v1.schema.json
     qv-lifecycle-bundle-v1.schema.json
     qv-transition-record-v1.schema.json
     qv-source-evidence-v1.schema.json
+    archive/
+      README.md
+      qv-manifest-v3.schema.json
+      qv-manifest-bundle-v2.schema.json
     fixtures/
       index.json
   process/roadmap/lifecycle/

@@ -146,10 +146,6 @@ export async function inspectLifecycleBundleTimestamps(bundle) {
   }));
 }
 
-export async function parseLifecycleBundleTimestamps(bundle) {
-  await inspectLifecycleBundleTimestamps(bundle);
-}
-
 function timestampEvidencePreference(entry) {
   return [
     entry?.completeProof === true || entry?.apparentlyComplete === true ? 1 : 0,

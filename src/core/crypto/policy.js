@@ -76,7 +76,7 @@ export function assertChunkCountWithinPolicy(
 }
 
 export function validateContainerPolicyMetadata(metadata, options = {}) {
-  const { allowLegacyWithoutProfile = true } = options;
+  const { allowLegacyWithoutProfile = false } = options;
 
   const profileId = typeof metadata?.cryptoProfileId === 'string' && metadata.cryptoProfileId.length > 0
     ? metadata.cryptoProfileId

@@ -1,6 +1,7 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../bytes.js';
 import { canonicalizeJsonToBytes } from '../manifest/jcs.js';
+import { parseJsonBytesStrict } from '../manifest/strict-json.js';
 
 const STELLAR_SIGNATURE_SCHEMA = 'stellar-signature/v2';
 
@@ -21,7 +22,7 @@ const STELLAR_SIGNATURE_SCHEME = Object.freeze({
 
 function decodeJsonBytes(bytes) {
   try {
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return parseJsonBytesStrict(bytes);
   } catch {
     return null;
   }
@@ -123,6 +124,7 @@ export function computeDetachedSignatureIdentityDigestHex({ format, signatureByt
     if (normalized instanceof Uint8Array) {
       return toHex(sha3_512(normalized));
     }
+    return null;
   }
 
   return toHex(sha3_512(signatureBytes));

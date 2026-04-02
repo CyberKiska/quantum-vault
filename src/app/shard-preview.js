@@ -2,6 +2,7 @@
 // Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
 import { parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
+import { parseJsonBytesStrict } from '../core/crypto/manifest/strict-json.js';
 import {
   LIFECYCLE_ARTIFACT_FAMILY,
   LIFECYCLE_QCONT_FORMAT_VERSION,
@@ -34,7 +35,7 @@ export async function parseQcontShardPreviewFile(file) {
   if (metaLen <= 0) throw new Error('Invalid shard metadata length');
   offset += 2;
   await ensureBytes(offset + metaLen);
-  const metaJSON = JSON.parse(decoder.decode(bytes.subarray(offset, offset + metaLen)));
+  const metaJSON = parseJsonBytesStrict(bytes.subarray(offset, offset + metaLen));
   if (metaJSON?.alg?.fmt !== LIFECYCLE_QCONT_FORMAT_VERSION) {
     throw new Error(`Unsupported shard format: expected ${LIFECYCLE_QCONT_FORMAT_VERSION}`);
   }
@@ -118,7 +119,6 @@ function classifyNonShardFile(file) {
   const name = String(file?.name || '').toLowerCase();
   if (name.endsWith('.qsig')) return 'signature';
   if (name.endsWith('.pqpk')) return 'pubkey';
-  if (name.endsWith('.qvmanifest.json')) return 'manifest';
   if (name.endsWith('.sig')) return 'signature';
   if (name.endsWith('.ots')) return 'timestamp';
   return 'other';
@@ -131,7 +131,7 @@ export async function assessShardSelection(files) {
 
   const parsed = [];
   let parseErrors = 0;
-  const attachments = { signature: 0, manifest: 0, pubkey: 0, timestamp: 0, other: 0 };
+  const attachments = { signature: 0, pubkey: 0, timestamp: 0, other: 0 };
   for (const file of files) {
     const lowerName = String(file?.name || '').toLowerCase();
     const explicitShardName = lowerName.endsWith('.qcont');
@@ -222,7 +222,6 @@ export async function assessShardSelection(files) {
 
   const verificationParts = [];
   if (attachments.signature > 0) verificationParts.push(`${attachments.signature} signature(s)`);
-  if (attachments.manifest > 0) verificationParts.push(`${attachments.manifest} manifest`);
   if (attachments.pubkey > 0) verificationParts.push(`${attachments.pubkey} public key(s)`);
   if (attachments.timestamp > 0) verificationParts.push(`${attachments.timestamp} timestamp(s)`);
   if (verificationParts.length > 0) {

@@ -43,6 +43,7 @@ import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-s
 import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
 import { unpackPqpk, unpackQsig, verifyQsigAgainstBytes } from './auth/qsig.js';
 import { verifyStellarSigAgainstBytes } from './auth/stellar-sig.js';
+import { computeDetachedSignatureIdentityDigestHex } from './auth/signature-identity.js';
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { slh_dsa_shake_128s } from '@noble/post-quantum/slh-dsa.js';
@@ -71,6 +72,7 @@ import {
   NONCE_MODE_RANDOM96,
   NONCE_POLICY_PER_CHUNK_V3,
   NONCE_POLICY_SINGLE_CONTAINER_V1,
+  validateContainerPolicyMetadata,
 } from './policy.js';
 import { kmac256 } from './kmac.js';
 import { resolveErasureRuntime } from './erasure-runtime.js';
@@ -5030,6 +5032,67 @@ function buildCases() {
       },
     },
     {
+      name: 'container policy metadata defaults to requiring cryptoProfileId',
+      fn: async () => {
+        const metadata = {
+          aead_mode: 'per-chunk-aead',
+          kdfTreeId: DEFAULT_CRYPTO_PROFILE.kdfTreeId,
+          noncePolicyId: NONCE_POLICY_PER_CHUNK_V3,
+          nonceMode: NONCE_MODE_KMAC_CTR32,
+          counterBits: DEFAULT_CRYPTO_PROFILE.noncePolicies['per-chunk-aead'].counterBits,
+          maxChunkCount: DEFAULT_CRYPTO_PROFILE.noncePolicies['per-chunk-aead'].maxChunkCount,
+          aadPolicyId: DEFAULT_CRYPTO_PROFILE.aadPolicyId,
+          domainStrings: { ...DEFAULT_CRYPTO_PROFILE.domainStrings },
+          chunkCount: 3,
+        };
+
+        let defaultError = null;
+        try {
+          validateContainerPolicyMetadata(metadata);
+        } catch (error) {
+          defaultError = error;
+        }
+
+        assert(defaultError instanceof Error, 'missing cryptoProfileId should fail closed by default');
+        assert(
+          String(defaultError.message || '').includes('missing cryptoProfileId'),
+          'missing cryptoProfileId should report an explicit fail-closed error'
+        );
+
+        const legacyCompatible = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: true });
+        assert(
+          legacyCompatible.cryptoProfileId === DEFAULT_CRYPTO_PROFILE.cryptoProfileId,
+          'explicit legacy opt-in should still resolve the default successor profile'
+        );
+      },
+    },
+    {
+      name: 'successor shard assessment treats .qvmanifest sidecars as unrecognized files',
+      fn: async () => {
+        const pair = await generateKeyPair({ collectUserEntropy: false });
+        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 2048);
+        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-preview-sidecar.bin'));
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const files = [
+          ...await Promise.all(split.shards.map(async (item, index) => (
+            fileLike(`phase7-preview-${index + 1}.qcont`, await blobToBytes(item.blob))
+          ))),
+          fileLike('archive.qvmanifest.json', textBytes('{"schema":"quantum-vault-archive-manifest/v3","version":3}')),
+        ];
+
+        const assessment = await assessShardSelectionPreview(files);
+        assert(assessment.ready === true, 'preview should still accept valid successor shards');
+        assert(
+          assessment.message.includes('1 unrecognized file(s) skipped.'),
+          'legacy .qvmanifest sidecars should be treated as unrecognized files'
+        );
+        assert(
+          !assessment.message.includes('manifest'),
+          'preview status should not advertise legacy manifest attachments'
+        );
+      },
+    },
+    {
       name: 'authenticity status message keeps signer pin detail alongside strong PQ detail',
       fn: async () => {
         const messageBytes = textBytes('auth-status-signer-pin-detail');
@@ -5170,6 +5233,43 @@ function buildCases() {
           fileLike('duplicate.sig', duplicateBytes),
         ]);
         assert(duplicateAttachClassified.signatures.length === 0, 'attach classifier must reject duplicate-key Stellar .sig files');
+      },
+    },
+    {
+      name: 'stellar detached signature identity digest stays stable for valid docs and returns null for duplicate-key docs',
+      fn: async () => {
+        const messageBytes = textBytes('stellar-proof-identity-normalization');
+        const fixture = await buildStellarSignatureFixture(messageBytes);
+        const validDigest = computeDetachedSignatureIdentityDigestHex({
+          format: 'stellar-sig',
+          signatureBytes: fixture.bytes,
+        });
+        assert(typeof validDigest === 'string' && validDigest.length === 128, 'valid Stellar .sig should produce a SHA3-512 identity digest');
+
+        const parsed = parseJsonTextStrict(new TextDecoder().decode(fixture.bytes));
+        const reorderedBytes = textBytes(JSON.stringify({
+          signatureB64: parsed.signatureB64,
+          hashes: [...parsed.hashes].reverse(),
+          signer: parsed.signer,
+          input: parsed.input,
+          signatureScheme: parsed.signatureScheme,
+          payloadType: parsed.payloadType,
+          proofType: parsed.proofType,
+          schema: parsed.schema,
+        }));
+        const reorderedDigest = computeDetachedSignatureIdentityDigestHex({
+          format: 'stellar-sig',
+          signatureBytes: reorderedBytes,
+        });
+        assert(reorderedDigest === validDigest, 'valid Stellar .sig identity digest should stay stable across equivalent JSON ordering');
+
+        const validText = new TextDecoder().decode(fixture.bytes);
+        const duplicateBytes = textBytes(`{"schema":"stellar-signature/v2",${validText.slice(1)}`);
+        const duplicateDigest = computeDetachedSignatureIdentityDigestHex({
+          format: 'stellar-sig',
+          signatureBytes: duplicateBytes,
+        });
+        assert(duplicateDigest === null, 'duplicate-key Stellar .sig should not produce a detached signature identity digest');
       },
     },
     {
