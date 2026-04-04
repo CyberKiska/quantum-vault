@@ -57,10 +57,11 @@ Internal current-state grounding:
 
 External references already used elsewhere in the repository:
 
-- FIPS 204 for ML-DSA suite family context
-- FIPS 205 for SLH-DSA suite family context
+- FIPS 204 for ML-DSA suite family context (parameter sets, security categories, normative algorithm identifiers)
+- FIPS 205 for SLH-DSA suite family context (parameter sets, security categories, hash-based security basis)
 - RFC 8032 for Ed25519 verification context
 - SEP-0023 for Stellar address encoding context
+- Trail of Bits, "The treachery of post-quantum signatures" (2023): engineering perspective on PQ signature operational constraints (large signature sizes, verification cost, protocol integration issues); relevant to understanding why PQ signature size and verification overhead are non-trivial considerations when designing the attach and verify workflows
 
 ## Current implementation surface
 
@@ -321,10 +322,14 @@ Current strong-PQ suites are:
 - `slhdsa-shake-256s`
 - `slhdsa-shake-256f`
 
+All three target NIST security category 5 (roughly equivalent to a 256-bit symmetric reference level). `mldsa-87` is the largest ML-DSA parameter set, as defined in FIPS 204 §4. `slhdsa-shake-256s` and `slhdsa-shake-256f` are the SHAKE-256-instantiated SLH-DSA parameter sets at the highest security level, as defined in FIPS 205 §10. The `s` variant (`256s`) produces smaller signatures at the cost of slower signing; the `f` variant (`256f`) produces larger signatures with faster signing. Both SLH-DSA variants are deliberately included to provide algorithmic-foundation diversity: SLH-DSA's security rests on hash-function assumptions rather than on the module learning-with-errors problem underlying ML-DSA, so the two families are not simultaneously broken by the same cryptanalytic advance.
+
+Lower ML-DSA or SLH-DSA parameter sets (e.g., `mldsa-44`, `mldsa-65`, `slhdsa-shake-128s`) are not included in the strong-PQ registry because they target lower NIST security categories. Their exclusion is an explicit registry decision, not a claim that those suites are broken.
+
 Current evaluation rule:
 
 - policy is evaluated against canonical suite identifiers after parsing and normalization
-- broad family names such as `ML-DSA` or `SLH-DSA` are not sufficient by themselves
+- broad family names such as `ML-DSA` or `SLH-DSA` are not sufficient by themselves; the exact parameter-set identifier must be present and recognized
 
 ### 6.3 Wrapper versus suite
 
@@ -340,7 +345,7 @@ Current counting rules are:
 - `minValidSignatures` counts unique detached proof identities, not repeated verification results for the same proof
 - semantically equivalent Stellar proofs are deduplicated even if JSON serialization differs
 - invalid extra signatures are reported but ignored for archive-policy counting
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting; "self-verified" means the signature was verified exclusively against the public key carried inside the `.qsig` binary wrapper, without corroboration from an externally-anchored identity source; this condition is excluded from policy satisfaction because it provides no binding to an identity established outside the artifact being evaluated
 - `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature in addition to `minValidSignatures`
 
 ## 7. Signer identity and pinning semantics

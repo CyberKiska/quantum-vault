@@ -57,9 +57,10 @@ External references already used elsewhere in the repository:
 
 - RFC 4648 for Base64 encoding conventions
 - RFC 8785 for canonical JSON behavior under `QV-JSON-RFC8785-v1`
+- RFC 5116 for AEAD interface discipline: unambiguous AAD construction, prohibition on interpreting ciphertext using unauthenticated fields, and injective encoding requirements for variable-length AAD inputs
 - FIPS 202 for `SHA3-256` and `SHA3-512`
-- SP 800-185 for KMAC256-based derivation inputs and commitment terminology
-- SP 800-38D for AES-256-GCM AEAD assumptions
+- SP 800-185 for KMAC256-based derivation inputs, domain-separation customization strings, and unambiguous composite input encoding
+- SP 800-38D for AES-256-GCM AEAD assumptions and IV uniqueness requirements
 - FIPS 203 for ML-KEM-1024 naming and profile context
 
 ## Current implementation surface
@@ -312,7 +313,7 @@ Current target rules:
 - detached archive-approval signatures MUST target canonical archive-state descriptor bytes
 - maintenance signatures MUST target canonical transition-record bytes
 - source-evidence signatures MUST target canonical source-evidence bytes
-- timestamps MUST target detached signature bytes by `SHA-256(detachedSignatureBytes)`
+- timestamps MUST target detached signature bytes by `SHA-256(detachedSignatureBytes)`; SHA-256 is used here as an interoperability requirement of the OpenTimestamps proof format (which defines its stamp operation over SHA-256 digests), not as an independent QV hash-function choice; SHA-3 variants are not currently defined in the OpenTimestamps proof header format
 - mutable lifecycle-bundle bytes are never the archive-approval signable payload
 
 ## 5. `.qenc` container format
@@ -548,7 +549,7 @@ Verifier and restore order:
 8. reconstruct `.qenc` and the ML-KEM private key from one internally consistent successor cohort
 9. verify that the selected lifecycle bundle matches the selected archive-state and cohort-binding objects
 10. verify detached signatures against the exact canonical target bytes for their declared family
-11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified
+11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified; the `.qsig` binary wrapper carries an embedded signer public key as a convenience field; a signature that verifies exclusively against this self-contained key — without corroboration from a bundled `attachments.publicKeys[]` entry or a user-supplied `.pqpk` pin — does not establish signer identity external to the artifact itself, and must not count toward policy satisfaction; this prevents an adversary from manufacturing a key pair, embedding it in a fresh `.qsig`, and satisfying policy without any externally-anchored identity
 12. evaluate archive policy using `archiveApprovalSignatures` only
 13. link timestamps to detached signature bytes and emit separate transition and source-evidence reports
 14. emit distinct status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`

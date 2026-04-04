@@ -1,7 +1,7 @@
 # Quantum Vault: Post-Quantum Archival Encryption with Threshold Recovery and Detached Provenance
 
 **Status:** Release Candidate  
-**Version:** 0.1  
+**Version:** 2.0.0  
 **Date:** 2026-04-02
 
 ---
@@ -18,7 +18,7 @@ Quantum Vault is a client-only archival containerization system that combines po
 
 An encrypted file, taken alone, addresses only one concern: confidentiality at the time of encryption. For data that must remain protected across years or decades, this is insufficient.
 
-**Long-lived confidentiality under harvest-now-decrypt-later (HNDL) risk.** An adversary who captures ciphertexts today may store them indefinitely and attempt decryption once cryptographically relevant quantum computers become available. Classical public-key key-establishment mechanisms such as RSA and ECDH are vulnerable to Shor's algorithm [1]. NIST IR 8547 identifies HNDL as a pressing driver for post-quantum migration [2]. Quantum Vault's architecture responds to this asymmetry: post-quantum encryption is mandatory from archive creation, while the archive-authenticity layer accepts both PQ and classical-interoperability signatures during the transition period.
+**Long-lived confidentiality under harvest-now-decrypt-later (HNDL) risk.** An adversary who captures ciphertexts today may store them indefinitely and attempt decryption once cryptographically relevant quantum computers become available. Classical public-key key-establishment mechanisms such as RSA and ECDH are vulnerable to Shor's algorithm [1]. NIST IR 8547 identifies HNDL as a pressing driver for post-quantum migration [2]. Analysis of distributed ledger networks shows concretely that HNDL is a present operational risk for long-lived stored data, not a future concern contingent on Q-Day: historically captured replicas remain vulnerable even after a network later migrates [31]. Quantum Vault's architecture responds to this asymmetry: post-quantum encryption is mandatory from archive creation, while the archive-authenticity layer accepts both PQ and classical-interoperability signatures during the transition period.
 
 **Long-lived provenance.** Integrity verification is distinct from provenance. In Quantum Vault's current model, detached signatures provide cryptographic evidence that a specific signer key signed a canonical archive-state descriptor or another declared lifecycle object. Binding that key to a real-world identity, an approval workflow, or a custody role is external to the artifact family. AEAD authentication tags protect ciphertext integrity against tampering but do not establish signer identity. For archives that must remain attributable over decades, detached digital signatures are required, and those signatures must themselves survive the quantum transition.
 
@@ -134,6 +134,8 @@ The derivation tree is:
 
 where `salt` is a 16-byte random value and `metaBytes` is the UTF-8 encoding of the container's public metadata JSON.
 
+The pseudocode above is a simplified representation. Actual input encoding follows SP 800-185 conventions to ensure composite inputs are unambiguously parseable [7]; in particular, variable-length fields such as `metaBytes` are encoded with explicit length prefixing so that no two distinct composite inputs can produce the same KMAC input byte string.
+
 Domain-separation strings are recorded in container metadata and included in the authenticated-data boundary. A verifier that encounters unknown or missing domain strings must reject the container.
 
 ### 4.3 Authenticated Encryption: AES-256-GCM
@@ -147,7 +149,9 @@ Two AEAD modes are supported:
 
 `IV_i = KMAC256(Kiv, containerNonce, customization = "quantum-vault:chunk-iv:v2", dkLen = 8) || uint32_be(i)`
 
-Per-chunk AAD is `header || uint32_be(i) || uint32_be(plainLen_i)`, binding each chunk's position and plaintext length into its authentication scope.
+This produces an 8-byte (64-bit) KMAC-derived prefix concatenated with a 4-byte big-endian chunk counter, for a total 96-bit IV per SP 800-38D requirements [8].
+
+Per-chunk AAD is `header || uint32_be(i) || uint32_be(plainLen_i)`, binding each chunk's position and plaintext length into its authentication scope. The fixed widths of `uint32_be` fields ensure the AAD concatenation is injective, satisfying the unambiguous additional-data construction requirement of the AEAD interface [28].
 
 SP 800-38D warns that GCM IV reuse under the same key can compromise security almost entirely [8]. The deterministic per-chunk IV derivation eliminates IV reuse risk within one container by construction.
 
@@ -159,6 +163,8 @@ The commitment is verified before decryption begins. Its purpose is to prevent k
 The key commitment is included within the AAD boundary, ensuring that it is itself authenticated.
 
 ### 4.5 Hashing and Fixity: SHA3-512 and SHA3-256
+
+SHA3-512 is chosen as the primary digest function partly for its conservative quantum headroom. Generic quantum preimage attacks on SHA-2 and SHA-3 are not simply "Grover halves the bits": the actual fault-tolerant quantum resource cost of finding a preimage is substantially higher than a naïve quadratic speedup suggests [29]. SHA3-512 therefore provides significant conservative margin even under optimistic assumptions about future quantum adversaries. The Keccak sponge construction also provides clean domain-separation properties that complement the KMAC-based key derivation layer.
 
 Quantum Vault uses SHA3-512 (FIPS 202 [10]) as its primary hash function for:
 
@@ -190,6 +196,8 @@ Quantum Vault supports detached signatures from two external signer tools:
 
 **Post-quantum signatures (`.qsig`).** Produced by Quantum Signer, supporting ML-DSA parameter sets (FIPS 204 [13]) and SLH-DSA parameter sets (FIPS 205 [14]). The `.qsig` format is a versioned binary container carrying suite identifiers, prehash information, signer fingerprint material, and signature bytes.
 
+ML-DSA derives its post-quantum security from the hardness of the module learning-with-errors (M-LWE) problem. SLH-DSA derives its post-quantum security from hash-function assumptions alone, with no dependence on structured algebraic hardness. This orthogonal security basis means that an unforeseen break in module-lattice problems would not compromise a SLH-DSA signature, and vice versa. The practical trade-off is that SLH-DSA produces substantially larger signatures and verifies more slowly than ML-DSA at equivalent security levels [32].
+
 **Classical-interoperability signatures (`.sig`).** Produced by Stellar WebSigner using Ed25519 (RFC 8032 [15]). These signatures provide interoperability with existing identity ecosystems but are not quantum-resistant.
 
 Current archive authenticity policy recognizes three suites as "strong PQ":
@@ -197,6 +205,8 @@ Current archive authenticity policy recognizes three suites as "strong PQ":
 - `mldsa-87`
 - `slhdsa-shake-256s`
 - `slhdsa-shake-256f`
+
+All three are NIST security category 5 instantiations. `mldsa-87` is the largest ML-DSA parameter set (FIPS 204 §4). `slhdsa-shake-256s` and `slhdsa-shake-256f` are the SHAKE-256-instantiated SLH-DSA variants at the highest security level (FIPS 205 §10); the `s` variant optimizes for smaller signatures while the `f` variant optimizes for faster signing. Including both SLH-DSA variants provides hash-based algorithmic diversification relative to ML-DSA's lattice foundation.
 
 Current signature-target model:
 
@@ -213,7 +223,7 @@ This section describes one of the most important architectural patterns in Quant
 
 ### 5.1 Archive-state descriptor
 
-The archive-state descriptor is the long-lived archive-approval object for one archive state. It is canonicalized under `QV-JSON-RFC8785-v1` and carries:
+The archive-state descriptor is the long-lived archive-approval object for one archive state. It is canonicalized under `QV-JSON-RFC8785-v1` (a strict UTF-8 JSON canonicalization profile aligned with RFC 8785 [16]; byte-level parity is demonstrated for current artifact shapes in the repository's canonicalization appendix) and carries:
 
 - `archiveId` as the stable archive identifier within the successor family
 - `parentStateId` for state lineage
@@ -263,7 +273,7 @@ Earlier iterations of the system used the same high-level architectural pattern,
 
 ### 5.5 Current timestamp evidence semantics
 
-OpenTimestamps (`.ots`) evidence is linked to detached signature bytes via `SHA-256(detachedSignatureBytes)`.
+OpenTimestamps (`.ots`) evidence is linked to detached signature bytes via `SHA-256(detachedSignatureBytes)`. SHA-256 is used here as an interoperability requirement of the OpenTimestamps proof format, which defines its stamp operation over SHA-256 digests; this is not an independent QV design choice but a constraint of the OTS ecosystem. It does not affect the SHA-3 dominance of the artifact family's fixity and binding layer, where all other digests use SHA3-512 or SHA3-256.
 
 Current `.ots` semantics are deliberately limited:
 
@@ -465,8 +475,10 @@ The format does not yet support:
 - first-class continuity records preserving `archiveId` semantics across rewrap or reencryption
 - first-class migration-event or renewal-event logs
 - envelope-DEK designs that would allow key-wrapping material to be replaced without re-encrypting the payload
-- hybrid KEM wrapping as a hedge against single-algorithm compromise
+- hybrid KEM wrapping as a hedge against single-algorithm compromise (see RFC 9794 for IETF terminology on hybrid PQ/traditional schemes [30])
 - KEM diversification beyond ML-KEM
+
+The importance of KEM diversification is directly evidenced by NIST's March 2025 selection of HQC as a second KEM standard, explicitly to provide a backup based on code-based cryptography in case ML-KEM proves vulnerable to future cryptanalysis [33]. The current format's `cryptoProfileId` field is extensible by design, and this extensibility will be required when a second KEM is incorporated.
 
 ### 9.5 Lightweight trust and governance model
 
@@ -490,7 +502,7 @@ Key generation depends primarily on the browser or OS cryptographic RNG exposed 
 
 [1] P. W. Shor, "Algorithms for Quantum Computation: Discrete Logarithms and Factoring," in *Proceedings 35th Annual Symposium on Foundations of Computer Science*, IEEE, 1994, pp. 124–134.
 
-[2] National Institute of Standards and Technology, "Transition to Post-Quantum Cryptography Standards," NIST IR 8547, 2024. https://csrc.nist.gov/pubs/ir/8547/ipd
+[2] National Institute of Standards and Technology, "Transition to Post-Quantum Cryptography Standards," NIST IR 8547 (Initial Public Draft), November 2024. https://csrc.nist.gov/pubs/ir/8547/ipd (as of the date of this document, no final version has been published; the IPD is the current available reference)
 
 [3] T. Gondrom, R. Brandner, and U. Pordesch, "Evidence Record Syntax (ERS)," RFC 4998, IETF, August 2007. https://www.rfc-editor.org/rfc/rfc4998
 
@@ -547,3 +559,9 @@ Key generation depends primarily on the browser or OS cryptographic RNG exposed 
 [29] M. Amy, O. Di Matteo, V. Gheorghiu, M. Mosca, A. Parent, and J. Schanck, "Estimating the Cost of Generic Quantum Pre-image Attacks on SHA-2 and SHA-3," in *Selected Areas in Cryptography — SAC 2016*, Springer LNCS 10532, pp. 317–337, 2017. https://doi.org/10.1007/978-3-319-69453-5_18
 
 [30] H. Birkholz, C. Vigano, and C. Bormann, "Concise Data Definition Language (CDDL): A Notational Convention to Express Concise Binary Object Representation (CBOR) and JSON Data Structures," RFC 8610, IETF, June 2019. https://www.rfc-editor.org/rfc/rfc8610
+
+[31] K. Mascelli and A. Rodden, "Harvest Now, Decrypt Later: Examining Post-Quantum Cryptography and the Data Privacy Risks for Distributed Ledger Networks," *FEDS Notes*, Federal Reserve Board, 2025. https://www.federalreserve.gov/econres/feds/harvest-now-decrypt-later-examining-post-quantum-cryptography-and-the-data-privacy-risks-for-distributed-ledger-networks.htm
+
+[32] D. J. Bernstein, A. Hülsing, S. Kölbl, R. Niederhagen, J. Rijneveld, and P. Schwabe, "The SPHINCS+ Signature Framework," in *ACM CCS*, 2019. https://sphincs.org/data/sphincs+-paper.pdf (academic precursor to SLH-DSA / FIPS 205; see also Trail of Bits, "The treachery of post-quantum signatures," 2023, https://blog.trailofbits.com/2023/03/01/the-treachery-of-post-quantum-signatures/ for an engineering perspective on operational constraints of large-signature PQ schemes)
+
+[33] National Institute of Standards and Technology, "NIST Selects HQC as Fifth Algorithm for Post-Quantum Encryption," NIST News, March 2025. https://www.nist.gov/news-events/news/2025/03/nist-selects-hqc-fifth-algorithm-post-quantum-encryption (HQC selected as a second KEM to provide code-based-cryptography diversification complementary to ML-KEM's module-lattice basis; see also NIST IR 8545 for the fourth-round evaluation rationale)

@@ -50,11 +50,11 @@ Internal current-state grounding:
 
 External references already used elsewhere in the repository:
 
-- OAIS / ISO 14721 for archival concepts such as representation information and preservation description information
-- ISO 16363 for trustworthy digital repository audit context
-- RFC 3161 for timestamp-token context
-- RFC 4998 for evidence-record and renewal direction
-- Haber-Stornetta and Bayer-Haber-Stornetta lineage for long-term time-proof direction
+- OAIS / ISO 14721:2025 for archival concepts such as representation information and preservation description information
+- ISO 16363 for trustworthy digital repository audit context (note: ISO 16363 defines audit criteria for repositories, not a conformance target for standalone client-side tools; individual QV design choices may be *aligned with* ISO 16363 criteria without the tool as a whole constituting a trustworthy digital repository)
+- RFC 3161 for timestamp-token context (TSA-based trusted timestamping; not currently implemented in QV but the relevant model for a classical server-based evidence path)
+- RFC 4998 for evidence-record and renewal direction; ERS defines the structure of renewable evidence records: an archive evidence archive (ARA) carries initial timestamp tokens plus successor renewal records (Section 5), each new record committing to prior evidence and new witness material, providing the formal model for multi-decade time-proof renewal
+- Haber-Stornetta (1991) and Bayer-Haber-Stornetta (1993) lineage for long-term time-proof direction: Haber-Stornetta establishes the conceptual security target (anti-backdating / anti-forward-dating without trust in mutable metadata); Bayer-Haber-Stornetta introduces Merkle tree aggregation for public witness scalability, which is the direct conceptual ancestor of OpenTimestamps' blockchain anchoring model
 - OpenTimestamps project documentation for the current external evidence ecosystem
 - ML-KEM-1024 (FIPS 203), ML-DSA (FIPS 204), and SLH-DSA (FIPS 205) for the current PQ cryptographic baseline carried by Quantum Vault and related tools
 - AES-256-GCM (SP 800-38D) for the current confidentiality layer carried by `.qenc`
@@ -219,6 +219,14 @@ Current practical witness strategy:
 
 - Quantum Vault interoperates with OpenTimestamps because it provides a public external witness ecosystem for detached-signature evidence without requiring Quantum Vault itself to operate a single long-lived attester service
 - this keeps the witness target stable when signatures are added or transported independently of lifecycle-bundle rewrites
+- OpenTimestamps aggregates document digests into Bitcoin transaction outputs using Merkle tree constructions in the tradition of Bayer, Haber, and Stornetta; the distributed public-witness character of Bitcoin mining reduces reliance on any single trusted-authority server as compared with RFC 3161 TSA-based timestamps
+
+Trust model of the current OTS integration:
+
+- the distributed witness character mitigates single-authority failure modes that affect RFC 3161 TSP tokens
+- however, the OTS model inherits trust assumptions about the continued security of SHA-256 as the proof's internal hash function and the continued availability of the Bitcoin blockchain as a publicly verifiable record
+- OTS evidence therefore carries its own long-horizon trust assumptions: an adversary capable of a SHA-256 second-preimage attack could forge the proof chain, and an archived Bitcoin transaction becomes unverifiable if the blockchain is no longer accessible to the verifier
+- these assumptions are different in character from QV's SHA-3 fixity layer but do not nullify the OTS evidence value within the expected operating window; they inform the recommendation to treat OTS as one witness regime rather than the only long-horizon witness
 
 Current limits and interpretation:
 
@@ -228,19 +236,21 @@ Current limits and interpretation:
 
 ### 5.3 Recommended future evidence object
 
-The research basis points toward a future evidence object or evidence-record chain.
-Its minimum purpose would be to commit to:
+The research basis points toward a future evidence object or evidence-record chain modeled on RFC 4998 Evidence Record Syntax (ERS). In RFC 4998's model, an archive evidence archive (ARA) starts with an initial evidence record that commits to a set of initial timestamp tokens. Each subsequent renewal record commits to the preceding evidence and adds new witness material, forming a chain in which the security of later records does not depend solely on the continued strength of the algorithms used in earlier ones.
 
-- one or more archive anchors or fixity anchors
-- detached signature digests
-- signer key identifiers
-- witness outputs, witness-regime metadata, and renewal events
+A QV evidence object's minimum purpose would be to commit to:
+
+- one or more archive anchors or fixity anchors (at minimum: `archiveId`, `stateId`, canonical archive-state bytes, and `qencHash`)
+- detached signature digests linked to the signatures being evidenced
+- signer key identifiers or fingerprints associated with those signatures
+- witness outputs, witness-regime metadata (including which hash functions and chains the witness relies on), and renewal events
 - predecessor evidence references when renewal occurs
 
 Recommended future shape:
 
-- `E0` as the initial archival evidence object
-- `E1`, `E2`, ... as renewal records that commit to prior evidence and new witness anchors
+- `E0` as the initial archival evidence object; may carry current detached-signature-targeted `.ots` evidence as its first witness material
+- `E1`, `E2`, ... as renewal records, each committing to the preceding evidence object's digest and adding new witness anchors under a successor witness regime
+- each record in the chain should be designed so that a verifier who has the chain `E0` through `Ek` can establish evidence continuity even if the algorithms used in `E0` are no longer trusted at verification time
 
 Current expected use of `E0`:
 
@@ -279,7 +289,7 @@ A minimally sufficient long-term Quantum Vault package should contain the follow
 
 ### 6.2 OAIS mapping
 
-Quantum Vault is not OAIS itself and this document does not claim OAIS or ISO 16363 compliance.
+Quantum Vault is not OAIS itself and this document does not claim OAIS (ISO 14721:2025) or ISO 16363 compliance.
 The mapping below is a practical orientation layer.
 
 | OAIS concept | Current Quantum Vault mapping | Current status |

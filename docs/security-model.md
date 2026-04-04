@@ -51,11 +51,13 @@ External references already used elsewhere in the repository:
 
 - FIPS 203 for ML-KEM-1024 context
 - FIPS 202 for SHA-3 hashing context
-- SP 800-185 for KMAC256 derivation context
-- SP 800-38D for AES-256-GCM AEAD assumptions
+- SP 800-185 for KMAC256 derivation context and domain-separation discipline
+- SP 800-38D for AES-256-GCM AEAD assumptions and IV uniqueness requirements
+- RFC 5116 for AEAD interface discipline, unambiguous AAD construction, and prohibition on parsing plaintext or ciphertext using unauthenticated data
 - FIPS 204 for ML-DSA detached-signature context
 - FIPS 205 for SLH-DSA detached-signature context
 - RFC 8032 for Ed25519 signature context
+- NIST IR 8547 (initial public draft, 2024) for HNDL and PQ migration framing
 
 ## Current implementation surface
 
@@ -177,7 +179,7 @@ The HNDL risk is the primary time-horizon driver: an adversary captures encrypte
 Under this timeline, three long-term objectives must remain distinct:
 
 1. Long-term confidentiality
-   Prevent retrospective decryption of captured ciphertexts across the full `t0` → `tQ` → `tV` horizon. Quantum Vault addresses this by using ML-KEM-1024 (FIPS 203) for key encapsulation and AES-256-GCM (SP 800-38D) for symmetric encryption, where the 256-bit key size mitigates Grover-style quadratic speedup. The explicit `cryptoProfileId` in every artifact ensures algorithm agility without parser ambiguity.
+   Prevent retrospective decryption of captured ciphertexts across the full `t0` → `tQ` → `tV` horizon. Quantum Vault addresses this by using ML-KEM-1024 (FIPS 203) for key encapsulation and AES-256-GCM (SP 800-38D) for symmetric encryption, where the 256-bit key size mitigates Grover-style quadratic speedup. SHA3-512 provides conservative fixity headroom; the practical fault-tolerant quantum resource cost of generic preimage attacks on SHA-3 is substantially higher than the naïve Grover intuition of "halving the bit-security" suggests. The explicit `cryptoProfileId` in every artifact ensures algorithm agility without parser ambiguity.
 
 2. Long-term authenticity and verifiability
    Permit a verifier at `tV` to validate integrity and signer identity even if some algorithms used at `t0` are obsolete at `tV`. After a broad classical-signature collapse at `tQ`, Ed25519 and other classical detached signatures cannot independently establish provenance; PQ detached signatures (ML-DSA / FIPS 204, SLH-DSA / FIPS 205) remain the viable path. Quantum Vault's `strong-pq-signature` policy level enforces at least one PQ archive-approval signature at restore time.
@@ -195,7 +197,7 @@ Current mitigations:
 
 - mandatory key commitment verified before decryption
 - fail-closed parsing before the AEAD layer
-- AAD binding that prevents silent reinterpretation of security-relevant metadata
+- AAD binding that prevents silent reinterpretation of security-relevant metadata; AAD fields are concatenated using fixed-width or length-prefixed encodings so that the AEAD additional-data input is unambiguously parseable (RFC 5116 §3.3)
 
 This surface is not fully eliminated and remains a residual consideration for any system that exposes verification outcomes.
 
@@ -252,7 +254,7 @@ Current security claims depend on the following assumptions:
 
 - cryptographic operations are performed locally in the client and are not routed through runtime network services
 - the user trusts or verifies the delivered application build
-- the browser or OS RNG exposed via `crypto.getRandomValues()`, together with any best-effort user-event mixing the implementation performs, is sufficient for key generation and random values
+- the browser or OS RNG exposed via `crypto.getRandomValues()`, together with any best-effort user-event mixing the implementation performs, provides sufficient entropy for key generation and random values; this is treated as an implementation assumption, not as a claim of conformance to any formal entropy-source standard (SP 800-90B or SP 800-90C)
 - enough independent custodians remain uncompromised and available to satisfy threshold recovery
 - the supported canonicalization implementation is applied consistently
 - detached signatures are verified using the correct wrapper semantics, context, and normalized suite identifiers
@@ -282,9 +284,10 @@ Current confidentiality and AEAD invariants:
 - a `(key, nonce)` pair MUST NOT be reused
 - security-relevant header fields MUST remain inside the authenticated boundary
 - single-container AAD is the full header through `keyCommitment`
-- per-chunk AAD is `header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`, where `header` includes `keyCommitment`
+- per-chunk AAD is `header || uint32_be(chunkIndex) || uint32_be(plainLen_i)`, where `header` includes `keyCommitment`; the use of fixed-width `uint32_be` fields ensures this concatenation is injective (no two distinct inputs produce the same AAD byte string), satisfying RFC 5116 §3.3
 - key commitment is mandatory and MUST be verified before decryption
 - KMAC domain strings for KDF and IV derivation MUST remain explicit, non-colliding, and stable for the artifact instance
+- parsers MUST NOT interpret ciphertext or plaintext content based on unauthenticated metadata fields
 
 ### 7.3 Successor lifecycle authenticity and restore invariants
 
@@ -380,6 +383,7 @@ Current residual risks include:
 - future ambiguity in trust roots, governance, or migration authority
 - per-chunk AEAD key reuse within one container: the current `per-chunk-aead` mode derives distinct IVs but uses a single `Kenc` across chunks, which is acceptable for the current size regime but may warrant future hardening for much larger payloads
 - chosen-ciphertext feedback from verifier success or failure responses
+- correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
 
 ## 11. Future coverage retained for this document
 
