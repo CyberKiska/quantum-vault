@@ -58,6 +58,7 @@ External references already used elsewhere in the repository:
 - FIPS 205 for SLH-DSA detached-signature context
 - RFC 8032 for Ed25519 signature context
 - NIST IR 8547 (initial public draft, 2024) for HNDL and PQ migration framing
+- Bernstein *et al.*, "KyberSlash" (*IACR TCHES* 2025(2)), https://doi.org/10.46586/tches.v2025.i2.209-234 and https://kyberslash.cr.yp.to/ — implementation timing side channels in some Kyber/ML-KEM code paths (secret-dependent division by a public modulus); distinct from HNDL against stored ciphertext and from asymptotic breaks of the ML-KEM target problem
 
 ## Current implementation surface
 
@@ -179,7 +180,7 @@ The HNDL risk is the primary time-horizon driver: an adversary captures encrypte
 Under this timeline, three long-term objectives must remain distinct:
 
 1. Long-term confidentiality
-   Prevent retrospective decryption of captured ciphertexts across the full `t0` → `tQ` → `tV` horizon. Quantum Vault addresses this by using ML-KEM-1024 (FIPS 203) for key encapsulation and AES-256-GCM (SP 800-38D) for symmetric encryption, where the 256-bit key size mitigates Grover-style quadratic speedup. SHA3-512 provides conservative fixity headroom; the practical fault-tolerant quantum resource cost of generic preimage attacks on SHA-3 is substantially higher than the naïve Grover intuition of "halving the bit-security" suggests. The explicit `cryptoProfileId` in every artifact ensures algorithm agility without parser ambiguity.
+   Prevent retrospective decryption of captured ciphertexts across the full `t0` → `tQ` → `tV` horizon. Quantum Vault addresses this by using ML-KEM-1024 (FIPS 203) for key encapsulation and AES-256-GCM (SP 800-38D) for symmetric encryption, where the 256-bit key size mitigates Grover-style quadratic speedup. SHA3-512 provides conservative fixity headroom; the practical fault-tolerant quantum resource cost of generic preimage attacks on SHA-3 is substantially higher than the naïve Grover intuition of "halving the bit-security" suggests. The explicit `cryptoProfileId` in every artifact ensures algorithm agility without parser ambiguity. KyberSlash-class timing attacks on ML-KEM **implementations** are a separate axis from this ciphertext-at-rest story; see Section 3.3.
 
 2. Long-term authenticity and verifiability
    Permit a verifier at `tV` to validate integrity and signer identity even if some algorithms used at `t0` are obsolete at `tV`. After a broad classical-signature collapse at `tQ`, Ed25519 and other classical detached signatures cannot independently establish provenance; PQ detached signatures (ML-DSA / FIPS 204, SLH-DSA / FIPS 205) remain the viable path. Quantum Vault's `strong-pq-signature` policy level enforces at least one PQ archive-approval signature at restore time.
@@ -200,6 +201,12 @@ Current mitigations:
 - AAD binding that prevents silent reinterpretation of security-relevant metadata; AAD fields are concatenated using fixed-width or length-prefixed encodings so that the AEAD additional-data input is unambiguously parseable (RFC 5116 §3.3)
 
 This surface is not fully eliminated and remains a residual consideration for any system that exposes verification outcomes.
+
+### 3.3 KyberSlash-class implementation timing (ML-KEM)
+
+KyberSlash documents **implementation** defects in which Kyber/ML-KEM code divides a **secret** numerator by a **public** denominator using operations whose latency can depend on secret data, enabling timing attacks in some environments when an adversary can observe encapsulation or decapsulation on the same device (see Sources and references: KyberSlash).
+
+This threat class does **not** replace the HNDL argument for using a PQ KEM for long-lived ciphertext: a passive archivist who only stores `.qenc` bytes still cannot read timings of a victim’s future decapsulation. It **does** mean that ML-KEM security in deployment is only as strong as the **concrete library** (and runtime): maintainers should track upstream `@noble/post-quantum` releases and public KyberSlash remediation guidance. It also reinforces why this document already treats **side-channel resistance in JavaScript** as out of scope (Section 5): browser execution is not a high-assurance timing-isolated environment.
 
 ## 4. Security goals
 

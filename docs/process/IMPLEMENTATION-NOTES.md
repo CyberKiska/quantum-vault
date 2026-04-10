@@ -212,7 +212,7 @@ src/
     │   ├── aead.js                  # AES-GCM nonce/IV policy helpers
     │   ├── kdf.js                   # KMAC derivation and key commitment helpers
     │   ├── kmac.js                  # Local SP 800-185 KMAC adapter over noble
-    │   ├── mlkem.js                 # ML-KEM-1024 implementation
+    │   ├── mlkem.js                 # ML-KEM-1024 via @noble/post-quantum
     │   ├── entropy.js               # CSPRNG + entropy mixing primitives
     │   ├── erasure-runtime.js       # RS runtime resolver (globalThis/injected)
     │   ├── constants.js             # Format/profile constants

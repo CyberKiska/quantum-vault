@@ -135,6 +135,10 @@ Long-term archival evaluation must keep the following objectives separate:
 | Representation information | Core docs exist, but test vectors, archival decoder packaging, and designated-community material are still incomplete | Long-term interpretability is improved but not yet archival-grade |
 | Migration semantics | Rewrap, reencryption, renewal, and migration authority are not yet first-class archival objects | Cross-decade continuity currently depends on documentation discipline rather than format-native records |
 
+### 3.1 PQ KEM implementation hygiene (KyberSlash)
+
+The ML-KEM **standard** (FIPS 203) addresses harvest-now-decrypt-later against **stored ciphertext** when a cryptographically relevant quantum computer exists. Separately, **implementations** can fail through **timing side channels** if they perform secret-dependent divisions on typical CPU/compiler combinations, as analyzed under the name KyberSlash (Bernstein *et al.*, *IACR TCHES* 2025; overview at https://kyberslash.cr.yp.to/). That line of work does not invalidate the case for PQ confidentiality at capture time; it obligates **library choice, patching, and dependency updates** in any serious deployment. Quantum Vault’s browser stack relies on `@noble/post-quantum` for ML-KEM (`src/core/crypto/mlkem.js`); long-term operators should track that dependency and the KyberSlash project’s library status alongside format-level algorithm agility (`cryptoProfileId`, future secondary KEMs such as HQC).
+
 ## 4. Archive classes
 
 Archive classes are currently a documentation and policy taxonomy, not yet a first-class wire-level field.
