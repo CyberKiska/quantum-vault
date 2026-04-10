@@ -47,6 +47,8 @@ External references already used elsewhere in the repository:
 
 - OpenTimestamps proof ecosystem as currently linked evidence
 - RFC 4648 for Base64 handling
+- RFC 3161 for contrasting TSA-style timestamp evidence
+- RFC 4998 for the renewable evidence-record model that current `.ots` linkage does not yet implement
 
 ## Current implementation status
 
@@ -125,6 +127,8 @@ Current pinning consequences:
 - a valid signature does not become policy-satisfying solely because a pin is present
 - self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself do not count toward trust or policy when bundled or user-supplied signer material did not verify
 
+This is a policy and provenance boundary, not a weaker signature parser. An embedded-key-only `.qsig` may still be cryptographically valid, but Quantum Vault does not treat a self-contained wrapper key as sufficient external identity evidence.
+
 ## 4. Proof identity deduplication and ambiguity handling
 
 Current policy counting deduplicates detached signatures by proof identity, not by filename.
@@ -150,12 +154,14 @@ Current `.ots` rules are intentionally narrow:
 - bundled timestamps link to detached signatures through `targetRef`
 - external timestamps resolve by matching the stamped digest against the detached signature bytes seen during verification
 - `.ots` evidence does not satisfy archive signature policy by itself
+- acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 
 Current completeness reporting is heuristic:
 
 - `apparentlyComplete` / `completeProof` is inferred from filename hints such as `complete`, `completed`, `confirmed`, or `upgraded`, or from proof size
 - the current implementation treats proof size `>= 1024` bytes as appearing complete when filename hints are absent
 - this is reporting convenience, not full long-horizon evidence validation
+- the current implementation does not independently verify Bitcoin inclusion, confirmation depth, or an RFC 3161-style TSA chain
 
 Current OTS deduplication:
 

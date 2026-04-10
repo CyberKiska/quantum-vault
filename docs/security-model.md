@@ -200,6 +200,8 @@ Current mitigations:
 - fail-closed parsing before the AEAD layer
 - AAD binding that prevents silent reinterpretation of security-relevant metadata; AAD fields are concatenated using fixed-width or length-prefixed encodings so that the AEAD additional-data input is unambiguously parseable (RFC 5116 §3.3)
 
+Together, these rules reduce the chance that an attacker can smuggle security-relevant interpretation through unauthenticated metadata or turn wrong-key acceptance and parsing ambiguity into a more useful verification oracle.
+
 This surface is not fully eliminated and remains a residual consideration for any system that exposes verification outcomes.
 
 ### 3.3 KyberSlash-class implementation timing (ML-KEM)
@@ -296,6 +298,8 @@ Current confidentiality and AEAD invariants:
 - KMAC domain strings for KDF and IV derivation MUST remain explicit, non-colliding, and stable for the artifact instance
 - parsers MUST NOT interpret ciphertext or plaintext content based on unauthenticated metadata fields
 
+These are hard invariants because AES-GCM authenticates only what the implementation actually binds. If a future variant moved security-relevant interpretation fields outside the authenticated boundary or allowed heuristic algorithm dispatch, a ciphertext could be structurally accepted under the wrong security interpretation.
+
 ### 7.3 Successor lifecycle authenticity and restore invariants
 
 Current successor invariants:
@@ -311,6 +315,8 @@ Current successor invariants:
 - if an operator explicitly selects a cohort or lifecycle-bundle variant in an otherwise ambiguous case, the result MUST be reported as an explicit operator choice with warning rather than as an automatic winner
 - self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself MUST NOT count toward trust or archive policy unless bundled or user-supplied signer material also verified
 - same-state resharing is maintenance, not archive re-approval
+
+The key design boundary is that archive approval attaches to one canonical, byte-stable object. Restore may collect additional evidence over time, but it MUST NOT reinterpret mutable lifecycle material as though it were part of the original archive-approval payload.
 
 ### 7.4 Shard and reconstruction invariants
 
@@ -334,6 +340,8 @@ Current parser and verifier invariants:
 - cryptographic meaning MUST NOT depend on mutable filesystem metadata
 - unresolved or incompatible `publicKeyRef` bindings MUST be rejected rather than silently downgraded
 - malformed or ambiguously linked OTS evidence MUST be rejected rather than silently trusted
+
+This is especially important for external authenticity artifacts. Filenames and storage context are user-controlled and mutable; only explicit magic values, schema identifiers, canonical bytes, and declared linkage fields are treated as trustworthy dispatch inputs.
 
 ### 7.6 Same-state resharing and future state-change claim boundaries
 

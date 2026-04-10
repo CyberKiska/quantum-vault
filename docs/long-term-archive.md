@@ -217,6 +217,12 @@ Current detached-signature timestamping rationale:
 - the signed target then binds the current `.qenc` and shard cohort through the current fixity and shard-binding anchors
 - current `.ots` evidence is therefore evidence for a signed archive description and its current binding chain, not a standalone proof about plaintext semantics
 
+Current implementation note:
+
+- `src/core/crypto/auth/opentimestamps.js` links OTS evidence by parsing the proof header and stamped digest, then matching that digest against detached signature bytes
+- the same code reports apparent completeness heuristically from filename hints or proof size
+- it does not independently validate a full Bitcoin confirmation chain or turn OTS into an RFC 4998-style renewable evidence record
+
 ### 5.2 Current witness strategy and its limits
 
 Current practical witness strategy:
@@ -237,6 +243,8 @@ Current limits and interpretation:
 - OpenTimestamps is not treated here as the final archival evidence architecture
 - RFC 4998 remains the model for renewal-capable evidence chaining and long-horizon verification continuity
 - future archival evidence may combine OpenTimestamps with other witness or renewal regimes rather than treating one mechanism as permanently sufficient
+
+This is the practical boundary between current and target state. Current OTS linkage improves portability of external witness material and gives the verifier a stable detached-signature evidence hook, but renewal-capable continuity still requires a first-class evidence object of the type RFC 4998 was designed to model.
 
 ### 5.3 Recommended future evidence object
 

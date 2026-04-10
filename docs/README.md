@@ -23,14 +23,22 @@ When documents disagree about role or ownership, `docs/README.md` wins.
 The documentation set is intentionally split into three surfaces:
 
 - top-level `docs/` files are the current primary Quantum Vault docs surface
-- `docs/process/` and `docs/series/` are support/reference material, not the primary product doc surface
-- `docs/internal/` is internal-only working material and planning history; it is not treated as published product documentation
+- `docs/process/` is published support/reference material, not the primary product doc surface
+- `docs/series/` and `docs/internal/` are contributor/internal working material and are not treated as published product documentation
 
 Publication note:
 
-- `docs/internal/` and `examples/` are excluded from published releases via `.gitignore`
+- `docs/internal/`, `docs/series/`, and `examples/` are excluded from published releases via `.gitignore`
 - internal planning material has been absorbed into the published owner docs and is not referenced as required reading in the release surface
 - `docs/process/roadmap/lifecycle/` remains published as historical transition/design material, not as the active normative or execution surface for current behavior
+
+## Published-doc source policy
+
+Published owner docs and active appendices may rely on:
+
+- primary standards and specifications
+- primary research directly supporting a current implementation, security, archival, or whitepaper-rationale claim
+- current implementation modules when the claim is specifically about shipped repository behavior
 
 Current release status:
 
@@ -73,8 +81,8 @@ Current release-gate note:
    Format-compatibility appendices that are actively referenced by `format-spec.md` live under `docs/appendices/`.
    They are support docs, not separate semantic owner docs.
 
-3. Distinguish published docs from internal material.
-   Files in `docs/internal/` are internal references and planning artifacts, not authoritative product docs.
+3. Distinguish published docs from contributor/internal material.
+   Files in `docs/internal/` and `docs/series/` are not authoritative product docs for the published Quantum Vault documentation set.
 
 4. Distinguish current behavior from future direction.
    Every core doc should label statements as implemented now, deprecated v1 context still needed during the phase-out window, or recommended future direction.
@@ -98,8 +106,8 @@ Current release-gate note:
 | Shared vocabulary, key terminology, and status terms | `glossary.md` | `glossary.md` |
 | Format-compatibility appendices for canonicalization, detached artifact handling, and vectors | `docs/appendices/` | `format-spec.md` owns the semantics; `docs/appendices/` carries active compatibility detail |
 | Contributor process and doc hygiene | `docs/README.md`, `docs/process/DOCS-WRITING.md` | `docs/README.md` |
-| Cross-app engineering standards | `docs/series/SERIES-STANDARTS.md` | `docs/series/` reference set |
-| Cross-app UX and interface terminology guidance | `docs/series/UX-STYLE-SERIES.md` | `docs/series/` reference set; Quantum Vault-specific product terms remain owned by `glossary.md` and the product docs |
+| Contributor-only cross-app engineering reference material | `docs/series/SERIES-STANDARTS.md` | Contributor reference only; published Quantum Vault docs cite standards and implementation directly |
+| Contributor-only cross-app UX and interface terminology guidance | `docs/series/UX-STYLE-SERIES.md` | Contributor reference only; Quantum Vault-specific product terms remain owned by `glossary.md` and the product docs |
 
 ## Current document map
 
@@ -120,8 +128,8 @@ Current release-gate note:
 | `docs/long-term-archive.md` | Mixed archival/roadmap doc | Release Candidate |
 | `docs/process/DOCS-WRITING.md` | Contributor guidance | Secondary process guide |
 | `docs/process/IMPLEMENTATION-NOTES.md` | Contributor design-history and codebase guide | Secondary contributor reference |
-| `docs/series/SERIES-STANDARTS.md` | Cross-app engineering/security reference | Draft reference |
-| `docs/series/UX-STYLE-SERIES.md` | Cross-app UX/terminology reference | Draft reference; Quantum Vault-specific terms defer to `docs/glossary.md` and the owner docs |
+| `docs/series/SERIES-STANDARTS.md` | Cross-app engineering/security reference | Unpublished contributor reference |
+| `docs/series/UX-STYLE-SERIES.md` | Cross-app UX/terminology reference | Unpublished contributor reference; Quantum Vault-specific terms defer to `docs/glossary.md` and the owner docs |
 | `docs/internal/` | Internal research, consolidation records, and preserved backup docs | Unpublished working material |
 
 ## Current structure

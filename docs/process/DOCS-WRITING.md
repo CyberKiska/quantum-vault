@@ -42,7 +42,7 @@ Entire documentation stack.
 ### References
 
 * RFC 2119 / RFC 8174 terminology for MUST/SHOULD language
-* Current `docs/series/SERIES-STANDARTS.md` style and assumptions
+* `docs/README.md` control rules and the current owner-doc conventions
 
 ---
 
@@ -72,7 +72,7 @@ All docs, especially `format-spec.md`, `long-term-archive.md`, `trust-and-policy
 
 * `docs/glossary.md`
 * Current README artifact model and policy vocabulary
-* OAIS/PDI language from the research basis 
+* OAIS/PDI language from `docs/long-term-archive.md` and the primary archival standards
 
 ---
 
@@ -89,12 +89,19 @@ Contributor writing should follow these active boundaries:
 * **`docs/trust-and-policy.md`** defines signature semantics, pinning, policy levels, proof counting, and restore authorization meaning.
 * **`docs/long-term-archive.md`** defines archival classes, OAIS mapping, renewal, migration, and long-horizon direction.
 * **`docs/process/`** is contributor/process guidance, not a normative product-doc surface.
-* **`docs/series/`** holds cross-app standards and UX guidance; it may standardize labels, but it should not redefine Quantum Vault product terms incompatibly with `docs/glossary.md` and the owner docs.
-* **`docs/internal/`** holds internal research and planning history.
+* **`docs/series/`** and **`docs/internal/`** are contributor/internal working material. They may help drafting, but published Quantum Vault docs should cite standards, primary research, and implementation code directly rather than treating those folders as authority.
 
 ### Why
 
 This prevents duplication and contradictions.
+
+## 3.1 Published-doc source policy
+
+When writing or revising the published Quantum Vault docs:
+
+* cite primary standards and specifications directly
+* cite primary research only when it supports a current implementation claim, a current security/archival claim, or a bounded whitepaper rationale point
+* cite implementation modules directly when describing shipped behavior
 
 ## 4. Doc invariants to preserve
 
@@ -122,24 +129,22 @@ Use:
 
 * standards + papers
 * `README.md` as the user-facing product description
-* the four core docs as the stabilized explanation inputs
-* Internal research reports as synthesis/background input
+* the core owner docs as stabilized explanation inputs
+* implementation code where rationale needs to stay honest about current behavior
 
 ## `docs/security-model.md`
 
 Use:
 
-* `docs/series/SERIES-STANDARTS.md`
-* current `README.md` behavior
+* implementation code and current `README.md` behavior
 * standards directly
-* Internal research reports where it frames threat objectives or long-horizon risks
+* selected primary research only for bounded threat or implementation-risk discussion
 
 ## `docs/format-spec.md`
 
 Use:
 
 * `README.md` and implementation code behavior as the source of truth for current formats
-* `docs/series/SERIES-STANDARTS.md` for global encoding, fail-closed, and primitive-usage rules
 * standards only for primitive constraints, not for container semantics
 
 ## `docs/long-term-archive.md`
@@ -149,8 +154,8 @@ Use:
 * OAIS / ISO 16363
 * RFC 3161 / RFC 4998
 * Haber–Stornetta lineage
-* Internal research reports as the main synthesis layer
 * current `README.md` and the core docs only to distinguish current state from target state
+* implementation code where the current evidence or restore behavior needs to be described precisely
 
 ## `docs/trust-and-policy.md`
 
@@ -189,4 +194,4 @@ The main remaining authored target is `docs/WHITEPAPER.md`, and most future work
 - Normative: MUST/SHALL, protocol invariants, format constraints
 - Informative: rationale, examples, threat discussion
 
-That guidance still fits the project well: `README.md` describes the implemented workflow and artifact set, `docs/series/SERIES-STANDARTS.md` remains one of the early architectural documents that establishes client-only and fail-closed engineering rules, `docs/series/UX-STYLE-SERIES.md` remains an early UX/terminology document, and internal research reports captures the long-horizon security and archival direction.
+That guidance still fits the project well: `README.md` describes the implemented workflow and artifact set, the owner docs define the published semantics, and published claims should be grounded in standards, primary research, and implementation code. Contributor-only material in `docs/series/` and `docs/internal/` may still help drafting, but it should not be cited as normative authority in the published Quantum Vault docs.

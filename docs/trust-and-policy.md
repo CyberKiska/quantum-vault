@@ -139,6 +139,7 @@ Quantum Vault distinguishes the following states:
    At least one OpenTimestamps proof linked correctly to detached signature bytes.
 
 These states MUST remain distinct in code, logs, UI, and documentation.
+FIPS 204 and FIPS 205 describe digital signatures as evidence about signed bytes, but signer identity, organizational authority, and long-term time evidence require additional context beyond bare cryptographic validity. The current Quantum Vault status model makes those boundaries explicit instead of flattening them into one generic "trusted" result.
 
 Current mandatory separation:
 
@@ -270,6 +271,8 @@ Current policy semantics:
 - `any-signature` requires at least one valid archive-approval signature but does not require a PQ suite specifically
 - `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature
 
+These meanings are intentionally narrow. Restore authorization is derived from explicit archive-policy rules over archive-approval signatures; auxiliary provenance material may improve reporting, but it does not silently change what the policy itself requires.
+
 Current policy non-claims:
 
 - policy satisfaction does not imply signer pinning
@@ -322,7 +325,7 @@ Current strong-PQ suites are:
 - `slhdsa-shake-256s`
 - `slhdsa-shake-256f`
 
-All three target NIST security category 5 (roughly equivalent to a 256-bit symmetric reference level). `mldsa-87` is the largest ML-DSA parameter set, as defined in FIPS 204 §4. `slhdsa-shake-256s` and `slhdsa-shake-256f` are the SHAKE-256-instantiated SLH-DSA parameter sets at the highest security level, as defined in FIPS 205 §10. The `s` variant (`256s`) produces smaller signatures at the cost of slower signing; the `f` variant (`256f`) produces larger signatures with faster signing. Both SLH-DSA variants are deliberately included to provide algorithmic-foundation diversity: SLH-DSA's security rests on hash-function assumptions rather than on the module learning-with-errors problem underlying ML-DSA, so the two families are not simultaneously broken by the same cryptanalytic advance.
+All three target NIST security category 5 (roughly equivalent to a 256-bit symmetric reference level). `mldsa-87` is the largest ML-DSA parameter set, as defined in FIPS 204 §4. `slhdsa-shake-256s` and `slhdsa-shake-256f` are the SHAKE-256-instantiated SLH-DSA parameter sets at the highest security level, as defined in FIPS 205 §10. The `s` variant (`256s`) produces smaller signatures at the cost of slower signing; the `f` variant (`256f`) produces larger signatures with faster signing. Both SLH-DSA variants are deliberately included to provide algorithmic-foundation diversity: SLH-DSA's security rests on hash-function assumptions rather than on the module-lattice assumptions underlying ML-DSA, so the two families are not simultaneously broken by the same cryptanalytic advance.
 
 Lower ML-DSA or SLH-DSA parameter sets (e.g., `mldsa-44`, `mldsa-65`, `slhdsa-shake-128s`) are not included in the strong-PQ registry because they target lower NIST security categories. Their exclusion is an explicit registry decision, not a claim that those suites are broken.
 
@@ -347,6 +350,8 @@ Current counting rules are:
 - invalid extra signatures are reported but ignored for archive-policy counting
 - self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting; "self-verified" means the signature was verified exclusively against the public key carried inside the `.qsig` binary wrapper, without corroboration from an externally-anchored identity source; this condition is excluded from policy satisfaction because it provides no binding to an identity established outside the artifact being evaluated
 - `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature in addition to `minValidSignatures`
+
+This is a trust-boundary rule, not a weaker verifier. An embedded-key-only `.qsig` may still be cryptographically valid as a detached proof artifact, but the current policy model refuses to treat self-contained proof material as externally anchored signer identity.
 
 ## 7. Signer identity and pinning semantics
 
@@ -430,6 +435,8 @@ Current handling rules:
 - if multiple OTS proofs target the same detached signature, reporting may prefer one apparently complete proof
 - current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size; they are not a cryptographic guarantee that a full external attestation chain was validated
 - unrelated or ambiguous `.ots` inputs fail closed
+
+This preserves the current policy boundary: OTS can strengthen evidence reporting and future archival interpretation, but it does not upgrade an otherwise unsatisfied archive-approval signature policy.
 
 ## 9. Attach and restore policy lifecycle
 

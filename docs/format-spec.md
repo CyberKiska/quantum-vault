@@ -316,6 +316,8 @@ Current target rules:
 - timestamps MUST target detached signature bytes by `SHA-256(detachedSignatureBytes)`; SHA-256 is used here as an interoperability requirement of the OpenTimestamps proof format (which defines its stamp operation over SHA-256 digests), not as an independent QV hash-function choice; SHA-3 variants are not currently defined in the OpenTimestamps proof header format
 - mutable lifecycle-bundle bytes are never the archive-approval signable payload
 
+This separation is one of the current format family's core invariants. Archive-approval signatures remain stable when lifecycle bundles are rewritten, while timestamp evidence attaches to one detached proof artifact rather than to a bundle that may legitimately change over time.
+
 ## 5. `.qenc` container format
 
 ### 5.1 Binary layout
@@ -386,6 +388,12 @@ Current AEAD and KDF rules:
 - key commitment is mandatory and is verified before decryption
 - `Kraw`, `Kenc`, and `Kiv` are derived via KMAC256 with explicit domain strings
 - per-chunk IV derivation uses `prefix64 || uint32_be(chunkIndex)` where `prefix64` is derived from `Kiv` and `containerNonce`
+
+Current implementation note:
+
+- the `Kraw` input is exactly the byte string `kdfSalt || metaJSON`
+- this is unambiguous in the current format because `kdfSalt` is fixed at 16 bytes and `metaJSON` is already length-delimited in the `.qenc` header
+- the current format does not define a separately serialized SP 800-185 tuple encoding inside the KMAC message
 
 ### 5.5 Current decrypt/verify order
 
@@ -530,6 +538,7 @@ Current acceptance boundaries:
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
 - `.pqpk` material may be used for bundled or user-supplied PQ pinning
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
+- OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 
 Detailed linkage, pinning, and ambiguity rules are defined in [appendices/external-artifacts.md](appendices/external-artifacts.md).
 

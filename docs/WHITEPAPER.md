@@ -58,11 +58,7 @@ For **live transaction layers**, the paper stresses a distinction that matters o
 
 **Hybrid key exchange and “delay.”** Standards already recognize **PQ/traditional hybrid** constructions as a *defined interoperability pattern* during migration. RFC 9794 [36] records, for example, that *“Data encrypted today (in 2025) with an algorithm vulnerable to a quantum computer can be stored for decryption by a future attacker with a CRQC”*—the same HNDL logic that motivates QV’s ML-KEM layer [2][6]. Hybrids can add a CRQC-resistant component alongside traditional algorithms during protocol evolution [36], but they **do not retroactively re-encrypt ciphertexts already harvested** under classical key establishment—so they are not a substitute for **PQ confidentiality at capture time**, which is QV’s baseline. Urgent adoption of **ML-DSA** and related signatures [13] addresses **long-lived authenticity** under the same broad transition; operational costs of large PQ signatures remain a real deployment constraint [32].
 
-Palmer [35], by contrast, proposes **Rational Quantum Mechanics (RaQM)**—a speculative alternative to standard quantum theory—and writes in the abstract (quoted):
-
-> Whilst QM and RaQM are experimentally indistinguishable for small numbers of qubits, RaQM predicts that the exponential advantage of quantum algorithms which, like Shor's, require bases with maximal N-qubit superposition/entanglement, will have saturated at 1,000 perfect qubits. Hence, insofar as a classical computer will never factor a 2048-bit RSA integer, RaQM predicts that a quantum computer won't either.
-
-The same paper’s Significance Statement includes (quoted): *“we predict that quantum computers will never break realistic RSA-encrypted messages, for fundamental rather than practical reasons.”* **Quantum Vault’s engineering posture does not depend on RaQM.** Archive confidentiality and migration urgency are grounded in the conventional cryptographically relevant quantum computer (CRQC) threat model [2] and HNDL framing [31]; RaQM is noted only as a published alternative premise that, if ever experimentally supported, would require revisiting long-horizon risk communication.
+A minority speculative literature also argues for much harsher physical limits on scalable quantum computation; Palmer [35], for example, proposes Rational Quantum Mechanics (RaQM) and argues that Shor-style practical breaking may saturate far below the scales usually assumed. **Quantum Vault’s engineering posture does not depend on such hypotheses.** Archive confidentiality and migration urgency remain grounded in the conventional cryptographically relevant quantum computer (CRQC) threat model and HNDL framing used by NIST and related transition guidance [2][31].
 
 **Long-lived provenance.** Integrity verification is distinct from provenance. In Quantum Vault's current model, detached signatures provide cryptographic evidence that a specific signer key signed a canonical archive-state descriptor or another declared lifecycle object. Binding that key to a real-world identity, an approval workflow, or a custody role is external to the artifact family. AEAD authentication tags protect ciphertext integrity against tampering but do not establish signer identity. For archives that must remain attributable over decades, detached digital signatures are required, and those signatures must themselves survive the quantum transition.
 
@@ -184,7 +180,7 @@ The derivation tree is:
 
 where `salt` is a 16-byte random value and `metaBytes` is the UTF-8 encoding of the container's public metadata JSON.
 
-The pseudocode above is a simplified representation. Actual input encoding follows SP 800-185 conventions to ensure composite inputs are unambiguously parseable [7]; in particular, variable-length fields such as `metaBytes` are encoded with explicit length prefixing so that no two distinct composite inputs can produce the same KMAC input byte string.
+The pseudocode above is a simplified representation. In the current implementation, `Kraw` is derived from the byte string `salt || metaBytes`. This remains unambiguous because `salt` is fixed at 16 bytes and `metaBytes` occupies the remainder of the KMAC message; the current format therefore relies on a fixed-width prefix plus explicit domain-separation strings, not on a separately serialized SP 800-185 tuple encoding inside the KMAC message [7].
 
 Domain-separation strings are recorded in container metadata and included in the authenticated-data boundary. A verifier that encounters unknown or missing domain strings must reject the container.
 
@@ -246,7 +242,7 @@ Quantum Vault supports detached signatures from two external signer tools:
 
 **Post-quantum signatures (`.qsig`).** Produced by Quantum Signer, supporting ML-DSA parameter sets (FIPS 204 [13]) and SLH-DSA parameter sets (FIPS 205 [14]). The `.qsig` format is a versioned binary container carrying suite identifiers, prehash information, signer fingerprint material, and signature bytes.
 
-ML-DSA derives its post-quantum security from the hardness of the module learning-with-errors (M-LWE) problem. SLH-DSA derives its post-quantum security from hash-function assumptions alone, with no dependence on structured algebraic hardness. This orthogonal security basis means that an unforeseen break in module-lattice problems would not compromise a SLH-DSA signature, and vice versa. The practical trade-off is that SLH-DSA produces substantially larger signatures and verifies more slowly than ML-DSA at equivalent security levels [32].
+ML-DSA is a module-lattice-based post-quantum signature family standardized in FIPS 204 [13]. SLH-DSA derives its post-quantum security from hash-function assumptions alone, with no dependence on structured algebraic hardness. This orthogonal security basis means that an unforeseen break in module-lattice assumptions would not compromise a SLH-DSA signature, and vice versa. The practical trade-off is that SLH-DSA produces substantially larger signatures and verifies more slowly than ML-DSA at equivalent security levels [32].
 
 **Classical-interoperability signatures (`.sig`).** Produced by Stellar WebSigner using Ed25519 (RFC 8032 [15]). These signatures provide interoperability with existing identity ecosystems but are not quantum-resistant.
 
@@ -305,6 +301,8 @@ The lifecycle bundle is mutable by design. Detached archive-approval signatures 
 
 Archive policy is evaluated using `archiveApprovalSignatures` only. Maintenance and source-evidence signatures remain separate semantic channels and do not satisfy archive policy.
 
+This separation is a direct answer to the archival mutability problem. Archive approval must remain anchored to one byte-stable object so that detached signatures, proof counting, and restore policy all refer to the same payload over time. Evidence that naturally grows after creation therefore travels in the lifecycle bundle, while the archive-state descriptor remains the immutable approval target.
+
 ### 5.3 Cohort binding and binding chain
 
 The cohort binding is the state-bound distribution object that carries sharding commitments and shard-body binding data for one shard cohort. It is canonicalized separately from the archive-state descriptor. `cohortId` is derived from `archiveId`, `stateId`, and `cohortBindingDigest`; the lifecycle-bundle digest is not part of cohort identity.
@@ -331,6 +329,8 @@ Current `.ots` semantics are deliberately limited:
 - it does not satisfy archive signature policy by itself
 - completeness labels (`apparentlyComplete`, `completeProof`) are heuristic reporting fields, not cryptographic guarantees that a full external attestation chain was validated
 - the current implementation performs linkage and reporting; it does not claim full external OpenTimestamps attestation-chain verification
+
+In the shipped implementation, linkage depends on the OTS proof header and stamped digest matching detached signature bytes. `apparentlyComplete` / `completeProof` are reporting labels inferred from filename hints and proof size, not from a separately validated Bitcoin confirmation chain.
 
 This design treats OpenTimestamps as a useful current evidence layer while leaving room for richer evidence architectures in future work.
 
