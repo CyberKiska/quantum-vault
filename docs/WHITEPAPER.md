@@ -447,12 +447,15 @@ Quantum Vault defines three archive classes as a documentation and planning taxo
 
 The current `.ots` integration provides evidence linkage but not a renewable evidence-record chain. A one-off timestamp proves existence at one point in time, but provides no mechanism to extend its validity when the underlying hash function or signature algorithm weakens. RFC 4998 (Evidence Record Syntax [3]) addresses this gap by defining structures for maintaining timestamp evidence over time.
 
+In Quantum Vault, RFC 4998 is treated as a benchmark for renewal-chain structure and continuity discipline, not as a target operational model or a commitment to a single long-lived timestamp authority, corporate service, or QV-operated evidence server.
+
 The archival direction for Quantum Vault envisions:
 
 - an initial evidence object `E0` committing to archive anchors, detached signature digests, signer key identifiers, and witness outputs
 - successor evidence records `E1`, `E2`, and so on that commit to prior evidence and bind new witness material
+- a portable evidence object whose identity comes from committed bytes and predecessor links rather than from an online service endpoint
 - support for multiple independent witness regimes rather than dependence on one timestamp authority
-- renewal before trust anchors or algorithms become untrustworthy
+- renewal before trust anchors, witness regimes, or algorithms become untrustworthy or unavailable
 
 This architecture is a recommended future direction, not a current implementation claim.
 
@@ -537,6 +540,9 @@ The current implementation does not include:
 - first-class governance objects or trust-root programs
 - institutional authority models for migration, renewal, or custody transfer
 - machine-validated policy versioning or algorithm deprecation records
+- any required QV-operated attestation service or "official operator" role
+
+That omission is deliberate. A cryptographic archive expected to remain interpretable for decades should not stay verifiable only while one corporation, server fleet, or project authority continues to exist. Institutional approval and renewal roles may exist, but they must be defined by the deploying organization and expressed through detached artifacts or future continuity records, not through implicit trust in the Quantum Vault project itself.
 
 ### 9.6 Single-key AEAD for large payloads
 

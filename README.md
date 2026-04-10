@@ -235,6 +235,8 @@ Detailed current rules live in:
 - Shamir sharing protects confidentiality below threshold, but users still need independent and reliable shard custody.
 - OpenTimestamps evidence is currently evidence-only and does not replace signature validation or policy satisfaction.
 - Current OTS linkage is real, but `appears complete` / `completeProof` are heuristic reporting labels rather than a claim that a full Bitcoin attestation chain was independently validated.
+- Quantum Vault is intentionally not a trust-in-a-service system: current verification semantics do not require a QV-operated timestamp server, an "official operator", or a permanent corporate trust root.
+- Future evidence renewal is expected to use portable evidence chains and potentially multiple witness regimes; RFC 4998 is relevant as a renewal benchmark, while current OpenTimestamps support is only one distributed witness regime.
 - Inspired by [diceslice](https://github.com/numago/diceslice) and [tidecoin](https://github.com/tidecoin/tidecoin).
 
 ### Sources and further reading

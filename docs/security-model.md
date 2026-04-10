@@ -146,6 +146,7 @@ Current major trust boundaries are:
 - the delivery/build boundary, where users must trust or verify the static application they loaded
 - the storage/custodian boundary, where shards and detached artifacts may be stored by untrusted third parties
 - the external signer and evidence boundary, where Quantum Vault consumes signatures and timestamps produced by separate tools
+- there is intentionally no required always-online QV attestation service, "official operator", or project-wide trust root in the current design; any deployment that introduces one is adding an external trust assumption rather than exercising a built-in QV requirement
 
 ## 3. Adversary model
 

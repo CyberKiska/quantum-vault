@@ -56,6 +56,8 @@ External references already used elsewhere in the repository:
 - RFC 4998 for evidence-record and renewal direction; ERS defines the structure of renewable evidence records: an archive evidence archive (ARA) carries initial timestamp tokens plus successor renewal records (Section 5), each new record committing to prior evidence and new witness material, providing the formal model for multi-decade time-proof renewal
 - Haber-Stornetta (1991) and Bayer-Haber-Stornetta (1993) lineage for long-term time-proof direction: Haber-Stornetta establishes the conceptual security target (anti-backdating / anti-forward-dating without trust in mutable metadata); Bayer-Haber-Stornetta introduces Merkle tree aggregation for public witness scalability, which is the direct conceptual ancestor of OpenTimestamps' blockchain anchoring model
 - OpenTimestamps project documentation for the current external evidence ecosystem
+- Git project documentation, "Git Objects," as a design analogy for content-addressed object identity independent of a storage endpoint
+- IPFS Docs, especially the Concepts and Content Identifiers (CIDs) material, as a design analogy for location-independent content identity and multi-provider retrieval
 - ML-KEM-1024 (FIPS 203), ML-DSA (FIPS 204), and SLH-DSA (FIPS 205) for the current PQ cryptographic baseline carried by Quantum Vault and related tools
 - AES-256-GCM (SP 800-38D) for the current confidentiality layer carried by `.qenc`
 
@@ -241,14 +243,18 @@ Trust model of the current OTS integration:
 Current limits and interpretation:
 
 - OpenTimestamps is not treated here as the final archival evidence architecture
-- RFC 4998 remains the model for renewal-capable evidence chaining and long-horizon verification continuity
+- RFC 4998 remains the benchmark for renewal-capable evidence chaining and long-horizon verification continuity
 - future archival evidence may combine OpenTimestamps with other witness or renewal regimes rather than treating one mechanism as permanently sufficient
 
-This is the practical boundary between current and target state. Current OTS linkage improves portability of external witness material and gives the verifier a stable detached-signature evidence hook, but renewal-capable continuity still requires a first-class evidence object of the type RFC 4998 was designed to model.
+This is the practical boundary between current and target state. Current OTS linkage improves portability of external witness material and gives the verifier a stable detached-signature evidence hook, but renewal-capable continuity still requires a first-class evidence object with RFC 4998-style chained-renewal semantics.
+
+RFC 4998 is therefore treated here as a benchmark, not as a promised compliance destination or a commitment to a single long-lived timestamp authority. The useful lesson is the renewal-chain discipline: successor evidence objects that commit to prior evidence and add new witness material. Quantum Vault should not inherit from RFC 3161 or RFC 4998 any requirement to depend on one enduring TSA, one corporation, or a QV-operated evidence service.
 
 ### 5.3 Recommended future evidence object
 
-The research basis points toward a future evidence object or evidence-record chain modeled on RFC 4998 Evidence Record Syntax (ERS). In RFC 4998's model, an archive evidence archive (ARA) starts with an initial evidence record that commits to a set of initial timestamp tokens. Each subsequent renewal record commits to the preceding evidence and adds new witness material, forming a chain in which the security of later records does not depend solely on the continued strength of the algorithms used in earlier ones.
+The research basis points toward a future evidence object or evidence-record chain benchmarked against RFC 4998 Evidence Record Syntax (ERS). In RFC 4998's model, an archive evidence archive (ARA) starts with an initial evidence record that commits to a set of initial timestamp tokens. Each subsequent renewal record commits to the preceding evidence and adds new witness material, forming a chain in which the security of later records does not depend solely on the continued strength of the algorithms used in earlier ones.
+
+Any future QV evidence object should also be portable and endpoint-independent. In the same spirit as Git's content-addressed object model and IPFS content identifiers, evidence identity should come from committed bytes and predecessor links rather than from the hostname, gateway, or corporation currently storing a copy. These systems are design analogies, not product dependencies.
 
 A QV evidence object's minimum purpose would be to commit to:
 
@@ -277,7 +283,9 @@ Recommended long-term direction:
 - do not rely on a single classical timestamp authority as the only durable witness
 - use multiple independent witness channels where possible
 - treat OpenTimestamps as one useful witness regime, not necessarily the only long-horizon witness regime
-- renew evidence before trust anchors or algorithms become untrustworthy
+- keep evidence portable across custodians and storage systems so later verification does not depend on contacting a project-operated service or a single vendor endpoint
+- treat institutional renewal and witness-acceptance roles as deployment-local policy, not as something granted by a Quantum Vault "official operator"
+- renew evidence before trust anchors, witness regimes, or algorithms become untrustworthy or unavailable
 - retain old evidence as historical context, but carry forward successor evidence in a continuity chain
 - when successor evidence is created, bind it both to prior evidence and to the current archive anchor being preserved
 

@@ -170,6 +170,8 @@ The current role model therefore distinguishes:
 - roles that are directly reflected in archive creation, attachment, restore, or verification behavior
 - operational roles that matter for provenance or stewardship but are not yet first-class trust objects
 
+Deployment roles are intentionally deployment-local. This specification does not create a global Quantum Vault signer registry, a project-issued trust root, or an "official operator" whose statements become authoritative for every archive. Institutions using Quantum Vault must define their own approval, custody, and renewal roles; the current implementation evaluates the artifacts those local roles produce, but it does not elevate the project itself into an enduring authority.
+
 | Role | Current meaning | What the implementation knows directly |
 | --- | --- | --- |
 | Archive creator | Party that creates the archive, chooses split parameters, and selects `authPolicy` at split time | The chosen policy and split parameters are represented in the archive-state descriptor, cohort binding, and lifecycle bundle |
@@ -177,12 +179,13 @@ The current role model therefore distinguishes:
 | Custodian | Holder of one or more `.qcont` shards or related detached artifacts | Shard custody is operational; custodian identity is not a first-class policy object |
 | Restore operator | Party coordinating restore and supplying optional lifecycle bundles, signatures, pins, or timestamps | Restore input selection and user pinning are directly reflected in restore behavior |
 | Verifier / relying party | Party evaluating integrity, signature validity, pinning, OTS linkage, and policy outcome | This role is directly reflected in current verify and restore behavior |
-| Policy maintainer | Party defining shipped defaults and the current strong-PQ suite registry | Product defaults and the strong-PQ registry are reflected in the current codebase and docs |
+| Policy maintainer | Party defining shipped defaults and the current strong-PQ suite registry | Product defaults and the strong-PQ registry are reflected in the current codebase and docs, but this role is not a deployment-wide cryptographic trust root |
 
 Current boundary to preserve:
 
 - Quantum Vault can enforce that artifacts are structurally valid, signatures verify, pins match or fail, and archive policy is or is not satisfied
 - Quantum Vault cannot, by itself, prove that a signer was organizationally authorized to approve plaintext, migration, custody transfer, or governance actions
+- Quantum Vault does not require a QV-run server, corporation, or project operator to define archive-policy meaning; deployments choose their own signer material, approval roles, and external trust process
 
 Current authority boundary for lifecycle state-change events:
 
