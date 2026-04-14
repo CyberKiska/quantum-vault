@@ -307,7 +307,7 @@ This project is distributed under the terms of the GNU Affero General Public Lic
 
 ### Third‑party software licensed under other licenses
 
-Browser encryption and decryption tool libraries:
+Browser encryption and decryption tool libraries (see their version in the package.json):
 * SHA3-512 for hashing and KMAC256 for KDF [noble-hashes](https://github.com/paulmillr/noble-hashes);
 * ML-KEM-1024 for post-quantum key encapsulation used in combination with AES-256-GCM for symmetric file encryption [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
 * Shamir's secret sharing algorithm for splitting [shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing);
@@ -315,8 +315,8 @@ Browser encryption and decryption tool libraries:
 
 The application incorporates the following dependencies that are released under the permissive MIT License and Apache License 2.0.
 
-| Library | Version | Copyright holder | Upstream repository |
-| --- | --- | --- | --- |
-| shamir-secret-sharing | 0.0.4 | Privy | https://github.com/privy-io/shamir-secret-sharing |
-| noble-post-quantum | 0.5.4 | Paul Miller | https://github.com/paulmillr/noble-post-quantum |
-| noble-hashes | 2.0.1 | Paul Miller | https://github.com/paulmillr/noble-hashes |
+| Library | Copyright holder | Upstream repository |
+| --- | --- | --- |
+| shamir-secret-sharing | Privy | https://github.com/privy-io/shamir-secret-sharing |
+| noble-post-quantum | Paul Miller | https://github.com/paulmillr/noble-post-quantum |
+| noble-hashes | Paul Miller | https://github.com/paulmillr/noble-hashes |
