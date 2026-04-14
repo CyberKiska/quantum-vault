@@ -146,7 +146,7 @@ Current major trust boundaries are:
 - the delivery/build boundary, where users must trust or verify the static application they loaded
 - the storage/custodian boundary, where shards and detached artifacts may be stored by untrusted third parties
 - the external signer and evidence boundary, where Quantum Vault consumes signatures and timestamps produced by separate tools
-- there is intentionally no required always-online QV attestation service, "official operator", or project-wide trust root in the current design; any deployment that introduces one is adding an external trust assumption rather than exercising a built-in QV requirement
+- there is intentionally no required always-online QV attestation service, "official operator", or project-wide trust root in the current design; any deployment that introduces one is adding an external trust assumption rather than exercising a built-in QV requirement (current role model in [`trust-and-policy.md#3-current-role-model-and-authority-boundary`](trust-and-policy.md#3-current-role-model-and-authority-boundary))
 
 ## 3. Adversary model
 
@@ -314,7 +314,7 @@ Current successor invariants:
 - restore MUST fail closed when archive, state, cohort, or lifecycle-bundle selection remains ambiguous
 - restore MUST NOT auto-select a same-state fork winner or lifecycle-bundle variant by timestamp, attachment count, lexical order, or similar heuristic
 - if an operator explicitly selects a cohort or lifecycle-bundle variant in an otherwise ambiguous case, the result MUST be reported as an explicit operator choice with warning rather than as an automatic winner
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself MUST NOT count toward trust or archive policy unless bundled or user-supplied signer material also verified
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself MUST NOT count toward trust or archive policy unless bundled or user-supplied signer material also verified; a proof that establishes only its own embedded key is not enough to anchor signer identity outside the artifact being checked (counting rationale in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules))
 - same-state resharing is maintenance, not archive re-approval
 
 The key design boundary is that archive approval attaches to one canonical, byte-stable object. Restore may collect additional evidence over time, but it MUST NOT reinterpret mutable lifecycle material as though it were part of the original archive-approval payload.

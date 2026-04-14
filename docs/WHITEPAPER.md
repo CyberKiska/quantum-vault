@@ -330,7 +330,7 @@ Current `.ots` semantics are deliberately limited:
 - completeness labels (`apparentlyComplete`, `completeProof`) are heuristic reporting fields, not cryptographic guarantees that a full external attestation chain was validated
 - the current implementation performs linkage and reporting; it does not claim full external OpenTimestamps attestation-chain verification
 
-In the shipped implementation, linkage depends on the OTS proof header and stamped digest matching detached signature bytes. `apparentlyComplete` / `completeProof` are reporting labels inferred from filename hints and proof size, not from a separately validated Bitcoin confirmation chain.
+In the shipped implementation, linkage depends on the OTS proof header and stamped digest matching detached signature bytes. `apparentlyComplete` / `completeProof` remain heuristic reporting labels inferred from filename hints or proof size rather than from independently validated Bitcoin confirmation data; exact acceptance, deduplication, and ambiguity rules are defined in [`appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting`](appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting).
 
 This design treats OpenTimestamps as a useful current evidence layer while leaving room for richer evidence architectures in future work.
 
@@ -447,7 +447,7 @@ Quantum Vault defines three archive classes as a documentation and planning taxo
 
 The current `.ots` integration provides evidence linkage but not a renewable evidence-record chain. A one-off timestamp proves existence at one point in time, but provides no mechanism to extend its validity when the underlying hash function or signature algorithm weakens. RFC 4998 (Evidence Record Syntax [3]) addresses this gap by defining structures for maintaining timestamp evidence over time.
 
-In Quantum Vault, RFC 4998 is treated as a benchmark for renewal-chain structure and continuity discipline, not as a target operational model or a commitment to a single long-lived timestamp authority, corporate service, or QV-operated evidence server.
+In Quantum Vault, RFC 4998 is treated as a benchmark for renewal-chain structure and continuity discipline, not as a target operational model or a commitment to a single long-lived timestamp authority, corporate service, or QV-operated evidence server. [`long-term-archive.md#52-current-witness-strategy-and-its-limits`](long-term-archive.md#52-current-witness-strategy-and-its-limits) carries the fuller archival framing for this boundary.
 
 The archival direction for Quantum Vault envisions:
 
@@ -542,7 +542,7 @@ The current implementation does not include:
 - machine-validated policy versioning or algorithm deprecation records
 - any required QV-operated attestation service or "official operator" role
 
-That omission is deliberate. A cryptographic archive expected to remain interpretable for decades should not stay verifiable only while one corporation, server fleet, or project authority continues to exist. Institutional approval and renewal roles may exist, but they must be defined by the deploying organization and expressed through detached artifacts or future continuity records, not through implicit trust in the Quantum Vault project itself.
+That omission is deliberate. A cryptographic archive expected to remain interpretable for decades should not stay verifiable only while one corporation, server fleet, or project authority continues to exist. Institutional approval and renewal roles may exist, but they must be defined by the deploying organization and expressed through detached artifacts or future continuity records, not through implicit trust in the Quantum Vault project itself. [`trust-and-policy.md#3-current-role-model-and-authority-boundary`](trust-and-policy.md#3-current-role-model-and-authority-boundary) defines the current normative authority boundary.
 
 ### 9.6 Single-key AEAD for large payloads
 

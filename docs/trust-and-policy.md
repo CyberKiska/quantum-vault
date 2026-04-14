@@ -11,6 +11,7 @@ Primary implementation sources: `src/core/crypto/qcont/restore.js`, `src/core/cr
 
 This document defines what signatures, pinning, and policy outcomes mean in Quantum Vault today.
 It is the semantic counterpart to [`format-spec.md`](format-spec.md).
+It is also the owner document for repeated trust semantics around self-verified `.qsig` handling and deployment-local authority boundaries.
 
 Division of labor:
 
@@ -436,7 +437,7 @@ Current handling rules:
 
 - OTS may be bundled or supplied externally
 - if multiple OTS proofs target the same detached signature, reporting may prefer one apparently complete proof
-- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size; they are not a cryptographic guarantee that a full external attestation chain was validated
+- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size, not a cryptographic guarantee that a full external attestation chain was validated; exact acceptance, linkage, deduplication, and ambiguity rules are owned by [`appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting`](appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting)
 - unrelated or ambiguous `.ots` inputs fail closed
 
 This preserves the current policy boundary: OTS can strengthen evidence reporting and future archival interpretation, but it does not upgrade an otherwise unsatisfied archive-approval signature policy.

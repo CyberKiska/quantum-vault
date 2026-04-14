@@ -10,6 +10,7 @@ Out of scope: full upstream signature-format specifications, archive-policy sema
 
 This appendix is the compatibility reference for the detached authenticity artifacts accepted by Quantum Vault today.
 It supports [`format-spec.md`](../format-spec.md) for ingestion and linkage rules and [`trust-and-policy.md`](../trust-and-policy.md) for policy meaning.
+It is the owner appendix for `apparentlyComplete` / `completeProof` reporting semantics and OTS linkage-vs-completeness boundaries.
 
 ## Scope
 
@@ -125,9 +126,7 @@ Current pinning consequences:
 - bundled-signature verification against a bundled key contributes to `bundlePinned`
 - verification against user-supplied pin material contributes to `userPinned`
 - a valid signature does not become policy-satisfying solely because a pin is present
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself do not count toward trust or policy when bundled or user-supplied signer material did not verify
-
-This is a policy and provenance boundary, not a weaker signature parser. An embedded-key-only `.qsig` may still be cryptographically valid, but Quantum Vault does not treat a self-contained wrapper key as sufficient external identity evidence.
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself do not count toward trust or policy when bundled or user-supplied signer material did not verify; an embedded-key-only `.qsig` may still be cryptographically valid, but it does not establish signer identity external to the artifact itself; normative counting and trust semantics are defined in [`trust-and-policy.md#64-counting-rules`](../trust-and-policy.md#64-counting-rules)
 
 ## 4. Proof identity deduplication and ambiguity handling
 

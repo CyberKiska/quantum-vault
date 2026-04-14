@@ -11,6 +11,7 @@ Primary sources: [`security-model.md`](security-model.md), [`trust-and-policy.md
 
 This document is the archival counterpart to the current security, format, and policy docs.
 It explains how Quantum Vault should be evaluated when the archive must remain meaningful across years or decades.
+It is the owner document for the RFC 4998 benchmark framing used by this docs set (renewal-chain benchmark, not a compliance or single-authority commitment).
 
 Division of labor:
 

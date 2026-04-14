@@ -79,7 +79,7 @@ Current release-gate note:
    `README.md`, `glossary.md`, `WHITEPAPER.md`, `format-spec.md`, `trust-and-policy.md`, `security-model.md`, `long-term-archive.md`.
 
    Format-compatibility appendices that are actively referenced by `format-spec.md` live under `docs/appendices/`.
-   They are support docs, not separate semantic owner docs.
+   They are support docs by default, but an appendix may own a bounded compatibility topic when a core owner doc explicitly delegates that topic to it.
 
 3. Distinguish published docs from contributor/internal material.
    Files in `docs/internal/` and `docs/series/` are not authoritative product docs for the published Quantum Vault documentation set.
@@ -104,7 +104,7 @@ Current release-gate note:
 | Threat model, assumptions, invariants, claim boundaries | `security-model.md` | `security-model.md` |
 | Archive classes, OAIS mapping, renewal, migration | `long-term-archive.md` | `long-term-archive.md` |
 | Shared vocabulary, key terminology, and status terms | `glossary.md` | `glossary.md` |
-| Format-compatibility appendices for canonicalization, detached artifact handling, and vectors | `docs/appendices/` | `format-spec.md` owns the semantics; `docs/appendices/` carries active compatibility detail |
+| Format-compatibility appendices for canonicalization, detached artifact handling, and vectors | `docs/appendices/` | `format-spec.md` remains the primary owner for format semantics; active appendices carry compatibility detail and may own bounded delegated semantics when a core owner doc says so |
 | Contributor process and doc hygiene | `docs/README.md`, `docs/process/DOCS-WRITING.md` | `docs/README.md` |
 | Contributor-only cross-app engineering reference material | `docs/series/SERIES-STANDARTS.md` | Contributor reference only; published Quantum Vault docs cite standards and implementation directly |
 | Contributor-only cross-app UX and interface terminology guidance | `docs/series/UX-STYLE-SERIES.md` | Contributor reference only; Quantum Vault-specific product terms remain owned by `glossary.md` and the product docs |
@@ -121,7 +121,7 @@ Current release-gate note:
 | `docs/schema/` | Machine-readable JSON Schema grammar layer and fixture corpus for manifest-family and **successor lifecycle** artifacts (`qv-archive-state-descriptor-v1`, `qv-cohort-binding-v1`, `qv-lifecycle-bundle-v1`, `qv-transition-record-v1`, `qv-source-evidence-v1`, plus manifest schemas) | Release Candidate |
 | `docs/process/roadmap/lifecycle/` | Historical successor transition roadmap, resharing rationale, and frozen design record | Historical; phases 0-7 implemented, later phases deferred; not normative for bytes |
 | `docs/appendices/canonicalization-profile.md` | Compatibility appendix for current manifest and bundle canonicalization labels | Release Candidate |
-| `docs/appendices/external-artifacts.md` | Compatibility appendix for detached artifact acceptance/linkage | Release Candidate |
+| `docs/appendices/external-artifacts.md` | Compatibility appendix for detached artifact acceptance/linkage; owner appendix for bounded OTS completeness/linkage-vs-completeness semantics | Release Candidate |
 | `docs/appendices/interoperability-and-test-vectors.md` | Compatibility appendix for examples, vectors, and malformed coverage | Release Candidate |
 | `docs/trust-and-policy.md` | Normative policy/pinning doc | Release Candidate |
 | `docs/security-model.md` | Normative threat/invariants doc | Release Candidate |

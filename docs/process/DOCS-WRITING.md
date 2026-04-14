@@ -103,6 +103,28 @@ When writing or revising the published Quantum Vault docs:
 * cite primary research only when it supports a current implementation claim, a current security/archival claim, or a bounded whitepaper rationale point
 * cite implementation modules directly when describing shipped behavior
 
+## 3.2 Single-source paragraphs (DRY rule)
+
+For repeated normative semantics, keep one owner section and make all other docs reference it briefly without becoming unreadable on their own.
+
+Owner map for current repeated policy blocks:
+
+* `docs/trust-and-policy.md` owns:
+  * self-verified `.qsig` trust/policy counting semantics
+  * deployment-local authority boundary (no global QV trust root / official operator semantics)
+* `docs/appendices/external-artifacts.md` owns:
+  * `apparentlyComplete` / `completeProof` semantics and OTS completeness-reporting limits
+* `docs/long-term-archive.md` owns:
+  * RFC 4998 benchmark positioning for renewal-chain direction (benchmark, not compliance commitment)
+
+Editing rule:
+
+* owner doc contains the full normative statement plus rationale and edge cases
+* non-owner docs keep a short self-contained summary (usually 1-3 sentences or a short bullet block) and link to the owner section for full semantics
+* links should point to the specific owner section, not just the file, whenever practical
+* when owner wording changes, update all cross-references in the same PR
+* DRY must not make a document unintelligible when read alone; readers should still understand the local boundary without opening another file
+
 ## 4. Doc invariants to preserve
 
 When updating the current owner docs, preserve the following implementation-boundary text and distinctions unless the code, schema, and owner docs are intentionally changing together:
