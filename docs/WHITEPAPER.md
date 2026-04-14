@@ -149,6 +149,18 @@ The archive lifecycle proceeds through the following stages:
 - governance and trust-root objects
 - distributed resharing
 
+### 3.4 Current cryptographic role map
+
+The current artifact family deliberately separates cryptographic roles that are often conflated in less rigorous archival tooling:
+
+| Security function | Current mechanism | Important non-claim |
+| --- | --- | --- |
+| Post-quantum confidentiality | ML-KEM-1024 key encapsulation feeding a KMAC256 derivation tree and AES-256-GCM payload encryption inside `.qenc` [6][7][8][23] | This path protects ciphertext and authenticated metadata; it does not identify a signer or prove when an artifact existed |
+| Fixity and state binding | SHA3-512 / SHA3-256 digests and commitments over canonical bytes [10] | Hash agreement detects byte changes, but does not by itself prove provenance, policy satisfaction, or organizational authorization |
+| Detached provenance | `.qsig` / `.sig` signatures over canonical archive-state or other declared lifecycle targets [13][14][15] | Signature validity is distinct from signer identity pinning, organizational authority, and archive-policy satisfaction |
+| Policy-gated restore authorization | `authPolicyCommitment` plus restore-time counting rules over archive-approval signatures | Policy is a verifier rule over signatures; it is not carried by AEAD tags, hash digests, or timestamps alone |
+| Time evidence | OpenTimestamps linkage today, with renewable evidence benchmarked against RFC 4998 and contrasted with RFC 3161 [3][20] | Current `.ots` evidence is supplementary and does not satisfy archive signature policy by itself |
+
 ---
 
 ## 4. Cryptographic Construction
@@ -550,7 +562,9 @@ The current per-chunk mode derives distinct IVs per chunk but uses a single encr
 
 ### 9.7 Entropy source
 
-Key generation depends primarily on the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`. User interaction events may be mixed in as a best-effort augmentation, but they are not treated as a standards-validated entropy source in their own right.
+Key generation depends primarily on the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`. In the shipped implementation, `src/core/crypto/entropy.js` first obtains a 64-byte base seed from `crypto.getRandomValues()`, performs only a minimal consecutive-output sanity check, and optionally mixes user-supplied entropy bytes through KMAC256 under the `quantum-vault:entropy-mix:v2` domain. `src/app/browser-entropy-collector.js` summarizes mouse, keyboard, window, and touch events into coarse event records and periodically folds in fresh OS randomness before producing optional user-entropy bytes for ML-KEM key generation.
+
+This is a robustness measure, not a formal entropy-validation claim. NIST SP 800-90B distinguishes entropy-source assessment from later random-bit generation layers, and SP 800-90C defines full entropy-source-plus-DRBG constructions [19][39]. Quantum Vault does not currently claim that the browser build instantiates a standalone SP 800-90C-style random-bit generator inside the application. The current claim is narrower: the host platform CSPRNG is assumed to be suitable, and event-derived material is treated as best-effort augmentation rather than as a separately validated entropy source.
 
 ---
 
@@ -631,3 +645,5 @@ Key generation depends primarily on the browser or OS cryptographic RNG exposed 
 [37] C. Chevignard, P.-A. Fouque, and A. Schrottenloher, "Reducing the Number of Qubits in Quantum Discrete Logarithms on Elliptic Curves," in *EUROCRYPT 2026* (also Cryptology ePrint Archive Report 2026/280). https://eprint.iacr.org/2026/280 (quotations follow the ePrint abstract; applies to 256-bit prime-field curves including NIST P-256; **not** the same curve model as secp256k1 in [34])
 
 [38] D. J. Bernstein, K. Bhargavan, S. Bhasin, A. Chattopadhyay, T. K. Chia, M. J. Kannwischer, F. Kiefer, T. B. Paiva, P. Ravi, and G. Tamvada, "KyberSlash: Exploiting secret-dependent division timings in Kyber implementations," *IACR Transactions on Cryptographic Hardware and Embedded Systems*, vol. 2025, no. 2, pp. 209–234, 2025. https://doi.org/10.46586/tches.v2025.i2.209-234. Project summary and library tracker: https://kyberslash.cr.yp.to/
+
+[39] National Institute of Standards and Technology, "Recommendation for Random Bit Generator (RBG) Constructions," SP 800-90C, September 2024. https://doi.org/10.6028/NIST.SP.800-90C

@@ -169,6 +169,18 @@ Artifact lifecycle summary:
 - Restore reconstructs one explicitly selected successor archive/state/cohort/bundle context and gates recovery by archive policy
 - Decrypt recovers the plaintext payload from `.qenc`
 
+### 3.1 Current cryptographic role separation
+
+Conforming implementations MUST preserve the following role boundaries when parsing artifacts, surfacing status, or building automation around the format family:
+
+| Mechanism or field | Current role | Must not be misread as |
+| --- | --- | --- |
+| `.qenc` confidentiality path (`cryptoProfileId`, ML-KEM, KMAC derivation, AES-GCM, `keyCommitment`) | Confidentiality, authenticated metadata, and wrong-key rejection within one container | Signer identity, archive approval, or time evidence |
+| `qencHash`, `stateId`, `cohortBindingDigest`, `authPolicyCommitment` | Fixity and binding over canonical bytes | Detached-signature approval, restore authorization by themselves, or timestamp evidence |
+| Detached `.qsig` / `.sig` proofs | Cryptographic evidence that a signer key signed one declared canonical target | Automatic bundled pinning, institutional authorization, or timestamp evidence |
+| `authPolicy` plus restore-time counting and suite evaluation | Restore authorization rule over verified archive-approval signatures | A property carried by AEAD tags, key commitments, or hashes alone |
+| `.ots` proofs | Supplementary time-evidence linkage to detached signature bytes | Archive-approval signature validity or archive-policy satisfaction |
+
 ## 4. Archive identity and binding model
 
 Current identity and binding objects are layered:

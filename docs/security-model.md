@@ -58,6 +58,8 @@ External references already used elsewhere in the repository:
 - FIPS 205 for SLH-DSA detached-signature context
 - RFC 8032 for Ed25519 signature context
 - NIST IR 8547 (initial public draft, 2024) for HNDL and PQ migration framing
+- SP 800-90B for entropy-source assessment boundaries
+- SP 800-90C for full entropy-source-plus-DRBG construction boundaries
 - Bernstein *et al.*, "KyberSlash" (*IACR TCHES* 2025(2)), https://doi.org/10.46586/tches.v2025.i2.209-234 and https://kyberslash.cr.yp.to/ — implementation timing side channels in some Kyber/ML-KEM code paths (secret-dependent division by a public modulus); distinct from HNDL against stored ciphertext and from asymptotic breaks of the ML-KEM target problem
 
 ## Current implementation surface
@@ -244,6 +246,13 @@ Archive approval provenance in the current implementation means:
 - a verifier can determine whether a signer key signed the canonical archive-state descriptor bytes
 - maintenance and source-evidence signatures are tracked separately from archive approval
 
+These goals are intentionally non-substitutable:
+
+- ML-KEM, KMAC, and AES-GCM protect confidentiality and authenticated ciphertext processing; they do not establish signer-authenticated provenance or restore authorization
+- SHA-3 digests and commitments provide fixity and binding over canonical bytes; they do not prove who approved an archive or when a witness existed
+- detached signatures provide evidence that a signer key signed a declared canonical target; they do not by themselves prove organizational authority, custody legitimacy, or policy satisfaction
+- OTS evidence provides supplementary time-evidence linkage; it does not replace detached signatures or satisfy archive policy
+
 ## 5. Non-goals and non-claims
 
 The current implementation does not claim:
@@ -270,6 +279,8 @@ Current security claims depend on the following assumptions:
 - detached signatures are verified using the correct wrapper semantics, context, and normalized suite identifiers
 - archive authenticity policy is evaluated exactly as defined in [`trust-and-policy.md`](trust-and-policy.md) and is not silently weakened
 - users preserve enough required artifacts for the selected recovery path
+
+Current randomness posture is intentionally narrow. The browser build relies on the host CSPRNG exposed via `crypto.getRandomValues()` and optional event-derived mixing from `src/core/crypto/entropy.js` and `src/app/browser-entropy-collector.js`. This should be read as an implementation assumption about the host platform, not as a claim that Quantum Vault itself instantiates a standalone SP 800-90B-evaluated entropy source or an SP 800-90C-conformant random-bit generator architecture inside the browser.
 
 ## 7. Hard invariants
 
