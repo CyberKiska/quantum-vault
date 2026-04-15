@@ -37,6 +37,8 @@ External references already used elsewhere in the repository:
 - RFC 8785 for the current strict canonicalization behavior
 - RFC 8259 for the JSON data model baseline
 
+This appendix intentionally cites the serializer implementation and the RFCs directly. Current canonicalization compatibility is an implementation-and-standards question, not a research-synthesis question.
+
 ## Current implementation status
 
 Implemented now:

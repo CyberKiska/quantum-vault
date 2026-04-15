@@ -57,9 +57,10 @@ External references already used elsewhere in the repository:
 
 - RFC 4648 for Base64 encoding conventions
 - RFC 8785 for canonical JSON behavior under `QV-JSON-RFC8785-v1`
+- RFC 5116 for AEAD interface discipline: unambiguous AAD construction, prohibition on interpreting ciphertext using unauthenticated fields, and injective encoding requirements for variable-length AAD inputs
 - FIPS 202 for `SHA3-256` and `SHA3-512`
-- SP 800-185 for KMAC256-based derivation inputs and commitment terminology
-- SP 800-38D for AES-256-GCM AEAD assumptions
+- SP 800-185 for KMAC256-based derivation inputs, domain-separation customization strings, and unambiguous composite input encoding
+- SP 800-38D for AES-256-GCM AEAD assumptions and IV uniqueness requirements
 - FIPS 203 for ML-KEM-1024 naming and profile context
 
 ## Current implementation surface
@@ -167,6 +168,18 @@ Artifact lifecycle summary:
 - Attach updates lifecycle-bundle attachments without mutating canonical archive-state or cohort-binding bytes
 - Restore reconstructs one explicitly selected successor archive/state/cohort/bundle context and gates recovery by archive policy
 - Decrypt recovers the plaintext payload from `.qenc`
+
+### 3.1 Current cryptographic role separation
+
+Conforming implementations MUST preserve the following role boundaries when parsing artifacts, surfacing status, or building automation around the format family:
+
+| Mechanism or field | Current role | Must not be misread as |
+| --- | --- | --- |
+| `.qenc` confidentiality path (`cryptoProfileId`, ML-KEM, KMAC derivation, AES-GCM, `keyCommitment`) | Confidentiality, authenticated metadata, and wrong-key rejection within one container | Signer identity, archive approval, or time evidence |
+| `qencHash`, `stateId`, `cohortBindingDigest`, `authPolicyCommitment` | Fixity and binding over canonical bytes | Detached-signature approval, restore authorization by themselves, or timestamp evidence |
+| Detached `.qsig` / `.sig` proofs | Cryptographic evidence that a signer key signed one declared canonical target | Automatic bundled pinning, institutional authorization, or timestamp evidence |
+| `authPolicy` plus restore-time counting and suite evaluation | Restore authorization rule over verified archive-approval signatures | A property carried by AEAD tags, key commitments, or hashes alone |
+| `.ots` proofs | Supplementary time-evidence linkage to detached signature bytes | Archive-approval signature validity or archive-policy satisfaction |
 
 ## 4. Archive identity and binding model
 
@@ -312,8 +325,10 @@ Current target rules:
 - detached archive-approval signatures MUST target canonical archive-state descriptor bytes
 - maintenance signatures MUST target canonical transition-record bytes
 - source-evidence signatures MUST target canonical source-evidence bytes
-- timestamps MUST target detached signature bytes by `SHA-256(detachedSignatureBytes)`
+- timestamps MUST target detached signature bytes by `SHA-256(detachedSignatureBytes)`; SHA-256 is used here as an interoperability requirement of the OpenTimestamps proof format (which defines its stamp operation over SHA-256 digests), not as an independent QV hash-function choice; SHA-3 variants are not currently defined in the OpenTimestamps proof header format
 - mutable lifecycle-bundle bytes are never the archive-approval signable payload
+
+This separation is one of the current format family's core invariants. Archive-approval signatures remain stable when lifecycle bundles are rewritten, while timestamp evidence attaches to one detached proof artifact rather than to a bundle that may legitimately change over time.
 
 ## 5. `.qenc` container format
 
@@ -385,6 +400,12 @@ Current AEAD and KDF rules:
 - key commitment is mandatory and is verified before decryption
 - `Kraw`, `Kenc`, and `Kiv` are derived via KMAC256 with explicit domain strings
 - per-chunk IV derivation uses `prefix64 || uint32_be(chunkIndex)` where `prefix64` is derived from `Kiv` and `containerNonce`
+
+Current implementation note:
+
+- the `Kraw` input is exactly the byte string `kdfSalt || metaJSON`
+- this is unambiguous in the current format because `kdfSalt` is fixed at 16 bytes and `metaJSON` is already length-delimited in the `.qenc` header
+- the current format does not define a separately serialized SP 800-185 tuple encoding inside the KMAC message
 
 ### 5.5 Current decrypt/verify order
 
@@ -529,6 +550,7 @@ Current acceptance boundaries:
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
 - `.pqpk` material may be used for bundled or user-supplied PQ pinning
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
+- OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 
 Detailed linkage, pinning, and ambiguity rules are defined in [appendices/external-artifacts.md](appendices/external-artifacts.md).
 
@@ -548,7 +570,7 @@ Verifier and restore order:
 8. reconstruct `.qenc` and the ML-KEM private key from one internally consistent successor cohort
 9. verify that the selected lifecycle bundle matches the selected archive-state and cohort-binding objects
 10. verify detached signatures against the exact canonical target bytes for their declared family
-11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified
+11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified; the embedded signer public key inside a `.qsig` is a convenience field, not by itself an externally anchored identity, so a proof that verifies only against its own embedded key must not count toward policy; full counting semantics and rationale are defined in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules)
 12. evaluate archive policy using `archiveApprovalSignatures` only
 13. link timestamps to detached signature bytes and emit separate transition and source-evidence reports
 14. emit distinct status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`

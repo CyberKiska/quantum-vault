@@ -25,6 +25,8 @@ Quantum Vault is a browser-based tool for protecting long-lived files with post-
 A normal encrypted file solves confidentiality at one point in time, but long-lived archives often also need durable recovery, signer-verifiable provenance, mutable evidence that can be attached later, and an explicit rule for when restore is allowed.
 Quantum Vault is designed for archives that need to survive both post-quantum transition risk and ordinary operational failure.
 
+Long-lived archives also force three questions that should not be collapsed into one verdict. Confidentiality asks whether captured ciphertext can still resist later decryption; NIST IR 8547 treats this harvest-now-decrypt-later risk as the urgent migration driver for key-establishment schemes. Authenticity asks whether a signer key approved a specific archive state; that is why Quantum Vault keeps detached signatures and signer pinning separate from AEAD integrity. Time evidence asks whether a signed artifact can be shown to have existed before a claimed time boundary; the current implementation can link OpenTimestamps proofs to detached signature bytes, but RFC 4998-style renewable evidence remains future work.
+
 | If you need to... | Quantum Vault does this by... |
 | --- | --- |
 | Keep archive contents confidential even if storage is copied | Encrypting locally in the browser with ML-KEM-1024, KMAC256, and AES-256-GCM |
@@ -204,6 +206,11 @@ Archive approval, maintenance, and source evidence are different channels:
 - source-evidence signatures target source-evidence bytes and are reported separately
 - timestamp evidence is supplementary and does not satisfy archive policy by itself
 
+Current trust boundary for detached PQ signatures:
+
+- a `.qsig` that verifies only with the public key embedded inside the `.qsig` itself is treated as cryptographic self-verification, not as externally anchored signer identity
+- such a self-verified `.qsig` can still be reported as internally consistent proof material, but it does not satisfy trust or archive policy unless bundled or user-supplied signer material also verifies
+
 | Policy level | Minimum requirement | Unsigned restore allowed | Ed25519-only signatures sufficient |
 | --- | --- | --- | --- |
 | `integrity-only` | No detached archive-approval signature required | Yes | Yes, but not required |
@@ -227,6 +234,9 @@ Detailed current rules live in:
 - ML-KEM gives confidentiality, not sender authentication; detached signatures and policy evaluation provide provenance at the archive layer.
 - Shamir sharing protects confidentiality below threshold, but users still need independent and reliable shard custody.
 - OpenTimestamps evidence is currently evidence-only and does not replace signature validation or policy satisfaction.
+- Current OTS linkage is real, but `appears complete` / `completeProof` are heuristic reporting labels rather than a claim that a full Bitcoin attestation chain was independently validated.
+- Quantum Vault is intentionally not a trust-in-a-service system: current verification semantics do not require a QV-operated timestamp server, an "official operator", or a permanent corporate trust root.
+- Future evidence renewal is expected to use portable evidence chains and potentially multiple witness regimes; RFC 4998 is relevant as a renewal benchmark, while current OpenTimestamps support is only one distributed witness regime.
 - Inspired by [diceslice](https://github.com/numago/diceslice) and [tidecoin](https://github.com/tidecoin/tidecoin).
 
 ### Sources and further reading
@@ -239,6 +249,9 @@ Detailed current rules live in:
 | SHA-3 (`SHA3-256`, `SHA3-512`) | [FIPS 202](https://doi.org/10.6028/NIST.FIPS.202) |
 | KMAC256 | [SP 800-185](https://doi.org/10.6028/NIST.SP.800-185) |
 | AES-256-GCM | [SP 800-38D](https://doi.org/10.6028/NIST.SP.800-38D) |
+| AEAD interface discipline | [RFC 5116](https://www.rfc-editor.org/rfc/rfc5116) |
+| PQ migration / HNDL framing | [NIST IR 8547 (IPD)](https://csrc.nist.gov/pubs/ir/8547/ipd) |
+| KEM usage and algorithm-agility context | [SP 800-227](https://doi.org/10.6028/NIST.SP.800-227) |
 | Ed25519 | [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) |
 | Stellar address encoding | [SEP-0023](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0023.md) |
 | OpenTimestamps project | [opentimestamps.org](https://opentimestamps.org/) |
@@ -294,7 +307,7 @@ This project is distributed under the terms of the GNU Affero General Public Lic
 
 ### Third‑party software licensed under other licenses
 
-Browser encryption and decryption tool libraries:
+Browser encryption and decryption tool libraries (see their version in the package.json):
 * SHA3-512 for hashing and KMAC256 for KDF [noble-hashes](https://github.com/paulmillr/noble-hashes);
 * ML-KEM-1024 for post-quantum key encapsulation used in combination with AES-256-GCM for symmetric file encryption [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
 * Shamir's secret sharing algorithm for splitting [shamir-secret-sharing](https://github.com/privy-io/shamir-secret-sharing);
@@ -302,8 +315,8 @@ Browser encryption and decryption tool libraries:
 
 The application incorporates the following dependencies that are released under the permissive MIT License and Apache License 2.0.
 
-| Library | Version | Copyright holder | Upstream repository |
-| --- | --- | --- | --- |
-| shamir-secret-sharing | 0.0.4 | Privy | https://github.com/privy-io/shamir-secret-sharing |
-| noble-post-quantum | 0.5.4 | Paul Miller | https://github.com/paulmillr/noble-post-quantum |
-| noble-hashes | 2.0.1 | Paul Miller | https://github.com/paulmillr/noble-hashes |
+| Library | Copyright holder | Upstream repository |
+| --- | --- | --- |
+| shamir-secret-sharing | Privy | https://github.com/privy-io/shamir-secret-sharing |
+| noble-post-quantum | Paul Miller | https://github.com/paulmillr/noble-post-quantum |
+| noble-hashes | Paul Miller | https://github.com/paulmillr/noble-hashes |

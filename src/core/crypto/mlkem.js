@@ -40,7 +40,7 @@ export async function generateKeyPair(options = {}) {
 }
 
 // Encapsulate using ML-KEM-1024 public key
-// noble-post-quantum v0.5.x API: { cipherText, sharedSecret }
+// @noble/post-quantum API: { cipherText, sharedSecret } (see package.json version)
 export async function encapsulate(publicKey) {
     validatePublicKey(publicKey);
     const result = await ml_kem1024.encapsulate(publicKey);
@@ -51,7 +51,7 @@ export async function encapsulate(publicKey) {
     if (!(encapsulatedKey instanceof Uint8Array) || !(sharedSecret instanceof Uint8Array)) {
         throw new Error(
             'KEM encapsulation failed: unexpected API response. ' +
-            'Verify noble-post-quantum version compatibility (expected v0.5.x).'
+            'Verify @noble/post-quantum version compatibility with package.json.'
         );
     }
     

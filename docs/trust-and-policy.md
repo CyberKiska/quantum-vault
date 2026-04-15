@@ -11,6 +11,7 @@ Primary implementation sources: `src/core/crypto/qcont/restore.js`, `src/core/cr
 
 This document defines what signatures, pinning, and policy outcomes mean in Quantum Vault today.
 It is the semantic counterpart to [`format-spec.md`](format-spec.md).
+It is also the owner document for repeated trust semantics around self-verified `.qsig` handling and deployment-local authority boundaries.
 
 Division of labor:
 
@@ -57,10 +58,11 @@ Internal current-state grounding:
 
 External references already used elsewhere in the repository:
 
-- FIPS 204 for ML-DSA suite family context
-- FIPS 205 for SLH-DSA suite family context
+- FIPS 204 for ML-DSA suite family context (parameter sets, security categories, normative algorithm identifiers)
+- FIPS 205 for SLH-DSA suite family context (parameter sets, security categories, hash-based security basis)
 - RFC 8032 for Ed25519 verification context
 - SEP-0023 for Stellar address encoding context
+- Trail of Bits, "The treachery of post-quantum signatures" (2023): engineering perspective on PQ signature operational constraints (large signature sizes, verification cost, protocol integration issues); relevant to understanding why PQ signature size and verification overhead are non-trivial considerations when designing the attach and verify workflows
 
 ## Current implementation surface
 
@@ -138,6 +140,7 @@ Quantum Vault distinguishes the following states:
    At least one OpenTimestamps proof linked correctly to detached signature bytes.
 
 These states MUST remain distinct in code, logs, UI, and documentation.
+FIPS 204 and FIPS 205 describe digital signatures as evidence about signed bytes, but signer identity, organizational authority, and long-term time evidence require additional context beyond bare cryptographic validity. The current Quantum Vault status model makes those boundaries explicit instead of flattening them into one generic "trusted" result.
 
 Current mandatory separation:
 
@@ -168,6 +171,8 @@ The current role model therefore distinguishes:
 - roles that are directly reflected in archive creation, attachment, restore, or verification behavior
 - operational roles that matter for provenance or stewardship but are not yet first-class trust objects
 
+Deployment roles are intentionally deployment-local. This specification does not create a global Quantum Vault signer registry, a project-issued trust root, or an "official operator" whose statements become authoritative for every archive. Institutions using Quantum Vault must define their own approval, custody, and renewal roles; the current implementation evaluates the artifacts those local roles produce, but it does not elevate the project itself into an enduring authority.
+
 | Role | Current meaning | What the implementation knows directly |
 | --- | --- | --- |
 | Archive creator | Party that creates the archive, chooses split parameters, and selects `authPolicy` at split time | The chosen policy and split parameters are represented in the archive-state descriptor, cohort binding, and lifecycle bundle |
@@ -175,12 +180,13 @@ The current role model therefore distinguishes:
 | Custodian | Holder of one or more `.qcont` shards or related detached artifacts | Shard custody is operational; custodian identity is not a first-class policy object |
 | Restore operator | Party coordinating restore and supplying optional lifecycle bundles, signatures, pins, or timestamps | Restore input selection and user pinning are directly reflected in restore behavior |
 | Verifier / relying party | Party evaluating integrity, signature validity, pinning, OTS linkage, and policy outcome | This role is directly reflected in current verify and restore behavior |
-| Policy maintainer | Party defining shipped defaults and the current strong-PQ suite registry | Product defaults and the strong-PQ registry are reflected in the current codebase and docs |
+| Policy maintainer | Party defining shipped defaults and the current strong-PQ suite registry | Product defaults and the strong-PQ registry are reflected in the current codebase and docs, but this role is not a deployment-wide cryptographic trust root |
 
 Current boundary to preserve:
 
 - Quantum Vault can enforce that artifacts are structurally valid, signatures verify, pins match or fail, and archive policy is or is not satisfied
 - Quantum Vault cannot, by itself, prove that a signer was organizationally authorized to approve plaintext, migration, custody transfer, or governance actions
+- Quantum Vault does not require a QV-run server, corporation, or project operator to define archive-policy meaning; deployments choose their own signer material, approval roles, and external trust process
 
 Current authority boundary for lifecycle state-change events:
 
@@ -269,6 +275,8 @@ Current policy semantics:
 - `any-signature` requires at least one valid archive-approval signature but does not require a PQ suite specifically
 - `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature
 
+These meanings are intentionally narrow. Restore authorization is derived from explicit archive-policy rules over archive-approval signatures; auxiliary provenance material may improve reporting, but it does not silently change what the policy itself requires.
+
 Current policy non-claims:
 
 - policy satisfaction does not imply signer pinning
@@ -321,10 +329,14 @@ Current strong-PQ suites are:
 - `slhdsa-shake-256s`
 - `slhdsa-shake-256f`
 
+All three target NIST security category 5 (roughly equivalent to a 256-bit symmetric reference level). `mldsa-87` is the largest ML-DSA parameter set, as defined in FIPS 204 §4. `slhdsa-shake-256s` and `slhdsa-shake-256f` are the SHAKE-256-instantiated SLH-DSA parameter sets at the highest security level, as defined in FIPS 205 §10. The `s` variant (`256s`) produces smaller signatures at the cost of slower signing; the `f` variant (`256f`) produces larger signatures with faster signing. Both SLH-DSA variants are deliberately included to provide algorithmic-foundation diversity: SLH-DSA's security rests on hash-function assumptions rather than on the module-lattice assumptions underlying ML-DSA, so the two families are not simultaneously broken by the same cryptanalytic advance.
+
+Lower ML-DSA or SLH-DSA parameter sets (e.g., `mldsa-44`, `mldsa-65`, `slhdsa-shake-128s`) are not included in the strong-PQ registry because they target lower NIST security categories. Their exclusion is an explicit registry decision, not a claim that those suites are broken.
+
 Current evaluation rule:
 
 - policy is evaluated against canonical suite identifiers after parsing and normalization
-- broad family names such as `ML-DSA` or `SLH-DSA` are not sufficient by themselves
+- broad family names such as `ML-DSA` or `SLH-DSA` are not sufficient by themselves; the exact parameter-set identifier must be present and recognized
 
 ### 6.3 Wrapper versus suite
 
@@ -340,8 +352,10 @@ Current counting rules are:
 - `minValidSignatures` counts unique detached proof identities, not repeated verification results for the same proof
 - semantically equivalent Stellar proofs are deduplicated even if JSON serialization differs
 - invalid extra signatures are reported but ignored for archive-policy counting
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting; "self-verified" means the signature was verified exclusively against the public key carried inside the `.qsig` binary wrapper, without corroboration from an externally-anchored identity source; this condition is excluded from policy satisfaction because it provides no binding to an identity established outside the artifact being evaluated
 - `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature in addition to `minValidSignatures`
+
+This is a trust-boundary rule, not a weaker verifier. An embedded-key-only `.qsig` may still be cryptographically valid as a detached proof artifact, but the current policy model refuses to treat self-contained proof material as externally anchored signer identity.
 
 ## 7. Signer identity and pinning semantics
 
@@ -423,8 +437,10 @@ Current handling rules:
 
 - OTS may be bundled or supplied externally
 - if multiple OTS proofs target the same detached signature, reporting may prefer one apparently complete proof
-- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size; they are not a cryptographic guarantee that a full external attestation chain was validated
+- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size, not a cryptographic guarantee that a full external attestation chain was validated; exact acceptance, linkage, deduplication, and ambiguity rules are owned by [`appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting`](appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting)
 - unrelated or ambiguous `.ots` inputs fail closed
+
+This preserves the current policy boundary: OTS can strengthen evidence reporting and future archival interpretation, but it does not upgrade an otherwise unsatisfied archive-approval signature policy.
 
 ## 9. Attach and restore policy lifecycle
 

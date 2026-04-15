@@ -32,6 +32,8 @@ Current implementation grounding:
 - [`appendices/canonicalization-profile.md`](canonicalization-profile.md)
 - [`appendices/external-artifacts.md`](external-artifacts.md)
 
+This appendix is intentionally implementation-grounded. Its subject is the repository's current conformance surface, so the primary authorities are the selftests, checked-in fixtures, and the owner docs that define the behaviors those tests are expected to preserve.
+
 ## Current implementation status
 
 Implemented now:
