@@ -15,6 +15,7 @@
     "build": "node scripts/build.mjs",
     "cli": "node bin/qv.mjs",
     "selftest": "node scripts/selftest.mjs",
+    "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
     "check": "npm run selftest && npm run schema:fixtures && npm run build",
@@ -26,6 +27,7 @@
     "shamir-secret-sharing": "0.0.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "esbuild": "0.28.0"
   }
 }

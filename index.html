@@ -38,8 +38,8 @@
 
         <div class="mode-switch-container">
           <span class="mode-label">Lite</span>
-          <label class="toggle-switch">
-            <input type="checkbox" id="modeToggle">
+          <label class="toggle-switch" data-testid="mode-toggle-control">
+            <input type="checkbox" id="modeToggle" data-testid="mode-toggle">
             <span class="slider"></span>
           </label>
           <span class="mode-label">Pro</span>
@@ -60,13 +60,13 @@
               <button id="proTabIdentity" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity" tabindex="0" type="button"><span class="icon">🔑</span> Key Management</button>
               <button id="proTabEncryption" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewEncryption" tabindex="-1" type="button"><span class="icon">🔒</span> Encryption</button>
               <button id="proTabDistribution" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewDistribution" tabindex="-1" type="button"><span class="icon">🧩</span> Split</button>
-              <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button"><span class="icon">♻️</span> Restore</button>
+              <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button" data-testid="tab-restore"><span class="icon">♻️</span> Restore</button>
             </div>
           </div>
           <div class="nav-group" role="presentation">
             <p class="nav-group-label">Maintenance Tools</p>
             <div class="nav-menu" role="presentation">
-              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button"><span class="icon">🪢</span> Attach</button>
+              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Attach</button>
               <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button"><span class="icon">🔁</span> Reshare</button>
             </div>
           </div>
@@ -100,7 +100,7 @@
 
     <!-- Main Content -->
     <main class="main-content">
-      <div id="toast-container" class="toast-container"></div>
+      <div id="toast-container" class="toast-container" data-testid="toast-container"></div>
       
       <!-- LITE MODE -->
       <section id="liteMode" class="mode-section active">
@@ -449,16 +449,16 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontAttachInput">Attach inputs</label>
-                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input">
                 </div>
                 <p class="muted-copy operation-hint">Load one archive cohort plus any archive-approval <code>.qsig</code>/<code>.sig</code>, <code>.pqpk</code>, and <code>.ots</code> files you want to merge.</p>
               </div>
               <div class="operation-readiness">
-                <div id="attachStatus" class="shards-status initially-hidden">
-                  <span id="attachStatusText">0 attach files selected</span>
+                <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status">
+                  <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
-                <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite"></pre>
+                <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite" data-testid="attach-mode-summary"></pre>
               </div>
               <details class="technical-context">
                 <summary>Technical context</summary>
@@ -475,11 +475,11 @@
                 </div>
               </details>
               <div class="button-group">
-                <button id="attachQcontBtn" class="button primary" type="button" disabled>Attach Archive-Approval Evidence</button>
+                <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Archive-Approval Evidence</button>
                 <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Archive-State Descriptor</button>
                 <button id="exportAttachedArtifactsBtn" class="button secondary" type="button" disabled>Export Attached Bundle Files</button>
               </div>
-              <div id="attachResult" class="restore-result-panel initially-hidden"></div>
+              <div id="attachResult" class="restore-result-panel initially-hidden" data-testid="attach-result"></div>
             </div>
           </div>
         </div>
@@ -613,27 +613,27 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontShardsInput">Restore inputs</label>
-                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input">
                 </div>
                 <p class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
               </div>
-              <div id="proShardsStatus" class="shards-status initially-hidden">
-                <span id="proShardsStatusText">0 shards selected</span>
+              <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status">
+                <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
-              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
-                <small id="restoreSuccessorSelectionSummary" class="muted-copy"></small>
-                <small id="restoreSuccessorSelectionHelp" class="muted-copy"></small>
-                <div id="restoreStateSelectionGroup" class="form-group initially-hidden">
+              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
+                <small id="restoreSuccessorSelectionSummary" class="muted-copy" data-testid="restore-selection-summary"></small>
+                <small id="restoreSuccessorSelectionHelp" class="muted-copy" data-testid="restore-selection-help"></small>
+                <div id="restoreStateSelectionGroup" class="form-group initially-hidden" data-testid="restore-state-selection-group">
                   <label for="restoreStateSelection">Archive and state selection</label>
-                  <select id="restoreStateSelection"></select>
+                  <select id="restoreStateSelection" data-testid="restore-state-selection"></select>
                 </div>
-                <div id="restoreCohortSelectionGroup" class="form-group initially-hidden">
+                <div id="restoreCohortSelectionGroup" class="form-group initially-hidden" data-testid="restore-cohort-selection-group">
                   <label for="restoreCohortSelection">Same-state cohort selection</label>
-                  <select id="restoreCohortSelection"></select>
+                  <select id="restoreCohortSelection" data-testid="restore-cohort-selection"></select>
                 </div>
-                <div id="restoreBundleSelectionGroup" class="form-group initially-hidden">
+                <div id="restoreBundleSelectionGroup" class="form-group initially-hidden" data-testid="restore-bundle-selection-group">
                   <label for="restoreBundleSelection">Lifecycle bundle selection</label>
-                  <select id="restoreBundleSelection"></select>
+                  <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
               </div>
               <details class="technical-context">
@@ -647,13 +647,13 @@
                 <summary>Signer pins (optional)</summary>
                 <div class="form-group verification-fields">
                   <label for="restoreExpectedEdSigner">Expected Ed25519 signer (optional)</label>
-                  <input type="text" id="restoreExpectedEdSigner" placeholder="G...">
+                  <input type="text" id="restoreExpectedEdSigner" placeholder="G..." data-testid="restore-expected-ed-signer">
                 </div>
               </details>
               <div class="button-group">
-                <button id="restoreQcontBtn" class="button primary" disabled type="button">Restore Selected Archive</button>
+                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Restore Selected Archive</button>
               </div>
-              <div id="proRestoreResult" class="restore-result-panel initially-hidden"></div>
+              <div id="proRestoreResult" class="restore-result-panel initially-hidden" data-testid="restore-result"></div>
             </div>
           </div>
         </div>
@@ -665,7 +665,7 @@
             <h3>Operations Log</h3>
             <button id="logToggleBtn" class="button secondary small" type="button">Show Log</button>
           </div>
-          <pre id="log" class="log-box"></pre>
+          <pre id="log" class="log-box" data-testid="operations-log"></pre>
         </div>
       </footer>
     </main>

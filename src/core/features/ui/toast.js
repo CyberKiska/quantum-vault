@@ -7,6 +7,7 @@ export function showToast(message, type = 'info', duration = 3500) {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.textContent = message;
+    toast.dataset.testid = 'toast';
     
     // Accessibility
     if (type === 'error' || type === 'warning') {

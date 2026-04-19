@@ -1390,6 +1390,9 @@ async function restoreSuccessorFromShards(shards, options = {}) {
 
   const archiveContext = await resolveSuccessorArchiveContext(shards, verificationOptions);
   if (options.enforcePolicy !== false && !archiveContext.authenticity.policy.satisfied) {
+    for (const warning of archiveContext.authenticity.warnings || []) {
+      onWarn(warning);
+    }
     throw new Error(archiveContext.authenticity.policy.reason);
   }
   const candidate = archiveContext.candidate;

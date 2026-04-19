@@ -78,7 +78,7 @@ import { kmac256 } from './kmac.js';
 import { resolveErasureRuntime } from './erasure-runtime.js';
 import { parseJsonTextStrict } from './manifest/strict-json.js';
 
-function textBytes(value) {
+export function textBytes(value) {
   return new TextEncoder().encode(value);
 }
 
@@ -95,7 +95,7 @@ function verifyLifecycleSignatureInAttachmentField(bundle, field, index = 0, opt
   });
 }
 
-async function blobToBytes(blob) {
+export async function blobToBytes(blob) {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
@@ -299,7 +299,7 @@ function buildLifecycleQsigEntry({
   return entry;
 }
 
-async function buildSuccessorRestoreSample({
+export async function buildSuccessorRestoreSample({
   payloadBytes = textBytes('successor-restore-sample'),
   filename = 'successor-restore-sample.bin',
   authPolicyLevel = 'integrity-only',
@@ -548,7 +548,7 @@ function buildMaintenanceArtifactsFactory({ keyId = 'pk-maintenance', signatureI
   };
 }
 
-async function buildSuccessorVerificationBundle(split, {
+export async function buildSuccessorVerificationBundle(split, {
   authPolicyLevel = split.lifecycleBundle.authPolicy.level,
   minValidSignatures = split.lifecycleBundle.authPolicy.minValidSignatures,
   includeArchiveApproval = true,
@@ -888,7 +888,7 @@ const STELLAR_PUBLIC_NETWORK_PASSPHRASE = 'Public Global Stellar Network ; Septe
 const STELLAR_ENVELOPE_TYPE_TX = 2;
 const STELLAR_OPERATION_TYPE_MANAGE_DATA = 10;
 
-function buildQsigFixture(messageBytes, { suite = 'mldsa-87', ctx = 'quantum-signer/v2', embeddedPublicKey = null } = {}) {
+export function buildQsigFixture(messageBytes, { suite = 'mldsa-87', ctx = 'quantum-signer/v2', embeddedPublicKey = null } = {}) {
   const suiteConfig = QSIG_FIXTURE_SUITES[suite];
   if (!suiteConfig) {
     throw new Error(`Unsupported selftest qsig fixture suite: ${suite}`);
@@ -1039,7 +1039,7 @@ function appendUnknownCriticalQsigMetadata(qsigBytes) {
   return mutated;
 }
 
-async function buildOtsFixture(stampedBytes, { completeProof = false } = {}) {
+export async function buildOtsFixture(stampedBytes, { completeProof = false } = {}) {
   const header = concatBytes([
     asciiBytes('\x00OpenTimestamps\x00\x00Proof\x00'),
     Uint8Array.of(0xbf, 0x89, 0xe2, 0xe8, 0x84, 0xe8, 0x92, 0x94, 0x01, 0x08),
@@ -1286,7 +1286,7 @@ function rewriteStellarSignatureDocument(bytes, {
   return new TextEncoder().encode(text);
 }
 
-async function ensureRuntimeCrypto() {
+export async function ensureRuntimeCrypto() {
   if (globalThis.crypto?.subtle) return;
   const isNode = typeof process !== 'undefined' && Boolean(process.versions?.node);
   if (!isNode) {
@@ -1298,7 +1298,7 @@ async function ensureRuntimeCrypto() {
   globalThis.crypto = webcrypto;
 }
 
-async function ensureErasureRuntime() {
+export async function ensureErasureRuntime() {
   try {
     resolveErasureRuntime();
     return;
