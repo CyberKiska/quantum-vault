@@ -1333,6 +1333,11 @@ async function ensureErasureRuntime() {
   resolveErasureRuntime();
 }
 
+async function importQvCliModuleForSelfTest() {
+  const specifier = ['..', 'cli', 'qv.js'].join('/');
+  return import(specifier);
+}
+
 async function runCase(name, fn) {
   try {
     await fn();
@@ -5988,6 +5993,93 @@ function buildCases() {
         assert(Array.isArray(result.diagnostics?.errors), 'non-strict parseLifecycleShard must return diagnostics.errors');
         assert(result.diagnostics.errors.length > 0, 'non-strict parseLifecycleShard must report errors for garbage input');
         assert(!result.metaJSON, 'non-strict parseLifecycleShard must not have metaJSON for garbage input');
+      },
+    },
+    {
+      name: 'qv verify JSON matches restore authenticity object on the same successor inputs',
+      fn: async () => {
+        const { verifyArchiveInputs } = await importQvCliModuleForSelfTest();
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('cli-verify-parity'),
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+        });
+        const verificationBundle = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: false,
+          includeMaintenance: false,
+          includeSourceEvidence: false,
+        });
+        const attachedBundleShards = sample.parsed.map((shard) => ({
+          ...shard,
+          lifecycleBundleBytes: verificationBundle.bundleBytes,
+          lifecycleBundleDigestHex: verificationBundle.digestHex,
+          lifecycleBundle: verificationBundle.bundle,
+        }));
+        const archiveApproval = buildQsigFixture(sample.split.archiveStateBytes);
+        const otsBytes = await buildOtsFixture(archiveApproval.qsigBytes, { completeProof: true });
+        const verification = {
+          signatures: [{ name: 'archive-approval.qsig', bytes: archiveApproval.qsigBytes }],
+          timestamps: [{ name: 'archive-approval.ots', bytes: otsBytes }],
+          pinnedPqPublicKeyFileBytesList: [archiveApproval.pqpkBytes],
+          expectedEd25519Signer: '',
+        };
+
+        const restored = await restoreFromShards(attachedBundleShards, {
+          verification,
+          onLog: () => {},
+          onError: () => {},
+        });
+        const cliAuthenticity = await verifyArchiveInputs({
+          archiveStateBytes: sample.split.archiveStateBytes,
+          lifecycleBundleBytes: verificationBundle.bundleBytes,
+          verification,
+        });
+
+        assert(
+          JSON.stringify(cliAuthenticity) === JSON.stringify(restored.authenticity),
+          'qv verify JSON must match restore authenticity JSON byte-for-byte on the same inputs'
+        );
+      },
+    },
+    {
+      name: 'qv restore --dry-run summary excludes recovered key and plaintext material',
+      fn: async () => {
+        const { restoreDryRunFromInputs } = await importQvCliModuleForSelfTest();
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('cli-restore-dry-run'),
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+        });
+        const verificationBundle = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          minValidSignatures: 1,
+          includeArchiveApproval: true,
+          includeMaintenance: true,
+          includeSourceEvidence: true,
+          timestampTargetFamily: 'archive-approval',
+        });
+        const attachedBundleShards = sample.parsed.map((shard) => ({
+          ...shard,
+          lifecycleBundleBytes: verificationBundle.bundleBytes,
+          lifecycleBundleDigestHex: verificationBundle.digestHex,
+          lifecycleBundle: verificationBundle.bundle,
+        }));
+
+        const summary = await restoreDryRunFromInputs({
+          parsedShards: attachedBundleShards,
+          verification: {
+            lifecycleBundleBytes: verificationBundle.bundleBytes,
+          },
+        });
+
+        assert(summary.command === 'restore', 'restore dry-run summary must identify restore command');
+        assert(summary.dryRun === true, 'restore dry-run summary must mark dryRun=true');
+        assert(summary.wouldSucceed === true, 'restore dry-run summary must report success for a satisfiable fixture');
+        assert(!Object.hasOwn(summary, 'qencBytes'), 'restore dry-run summary must not expose qencBytes');
+        assert(!Object.hasOwn(summary, 'privKey'), 'restore dry-run summary must not expose privKey');
+        assert(summary.authenticity?.policy?.satisfied === true, 'restore dry-run summary must retain authenticity policy result');
       },
     },
     {

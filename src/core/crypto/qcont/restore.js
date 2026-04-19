@@ -19,6 +19,7 @@ import {
   canonicalizeCohortBinding,
   canonicalizeSourceEvidence,
   decodeLifecycleSignatureBytes,
+  deriveCohortId,
   inspectLifecycleTransitions,
   LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS,
   parseArchiveStateDescriptorBytes,
@@ -457,6 +458,76 @@ function buildSuccessorSourceEvidenceReport(lifecycleBundle, signatureResults = 
     externalSourceSignatureRefsPresent: records.some((record) => record.externalSourceSignatureRefCount > 0),
     descriptiveFieldNames: [...new Set(records.flatMap((record) => record.descriptiveFieldNames))].sort(),
     records,
+  };
+}
+
+function buildEmptySuccessorTransitionReport({ archiveId = '', stateId = '' } = {}) {
+  return {
+    present: false,
+    chainValid: false,
+    validationScope: 'unavailable',
+    count: 0,
+    signed: false,
+    maintenanceSignatureVerified: false,
+    maintenancePurposeLabels: [],
+    currentArchiveId: archiveId,
+    currentStateId: stateId,
+    currentCohortId: '',
+    currentCohortBindingDigestHex: '',
+    records: [],
+  };
+}
+
+function buildEmptySuccessorSourceEvidenceReport() {
+  return {
+    present: false,
+    count: 0,
+    signed: false,
+    signatureVerified: false,
+    sourceEvidenceSignatureCount: 0,
+    verifiedSourceEvidenceSignatureCount: 0,
+    externalSourceSignatureRefCount: 0,
+    externalSourceSignatureRefsPresent: false,
+    descriptiveFieldNames: [],
+    records: [],
+  };
+}
+
+function buildSuccessorAuthenticityStatus(report, {
+  integrityVerified = true,
+  cohortForkDetected = false,
+  bundleCohortMixed = false,
+  mixedLifecycleBundleVariantsWithinCohort = bundleCohortMixed,
+} = {}) {
+  const verificationStatus = report?.verification?.status || {};
+  const policySatisfied = report?.policy?.satisfied === true;
+  return {
+    integrityVerified,
+    archiveApprovalSignatureVerified: verificationStatus.archiveApprovalSignatureVerified === true,
+    strongPqSignatureVerified: verificationStatus.strongPqSignatureVerified === true,
+    signerPinned: verificationStatus.signerPinned === true,
+    bundlePinned: verificationStatus.bundlePinned === true,
+    userPinned: verificationStatus.userPinned === true,
+    userPinProvided: verificationStatus.userPinProvided === true,
+    transitionRecordPresent: verificationStatus.transitionRecordPresent === true,
+    transitionChainValid: verificationStatus.transitionChainValid === true,
+    sourceEvidencePresent: verificationStatus.sourceEvidencePresent === true,
+    cohortForkDetected,
+    bundleCohortMixed,
+    mixedLifecycleBundleVariantsWithinCohort,
+    maintenanceSignatureVerified: verificationStatus.maintenanceSignatureVerified === true,
+    sourceEvidenceSignatureVerified: verificationStatus.sourceEvidenceSignatureVerified === true,
+    otsEvidenceLinked: verificationStatus.otsEvidenceLinked === true,
+    policySatisfied,
+    archivePolicySatisfied: policySatisfied,
+  };
+}
+
+function finalizeSuccessorAuthenticityReport(report, statusOptions = {}) {
+  return {
+    ...report,
+    warnings: dedupeWarnings(report?.warnings || []),
+    status: buildSuccessorAuthenticityStatus(report, statusOptions),
   };
 }
 
@@ -960,7 +1031,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     warnings.push(`${invalidSignatureCount} detached signature(s) did not verify and were ignored for archive policy evaluation.`);
   }
 
-  return {
+  return finalizeSuccessorAuthenticityReport({
     verification: {
       provided: results.length > 0,
       results,
@@ -1006,7 +1077,156 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     transitionReport,
     sourceEvidenceReport,
     warnings: dedupeWarnings(warnings),
+  });
+}
+
+async function evaluateBundlelessSuccessorAuthenticity(candidate, verificationOptions = {}) {
+  const {
+    pins: normalizedPinnedPqPins,
+    warnings: pinNormalizationWarnings,
+  } = normalizePqPublicKeyPins({
+    pinnedPqPublicKeyFileBytes: verificationOptions.pinnedPqPublicKeyFileBytes ?? verificationOptions.pqPublicKeyFileBytes,
+    pinnedPqPublicKeyFileBytesList: verificationOptions.pinnedPqPublicKeyFileBytesList,
+    invalidBehavior: 'warn',
+    invalidLabel: 'Pinned PQ signer key',
+  });
+  const expectedEd25519Signer = String(verificationOptions.expectedEd25519Signer || '').trim();
+  const results = [];
+  const externalSignatures = Array.isArray(verificationOptions.signatures) ? verificationOptions.signatures : [];
+
+  for (const signature of externalSignatures) {
+    results.push(await verifySuccessorExternalSignature({
+      archiveStateBytes: candidate.archiveStateBytes,
+      stateId: candidate.stateId,
+      signature,
+      normalizedPinnedPqPins,
+      expectedEd25519Signer,
+    }));
+  }
+
+  const { counts, duplicateWarnings, selfSignedWarnings } = buildLifecycleVerificationCounts(results);
+  const warnings = [];
+  for (const result of results) {
+    for (const warning of result.warnings || []) warnings.push(warning);
+  }
+  warnings.push(...pinNormalizationWarnings);
+  warnings.push(...selfSignedWarnings);
+  warnings.push(...duplicateWarnings);
+
+  const timestampInspection = await inspectSuccessorTimestampEvidence({
+    bundle: null,
+    externalTimestamps: Array.isArray(verificationOptions.timestamps) ? verificationOptions.timestamps : [],
+    signatureResults: results.filter((item) => item.signatureBytes instanceof Uint8Array),
+  });
+  warnings.push(...(timestampInspection.warnings || []));
+
+  const transitionReport = buildEmptySuccessorTransitionReport({
+    archiveId: candidate.archiveId,
+    stateId: candidate.stateId,
+  });
+  const sourceEvidenceReport = buildEmptySuccessorSourceEvidenceReport();
+  const userPinProvided = (
+    normalizedPinnedPqPins.length > 0 ||
+    expectedEd25519Signer.length > 0
+  );
+  const invalidSignatureCount = results.filter((item) => item.ok !== true).length;
+  if (invalidSignatureCount > 0) {
+    warnings.push(`${invalidSignatureCount} detached signature(s) did not verify and were ignored for archive policy evaluation.`);
+  }
+  warnings.push('Lifecycle bundle not provided; archive authenticity policy could not be evaluated.');
+
+  return finalizeSuccessorAuthenticityReport({
+    verification: {
+      provided: results.length > 0,
+      results,
+      warnings: dedupeWarnings(warnings),
+      counts,
+      signatureArtifacts: results
+        .filter((result) => result.signatureBytes instanceof Uint8Array)
+        .map((result) => ({
+          id: result.artifactId || result.name,
+          name: result.name,
+          source: result.source,
+          family: result.family,
+          format: result.format,
+          ok: result.ok === true,
+          signatureBytes: result.signatureBytes,
+          signatureContentDigestHex: result.signatureContentDigestHex,
+          proofIdentityDigestHex: result.proofIdentityDigestHex,
+          otsStampedDigestHex: result.otsStampedDigestHex,
+          targetRef: result.targetRef,
+          targetType: result.targetType,
+          transitionIndex: Number.isInteger(result.transitionIndex) ? result.transitionIndex : null,
+          maintenancePurposeLabels: Array.isArray(result.maintenancePurposeLabels)
+            ? [...result.maintenancePurposeLabels]
+            : [],
+        })),
+      status: {
+        archiveApprovalSignatureVerified: counts.validArchiveApproval > 0,
+        strongPqSignatureVerified: counts.validArchiveApprovalStrongPq > 0,
+        signerPinned: counts.archiveApprovalPinnedValidTotal > 0,
+        bundlePinned: counts.archiveApprovalBundlePinnedValidTotal > 0,
+        userPinned: counts.archiveApprovalUserPinnedValidTotal > 0,
+        userPinProvided,
+        transitionRecordPresent: false,
+        transitionChainValid: false,
+        sourceEvidencePresent: false,
+        maintenanceSignatureVerified: false,
+        sourceEvidenceSignatureVerified: false,
+        otsEvidenceLinked: timestampInspection.evidence.length > 0,
+      },
+    },
+    policy: {
+      level: 'unresolved',
+      minValidSignatures: 0,
+      satisfied: false,
+      reason: 'Lifecycle bundle is required to evaluate archive authenticity policy',
+    },
+    timestampEvidence: timestampInspection.evidence,
+    transitionReport,
+    sourceEvidenceReport,
+    warnings: dedupeWarnings(warnings),
+  });
+}
+
+export async function verifyArchiveAuthenticity({
+  archiveStateBytes,
+  lifecycleBundleBytes = null,
+  verification = {},
+} = {}) {
+  if (!(archiveStateBytes instanceof Uint8Array)) {
+    throw new Error('verifyArchiveAuthenticity requires archiveStateBytes');
+  }
+
+  const parsedArchiveState = parseArchiveStateDescriptorBytes(archiveStateBytes);
+  const candidate = {
+    archiveId: parsedArchiveState.archiveState.archiveId,
+    stateId: parsedArchiveState.stateId,
+    archiveStateBytes: parsedArchiveState.bytes,
+    archiveState: parsedArchiveState.archiveState,
   };
+
+  if (!(lifecycleBundleBytes instanceof Uint8Array)) {
+    return evaluateBundlelessSuccessorAuthenticity(candidate, verification);
+  }
+
+  const parsedBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
+  const canonicalBundleArchiveState = canonicalizeArchiveStateDescriptor(parsedBundle.lifecycleBundle.archiveState);
+  if (!bytesEqual(parsedArchiveState.bytes, canonicalBundleArchiveState.bytes)) {
+    throw new Error('Provided archive-state descriptor does not match provided lifecycle bundle');
+  }
+  if (parsedBundle.lifecycleBundle.archiveStateDigest.value !== parsedArchiveState.stateId) {
+    throw new Error('Provided lifecycle bundle archiveStateDigest does not match archive-state descriptor');
+  }
+
+  return evaluateSuccessorAuthenticity({
+    ...candidate,
+    cohortId: deriveCohortId({
+      archiveId: parsedArchiveState.archiveState.archiveId,
+      stateId: parsedArchiveState.stateId,
+      cohortBindingDigest: parsedBundle.lifecycleBundle.currentCohortBindingDigest,
+    }),
+  }, parsedBundle.lifecycleBundle, verification);
 }
 
 async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) {
@@ -1141,9 +1361,6 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
   } else {
     authenticity.warnings = dedupeWarnings(authenticity.warnings || []);
   }
-  if (!authenticity.policy.satisfied) {
-    throw new Error(authenticity.policy.reason);
-  }
 
   return {
     candidate,
@@ -1172,6 +1389,9 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   const keyValidationHooks = options.keyValidationHooks || null;
 
   const archiveContext = await resolveSuccessorArchiveContext(shards, verificationOptions);
+  if (options.enforcePolicy !== false && !archiveContext.authenticity.policy.satisfied) {
+    throw new Error(archiveContext.authenticity.policy.reason);
+  }
   const candidate = archiveContext.candidate;
   const archiveState = candidate.archiveState;
   const cohortBinding = candidate.cohortBinding;
@@ -1236,7 +1456,6 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     authenticityWarnings.push(mixedBundleWarning);
   }
 
-  const successorStatus = archiveContext.authenticity.verification.status;
   const transitionReport = archiveContext.authenticity.transitionReport;
   const sourceEvidenceReport = archiveContext.authenticity.sourceEvidenceReport;
   return {
@@ -1279,42 +1498,24 @@ async function restoreSuccessorFromShards(shards, options = {}) {
         availableLifecycleBundleDigests: [...archiveContext.availableLifecycleBundleDigests],
       },
     },
-    authenticity: {
-      policy: archiveContext.authenticity.policy,
-      verification: archiveContext.authenticity.verification,
+    authenticity: finalizeSuccessorAuthenticityReport({
+      ...archiveContext.authenticity,
       transitionReport,
       sourceEvidenceReport,
-      warnings: [...new Set(authenticityWarnings.filter(Boolean))],
-      status: {
-        integrityVerified: true,
-        archiveApprovalSignatureVerified: successorStatus.archiveApprovalSignatureVerified,
-        strongPqSignatureVerified: successorStatus.strongPqSignatureVerified,
-        signerPinned: successorStatus.signerPinned,
-        bundlePinned: successorStatus.bundlePinned,
-        userPinned: successorStatus.userPinned,
-        userPinProvided: successorStatus.userPinProvided,
-        transitionRecordPresent: transitionReport.present,
-        transitionChainValid: transitionReport.chainValid,
-        sourceEvidencePresent: sourceEvidenceReport.present,
-        cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
-        bundleCohortMixed,
-        mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,
-        maintenanceSignatureVerified: successorStatus.maintenanceSignatureVerified,
-        sourceEvidenceSignatureVerified: successorStatus.sourceEvidenceSignatureVerified,
-        otsEvidenceLinked: successorStatus.otsEvidenceLinked,
-        policySatisfied: archiveContext.authenticity.policy.satisfied,
-        archivePolicySatisfied: archiveContext.authenticity.policy.satisfied,
-      },
-      timestampEvidence: archiveContext.authenticity.timestampEvidence,
-    },
+      warnings: authenticityWarnings,
+    }, {
+      integrityVerified: true,
+      cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
+      bundleCohortMixed,
+      mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,
+    }),
   };
 }
 
-export async function restoreFromShards(shards, options = {}) {
+function prepareRestoreShardInputs(shards, options = {}) {
   const onLog = options.onLog || (() => {});
   const onWarn = options.onWarn || options.onError || (() => {});
   const strict = options.strict ?? true;
-  const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
   const verificationOptions = options.verification || {};
 
   if (!Array.isArray(shards) || shards.length === 0) {
@@ -1355,6 +1556,30 @@ export async function restoreFromShards(shards, options = {}) {
       `Restore requires prepared successor lifecycle shards only. Non-successor parsed input indices: ${nonSuccessorIndices.join(', ')}.`
     );
   }
+
+  return {
+    onLog,
+    onWarn,
+    prepared,
+  };
+}
+
+export async function assessRestoreFromShards(shards, options = {}) {
+  const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
+  const { onLog, onWarn, prepared } = prepareRestoreShardInputs(shards, options);
+
+  return restoreSuccessorFromShards(prepared, {
+    ...options,
+    onLog,
+    onWarn,
+    erasureRuntime,
+    enforcePolicy: false,
+  });
+}
+
+export async function restoreFromShards(shards, options = {}) {
+  const erasureRuntime = resolveErasureRuntime(options.erasureRuntime ?? options.erasure);
+  const { onLog, onWarn, prepared } = prepareRestoreShardInputs(shards, options);
 
   return restoreSuccessorFromShards(prepared, {
     ...options,

@@ -7,9 +7,13 @@
     "npm": ">=11.9.0"
   },
   "packageManager": "npm@11.9.0",
+  "bin": {
+    "qv": "./bin/qv.mjs"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
+    "cli": "node bin/qv.mjs",
     "selftest": "node scripts/selftest.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
