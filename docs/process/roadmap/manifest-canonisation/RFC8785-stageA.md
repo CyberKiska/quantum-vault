@@ -1,8 +1,11 @@
 # Quantum Vault Roadmap A — RFC 8785 Canonical Manifest Standardization
 
-Status: Draft roadmap  
-Type: Informative planning document  
+Status: Historical — completed baseline; superseded by current successor-family design  
+Type: Informative historical record  
 Audience: implementers, reviewers, cryptography/documentation maintainers
+
+Historical note:
+This file records a completed pre-successor planning baseline. It is retained for background only and is not active execution guidance for the current runtime.
 
 ## 1. Purpose
 

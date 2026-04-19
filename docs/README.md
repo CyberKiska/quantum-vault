@@ -44,14 +44,14 @@ Current release status:
 
 Implemented now:
 
-- the documentation set is successor-first and treats the v2 lifecycle family as the present baseline
-- the regular-user product surface now creates successor lifecycle archives by default in both Lite and Pro
-- current published docs MUST distinguish implemented now, deprecated v1 context, and deferred roadmap material explicitly
+- the documentation set is successor-family-only for the shipped product surface
+- the regular-user product surface creates successor lifecycle archives in both Lite and Pro
+- current published docs MUST distinguish implemented now, historical background, and deferred roadmap material explicitly
 
-Deprecated v1 context:
+Historical and rejected runtime context:
 
-- beginning with v1.5.3, v1 manifest/bundle creation became deprecated rather than a normal product path on the shipped UI surface
-- v1 attach/restore material remains published only for previously created archives during the documented phase-out window
+- pre-successor planning material is retained only as historical reference
+- legacy manifest-era inputs are rejected by the current runtime and MUST NOT be presented as a live migration path in owner docs
 
 Deferred roadmap:
 
@@ -63,7 +63,7 @@ Current product surfaces:
 
 - Lite: regular-user successor archive creation/export of `.qcont`, `*.archive-state.json`, and `*.lifecycle-bundle.json`, successor restore, and explicit ambiguity resolution when successor archive/state/cohort or lifecycle-bundle selection is required
 - Pro: all Lite successor workflows plus standalone `*.cohort-binding.json` export, explicit successor artifact export/attach/inspection, and same-state resharing controls
-- Deprecated v1: transition-only attach/restore/documentation for previously created archives; no normal v1 creation path remains on the shipped UI surface
+- Historical material: roadmap and archival reference files may describe earlier artifact families or earlier planning baselines, but they are not part of the current shipped product surface
 
 Current release-gate note:
 
@@ -84,11 +84,11 @@ Current release-gate note:
 3. Distinguish published docs from contributor/internal material.
    Files in `docs/internal/` and `docs/series/` are not authoritative product docs for the published Quantum Vault documentation set.
 
-4. Distinguish current behavior from future direction.
-   Every core doc should label statements as implemented now, deprecated v1 context still needed during the phase-out window, or recommended future direction.
+4. Distinguish current behavior from historical and future direction.
+   Every core doc should label statements as implemented now, historical background, or recommended future direction.
 
 5. Owner docs MUST keep the status split explicit.
-   Core owner docs should mark successor-default current behavior, deferred roadmap material, and deprecated v1 context separately rather than mixing them into one narrative.
+   Core owner docs should mark current successor-family behavior, deferred roadmap material, and historical reference material separately rather than mixing them into one narrative.
 
 6. Shared vocabulary lives in `docs/glossary.md`.
    If a core term meaning changes, update the glossary and the owning document in the same change.
@@ -98,7 +98,7 @@ Current release-gate note:
 | Topic | Working source now | Destination owner |
 | --- | --- | --- |
 | Product overview and workflow | `README.md` | `README.md` + `WHITEPAPER.md` |
-| Artifact formats, canonicalization, verifier flow (legacy manifest bundle and successor lifecycle) | `format-spec.md`, `src/core/crypto/qcont/restore.js`, `src/core/crypto/qcont/lifecycle-shard.js`, `src/core/crypto/lifecycle/artifacts.js`, `docs/schema/` | `format-spec.md` |
+| Artifact formats, canonicalization, verifier flow, and successor lifecycle attachments | `format-spec.md`, `src/core/crypto/qcont/restore.js`, `src/core/crypto/qcont/lifecycle-shard.js`, `src/core/crypto/lifecycle/artifacts.js`, `docs/schema/` | `format-spec.md` |
 | Successor lifecycle design history and Phase 0 frozen contracts (informative) | `docs/process/roadmap/lifecycle/` plus the shipped successor implementation and schemas | Historical transition record only; normative bytes/policy remain in `format-spec.md` and `trust-and-policy.md` |
 | Archive policy, proof counting, pinning, role semantics | `trust-and-policy.md` | `trust-and-policy.md` |
 | Threat model, assumptions, invariants, claim boundaries | `security-model.md` | `security-model.md` |
@@ -118,16 +118,17 @@ Current release-gate note:
 | `docs/glossary.md` | Shared vocabulary and status-term baseline | Release Candidate |
 | `docs/WHITEPAPER.md` | Informative system-level design and rationale doc | Release Candidate |
 | `docs/format-spec.md` | Normative format/verifier doc | Release Candidate |
-| `docs/schema/` | Machine-readable JSON Schema grammar layer and fixture corpus for manifest-family and **successor lifecycle** artifacts (`qv-archive-state-descriptor-v1`, `qv-cohort-binding-v1`, `qv-lifecycle-bundle-v1`, `qv-transition-record-v1`, `qv-source-evidence-v1`, plus manifest schemas) | Release Candidate |
+| `docs/schema/` | Machine-readable JSON Schema grammar layer and fixture corpus for the shipped successor-family artifacts (`qv-archive-state-descriptor-v1`, `qv-cohort-binding-v1`, `qv-lifecycle-bundle-v1`, `qv-transition-record-v1`, `qv-source-evidence-v1`) plus retained historical schema files | Release Candidate |
 | `docs/process/roadmap/lifecycle/` | Historical successor transition roadmap, resharing rationale, and frozen design record | Historical; phases 0-7 implemented, later phases deferred; not normative for bytes |
-| `docs/appendices/canonicalization-profile.md` | Compatibility appendix for current manifest and bundle canonicalization labels | Release Candidate |
+| `docs/process/roadmap/manifest-canonisation/` | Historical pre-successor planning baseline | Historical — completed baseline; superseded by the shipped successor-family design |
+| `docs/appendices/canonicalization-profile.md` | Compatibility appendix for current canonicalization labels | Release Candidate |
 | `docs/appendices/external-artifacts.md` | Compatibility appendix for detached artifact acceptance/linkage; owner appendix for bounded OTS completeness/linkage-vs-completeness semantics | Release Candidate |
 | `docs/appendices/interoperability-and-test-vectors.md` | Compatibility appendix for examples, vectors, and malformed coverage | Release Candidate |
 | `docs/trust-and-policy.md` | Normative policy/pinning doc | Release Candidate |
 | `docs/security-model.md` | Normative threat/invariants doc | Release Candidate |
 | `docs/long-term-archive.md` | Mixed archival/roadmap doc | Release Candidate |
 | `docs/process/DOCS-WRITING.md` | Contributor guidance | Secondary process guide |
-| `docs/process/IMPLEMENTATION-NOTES.md` | Contributor design-history and codebase guide | Secondary contributor reference |
+| `docs/process/IMPLEMENTATION-NOTES.md` | Contributor successor-family design and codebase guide | Secondary contributor reference |
 | `docs/series/SERIES-STANDARTS.md` | Cross-app engineering/security reference | Unpublished contributor reference |
 | `docs/series/UX-STYLE-SERIES.md` | Cross-app UX/terminology reference | Unpublished contributor reference; Quantum Vault-specific terms defer to `docs/glossary.md` and the owner docs |
 | `docs/internal/` | Internal research, consolidation records, and preserved backup docs | Unpublished working material |
@@ -150,7 +151,7 @@ docs/
     qv-transition-record-v1.schema.json
     qv-source-evidence-v1.schema.json
     archive/
-      README.md
+      README.md                    # historical schema material retained for reference
       qv-manifest-v3.schema.json
       qv-manifest-bundle-v2.schema.json
     fixtures/
@@ -160,6 +161,10 @@ docs/
     implementation-questions-and-reading.md
     resharing-design.md
     implementation-plan-lifecycle.md
+  process/roadmap/manifest-canonisation/
+    RFC8785-stageA.md
+    json-schema-stageB.md
+    spec-layer-separation-stageC.md
   appendices/
     canonicalization-profile.md
     external-artifacts.md
