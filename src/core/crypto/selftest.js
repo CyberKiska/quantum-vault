@@ -1,7 +1,7 @@
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
 import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fromHex, timingSafeEqual, utf8ToBytes } from './bytes.js';
 import { encapsulate, ML_KEM_1024_PUBLIC_KEY_SIZE, validatePublicKey, validatePrivateKey } from './mlkem.js';
-import { attachLifecycleBundleToShards, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
+import { attachLifecycleBundleToShards, exportSourceEvidenceForSigning, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
 import { reconstructLifecycleCohortMaterial } from './qcont/lifecycle-cohort-shared.js';
 import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
 import { buildLifecycleQcontShards, parseLifecycleShard, reshareSameState, rewriteLifecycleBundleInShard } from './qcont/lifecycle-shard.js';
@@ -2914,19 +2914,203 @@ function buildCases() {
         const sig = buildQsigFixture(split.archiveStateBytes);
 
         const attached = await attachLifecycleBundleToShards(parsed, {
-          signatures: [{ name: 'archive-approval.qsig', bytes: sig.qsigBytes }],
+          signatureImports: [{
+            name: 'archive-approval.qsig',
+            bytes: sig.qsigBytes,
+            signatureFamily: 'archive-approval',
+            targetType: 'archive-state',
+            targetRef: `state:${split.stateId}`,
+            targetDigest: split.stateId,
+          }],
           pqPublicKeyFileBytesList: [sig.pqpkBytes],
         });
 
         assert(timingSafeEqual(attached.signableArchiveStateBytes, split.archiveStateBytes), 'attach changed the external signer target bytes');
         assert(timingSafeEqual(attached.archiveStateBytes, split.archiveStateBytes), 'attach changed archive-state bytes');
         assert(timingSafeEqual(attached.cohortBindingBytes, split.cohortBindingBytes), 'attach changed cohort-binding bytes');
+        assert(attached.lifecycleBundle.attachments.archiveApprovalSignatures.length === 1, 'expected one archive-approval signature after typed attach import');
 
         const reparsed = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
         for (const shard of reparsed) {
           assert(timingSafeEqual(shard.archiveStateBytes, split.archiveStateBytes), 'rewritten shard archive-state bytes changed unexpectedly');
           assert(timingSafeEqual(shard.cohortBindingBytes, split.cohortBindingBytes), 'rewritten shard cohort-binding bytes changed unexpectedly');
         }
+      },
+    },
+    {
+      name: 'successor attach imports maintenance signatures only for an explicit transition-record target and never mixes archive policy',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-attach-maintenance-roundtrip'),
+          authPolicyLevel: 'any-signature',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'any-signature',
+          includeArchiveApproval: false,
+          includeMaintenance: true,
+          includeSourceEvidence: false,
+        });
+        const bundle = cloneJson(bundleVariant.bundle);
+        bundle.attachments.publicKeys = [];
+        bundle.attachments.archiveApprovalSignatures = [];
+        bundle.attachments.maintenanceSignatures = [];
+        const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, canonicalBundle.bytes);
+        const canonicalTransition = canonicalizeTransitionRecord(bundle.transitions[0]);
+        const sig = buildQsigFixture(canonicalTransition.bytes);
+
+        const attached = await attachLifecycleBundleToShards(rewritten, {
+          signatureImports: [{
+            name: 'maintenance.qsig',
+            bytes: sig.qsigBytes,
+            signatureFamily: 'maintenance',
+            targetType: 'transition-record',
+            targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+            targetDigest: canonicalTransition.digest.value,
+          }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+
+        assert(attached.lifecycleBundle.attachments.archiveApprovalSignatures.length === 0, 'maintenance import must not add archive-approval signatures');
+        assert(attached.lifecycleBundle.attachments.maintenanceSignatures.length === 1, 'expected one maintenance signature after attach');
+
+        const verification = await verifyLifecycleSignatureEntry(
+          attached.lifecycleBundle,
+          attached.lifecycleBundle.attachments.maintenanceSignatures[0],
+          { expectedFamily: 'maintenance', expectedField: 'maintenanceSignatures' }
+        );
+        assert(verification.targetType === 'transition-record', 'maintenance attach verification resolved the wrong target type');
+        assert(verification.targetDigest.value === canonicalTransition.digest.value, 'maintenance attach verification resolved the wrong transition-record digest');
+
+        const reparsed = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+        await expectFailureWithMessage(
+          () => restoreFromShards(reparsed, { onLog: () => {}, onError: () => {} }),
+          /no verified archive-approval signature satisfies archive policy/i,
+          'maintenance attach unexpectedly satisfied archive policy'
+        );
+      },
+    },
+    {
+      name: 'successor attach exports source-evidence canonical bytes and imports builder-based source-evidence signatures without privacy fields',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-attach-source-evidence-roundtrip'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const sourceEvidenceInput = {
+          relationType: 'reviewed-source',
+          sourceObjectType: 'archive-state-descriptor',
+          sourceDigests: [
+            { alg: 'SHA3-512', value: '54'.repeat(64) },
+            { alg: 'SHA-256', value: '32'.repeat(32) },
+          ],
+          externalSourceSignatureRefs: ['sig:external-attach-roundtrip'],
+          localPath: '/Users/alice/private/source.json',
+        };
+        const exported = exportSourceEvidenceForSigning({
+          sourceEvidence: sourceEvidenceInput,
+        });
+        assert(!Object.prototype.hasOwnProperty.call(exported.sourceEvidence, 'localPath'), 'source-evidence export must suppress localPath');
+
+        const sig = buildQsigFixture(exported.sourceEvidenceBytes);
+        const attached = await attachLifecycleBundleToShards(sample.parsed, {
+          signatureImports: [{
+            name: 'source-evidence.qsig',
+            bytes: sig.qsigBytes,
+            signatureFamily: 'source-evidence',
+            targetType: 'source-evidence',
+            targetRef: exported.targetRef,
+            targetDigest: exported.sourceEvidenceDigestHex,
+            sourceEvidence: sourceEvidenceInput,
+          }],
+          pqPublicKeyFileBytesList: [sig.pqpkBytes],
+        });
+
+        assert(attached.lifecycleBundle.sourceEvidence.length === 1, 'expected one source-evidence entry after attach');
+        assert(attached.lifecycleBundle.attachments.sourceEvidenceSignatures.length === 1, 'expected one source-evidence signature after attach');
+        assert(!Object.prototype.hasOwnProperty.call(attached.lifecycleBundle.sourceEvidence[0], 'localPath'), 'attached source-evidence must suppress localPath');
+
+        const canonicalSourceEvidence = canonicalizeSourceEvidence(attached.lifecycleBundle.sourceEvidence[0]);
+        assert(
+          timingSafeEqual(canonicalSourceEvidence.bytes, exported.sourceEvidenceBytes),
+          'source-evidence builder export/import changed canonical bytes'
+        );
+
+        const verification = await verifyLifecycleSignatureEntry(
+          attached.lifecycleBundle,
+          attached.lifecycleBundle.attachments.sourceEvidenceSignatures[0],
+          { expectedFamily: 'source-evidence', expectedField: 'sourceEvidenceSignatures' }
+        );
+        assert(verification.targetDigest.value === exported.sourceEvidenceDigestHex, 'source-evidence attach verification resolved the wrong digest');
+      },
+    },
+    {
+      name: 'successor attach rejects wrong-family lifecycle imports and refuses maintenance route-by-guess',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample({
+          payloadBytes: textBytes('successor-attach-wrong-family-rejection'),
+          authPolicyLevel: 'integrity-only',
+        });
+        const bundleVariant = await buildSuccessorVerificationBundle(sample.split, {
+          authPolicyLevel: 'integrity-only',
+          includeArchiveApproval: false,
+          includeMaintenance: true,
+          includeSourceEvidence: false,
+        });
+        const bundle = cloneJson(bundleVariant.bundle);
+        bundle.attachments.publicKeys = [];
+        bundle.attachments.archiveApprovalSignatures = [];
+        bundle.attachments.maintenanceSignatures = [];
+        const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+        const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, canonicalBundle.bytes);
+        const canonicalTransition = canonicalizeTransitionRecord(bundle.transitions[0]);
+        const archiveSig = buildQsigFixture(sample.split.archiveStateBytes);
+        const maintenanceSig = buildQsigFixture(canonicalTransition.bytes);
+
+        await expectFailureWithMessage(
+          () => attachLifecycleBundleToShards(rewritten, {
+            signatureImports: [{
+              name: 'archive-wrong-family.qsig',
+              bytes: archiveSig.qsigBytes,
+              signatureFamily: 'archive-approval',
+              targetType: 'transition-record',
+              targetRef: `transition:sha3-512:${canonicalTransition.digest.value}`,
+              targetDigest: canonicalTransition.digest.value,
+            }],
+            pqPublicKeyFileBytesList: [archiveSig.pqpkBytes],
+          }),
+          /wrong targetType for archive-approval import/i,
+          'attach unexpectedly accepted an archive-approval import declared against transition-record bytes'
+        );
+
+        await expectFailureWithMessage(
+          () => attachLifecycleBundleToShards(rewritten, {
+            signatureImports: [{
+              name: 'maintenance-wrong-family.qsig',
+              bytes: archiveSig.qsigBytes,
+              signatureFamily: 'maintenance',
+              targetType: 'archive-state',
+              targetRef: `state:${sample.split.stateId}`,
+              targetDigest: sample.split.stateId,
+            }],
+            pqPublicKeyFileBytesList: [archiveSig.pqpkBytes],
+          }),
+          /wrong targetType for maintenance import/i,
+          'attach unexpectedly accepted a maintenance import declared against archive-state bytes'
+        );
+
+        await expectFailureWithMessage(
+          () => attachLifecycleBundleToShards(rewritten, {
+            signatureImports: [{
+              name: 'maintenance-no-target.qsig',
+              bytes: maintenanceSig.qsigBytes,
+              signatureFamily: 'maintenance',
+            }],
+            pqPublicKeyFileBytesList: [maintenanceSig.pqpkBytes],
+          }),
+          /refusing to route by guess/i,
+          'attach unexpectedly auto-routed a maintenance signature without an explicit targetRef'
+        );
       },
     },
     {

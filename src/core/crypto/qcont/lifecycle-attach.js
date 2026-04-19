@@ -6,16 +6,30 @@ import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-ide
 import { getSignatureSuiteInfo } from '../auth/signature-suites.js';
 import { isSupportedStellarSignatureDocumentBytes, verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
 import {
+  buildSourceEvidence,
   canonicalizeArchiveStateDescriptor,
   canonicalizeCohortBinding,
   canonicalizeLifecycleBundle,
+  canonicalizeSourceEvidence,
   decodeLifecycleSignatureBytes,
   LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS,
   parseArchiveStateDescriptorBytes,
   parseLifecycleBundleBytes,
+  parseSourceEvidenceBytes,
+  resolveLifecycleSignatureTarget,
   verifyLifecycleSignatureEntry,
 } from '../lifecycle/artifacts.js';
 import { rewriteLifecycleBundleInShard } from './lifecycle-shard.js';
+
+const SHA3_512_HEX_RE = /^[0-9a-f]{128}$/;
+const LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTOR_BY_FAMILY = new Map(
+  LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.map((descriptor) => [descriptor.family, descriptor])
+);
+const TARGET_REF_PATTERNS = Object.freeze({
+  'archive-approval': /^state:([0-9a-f]{128})$/,
+  maintenance: /^transition:sha3-512:([0-9a-f]{128})$/,
+  'source-evidence': /^source-evidence:sha3-512:([0-9a-f]{128})$/,
+});
 
 function ensureSingleLifecycleCohort(shards) {
   const byKey = new Map();
@@ -152,14 +166,184 @@ export function mergeLifecycleAttachmentEntriesById(existingValues, nextValues) 
   return out;
 }
 
-async function assertImportedArchiveApprovalEntriesValid(bundle, signatures, expectedEd25519Signer = '') {
-  const descriptor = LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.find((entry) => entry.family === 'archive-approval');
-  for (const signature of Array.isArray(signatures) ? signatures : []) {
-    await verifyLifecycleSignatureEntry(bundle, signature, {
-      expectedEd25519Signer,
+function importLabel(signatureImport, fallback = 'signature import') {
+  const label = String(signatureImport?.name || '').trim();
+  return label || fallback;
+}
+
+function normalizeImportTargetDigest(value, field) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    if (!SHA3_512_HEX_RE.test(value)) {
+      throw new Error(`Invalid ${field}`);
+    }
+    return {
+      alg: 'SHA3-512',
+      value,
+    };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Invalid ${field}`);
+  }
+  if (value.alg !== 'SHA3-512' || !SHA3_512_HEX_RE.test(String(value.value || ''))) {
+    throw new Error(`Invalid ${field}`);
+  }
+  return {
+    alg: 'SHA3-512',
+    value: String(value.value),
+  };
+}
+
+function digestFromTargetRef(targetRef, descriptor, label) {
+  const pattern = TARGET_REF_PATTERNS[descriptor.family];
+  const match = pattern?.exec(targetRef);
+  if (!match) {
+    throw new Error(`${label}: invalid targetRef for ${descriptor.family}`);
+  }
+  return {
+    alg: 'SHA3-512',
+    value: match[1],
+  };
+}
+
+function sourceEvidenceTargetRef(digestHex) {
+  return `source-evidence:sha3-512:${digestHex}`;
+}
+
+function resolveSignatureImportDescriptor(signatureImport, label) {
+  const family = String(signatureImport?.signatureFamily || '').trim();
+  const descriptor = LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTOR_BY_FAMILY.get(family);
+  if (!descriptor) {
+    throw new Error(`${label}: unsupported signatureFamily "${family}"`);
+  }
+  return descriptor;
+}
+
+function buildDeclaredSignatureTarget(signatureImport, descriptor, defaultTarget, options = {}) {
+  const label = options.label || importLabel(signatureImport);
+  const providedTargetType = typeof signatureImport?.targetType === 'string'
+    ? String(signatureImport.targetType).trim()
+    : '';
+  const targetType = providedTargetType || descriptor.targetType;
+  if (targetType !== descriptor.targetType) {
+    throw new Error(
+      `${label}: wrong targetType for ${descriptor.family} import; expected ${descriptor.targetType}, got ${targetType}`
+    );
+  }
+
+  const providedTargetRef = typeof signatureImport?.targetRef === 'string'
+    ? String(signatureImport.targetRef).trim()
+    : '';
+  if (options.requireExplicitTargetRef && !providedTargetRef) {
+    throw new Error(`${label}: ${descriptor.family} imports require explicit targetRef; refusing to route by guess`);
+  }
+
+  const targetRef = providedTargetRef || defaultTarget?.targetRef || '';
+  if (!targetRef) {
+    throw new Error(`${label}: missing targetRef`);
+  }
+
+  const refDigest = digestFromTargetRef(targetRef, descriptor, label);
+  const declaredTargetDigest = normalizeImportTargetDigest(signatureImport?.targetDigest, `${label}.targetDigest`);
+  if (declaredTargetDigest && declaredTargetDigest.value !== refDigest.value) {
+    throw new Error(`${label}: targetDigest does not match targetRef`);
+  }
+  if (defaultTarget?.targetDigest?.value && defaultTarget.targetDigest.value !== refDigest.value) {
+    throw new Error(`${label}: targetRef does not match the selected ${descriptor.family} target`);
+  }
+
+  return {
+    signatureFamily: descriptor.family,
+    targetType: descriptor.targetType,
+    targetRef,
+    targetDigest: declaredTargetDigest || defaultTarget?.targetDigest || refDigest,
+  };
+}
+
+function resolveTypedSignatureTarget(bundle, signatureImport, descriptor, defaultTarget, options = {}) {
+  const declaredTarget = buildDeclaredSignatureTarget(signatureImport, descriptor, defaultTarget, options);
+  try {
+    return resolveLifecycleSignatureTarget(bundle, declaredTarget, {
       expectedFamily: descriptor.family,
-      expectedField: descriptor.field,
     });
+  } catch (error) {
+    throw new Error(`${options.label || importLabel(signatureImport)}: ${error?.message || error}`);
+  }
+}
+
+function resolveSourceEvidenceArtifact(input = {}, label = 'source-evidence') {
+  const hasBytes = input.sourceEvidenceBytes instanceof Uint8Array;
+  const hasBuilderParams = input.sourceEvidence != null;
+  if (hasBytes && hasBuilderParams) {
+    throw new Error(`${label}: provide either sourceEvidenceBytes or sourceEvidence, not both`);
+  }
+  if (hasBytes) {
+    const parsed = parseSourceEvidenceBytes(input.sourceEvidenceBytes);
+    return {
+      sourceEvidence: parsed.sourceEvidence,
+      bytes: parsed.bytes,
+      digest: parsed.digest,
+      targetRef: sourceEvidenceTargetRef(parsed.digest.value),
+    };
+  }
+  if (hasBuilderParams) {
+    const canonical = canonicalizeSourceEvidence(buildSourceEvidence(input.sourceEvidence));
+    return {
+      sourceEvidence: canonical.sourceEvidence,
+      bytes: canonical.bytes,
+      digest: canonical.digest,
+      targetRef: sourceEvidenceTargetRef(canonical.digest.value),
+    };
+  }
+  throw new Error(`${label}: source-evidence import requires sourceEvidenceBytes or sourceEvidence`);
+}
+
+export function exportSourceEvidenceForSigning(options = {}) {
+  const canonical = resolveSourceEvidenceArtifact(options, 'source-evidence export');
+  return {
+    sourceEvidence: canonical.sourceEvidence,
+    sourceEvidenceBytes: canonical.bytes,
+    sourceEvidenceDigestHex: canonical.digest.value,
+    targetType: 'source-evidence',
+    targetRef: canonical.targetRef,
+    targetDigest: canonical.digest,
+  };
+}
+
+function mergeLifecycleSourceEvidenceEntries(existingValues, nextValues) {
+  const out = [...existingValues];
+  const byDigest = new Map(out.map((entry) => {
+    const canonical = canonicalizeSourceEvidence(entry);
+    return [canonical.digest.value, canonical];
+  }));
+
+  for (const value of nextValues) {
+    const canonical = canonicalizeSourceEvidence(value);
+    if (byDigest.has(canonical.digest.value)) {
+      const previous = byDigest.get(canonical.digest.value);
+      if (!bytesEqual(previous.bytes, canonical.bytes)) {
+        throw new Error(
+          `Lifecycle source-evidence merge conflict: duplicate digest "${canonical.digest.value}" with differing content`
+        );
+      }
+      continue;
+    }
+    out.push(canonical.sourceEvidence);
+    byDigest.set(canonical.digest.value, canonical);
+  }
+  return out;
+}
+
+async function assertImportedLifecycleSignatureEntriesValid(bundle, signaturesByField, expectedEd25519Signer = '') {
+  for (const descriptor of LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS) {
+    const signatures = Array.isArray(signaturesByField?.[descriptor.field]) ? signaturesByField[descriptor.field] : [];
+    for (const signature of signatures) {
+      await verifyLifecycleSignatureEntry(bundle, signature, {
+        expectedEd25519Signer,
+        expectedFamily: descriptor.family,
+        expectedField: descriptor.field,
+      });
+    }
   }
 }
 
@@ -180,10 +364,9 @@ function verifyQsigOrThrow(options, signatureName) {
   }
 }
 
-async function importExternalArchiveApprovalQsig({
-  archiveStateBytes,
-  archiveStateDigest,
-  stateId,
+async function importExternalLifecycleQsig({
+  signatureFamily,
+  target,
   signature,
   normalizedPqPins,
 }) {
@@ -191,7 +374,7 @@ async function importExternalArchiveApprovalQsig({
   const successful = [];
   for (const candidatePin of normalizedPqPins) {
     const result = verifyQsigOrThrow({
-      messageBytes: archiveStateBytes,
+      messageBytes: target.bytes,
       qsigBytes: signature.bytes,
       bundlePqPublicKeyFileBytes: candidatePin.bytes,
       pinnedPqPublicKeyFileBytes: candidatePin.bytes,
@@ -212,7 +395,7 @@ async function importExternalArchiveApprovalQsig({
       throw new Error(`${signature.name}: no provided .pqpk file matches this detached PQ signature.`);
     }
     verified = verifyQsigOrThrow({
-      messageBytes: archiveStateBytes,
+      messageBytes: target.bytes,
       qsigBytes: signature.bytes,
       bundlePqPublicKeyFileBytes: null,
     }, signature.name || 'signature.qsig');
@@ -229,12 +412,12 @@ async function importExternalArchiveApprovalQsig({
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],
     signature: {
       id: signatureAttachmentId('qsig', signature.bytes),
-      signatureFamily: 'archive-approval',
+      signatureFamily,
       format: 'qsig',
       suite: verified.suite,
-      targetType: 'archive-state',
-      targetRef: `state:${stateId}`,
-      targetDigest: archiveStateDigest,
+      targetType: target.targetType,
+      targetRef: target.targetRef,
+      targetDigest: target.digest,
       signatureEncoding: 'base64',
       signature: bytesToBase64(signature.bytes),
       publicKeyRef: publicKeyAttachment?.id,
@@ -242,15 +425,14 @@ async function importExternalArchiveApprovalQsig({
   };
 }
 
-async function importExternalArchiveApprovalStellarSig({
-  archiveStateBytes,
-  archiveStateDigest,
-  stateId,
+async function importExternalLifecycleStellarSig({
+  signatureFamily,
+  target,
   signature,
   expectedEd25519Signer = '',
 }) {
   const verified = await verifyStellarSigAgainstBytes({
-    messageBytes: archiveStateBytes,
+    messageBytes: target.bytes,
     sigJsonBytes: signature.bytes,
     expectedSigner: expectedEd25519Signer,
   });
@@ -262,17 +444,58 @@ async function importExternalArchiveApprovalStellarSig({
     publicKeys: publicKeyAttachment ? [publicKeyAttachment] : [],
     signature: {
       id: signatureAttachmentId('stellar-sig', signature.bytes),
-      signatureFamily: 'archive-approval',
+      signatureFamily,
       format: 'stellar-sig',
       suite: 'ed25519',
-      targetType: 'archive-state',
-      targetRef: `state:${stateId}`,
-      targetDigest: archiveStateDigest,
+      targetType: target.targetType,
+      targetRef: target.targetRef,
+      targetDigest: target.digest,
       signatureEncoding: 'base64',
       signature: bytesToBase64(signature.bytes),
       publicKeyRef: publicKeyAttachment?.id,
     },
   };
+}
+
+async function importExternalLifecycleSignature({
+  signatureFamily,
+  target,
+  signature,
+  normalizedPqPins,
+  expectedEd25519Signer = '',
+}) {
+  const type = detectExternalSignatureType(signature);
+  if (type === 'qsig') {
+    return importExternalLifecycleQsig({
+      signatureFamily,
+      target,
+      signature,
+      normalizedPqPins,
+    });
+  }
+  if (type === 'stellar-sig') {
+    return importExternalLifecycleStellarSig({
+      signatureFamily,
+      target,
+      signature,
+      expectedEd25519Signer,
+    });
+  }
+  throw new Error(`Unsupported signature file: ${signature?.name || 'unknown'}`);
+}
+
+function collectSignatureImports(options = {}) {
+  const imports = [];
+  for (const signature of Array.isArray(options.signatures) ? options.signatures : []) {
+    imports.push({
+      ...signature,
+      signatureFamily: 'archive-approval',
+    });
+  }
+  for (const signatureImport of Array.isArray(options.signatureImports) ? options.signatureImports : []) {
+    imports.push(signatureImport);
+  }
+  return imports;
 }
 
 async function resolveLifecycleAttachContext(shards, options = {}) {
@@ -390,48 +613,79 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
     invalidLabel: 'Pinned PQ signer key',
   }).pins;
 
-  const externalSignatures = Array.isArray(options.signatures) ? options.signatures : [];
+  const signatureImports = collectSignatureImports(options);
   const importedPublicKeys = [];
-  const importedArchiveApprovalSignatures = [];
-  for (const signature of externalSignatures) {
-    const type = detectExternalSignatureType(signature);
-    if (type === 'qsig') {
-      const imported = await importExternalArchiveApprovalQsig({
-        archiveStateBytes,
-        archiveStateDigest,
-        stateId,
-        signature,
-        normalizedPqPins,
-      });
-      importedPublicKeys.push(...imported.publicKeys);
-      importedArchiveApprovalSignatures.push(imported.signature);
-      continue;
+  const importedSignaturesByField = {
+    archiveApprovalSignatures: [],
+    maintenanceSignatures: [],
+    sourceEvidenceSignatures: [],
+  };
+  let importedSourceEvidence = [];
+  for (const signatureImport of signatureImports) {
+    const label = importLabel(signatureImport, 'signature import');
+    if (!(signatureImport?.bytes instanceof Uint8Array) || signatureImport.bytes.length === 0) {
+      throw new Error(`Invalid signature file: ${label}`);
     }
-    if (type === 'stellar-sig') {
-      const imported = await importExternalArchiveApprovalStellarSig({
-        archiveStateBytes,
-        archiveStateDigest,
-        stateId,
-        signature,
-        expectedEd25519Signer,
+    const descriptor = resolveSignatureImportDescriptor(signatureImport, label);
+    let targetBundle = lifecycleBundle;
+    let defaultTarget = null;
+
+    if (descriptor.family === 'archive-approval') {
+      defaultTarget = {
+        targetRef: `state:${stateId}`,
+        targetDigest: archiveStateDigest,
+      };
+    } else if (descriptor.family === 'source-evidence') {
+      const exported = exportSourceEvidenceForSigning({
+        sourceEvidenceBytes: signatureImport?.sourceEvidenceBytes,
+        sourceEvidence: signatureImport?.sourceEvidence,
       });
-      importedPublicKeys.push(...imported.publicKeys);
-      importedArchiveApprovalSignatures.push(imported.signature);
-      continue;
+      importedSourceEvidence = mergeLifecycleSourceEvidenceEntries(importedSourceEvidence, [exported.sourceEvidence]);
+      targetBundle = {
+        ...lifecycleBundle,
+        sourceEvidence: mergeLifecycleSourceEvidenceEntries(lifecycleBundle.sourceEvidence, importedSourceEvidence),
+      };
+      defaultTarget = {
+        targetRef: exported.targetRef,
+        targetDigest: exported.targetDigest,
+      };
     }
-    throw new Error(`Unsupported signature file: ${signature?.name || 'unknown'}`);
+
+    const target = resolveTypedSignatureTarget(targetBundle, signatureImport, descriptor, defaultTarget, {
+      label,
+      requireExplicitTargetRef: descriptor.family === 'maintenance',
+    });
+    const imported = await importExternalLifecycleSignature({
+      signatureFamily: descriptor.family,
+      target,
+      signature: {
+        name: label,
+        bytes: signatureImport.bytes,
+      },
+      normalizedPqPins,
+      expectedEd25519Signer,
+    });
+    importedPublicKeys.push(...imported.publicKeys);
+    importedSignaturesByField[descriptor.field].push(imported.signature);
   }
 
   const mergedBundle = {
     ...lifecycleBundle,
+    sourceEvidence: mergeLifecycleSourceEvidenceEntries(lifecycleBundle.sourceEvidence, importedSourceEvidence),
     attachments: {
       publicKeys: mergeLifecycleAttachmentEntriesById(lifecycleBundle.attachments.publicKeys, importedPublicKeys),
       archiveApprovalSignatures: mergeLifecycleAttachmentEntriesById(
         lifecycleBundle.attachments.archiveApprovalSignatures,
-        importedArchiveApprovalSignatures
+        importedSignaturesByField.archiveApprovalSignatures
       ),
-      maintenanceSignatures: [...lifecycleBundle.attachments.maintenanceSignatures],
-      sourceEvidenceSignatures: [...lifecycleBundle.attachments.sourceEvidenceSignatures],
+      maintenanceSignatures: mergeLifecycleAttachmentEntriesById(
+        lifecycleBundle.attachments.maintenanceSignatures,
+        importedSignaturesByField.maintenanceSignatures
+      ),
+      sourceEvidenceSignatures: mergeLifecycleAttachmentEntriesById(
+        lifecycleBundle.attachments.sourceEvidenceSignatures,
+        importedSignaturesByField.sourceEvidenceSignatures
+      ),
       timestamps: [...lifecycleBundle.attachments.timestamps],
     },
   };
@@ -464,9 +718,9 @@ export async function attachLifecycleBundleToShards(shards, options = {}) {
   }
 
   const canonicalBundle = await canonicalizeLifecycleBundle(mergedBundle);
-  await assertImportedArchiveApprovalEntriesValid(
+  await assertImportedLifecycleSignatureEntriesValid(
     canonicalBundle.lifecycleBundle,
-    importedArchiveApprovalSignatures,
+    importedSignaturesByField,
     expectedEd25519Signer
   );
 
