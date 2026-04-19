@@ -15,6 +15,8 @@ It is intentionally paired with [`trust-and-policy.md`](trust-and-policy.md):
 - `format-spec.md` defines bytes, fields, schemas, attachment points, and restore/verifier flow
 - `trust-and-policy.md` defines what signatures, pinning, and policy outcomes mean
 
+For a consolidated descriptive index of the current shipped identifiers and version strings, see [appendices/registry.md](appendices/registry.md).
+
 ## Scope
 
 This document covers the current Quantum Vault artifact family and verifier behavior for:
@@ -51,6 +53,7 @@ Internal current-state grounding:
 - `src/core/crypto/qcont/restore.js` for successor restore grouping, explicit disambiguation, and policy-gated restore
 - `src/core/crypto/lifecycle/artifacts.js` for archive-state, cohort-binding, lifecycle-bundle, transition-record, source-evidence, and detached-signature target semantics
 - `src/core/crypto/auth/qsig.js`, `src/core/crypto/auth/stellar-sig.js`, and `src/core/crypto/auth/opentimestamps.js` for detached authenticity artifact handling
+- [appendices/registry.md](appendices/registry.md) for a descriptive, source-backed index of current shipped identifiers and registry-style constants
 - successor schemas under `docs/schema/` for the grammar layer
 
 External references already used elsewhere in the repository:
@@ -358,7 +361,7 @@ This separation is one of the current format family's core invariants. Archive-a
 | `cryptoProfileId` | `QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2` | required by current validation |
 | `kdfTreeId` | `QV-KDF-TREE-v2` | required by current validation |
 | `aead_mode` | `single-container-aead` or `per-chunk-aead` | MUST be one of the supported current AEAD modes |
-| `iv_strategy` | `random96` or `kmac-prefix64-ctr32-v3` | MUST match `aead_mode` |
+| `iv_strategy` | `single-iv` or `kmac-prefix64-ctr32-v3` | MUST match `aead_mode` |
 | `noncePolicyId` | `QV-GCM-RAND96-v1` or `QV-GCM-KMACPFX64-CTR32-v3` | MUST match `aead_mode` |
 | `nonceMode` | `random96` or `kmac-prefix64-ctr32` | MUST match `aead_mode` |
 | `counterBits` | `0` or `32` | MUST match `aead_mode` |
