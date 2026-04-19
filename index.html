@@ -671,8 +671,14 @@
     </main>
   </div>
 
+  <!-- SRI is applied to the shipped executable scripts. The app does not ship an
+       import map, and source maps remain non-executable debug artifacts. This time
+       keeps stylesheet integrity out of the HTML and relies on BUILD.manifest.json
+       as the operator-visible integrity source for non-script assets. -->
   <script src="%BASE_PATH%third-party/erasure.js"
-          integrity="sha384-rKyZ/aEteEXCmx6n1CCT2nh5UiYpYAxmPIYVWMyWYIBv2WC7KyxutkxkXrEjTpa4"></script>
-  <script type="module" src="%BASE_PATH%assets/main.js"></script>
+          integrity="%ERASURE_JS_SRI%"></script>
+  <script type="module"
+          src="%BASE_PATH%assets/main.js"
+          integrity="%MAIN_JS_SRI%"></script>
 </body>
 </html>
