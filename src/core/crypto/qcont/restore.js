@@ -28,6 +28,7 @@ import {
 import { validateContainerPolicyMetadata } from '../policy.js';
 import { resolveErasureRuntime } from '../erasure-runtime.js';
 import {
+  assertArchiveStateMatchesQencMetadata,
   mergeLifecycleShardIntoCohortGroups,
   normalizeHexString,
   reconstructLifecycleCohortMaterial,
@@ -1161,27 +1162,6 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     },
     authenticity,
   };
-}
-
-function assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON) {
-  const qenc = archiveState.qenc || {};
-
-  ensureEqual(qenc.hashAlg, 'SHA3-512', 'qenc.hashAlg');
-  ensureEqual(qenc.primaryAnchor, 'qencHash', 'qenc.primaryAnchor');
-  ensureEqual(qenc.containerIdRole, 'secondary-header-id', 'qenc.containerIdRole');
-  ensureEqual(qenc.containerIdAlg, 'SHA3-512(qenc-header-bytes)', 'qenc.containerIdAlg');
-
-  ensureEqual(Number(qencMetaJSON.chunkSize), Number(qenc.chunkSize), 'qenc.chunkSize');
-  ensureEqual(Number(qencMetaJSON.chunkCount), Number(qenc.chunkCount), 'qenc.chunkCount');
-  ensureEqual(Number(qencMetaJSON.payloadLength), Number(qenc.payloadLength), 'qenc.payloadLength');
-
-  ensureEqual(qencMetaJSON.cryptoProfileId, archiveState.cryptoProfileId, 'cryptoProfileId');
-  ensureEqual(qencMetaJSON.kdfTreeId, archiveState.kdfTreeId, 'kdfTreeId');
-  ensureEqual(qencMetaJSON.noncePolicyId, archiveState.noncePolicyId, 'noncePolicyId');
-  ensureEqual(qencMetaJSON.nonceMode, archiveState.nonceMode, 'nonceMode');
-  ensureEqual(Number(qencMetaJSON.counterBits), Number(archiveState.counterBits), 'counterBits');
-  ensureEqual(Number(qencMetaJSON.maxChunkCount), Number(archiveState.maxChunkCount), 'maxChunkCount');
-  ensureEqual(qencMetaJSON.aadPolicyId, archiveState.aadPolicyId, 'aadPolicyId');
 }
 
 async function restoreSuccessorFromShards(shards, options = {}) {
