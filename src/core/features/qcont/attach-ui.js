@@ -36,7 +36,7 @@ export async function classifyAttachFiles(files) {
     }
     if (isLegacyAttachFilename(name)) {
       throw new Error(
-        'Unsupported attach input: manifest-side files are no longer accepted here. Use successor shards, archive-state descriptors, lifecycle bundles, detached signatures, .pqpk files, or .ots proofs.'
+        'Unsupported attach input: manifest-side files are no longer accepted here. Use successor shards, archive-state descriptors, lifecycle bundles, archive-approval .qsig/.sig files, .pqpk files, or .ots proofs.'
       );
     }
 
@@ -287,7 +287,7 @@ async function updateAttachStatus() {
   if (count === 0) {
     status.style.display = 'none';
     status.className = 'shards-status initially-hidden';
-    text.textContent = 'Select attach inputs to see the attach plan.';
+    text.textContent = 'Select archive-approval attach inputs to see the attach plan.';
     hint.textContent = '';
     if (modeSummary) {
       modeSummary.textContent = '';
@@ -337,7 +337,7 @@ async function updateAttachStatus() {
     if (!summary) {
       summary = plan.embedIntoShards
         ? (plan.warning ? 'Ready to update selected shards only' : 'Ready to embed into selected shards')
-        : 'Ready to update lifecycle bundle only';
+        : 'Ready to update the lifecycle bundle only';
     }
 
     status.className = `shards-status ${stateClass}`;
@@ -419,16 +419,16 @@ function buildAttachResultSummary({ plan, classified }) {
   }
   addPolar(true, 'Signable archive-state bytes remained unchanged', '');
 
-  addSection('Detached Evidence');
-  if (signatureCount > 0) addPolar(true, `Detached signatures merged (${signatureCount})`, '');
-  else addNeutral('No detached signatures were supplied.');
-  if (publicKeyCount > 0) addPolar(true, `Signer public keys merged (${publicKeyCount})`, '');
-  else addNeutral('No signer public keys were supplied.');
-  if (timestampCount > 0) addPolar(true, `Timestamp proofs merged (${timestampCount})`, '');
-  else addNeutral('No timestamp proofs were supplied.');
+  addSection('Imported Files');
+  if (signatureCount > 0) addPolar(true, `Archive-approval signatures merged (${signatureCount})`, '');
+  else addNeutral('No archive-approval .qsig/.sig files were supplied.');
+  if (publicKeyCount > 0) addPolar(true, `.pqpk signer pins merged (${publicKeyCount})`, '');
+  else addNeutral('No .pqpk signer pins were supplied.');
+  if (timestampCount > 0) addPolar(true, `.ots proofs merged (${timestampCount})`, '');
+  else addNeutral('No .ots proofs were supplied.');
 
   addSection('Next Actions');
-  addNeutral('Export the updated lifecycle bundle or shard set, or continue to Restore with the merged evidence.');
+  addNeutral('Export the updated archive-state descriptor, lifecycle bundle, or shard set, or continue to Restore with the merged evidence.');
 
   panel.className = 'restore-result-panel ok';
 }
@@ -483,7 +483,7 @@ async function exportAttachedArtifacts() {
     const classified = await classifyAttachFiles(files);
     const bundle = await resolveAttachSourceBundle(classified);
     if (!bundle) {
-      throw new Error('The selected inputs contain only the archive-state descriptor; there are no attached artifacts to export.');
+      throw new Error('The selected inputs contain only the archive-state descriptor; there are no attached bundle files to export.');
     }
 
     const baseName = deriveArchiveBaseName(files);
@@ -495,9 +495,9 @@ async function exportAttachedArtifacts() {
     }
 
     if (exportedCount === 0) {
-      throw new Error('No attached signatures, keys, or OTS evidence were found to export.');
+      throw new Error('No attached signatures, signer keys, or OTS proofs were found in the lifecycle bundle.');
     }
-    logSuccess(`Exported ${exportedCount} attached artifact(s), including any embedded OTS evidence.`);
+    logSuccess(`Exported ${exportedCount} attached lifecycle-bundle file(s), including any embedded OTS proofs.`);
   } catch (error) {
     logError(error);
   } finally {
@@ -552,7 +552,7 @@ async function attachFilesToShards() {
     const bundleName = deriveBundleFilename(files);
     download(new Blob([result.lifecycleBundleBytes], { type: 'application/json' }), bundleName);
     if (plan.embedIntoShards && classified.shardFiles.length > 0) {
-      logSuccess(`Embedded attached artifacts into the selected successor shards and updated ${bundleName}.`);
+      logSuccess(`Embedded the updated lifecycle bundle into the selected successor shards and wrote ${bundleName}.`);
     } else {
       logSuccess(`Updated ${bundleName} without rewriting shard files.`);
     }
@@ -560,8 +560,9 @@ async function attachFilesToShards() {
     if (result.mixedEmbeddedLifecycleBundleDigests) {
       logWarning('The selected successor shard set previously carried multiple embedded lifecycle-bundle digests within one cohort. The attach result preserves that fact without treating it as mixed cohorts.');
     }
+    log('This attach surface imports archive-approval .qsig/.sig files plus .pqpk pins and .ots proofs; detached maintenance and source-evidence files are not imported here.');
     log('Detached archive-approval signatures bind the canonical archive-state descriptor bytes, not mutable lifecycle-bundle bytes.');
-    log('Next actions: export the updated lifecycle bundle or shard set, or continue to Restore with the merged evidence.');
+    log('Next actions: export the updated archive-state descriptor, lifecycle bundle, or shard set, or continue to Restore with the merged evidence.');
     buildAttachResultSummary({ plan, classified });
   } catch (error) {
     logError(error);
