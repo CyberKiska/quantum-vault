@@ -5509,6 +5509,52 @@ function buildCases() {
       },
     },
     {
+      name: 'inspectLifecycleTimestampEvidence links embedded OTS proofs to v1 archive-approval attachment families',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample();
+        const signedBundle = await buildSuccessorVerificationBundle(sample.split, {
+          includeArchiveApproval: true,
+          timestampTargetFamily: 'archive-approval',
+        });
+
+        const evidence = await inspectLifecycleTimestampEvidence({
+          bundle: signedBundle.bundle,
+        });
+
+        assert(evidence.length === 1, 'expected one embedded OTS evidence entry');
+        assert(
+          evidence[0].targetRef === `state:${sample.split.stateId}`,
+          'embedded OTS evidence must report the signed archive-state targetRef rather than the attachment id'
+        );
+        assert(
+          evidence[0].targetName === 'archive-approval-sig-1',
+          'embedded OTS evidence must preserve the linked attachment id as the target name'
+        );
+        assert(evidence[0].targetSource === 'bundle', 'embedded OTS evidence must report bundle source');
+        assert(evidence[0].targetVerified === false, 'embedded OTS inspection must not claim signature verification on its own');
+        assert(evidence[0].linkLabel === 'OTS evidence linked to signature', 'embedded OTS evidence must preserve reporting labels');
+        assert(evidence[0].completionLabel === 'OTS proof appears complete', 'embedded OTS evidence must preserve completion reporting');
+      },
+    },
+    {
+      name: 'inspectLifecycleTimestampEvidence fails clearly when embedded OTS targetRef does not match any bundled signature id',
+      fn: async () => {
+        const sample = await buildSuccessorRestoreSample();
+        const signedBundle = await buildSuccessorVerificationBundle(sample.split, {
+          includeArchiveApproval: true,
+          timestampTargetFamily: 'archive-approval',
+        });
+        const mutatedBundle = cloneJson(signedBundle.bundle);
+        mutatedBundle.attachments.timestamps[0].targetRef = 'archive-approval-sig-missing';
+
+        await expectFailureWithMessage(
+          () => inspectLifecycleTimestampEvidence({ bundle: mutatedBundle }),
+          /OpenTimestamps targetRef is unknown: archive-approval-sig-missing/,
+          'embedded OTS inspection must fail clearly when targetRef does not match a bundled signature attachment id'
+        );
+      },
+    },
+    {
       name: 'qenc decrypt must fail with unrelated private key',
       fn: async () => {
         const pairA = await generateKeyPair({ collectUserEntropy: false });
