@@ -44,6 +44,17 @@
       }
     },
     {
+      "id": "archive-state-v1-invalid-unknown-field",
+      "schema": "qv-archive-state-descriptor-v1.schema.json",
+      "file": "fixtures/qv-archive-state-descriptor-v1.invalid.unknown-field.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "archive-state",
+        "expectParseSuccess": false,
+        "expectErrorIncludes": "Unknown archiveState.unexpectedField"
+      }
+    },
+    {
       "id": "archive-state-v1-schema-valid-wire-invalid-noncanonical-bytes",
       "schema": "qv-archive-state-descriptor-v1.schema.json",
       "file": "fixtures/qv-archive-state-descriptor-v1.valid.json",
@@ -138,6 +149,20 @@
       }
     },
     {
+      "id": "transition-record-v1-schema-valid-semantic-invalid-state-change",
+      "schema": "qv-transition-record-v1.schema.json",
+      "file": "fixtures/qv-transition-record-v1.schema-valid.semantic-invalid.state-change.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "transition-record",
+        "expectParseSuccess": false,
+        "expectStandaloneParseSuccess": true,
+        "contextualLifecycleBundleFile": "fixtures/qv-lifecycle-bundle-v1.valid.json",
+        "contextualTransitionIndex": 0,
+        "expectErrorIncludes": "changes stateId"
+      }
+    },
+    {
       "id": "source-evidence-v1-valid",
       "schema": "qv-source-evidence-v1.schema.json",
       "file": "fixtures/qv-source-evidence-v1.valid.json",
@@ -191,6 +216,28 @@
       }
     },
     {
+      "id": "source-evidence-v1-schema-valid-semantic-invalid-duplicate-signature-refs",
+      "schema": "qv-source-evidence-v1.schema.json",
+      "file": "fixtures/qv-source-evidence-v1.schema-valid.semantic-invalid.duplicate-signature-refs.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "source-evidence",
+        "expectParseSuccess": false,
+        "expectErrorIncludes": "Duplicate sourceEvidence.externalSourceSignatureRefs value"
+      }
+    },
+    {
+      "id": "source-evidence-v1-schema-valid-semantic-invalid-duplicate-digest-alg",
+      "schema": "qv-source-evidence-v1.schema.json",
+      "file": "fixtures/qv-source-evidence-v1.schema-valid.semantic-invalid.duplicate-digest-alg.json",
+      "expectSchemaValid": true,
+      "runtime": {
+        "artifact": "source-evidence",
+        "expectParseSuccess": false,
+        "expectErrorIncludes": "Duplicate sourceEvidence.sourceDigests.alg"
+      }
+    },
+    {
       "id": "lifecycle-bundle-v1-valid",
       "schema": "qv-lifecycle-bundle-v1.schema.json",
       "file": "fixtures/qv-lifecycle-bundle-v1.valid.json",
@@ -230,6 +277,16 @@
         "artifact": "lifecycle-bundle",
         "expectParseSuccess": false,
         "useRawJsonBytes": true
+      }
+    },
+    {
+      "id": "lifecycle-bundle-v1-schema-valid-semantic-invalid-signature-unknown-field",
+      "schema": "qv-lifecycle-bundle-v1.schema.json",
+      "file": "fixtures/qv-lifecycle-bundle-v1.schema-valid.semantic-invalid.signature-unknown-field.json",
+      "expectSchemaValid": false,
+      "runtime": {
+        "artifact": "lifecycle-bundle",
+        "expectParseSuccess": false
       }
     }
   ]

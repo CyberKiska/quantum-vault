@@ -700,7 +700,9 @@ const LIFECYCLE_SAMPLE_VECTORS = Object.freeze({
   cohortIdPreimageCanonical: '{"archiveId":"abababababababababababababababababababababababababababababababab","cohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"stateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","type":"quantum-vault-cohort-id-preimage/v1"}',
   cohortId: 'd14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b',
   transitionRecordCanonical: '{"actorHints":{"ceremony":"reshare-01"},"archiveId":"abababababababababababababababababababababababababababababababab","canonicalization":"QV-JSON-RFC8785-v1","fromCohortBindingDigest":{"alg":"SHA3-512","value":"23232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323"},"fromCohortId":"ebf832f7aff98cbe063b84b6835e58321ce5f932a211c888280511e614ae619b","fromStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","notes":null,"operatorRole":"operator","performedAt":"2026-03-25T12:34:56.000Z","reasonCode":"cohort-rotation","schema":"quantum-vault-transition-record/v1","toCohortBindingDigest":{"alg":"SHA3-512","value":"711a52b581d6a92e8721f5188c516f7af932f9ef2ae11007b33765126ab23b06a94042e47d2b831f1b29340a7744065b7e946f76c5cba47ffa559cd73b6c794c"},"toCohortId":"d14b3541103107a1969fb55db486bd3734a7ef5e05e88e6ab6604a7d38e8cc9b","toStateId":"e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117","transitionType":"same-state-resharing","version":1}',
+  transitionRecordDigest: '623be3bc8bf39d1f4ebc4225cd3beacd06b715f7f0d75d73ca0666737ad70ce39846bddc756d783a531afc860aafb26c57b8ce35ef7f051d6d118e26b5efdeb9',
   sourceEvidenceCanonical: '{"canonicalization":"QV-JSON-RFC8785-v1","externalSourceSignatureRefs":["sig:external-1"],"relationType":"reviewed-source","schema":"quantum-vault-source-evidence/v1","sourceDigests":[{"alg":"SHA3-512","value":"45454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545454545"},{"alg":"SHA-256","value":"6767676767676767676767676767676767676767676767676767676767676767"}],"sourceEvidenceType":"source-evidence","sourceObjectType":"archive-state-descriptor","version":1}',
+  sourceEvidenceDigest: 'a270c000dd344f8cbfd169ca2037de6e1807cfebe555e968a78821966af56a2ee2798a2256ad2ba8837f51b76b681aac63d356d96c9691a8db8333d6bb75babb',
   lifecycleBundleDigest: '8bb5b59ca01e5bac80babd9f8ec894bcd34d17f75b653ff265656108a449ebebecf5a76ec9c88799646eec3a029033f2391a9e0eea069f57868a57a28c5bf4ab',
 });
 
@@ -1700,12 +1702,20 @@ function buildCases() {
           'transition-record canonical regression bytes changed unexpectedly'
         );
         assert(
+          canonicalTransition.digest.value === LIFECYCLE_SAMPLE_VECTORS.transitionRecordDigest,
+          'transition-record digest regression changed unexpectedly'
+        );
+        assert(
           canonicalSourceEvidence.canonical === LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceCanonical,
           'source-evidence canonical regression string changed unexpectedly'
         );
         assert(
           timingSafeEqual(canonicalSourceEvidence.bytes, textBytes(LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceCanonical)),
           'source-evidence canonical regression bytes changed unexpectedly'
+        );
+        assert(
+          canonicalSourceEvidence.digest.value === LIFECYCLE_SAMPLE_VECTORS.sourceEvidenceDigest,
+          'source-evidence digest regression changed unexpectedly'
         );
 
         assert(
