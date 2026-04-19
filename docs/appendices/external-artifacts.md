@@ -155,12 +155,21 @@ Current `.ots` rules are intentionally narrow:
 - `.ots` evidence does not satisfy archive signature policy by itself
 - acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 
+Current shipped-path distinction:
+
+- browser Attach imports `.ots` by calling the detached-signature resolver over the currently known signature bytes and fails closed if a proof matches zero or multiple signatures
+- restore uses the same detached-signature linkage rule for timestamp evidence, but bad linkage is reported as warning material on the timestamp-evidence channel instead of blocking an otherwise policy-satisfied restore
+
 Current completeness reporting is heuristic:
 
-- `apparentlyComplete` / `completeProof` is inferred from filename hints such as `complete`, `completed`, `confirmed`, or `upgraded`, or from proof size
-- the current implementation treats proof size `>= 1024` bytes as appearing complete when filename hints are absent
+- `apparentlyComplete` / `completeProof` is inferred from proof-name keywords first
+- names containing `initial`, `pending`, or `incomplete` are reported as incomplete
+- names containing `complete`, `completed`, `confirmed`, or `upgraded` are reported as complete
+- the current implementation treats proof size `>= 1024` bytes as appearing complete only when no keyword match was found
+- `apparentlyComplete` and `completeProof` are aliases for the same heuristic outcome in the current implementation
 - this is reporting convenience, not full long-horizon evidence validation
 - the current implementation does not independently verify Bitcoin inclusion, confirmation depth, or an RFC 3161-style TSA chain
+- the current implementation does not validate a full Bitcoin attestation chain merely because `apparentlyComplete` / `completeProof` is true
 
 Current OTS deduplication:
 
