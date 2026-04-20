@@ -19,6 +19,7 @@ import {
   resolveLifecycleSignatureTarget,
   verifyLifecycleSignatureEntry,
 } from '../lifecycle/artifacts.js';
+import { canonicalizeJson } from '../manifest/jcs.js';
 import { rewriteLifecycleBundleInShard } from './lifecycle-shard.js';
 
 const SHA3_512_HEX_RE = /^[0-9a-f]{128}$/;
@@ -134,17 +135,6 @@ function buildLifecycleStellarSignerAttachment(signer) {
   };
 }
 
-function stableStringifyForAttachmentMerge(value) {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringifyForAttachmentMerge).join(',')}]`;
-  }
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringifyForAttachmentMerge(value[k])}`).join(',')}}`;
-}
-
 /**
  * Merge lifecycle bundle attachment rows by `id`. Duplicate ids with identical content
  * are skipped; duplicate ids with differing content fail closed.
@@ -155,7 +145,7 @@ export function mergeLifecycleAttachmentEntriesById(existingValues, nextValues) 
   for (const value of nextValues) {
     if (byId.has(value.id)) {
       const prev = byId.get(value.id);
-      if (stableStringifyForAttachmentMerge(prev) !== stableStringifyForAttachmentMerge(value)) {
+      if (canonicalizeJson(prev) !== canonicalizeJson(value)) {
         throw new Error(`Lifecycle attachment merge conflict: duplicate id "${value.id}" with differing content`);
       }
       continue;

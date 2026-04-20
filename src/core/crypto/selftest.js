@@ -3731,7 +3731,14 @@ function buildCases() {
           },
           'attach merge unexpectedly accepted conflicting duplicate ids'
         );
-        const merged = mergeLifecycleAttachmentEntriesById([a], [cloneJson(a)]);
+        const reordered = {
+          value: 'YQ==',
+          encoding: 'base64',
+          suite: 'mldsa-87',
+          kty: 'ml-dsa-public-key',
+          id: 'key-a',
+        };
+        const merged = mergeLifecycleAttachmentEntriesById([a], [reordered]);
         assert(merged.length === 1, 'duplicate identical entries should collapse to one row');
       },
     },
