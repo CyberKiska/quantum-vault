@@ -445,7 +445,13 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
     `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal ?? 0}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal ?? 0}.`
   );
   onLog(
-    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, pinned=${counts.pinnedValidTotal ?? 0}, bundle-pinned=${counts.bundlePinnedValidTotal ?? 0}, user-pinned=${counts.userPinnedValidTotal ?? 0}, maintenance=${counts.validMaintenance ?? 0}, source-evidence=${counts.validSourceEvidence ?? 0}.`
+    `Maintenance counts: valid=${counts.validMaintenance ?? 0}, transition-records=${authenticity?.status?.transitionRecordPresent === true ? 1 : 0}.`
+  );
+  onLog(
+    `Source-evidence counts: valid=${counts.validSourceEvidence ?? 0}, objects=${sourceEvidenceReport?.count ?? 0}.`
+  );
+  onLog(
+    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, pinned=${counts.pinnedValidTotal ?? 0}, bundle-pinned=${counts.bundlePinnedValidTotal ?? 0}, user-pinned=${counts.userPinnedValidTotal ?? 0}.`
   );
   for (const warning of verification.warnings || []) {
     onWarn(warning);
@@ -542,6 +548,38 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     'Strong PQ archive-approval signature not present',
     archiveApprovalVerified === true && status.strongPqSignatureVerified !== true,
   );
+  addNeutral('Maintenance and source-evidence signatures are reported separately and do not satisfy archive policy.');
+
+  addSection('Maintenance');
+  if (status.transitionRecordPresent !== true) {
+    addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
+  } else {
+    addPolar(true, 'Transition record present', 'Transition record missing');
+    addPolar(
+      status.transitionChainValid === true,
+      'Transition-chain references valid',
+      'Transition-chain references invalid or broken',
+    );
+    addPolar(
+      status.maintenanceSignatureVerified === true,
+      'Maintenance signature verified',
+      'No verified maintenance signature on transition record(s)',
+    );
+    addNeutral('Maintenance signatures authorize resharing events only; they do not replace archive approval.');
+  }
+
+  addSection('Source Evidence');
+  if (status.sourceEvidencePresent !== true) {
+    addNeutral('No source-evidence objects on this archive (optional provenance).');
+  } else {
+    addPolar(
+      status.sourceEvidenceSignatureVerified === true,
+      'Source-evidence signature verified',
+      'Source-evidence present but no verified signature',
+    );
+    addNeutral('Source evidence is provenance only; it does not imply archive approval.');
+  }
+
   addSection('Selection');
   if (cohortInspection.forkDetected === true) {
     addPolar(false, '', 'Same-state cohort fork remains known for this archive state', true);
@@ -584,33 +622,9 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
       appendStatusLine(false, `OTS proof not yet complete (${incompleteCount}) — calendars may still be pending`, true);
     }
   }
-  if (status.sourceEvidencePresent !== true) {
-    addNeutral('No source-evidence objects on this archive (optional provenance).');
-  } else {
-    addPolar(
-      status.sourceEvidenceSignatureVerified === true,
-      'Source-evidence signature verified',
-      'Source-evidence present but no verified signature',
-    );
-  }
-  addSection('Maintenance & Provenance');
-  if (status.transitionRecordPresent !== true) {
-    addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
-  } else {
-    addPolar(true, 'Transition record present', 'Transition record missing');
-    addPolar(
-      status.transitionChainValid === true,
-      'Transition-chain references valid',
-      'Transition-chain references invalid or broken',
-    );
-    addPolar(
-      status.maintenanceSignatureVerified === true,
-      'Maintenance signature verified',
-      'No verified maintenance signature on transition record(s)',
-    );
-  }
   addSection('Policy');
   addPolar(status.policySatisfied === true, 'Archive policy satisfied', 'Archive policy not satisfied');
+  addNeutral('Archive policy evaluation remains archive-approval-only in Phase 1.');
 
   panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
 }

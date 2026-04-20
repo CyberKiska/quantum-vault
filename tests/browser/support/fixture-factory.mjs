@@ -9,6 +9,10 @@ import {
   textBytes,
 } from '../../../src/core/crypto/selftest.js';
 import {
+  canonicalizeLifecycleBundle,
+  canonicalizeTransitionRecord,
+} from '../../../src/core/crypto/lifecycle/artifacts.js';
+import {
   reshareSameState,
   rewriteLifecycleBundleInShard,
 } from '../../../src/core/crypto/qcont/lifecycle-shard.js';
@@ -25,6 +29,10 @@ async function shardPayloads(shards, prefix) {
   return Promise.all(shards.map(async (item, index) => (
     filePayload(`${prefix}-${index + 1}.qcont`, await blobToBytes(item.blob))
   )));
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 let cachedFixtureSetPromise = null;
@@ -83,6 +91,34 @@ async function buildBrowserFixtureSet() {
   const attachArchiveApproval = buildQsigFixture(attachSample.split.archiveStateBytes);
   const wrongOts = await buildOtsFixture(textBytes('browser-qa-wrong-ots-target'), { completeProof: true });
 
+  const reshareExportSample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-reshare-export'),
+    authPolicyLevel: 'integrity-only',
+  });
+
+  const maintenanceAttachSample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-maintenance-attach'),
+    authPolicyLevel: 'integrity-only',
+  });
+  const maintenanceAttachBundle = await buildSuccessorVerificationBundle(maintenanceAttachSample.split, {
+    authPolicyLevel: 'integrity-only',
+    includeArchiveApproval: false,
+    includeMaintenance: false,
+    includeSourceEvidence: false,
+    timestampTargetFamily: 'maintenance',
+  });
+  const unsignedMaintenanceBundle = cloneJson(maintenanceAttachBundle.bundle);
+  unsignedMaintenanceBundle.attachments.publicKeys = [];
+  unsignedMaintenanceBundle.attachments.maintenanceSignatures = [];
+  unsignedMaintenanceBundle.attachments.timestamps = [];
+  const unsignedMaintenanceBundleCanonical = await canonicalizeLifecycleBundle(unsignedMaintenanceBundle);
+  const maintenanceTransitionRecordCanonical = canonicalizeTransitionRecord(maintenanceAttachBundle.transitionRecord);
+
+  const sourceEvidenceAttachSample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-source-evidence-attach'),
+    authPolicyLevel: 'integrity-only',
+  });
+
   return {
     strongPolicyFailFiles: await shardPayloads(strongPolicySample.split.shards, 'strong-pq'),
     strongPolicySatisfiedFiles: [
@@ -113,6 +149,20 @@ async function buildBrowserFixtureSet() {
       filePayload('attach-archive.pqpk', attachArchiveApproval.pqpkBytes),
       filePayload('attach-archive.ots', wrongOts),
     ],
+    reshareExportFiles: await shardPayloads(reshareExportSample.split.shards, 'reshare-export'),
+    maintenanceAttachBaseFiles: [
+      filePayload('maintenance-base.lifecycle-bundle.json', unsignedMaintenanceBundleCanonical.bytes, 'application/json'),
+      filePayload('maintenance-base.transition-record.json', maintenanceTransitionRecordCanonical.bytes, 'application/json'),
+    ],
+    maintenanceAttachSignatureFiles: [
+      filePayload('maintenance.qsig', maintenanceAttachBundle.fixtures.maintenance.qsigBytes),
+      filePayload('maintenance.pqpk', maintenanceAttachBundle.fixtures.maintenance.pqpkBytes),
+    ],
+    maintenanceRestoreShardFiles: await shardPayloads(maintenanceAttachSample.split.shards, 'maintenance-restore'),
+    sourceEvidenceAttachBaseFiles: [
+      filePayload('source-evidence-base.lifecycle-bundle.json', sourceEvidenceAttachSample.split.lifecycleBundleBytes, 'application/json'),
+    ],
+    sourceEvidenceRestoreShardFiles: await shardPayloads(sourceEvidenceAttachSample.split.shards, 'source-evidence-restore'),
   };
 }
 

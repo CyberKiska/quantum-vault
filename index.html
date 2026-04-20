@@ -67,7 +67,7 @@
             <p class="nav-group-label">Maintenance Tools</p>
             <div class="nav-menu" role="presentation">
               <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Attach</button>
-              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button"><span class="icon">🔁</span> Reshare</button>
+              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Reshare</button>
             </div>
           </div>
         </nav>
@@ -440,19 +440,73 @@
         <div id="proViewAttach" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
           <header class="section-header">
             <h2>Attach</h2>
-            <p class="muted-copy section-step-hint">Optional tool: merge archive-approval <code>.qsig</code>/<code>.sig</code>, <code>.pqpk</code>, and <code>.ots</code> inputs into the lifecycle bundle or selected shards without changing archive-state bytes.</p>
+            <p class="muted-copy section-step-hint">Optional tool: merge archive-approval, maintenance, or source-evidence artifacts into the lifecycle bundle or selected shards without changing archive-state bytes or archive-policy semantics.</p>
           </header>
 
           <div class="panel-grid">
             <div class="card full-width">
-              <h3>Merge Archive-Approval Evidence</h3>
+              <h3>Merge Lifecycle Evidence</h3>
               <div class="operation-input-panel">
+                <div class="form-group">
+                  <label for="attachEvidenceChannel">Evidence channel</label>
+                  <select id="attachEvidenceChannel" data-testid="attach-channel">
+                    <option value="archive-approval" selected>Archive approval</option>
+                    <option value="maintenance">Maintenance signature</option>
+                    <option value="source-evidence">Source evidence</option>
+                  </select>
+                </div>
+                <p id="attachChannelHelp" class="muted-copy operation-hint" data-testid="attach-channel-help">Archive approval attaches detached signatures over the canonical archive-state descriptor. Maintenance and source-evidence remain separate evidence channels and never satisfy archive policy on their own.</p>
                 <div class="form-group">
                   <label for="qcontAttachInput">Attach inputs</label>
                   <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input">
                 </div>
-                <p class="muted-copy operation-hint">Load one archive cohort plus any archive-approval <code>.qsig</code>/<code>.sig</code>, <code>.pqpk</code>, and <code>.ots</code> files you want to merge.</p>
+                <p id="attachInputHint" class="muted-copy operation-hint">Load one archive cohort plus any detached signatures, signer pins, timestamps, and channel-specific JSON artifacts you want to merge. Signing remains external.</p>
               </div>
+              <details id="sourceEvidenceBuilderSection" class="verification-section initially-hidden">
+                <summary>Source-evidence builder for external signing</summary>
+                <div class="form-group verification-fields">
+                  <div class="split-grid">
+                    <div class="form-group">
+                      <label for="sourceEvidenceRelationType">Relation type</label>
+                      <select id="sourceEvidenceRelationType" data-testid="source-evidence-relation-type">
+                        <option value="reviewed-source" selected>reviewed-source</option>
+                        <option value="precursor-object">precursor-object</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label for="sourceEvidenceObjectType">Source object type</label>
+                      <input type="text" id="sourceEvidenceObjectType" value="archive-state-descriptor" placeholder="archive-state-descriptor" data-testid="source-evidence-object-type">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Source digests</label>
+                    <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
+                    <div class="button-group">
+                      <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
+                    </div>
+                    <small class="muted-copy">Provide one or more canonical digests for the reviewed source object.</small>
+                  </div>
+                  <div class="form-group">
+                    <label for="sourceEvidenceExternalRefs">External source-signature refs (optional)</label>
+                    <textarea id="sourceEvidenceExternalRefs" rows="2" placeholder="One ref per line, for example: sig:external-review-1" data-testid="source-evidence-external-refs"></textarea>
+                  </div>
+                  <div class="form-group">
+                    <label class="checkbox-row" for="sourceEvidenceMediaTypeOptIn">
+                      <input type="checkbox" id="sourceEvidenceMediaTypeOptIn" data-testid="source-evidence-media-opt-in">
+                      <span>Include optional media type</span>
+                    </label>
+                    <small id="sourceEvidencePrivacyWarning" class="muted-copy">Optional descriptive fields are not privacy-preserving. Keep them empty unless you intend to disclose that metadata.</small>
+                  </div>
+                  <div id="sourceEvidenceMediaTypeGroup" class="form-group initially-hidden">
+                    <label for="sourceEvidenceMediaType">Media type</label>
+                    <input type="text" id="sourceEvidenceMediaType" placeholder="application/json" data-testid="source-evidence-media-type">
+                  </div>
+                  <div class="button-group">
+                    <button id="exportSourceEvidenceBtn" class="button secondary" type="button" data-testid="source-evidence-export">Export Canonical Source-Evidence JSON</button>
+                  </div>
+                  <small id="sourceEvidenceExportHint" class="muted-copy">Export the canonical JSON here, sign it with an external tool, then re-import that <code>.json</code> plus the detached signature through this Attach surface.</small>
+                </div>
+              </details>
               <div class="operation-readiness">
                 <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status">
                   <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
@@ -464,7 +518,8 @@
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor attach can update only the lifecycle bundle or also re-embed that bundle into the selected shard files, depending on what you load.</small>
-                  <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, archive-approval <code>.qsig</code>/<code>.sig</code>, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs. This surface does not attach detached maintenance or source-evidence files. Attach never changes the signable archive-state bytes.</small>
+                  <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, detached signatures, <code>.pqpk</code> signer pins, <code>.ots</code> proofs, and when needed a canonical <code>.transition-record.json</code> or <code>.source-evidence.json</code> artifact. Attach never changes the signable archive-state bytes.</small>
+                  <small class="muted-copy">All signing remains external in Phase 1. This UI does not generate signing keys and it does not collapse maintenance or source-evidence into archive approval.</small>
                 </div>
               </details>
               <details class="verification-section">
@@ -475,7 +530,7 @@
                 </div>
               </details>
               <div class="button-group">
-                <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Archive-Approval Evidence</button>
+                <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Selected Evidence</button>
                 <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Archive-State Descriptor</button>
                 <button id="exportAttachedArtifactsBtn" class="button secondary" type="button" disabled>Export Attached Bundle Files</button>
               </div>
@@ -496,7 +551,7 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontReshareInput">Reshare inputs</label>
-                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple>
+                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input">
                 </div>
                 <p class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
               </div>
@@ -593,9 +648,13 @@
                 </div>
               </div>
               <div class="button-group">
-                <button id="reshareQcontBtn" class="button primary" disabled type="button">Emit Successor Cohort</button>
+                <button id="reshareQcontBtn" class="button primary" disabled type="button" data-testid="reshare-button">Emit Successor Cohort</button>
               </div>
-              <div id="proReshareResult" class="restore-result-panel initially-hidden"></div>
+              <div id="reshareExportActions" class="button-group initially-hidden">
+                <button id="exportReshareTransitionRecordBtn" class="button secondary" type="button" data-testid="reshare-export-transition-record">Export Transition Record</button>
+                <button id="exportReshareLifecycleBundleBtn" class="button secondary" type="button">Export Lifecycle Bundle</button>
+              </div>
+              <div id="proReshareResult" class="restore-result-panel initially-hidden" data-testid="reshare-result"></div>
             </div>
           </div>
         </div>

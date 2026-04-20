@@ -7,6 +7,7 @@ import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 
 let reshareStatusSeq = 0;
+let lastReshareExports = null;
 
 function deriveReshareBaseName(files = []) {
   const shard = files.find((file) => String(file?.name || '').toLowerCase().endsWith('.qcont'));
@@ -72,11 +73,39 @@ function buildReshareResultSummary(result) {
   } else {
     addNeutral('No new maintenance signatures were attached. The transition record can be signed and attached later.');
   }
+  addNeutral('The emitted transition-record.json is the external signing target for maintenance signatures.');
 
   addSection('Next Actions');
   addNeutral('Distribute the new cohort, attach maintenance signatures later if needed, or continue to Restore with the updated evidence set.');
 
   panel.className = 'restore-result-panel ok';
+}
+
+function setReshareExportVisibility(visible) {
+  const actions = document.getElementById('reshareExportActions');
+  if (!actions) return;
+  actions.classList.toggle('initially-hidden', !visible);
+}
+
+function clearReshareExportState() {
+  lastReshareExports = null;
+  setReshareExportVisibility(false);
+}
+
+function exportCachedReshareArtifact(kind) {
+  if (!lastReshareExports) {
+    showToast('Run resharing successfully before exporting result artifacts.', 'warning');
+    return;
+  }
+  if (kind === 'transition-record') {
+    download(new Blob([lastReshareExports.transitionRecordBytes], { type: 'application/json' }), lastReshareExports.transitionRecordName);
+    logSuccess(`Exported ${lastReshareExports.transitionRecordName} for external maintenance signing.`);
+    return;
+  }
+  if (kind === 'lifecycle-bundle') {
+    download(new Blob([lastReshareExports.lifecycleBundleBytes], { type: 'application/json' }), lastReshareExports.lifecycleBundleName);
+    logSuccess(`Exported ${lastReshareExports.lifecycleBundleName}.`);
+  }
 }
 
 async function updateReshareStatus() {
@@ -102,6 +131,8 @@ async function updateReshareStatus() {
 export function initQcontReshareUI() {
   const input = document.getElementById('qcontReshareInput');
   const reshareBtn = document.getElementById('reshareQcontBtn');
+  const exportTransitionRecordBtn = document.getElementById('exportReshareTransitionRecordBtn');
+  const exportLifecycleBundleBtn = document.getElementById('exportReshareLifecycleBundleBtn');
   const nInput = document.getElementById('reshareN');
   const kInput = document.getElementById('reshareK');
   const reasonCodeInput = document.getElementById('reshareReasonCode');
@@ -137,8 +168,11 @@ export function initQcontReshareUI() {
       resultPanel.style.display = 'none';
       resultPanel.replaceChildren();
     }
+    clearReshareExportState();
     void updateReshareStatus();
   });
+  exportTransitionRecordBtn?.addEventListener('click', () => exportCachedReshareArtifact('transition-record'));
+  exportLifecycleBundleBtn?.addEventListener('click', () => exportCachedReshareArtifact('lifecycle-bundle'));
   void updateReshareStatus();
 
   reshareBtn?.addEventListener('click', async () => {
@@ -229,6 +263,15 @@ export function initQcontReshareUI() {
       const transitionRecordName = `${baseName}.transition-record.json`;
       download(new Blob([result.transitionRecordBytes], { type: 'application/json' }), transitionRecordName);
       log(`Saved ${transitionRecordName} (${result.transitionRecordBytes.length} B) SHA3-512=${result.transitionRecordDigestHex}`);
+      log('The transition record is the maintenance signing target. Sign it externally, then re-import it with the detached signature through Attach > Maintenance signature.');
+
+      lastReshareExports = {
+        lifecycleBundleBytes: result.lifecycleBundleBytes,
+        lifecycleBundleName,
+        transitionRecordBytes: result.transitionRecordBytes,
+        transitionRecordName,
+      };
+      setReshareExportVisibility(true);
 
       log(`ArchiveId preserved: ${result.archiveId}`);
       log(`StateId preserved: ${result.stateId}`);
@@ -251,6 +294,7 @@ export function initQcontReshareUI() {
       if (/legacy shards are not supported for resharing/i.test(String(error?.message || error))) {
         showToast('Legacy shards are not supported for resharing.', 'warning');
       }
+      clearReshareExportState();
       logError(error);
     } finally {
       setButtonsDisabled(false);
