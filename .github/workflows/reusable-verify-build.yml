@@ -67,6 +67,9 @@ jobs:
       - name: Schema fixtures
         run: npm run schema:fixtures
 
+      - name: Binary corpus
+        run: npm run corpus:verify
+
       - name: Build
         env:
           BASE_PATH: ${{ inputs.base-path }}

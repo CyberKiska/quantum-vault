@@ -18,7 +18,7 @@
     "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
-    "check": "npm run selftest && npm run schema:fixtures && npm run build",
+    "check": "npm run selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
     "deploy": "npm run build"
   },
   "dependencies": {
