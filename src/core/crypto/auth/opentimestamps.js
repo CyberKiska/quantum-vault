@@ -1,4 +1,8 @@
 import { asciiBytes, base64ToBytes, concatBytes, digestSha256, toHex } from '../bytes.js';
+import {
+  decodeLifecycleSignatureBytes,
+  LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS,
+} from '../lifecycle/artifacts.js';
 
 const OTS_PREFIX = concatBytes([
   asciiBytes('\x00OpenTimestamps\x00\x00Proof\x00'),
@@ -48,10 +52,19 @@ export function parseOpenTimestampProof(bytes, { name = '' } = {}) {
 }
 
 export function decodeLifecycleBundleSignatureBytes(signature) {
-  if (signature?.signatureEncoding !== 'base64') {
-    throw new Error(`Unsupported bundle signature encoding: ${signature?.signatureEncoding ?? 'unknown'}`);
-  }
-  return base64ToBytes(signature.signature);
+  return decodeLifecycleSignatureBytes(signature, 'detached signature');
+}
+
+function buildLifecycleBundleSignatureArtifacts(bundle) {
+  return LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.flatMap((descriptor) => (
+    Array.isArray(bundle?.attachments?.[descriptor.field]) ? bundle.attachments[descriptor.field] : []
+  )).map((signature) => ({
+    id: signature.id,
+    name: signature.id,
+    source: 'bundle',
+    targetRef: signature.targetRef,
+    bytes: decodeLifecycleBundleSignatureBytes(signature),
+  }));
 }
 
 // This helper supports legacy/reporting call sites that may already carry a
@@ -108,12 +121,7 @@ export async function resolveOpenTimestampTarget({ timestampBytes, timestampName
 }
 
 export async function inspectLifecycleBundleTimestamps(bundle) {
-  const signatures = Array.isArray(bundle?.attachments?.signatures)
-    ? bundle.attachments.signatures.map((signature) => ({
-        id: signature.id,
-        bytes: decodeLifecycleBundleSignatureBytes(signature),
-      }))
-    : [];
+  const signatures = buildLifecycleBundleSignatureArtifacts(bundle);
   const signaturesById = new Map(signatures.map((signature) => [signature.id, signature]));
   const timestamps = Array.isArray(bundle?.attachments?.timestamps) ? bundle.attachments.timestamps : [];
 
@@ -132,8 +140,8 @@ export async function inspectLifecycleBundleTimestamps(bundle) {
     });
     return {
       id: timestamp.id,
-      targetRef: resolved.targetRef,
-      targetName: resolved.targetName,
+      targetRef: targetSignature.targetRef || timestamp.targetRef,
+      targetName: targetSignature.name || targetSignature.id || timestamp.targetRef,
       targetSource: resolved.targetSource,
       targetVerified: resolved.targetVerified,
       linked: true,

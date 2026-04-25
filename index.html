@@ -33,13 +33,13 @@
         <div class="header-group">
           <h1>Quantum Vault</h1>
           <p class="subtitle">PQC encryption & sharding</p>
-          <span class="version-badge">v2.0.0</span>
+          <span class="version-badge">v2.1.0</span>
         </div>
 
         <div class="mode-switch-container">
           <span class="mode-label">Lite</span>
-          <label class="toggle-switch">
-            <input type="checkbox" id="modeToggle">
+          <label class="toggle-switch" data-testid="mode-toggle-control">
+            <input type="checkbox" id="modeToggle" data-testid="mode-toggle">
             <span class="slider"></span>
           </label>
           <span class="mode-label">Pro</span>
@@ -60,14 +60,14 @@
               <button id="proTabIdentity" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity" tabindex="0" type="button"><span class="icon">🔑</span> Key Management</button>
               <button id="proTabEncryption" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewEncryption" tabindex="-1" type="button"><span class="icon">🔒</span> Encryption</button>
               <button id="proTabDistribution" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewDistribution" tabindex="-1" type="button"><span class="icon">🧩</span> Split</button>
-              <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button"><span class="icon">♻️</span> Restore</button>
+              <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button" data-testid="tab-restore"><span class="icon">♻️</span> Restore</button>
             </div>
           </div>
           <div class="nav-group" role="presentation">
             <p class="nav-group-label">Maintenance Tools</p>
             <div class="nav-menu" role="presentation">
-              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button"><span class="icon">🪢</span> Attach</button>
-              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button"><span class="icon">🔁</span> Reshare</button>
+              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Attach</button>
+              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Reshare</button>
             </div>
           </div>
         </nav>
@@ -100,7 +100,7 @@
 
     <!-- Main Content -->
     <main class="main-content">
-      <div id="toast-container" class="toast-container"></div>
+      <div id="toast-container" class="toast-container" data-testid="toast-container"></div>
       
       <!-- LITE MODE -->
       <section id="liteMode" class="mode-section active">
@@ -440,31 +440,86 @@
         <div id="proViewAttach" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
           <header class="section-header">
             <h2>Attach</h2>
-            <p class="muted-copy section-step-hint">Optional tool: merge signatures, keys, and timestamps into shards or the lifecycle bundle without changing signable bytes.</p>
+            <p class="muted-copy section-step-hint">Optional tool: merge archive-approval, maintenance, or source-evidence artifacts into the lifecycle bundle or selected shards without changing archive-state bytes or archive-policy semantics.</p>
           </header>
 
           <div class="panel-grid">
             <div class="card full-width">
-              <h3>Merge Detached Evidence</h3>
+              <h3>Merge Lifecycle Evidence</h3>
               <div class="operation-input-panel">
                 <div class="form-group">
-                  <label for="qcontAttachInput">Attach inputs</label>
-                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                  <label for="attachEvidenceChannel">Evidence channel</label>
+                  <select id="attachEvidenceChannel" data-testid="attach-channel">
+                    <option value="archive-approval" selected>Archive approval</option>
+                    <option value="maintenance">Maintenance signature</option>
+                    <option value="source-evidence">Source evidence</option>
+                  </select>
                 </div>
-                <p class="muted-copy operation-hint">Load one archive cohort and any detached signatures, signer keys, or timestamp proofs you want to merge.</p>
+                <p id="attachChannelHelp" class="muted-copy operation-hint" data-testid="attach-channel-help">Archive approval attaches detached signatures over the canonical archive-state descriptor. Maintenance and source-evidence remain separate evidence channels and never satisfy archive policy on their own.</p>
+                <div class="form-group">
+                  <label for="qcontAttachInput">Attach inputs</label>
+                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input">
+                </div>
+                <p id="attachInputHint" class="muted-copy operation-hint">Load one archive cohort plus any detached signatures, signer pins, timestamps, and channel-specific JSON artifacts you want to merge. Signing remains external.</p>
               </div>
+              <details id="sourceEvidenceBuilderSection" class="verification-section initially-hidden">
+                <summary>Source-evidence builder for external signing</summary>
+                <div class="form-group verification-fields">
+                  <div class="split-grid">
+                    <div class="form-group">
+                      <label for="sourceEvidenceRelationType">Relation type</label>
+                      <select id="sourceEvidenceRelationType" data-testid="source-evidence-relation-type">
+                        <option value="reviewed-source" selected>reviewed-source</option>
+                        <option value="precursor-object">precursor-object</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label for="sourceEvidenceObjectType">Source object type</label>
+                      <input type="text" id="sourceEvidenceObjectType" value="archive-state-descriptor" placeholder="archive-state-descriptor" data-testid="source-evidence-object-type">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Source digests</label>
+                    <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
+                    <div class="button-group">
+                      <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
+                    </div>
+                    <small class="muted-copy">Provide one or more canonical digests for the reviewed source object.</small>
+                  </div>
+                  <div class="form-group">
+                    <label for="sourceEvidenceExternalRefs">External source-signature refs (optional)</label>
+                    <textarea id="sourceEvidenceExternalRefs" rows="2" placeholder="One ref per line, for example: sig:external-review-1" data-testid="source-evidence-external-refs"></textarea>
+                  </div>
+                  <div class="form-group">
+                    <label class="checkbox-row" for="sourceEvidenceMediaTypeOptIn">
+                      <input type="checkbox" id="sourceEvidenceMediaTypeOptIn" data-testid="source-evidence-media-opt-in">
+                      <span>Include optional media type</span>
+                    </label>
+                    <small id="sourceEvidencePrivacyWarning" class="muted-copy">Optional descriptive fields are not privacy-preserving. Keep them empty unless you intend to disclose that metadata.</small>
+                  </div>
+                  <div id="sourceEvidenceMediaTypeGroup" class="form-group initially-hidden">
+                    <label for="sourceEvidenceMediaType">Media type</label>
+                    <input type="text" id="sourceEvidenceMediaType" placeholder="application/json" data-testid="source-evidence-media-type">
+                  </div>
+                  <div class="button-group">
+                    <button id="exportSourceEvidenceBtn" class="button secondary" type="button" data-testid="source-evidence-export">Export Canonical Source-Evidence JSON</button>
+                  </div>
+                  <small id="sourceEvidenceExportHint" class="muted-copy">Export the canonical JSON here, sign it with an external tool, then re-import that <code>.json</code> plus the detached signature through this Attach surface.</small>
+                </div>
+              </details>
               <div class="operation-readiness">
-                <div id="attachStatus" class="shards-status initially-hidden">
-                  <span id="attachStatusText">0 attach files selected</span>
+                <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status">
+                  <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
-                <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite"></pre>
+                <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite" data-testid="attach-mode-summary"></pre>
               </div>
               <details class="technical-context">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor attach can update only the lifecycle bundle or also re-embed that bundle into the selected shard files, depending on what you load.</small>
-                  <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs. Attach never changes the signable archive-state bytes.</small>
+                  <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, detached signatures, <code>.pqpk</code> signer pins, <code>.ots</code> proofs, and when needed a canonical <code>.transition-record.json</code> or <code>.source-evidence.json</code> artifact. Attach never changes the signable archive-state bytes.</small>
+                  <small class="muted-copy">All signing remains external in Phase 1. This UI does not generate signing keys and it does not collapse maintenance or source-evidence into archive approval.</small>
                 </div>
               </details>
               <details class="verification-section">
@@ -475,11 +530,11 @@
                 </div>
               </details>
               <div class="button-group">
-                <button id="attachQcontBtn" class="button primary" type="button" disabled>Attach Artifacts</button>
-                <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Signable Artifact</button>
-                <button id="exportAttachedArtifactsBtn" class="button secondary" type="button" disabled>Export Attached Artifacts</button>
+                <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Selected Evidence</button>
+                <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Archive-State Descriptor</button>
+                <button id="exportAttachedArtifactsBtn" class="button secondary" type="button" disabled>Export Attached Bundle Files</button>
               </div>
-              <div id="attachResult" class="restore-result-panel initially-hidden"></div>
+              <div id="attachResult" class="restore-result-panel initially-hidden" data-testid="attach-result"></div>
             </div>
           </div>
         </div>
@@ -496,7 +551,7 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontReshareInput">Reshare inputs</label>
-                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple>
+                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input">
                 </div>
                 <p class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
               </div>
@@ -593,9 +648,13 @@
                 </div>
               </div>
               <div class="button-group">
-                <button id="reshareQcontBtn" class="button primary" disabled type="button">Emit Successor Cohort</button>
+                <button id="reshareQcontBtn" class="button primary" disabled type="button" data-testid="reshare-button">Emit Successor Cohort</button>
               </div>
-              <div id="proReshareResult" class="restore-result-panel initially-hidden"></div>
+              <div id="reshareExportActions" class="button-group initially-hidden">
+                <button id="exportReshareTransitionRecordBtn" class="button secondary" type="button" data-testid="reshare-export-transition-record">Export Transition Record</button>
+                <button id="exportReshareLifecycleBundleBtn" class="button secondary" type="button">Export Lifecycle Bundle</button>
+              </div>
+              <div id="proReshareResult" class="restore-result-panel initially-hidden" data-testid="reshare-result"></div>
             </div>
           </div>
         </div>
@@ -613,27 +672,27 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontShardsInput">Restore inputs</label>
-                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input">
                 </div>
                 <p class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
               </div>
-              <div id="proShardsStatus" class="shards-status initially-hidden">
-                <span id="proShardsStatusText">0 shards selected</span>
+              <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status">
+                <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
-              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
-                <small id="restoreSuccessorSelectionSummary" class="muted-copy"></small>
-                <small id="restoreSuccessorSelectionHelp" class="muted-copy"></small>
-                <div id="restoreStateSelectionGroup" class="form-group initially-hidden">
+              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
+                <small id="restoreSuccessorSelectionSummary" class="muted-copy" data-testid="restore-selection-summary"></small>
+                <small id="restoreSuccessorSelectionHelp" class="muted-copy" data-testid="restore-selection-help"></small>
+                <div id="restoreStateSelectionGroup" class="form-group initially-hidden" data-testid="restore-state-selection-group">
                   <label for="restoreStateSelection">Archive and state selection</label>
-                  <select id="restoreStateSelection"></select>
+                  <select id="restoreStateSelection" data-testid="restore-state-selection"></select>
                 </div>
-                <div id="restoreCohortSelectionGroup" class="form-group initially-hidden">
+                <div id="restoreCohortSelectionGroup" class="form-group initially-hidden" data-testid="restore-cohort-selection-group">
                   <label for="restoreCohortSelection">Same-state cohort selection</label>
-                  <select id="restoreCohortSelection"></select>
+                  <select id="restoreCohortSelection" data-testid="restore-cohort-selection"></select>
                 </div>
-                <div id="restoreBundleSelectionGroup" class="form-group initially-hidden">
+                <div id="restoreBundleSelectionGroup" class="form-group initially-hidden" data-testid="restore-bundle-selection-group">
                   <label for="restoreBundleSelection">Lifecycle bundle selection</label>
-                  <select id="restoreBundleSelection"></select>
+                  <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
               </div>
               <details class="technical-context">
@@ -647,13 +706,13 @@
                 <summary>Signer pins (optional)</summary>
                 <div class="form-group verification-fields">
                   <label for="restoreExpectedEdSigner">Expected Ed25519 signer (optional)</label>
-                  <input type="text" id="restoreExpectedEdSigner" placeholder="G...">
+                  <input type="text" id="restoreExpectedEdSigner" placeholder="G..." data-testid="restore-expected-ed-signer">
                 </div>
               </details>
               <div class="button-group">
-                <button id="restoreQcontBtn" class="button primary" disabled type="button">Restore Selected Archive</button>
+                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Restore Selected Archive</button>
               </div>
-              <div id="proRestoreResult" class="restore-result-panel initially-hidden"></div>
+              <div id="proRestoreResult" class="restore-result-panel initially-hidden" data-testid="restore-result"></div>
             </div>
           </div>
         </div>
@@ -665,14 +724,20 @@
             <h3>Operations Log</h3>
             <button id="logToggleBtn" class="button secondary small" type="button">Show Log</button>
           </div>
-          <pre id="log" class="log-box"></pre>
+          <pre id="log" class="log-box" data-testid="operations-log"></pre>
         </div>
       </footer>
     </main>
   </div>
 
+  <!-- SRI is applied to the shipped executable scripts. The app does not ship an
+       import map, and source maps remain non-executable debug artifacts. This time
+       keeps stylesheet integrity out of the HTML and relies on BUILD.manifest.json
+       as the operator-visible integrity source for non-script assets. -->
   <script src="%BASE_PATH%third-party/erasure.js"
-          integrity="sha384-rKyZ/aEteEXCmx6n1CCT2nh5UiYpYAxmPIYVWMyWYIBv2WC7KyxutkxkXrEjTpa4"></script>
-  <script type="module" src="%BASE_PATH%assets/main.js"></script>
+          integrity="%ERASURE_JS_SRI%"></script>
+  <script type="module"
+          src="%BASE_PATH%assets/main.js"
+          integrity="%MAIN_JS_SRI%"></script>
 </body>
 </html>

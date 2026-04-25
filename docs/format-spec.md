@@ -15,6 +15,8 @@ It is intentionally paired with [`trust-and-policy.md`](trust-and-policy.md):
 - `format-spec.md` defines bytes, fields, schemas, attachment points, and restore/verifier flow
 - `trust-and-policy.md` defines what signatures, pinning, and policy outcomes mean
 
+For a consolidated descriptive index of the current shipped identifiers and version strings, see [appendices/registry.md](appendices/registry.md).
+
 ## Scope
 
 This document covers the current Quantum Vault artifact family and verifier behavior for:
@@ -51,6 +53,7 @@ Internal current-state grounding:
 - `src/core/crypto/qcont/restore.js` for successor restore grouping, explicit disambiguation, and policy-gated restore
 - `src/core/crypto/lifecycle/artifacts.js` for archive-state, cohort-binding, lifecycle-bundle, transition-record, source-evidence, and detached-signature target semantics
 - `src/core/crypto/auth/qsig.js`, `src/core/crypto/auth/stellar-sig.js`, and `src/core/crypto/auth/opentimestamps.js` for detached authenticity artifact handling
+- [appendices/registry.md](appendices/registry.md) for a descriptive, source-backed index of current shipped identifiers and registry-style constants
 - successor schemas under `docs/schema/` for the grammar layer
 
 External references already used elsewhere in the repository:
@@ -309,6 +312,7 @@ Current lifecycle-bundle rules:
 - `archiveStateDigest` MUST equal `SHA3-512` over the canonical embedded archive-state bytes
 - `currentCohortBindingDigest` MUST equal `SHA3-512` over the canonical embedded cohort-binding bytes
 - lifecycle-bundle mutation MUST NOT mutate canonical archive-state or cohort-binding bytes
+- the shipped browser Attach workflow imports only archive-approval detached signatures, `.pqpk` signer pins, and `.ots` proofs; generic browser import of maintenance or source-evidence detached signatures is not implemented in the current UI flow
 
 ### 4.4 Detached-signature target mappings
 
@@ -357,7 +361,7 @@ This separation is one of the current format family's core invariants. Archive-a
 | `cryptoProfileId` | `QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2` | required by current validation |
 | `kdfTreeId` | `QV-KDF-TREE-v2` | required by current validation |
 | `aead_mode` | `single-container-aead` or `per-chunk-aead` | MUST be one of the supported current AEAD modes |
-| `iv_strategy` | `random96` or `kmac-prefix64-ctr32-v3` | MUST match `aead_mode` |
+| `iv_strategy` | `single-iv` or `kmac-prefix64-ctr32-v3` | MUST match `aead_mode` |
 | `noncePolicyId` | `QV-GCM-RAND96-v1` or `QV-GCM-KMACPFX64-CTR32-v3` | MUST match `aead_mode` |
 | `nonceMode` | `random96` or `kmac-prefix64-ctr32` | MUST match `aead_mode` |
 | `counterBits` | `0` or `32` | MUST match `aead_mode` |
@@ -546,11 +550,15 @@ Current accepted external authenticity artifacts are:
 Current acceptance boundaries:
 
 - `.qsig` and `.sig` are integration contracts; this specification does not restate their full upstream format definitions
+- the shipped browser Attach workflow imports `.qsig` / `.sig` only as archive-approval signatures over canonical archive-state bytes
 - external signatures used at restore are archive-approval signatures over canonical archive-state bytes
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
 - `.pqpk` material may be used for bundled or user-supplied PQ pinning
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
+- the shipped browser Attach workflow does not provide a generic detached-file import path for maintenance or source-evidence signatures
 - OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
+- `apparentlyComplete` / `completeProof` are derived by the current implementation from proof-name keywords first (`initial`, `pending`, `incomplete` => incomplete; `complete`, `completed`, `confirmed`, `upgraded` => complete), with proof size `>= 1024` bytes used only as a fallback when no keyword matches
+- the current implementation does not treat `apparentlyComplete` / `completeProof` as validation of a Bitcoin attestation chain
 
 Detailed linkage, pinning, and ambiguity rules are defined in [appendices/external-artifacts.md](appendices/external-artifacts.md).
 
@@ -572,7 +580,7 @@ Verifier and restore order:
 10. verify detached signatures against the exact canonical target bytes for their declared family
 11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified; the embedded signer public key inside a `.qsig` is a convenience field, not by itself an externally anchored identity, so a proof that verifies only against its own embedded key must not count toward policy; full counting semantics and rationale are defined in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules)
 12. evaluate archive policy using `archiveApprovalSignatures` only
-13. link timestamps to detached signature bytes and emit separate transition and source-evidence reports
+13. link timestamps to detached signature bytes, report linkage failures as timestamp-evidence warnings, and emit separate transition and source-evidence reports
 14. emit distinct status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`
 
 Restore selection rules:
@@ -604,6 +612,10 @@ Quantum Vault MUST fail closed on:
 - multiple embedded lifecycle-bundle digests inside a selected cohort when no explicit bundle bytes or digest are supplied
 - multiple matching user-supplied PQ pin files for one detached PQ signature
 - unrelated or ambiguously linked OTS evidence
+
+Current attach-time OTS failure rule:
+
+- the shipped Attach workflow resolves each imported `.ots` proof against the currently known detached signature bytes and MUST fail closed if the proof matches zero or multiple signatures
 
 Current non-rejection note for explicit successor disambiguation:
 

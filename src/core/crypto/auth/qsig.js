@@ -363,6 +363,7 @@ export function unpackQsig(sigBytes) {
   ensureSupportedSignatureProfile(signatureProfileId);
   ensureSupportedHashAlg(payloadDigestAlgId);
   ensureSupportedAuthDigest(authDigestAlgId);
+  const suite = suiteInfo(suiteId);
 
   const flags = reader.u16le('flags');
   if ((flags & ~KNOWN_SIG_FLAGS) !== 0) {
@@ -429,6 +430,8 @@ export function unpackQsig(sigBytes) {
     versionMajor,
     versionMinor,
     suiteId,
+    suite: suite.normalizedSuite,
+    suiteDisplay: suite.name,
     signatureProfileId,
     hashAlgId: payloadDigestAlgId,
     payloadDigestAlgId,
@@ -529,7 +532,7 @@ export function unpackPqpk(publicKeyFileBytes) {
   }
 
   const suiteId = reader.u8('suiteId');
-  suiteInfo(suiteId);
+  const suite = suiteInfo(suiteId);
 
   const flags = reader.u8('flags');
   if (flags !== 0) throw new Error('Invalid detached PQ public key flags');
@@ -552,6 +555,8 @@ export function unpackPqpk(publicKeyFileBytes) {
     versionMajor,
     versionMinor,
     suiteId,
+    suite: suite.normalizedSuite,
+    suiteDisplay: suite.name,
     keyBytes,
   };
 }

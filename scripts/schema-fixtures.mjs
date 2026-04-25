@@ -56,6 +56,59 @@ function formatError(error) {
   return String(error);
 }
 
+function ensureExpectedFailure(error, expectedMessageIncludes, label) {
+  if (!expectedMessageIncludes) return;
+  const actualMessage = formatError(error);
+  if (!actualMessage.includes(expectedMessageIncludes)) {
+    throw new Error(`${label} failed with unexpected message: expected substring "${expectedMessageIncludes}", got "${actualMessage}"`);
+  }
+}
+
+function assertParserFailure(parseFn, bytes, runtime, label) {
+  try {
+    parseFn(bytes);
+  } catch (error) {
+    ensureExpectedFailure(error, runtime.expectErrorIncludes, label);
+    return null;
+  }
+  throw new Error(`${label} unexpectedly accepted schema-valid semantic-invalid fixture`);
+}
+
+async function assertAsyncParserFailure(parseFn, bytes, runtime, label) {
+  try {
+    await parseFn(bytes);
+  } catch (error) {
+    ensureExpectedFailure(error, runtime.expectErrorIncludes, label);
+    return null;
+  }
+  throw new Error(`${label} unexpectedly accepted schema-valid semantic-invalid fixture`);
+}
+
+async function assertTransitionRecordBundleContextExpectation(fixture, instance, rawJsonBytes) {
+  const runtime = fixture.runtime || {};
+  const bytes = runtime.useRawJsonBytes === true ? rawJsonBytes : canonicalizeJsonToBytes(instance);
+
+  if (runtime.expectStandaloneParseSuccess === false) {
+    assertParserFailure(parseTransitionRecordBytes, bytes, runtime, 'transition-record parser');
+  } else {
+    parseTransitionRecordBytes(bytes);
+  }
+
+  const bundlePath = resolve(schemaDir, runtime.contextualLifecycleBundleFile);
+  const bundle = await readJsonFile(bundlePath);
+  const transitionIndex = Number.isInteger(runtime.contextualTransitionIndex) ? runtime.contextualTransitionIndex : 0;
+  if (!Array.isArray(bundle.transitions) || transitionIndex < 0 || transitionIndex >= bundle.transitions.length) {
+    throw new Error(`Invalid contextualTransitionIndex for ${fixture.id}`);
+  }
+  bundle.transitions[transitionIndex] = instance;
+  const bundleBytes = canonicalizeJsonToBytes(bundle);
+
+  if (runtime.expectParseSuccess) {
+    return parseLifecycleBundleBytes(bundleBytes);
+  }
+  return assertAsyncParserFailure(parseLifecycleBundleBytes, bundleBytes, runtime, 'lifecycle-bundle parser');
+}
+
 async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
   const runtime = fixture.runtime;
   const bytes = runtime.useRawJsonBytes === true ? rawJsonBytes : canonicalizeJsonToBytes(instance);
@@ -63,76 +116,34 @@ async function assertRuntimeExpectation(fixture, instance, rawJsonBytes) {
     if (runtime.expectParseSuccess) {
       return parseArchiveStateDescriptorBytes(bytes);
     }
-    let failed = false;
-    try {
-      parseArchiveStateDescriptorBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('archive-state parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return null;
+    return assertParserFailure(parseArchiveStateDescriptorBytes, bytes, runtime, 'archive-state parser');
   }
   if (runtime.artifact === 'cohort-binding') {
     if (runtime.expectParseSuccess) {
       return parseCohortBindingBytes(bytes);
     }
-    let failed = false;
-    try {
-      parseCohortBindingBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('cohort-binding parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return null;
+    return assertParserFailure(parseCohortBindingBytes, bytes, runtime, 'cohort-binding parser');
   }
   if (runtime.artifact === 'transition-record') {
+    if (typeof runtime.contextualLifecycleBundleFile === 'string' && runtime.contextualLifecycleBundleFile) {
+      return assertTransitionRecordBundleContextExpectation(fixture, instance, rawJsonBytes);
+    }
     if (runtime.expectParseSuccess) {
       return parseTransitionRecordBytes(bytes);
     }
-    let failed = false;
-    try {
-      parseTransitionRecordBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('transition-record parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return null;
+    return assertParserFailure(parseTransitionRecordBytes, bytes, runtime, 'transition-record parser');
   }
   if (runtime.artifact === 'source-evidence') {
     if (runtime.expectParseSuccess) {
       return parseSourceEvidenceBytes(bytes);
     }
-    let failed = false;
-    try {
-      parseSourceEvidenceBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('source-evidence parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return null;
+    return assertParserFailure(parseSourceEvidenceBytes, bytes, runtime, 'source-evidence parser');
   }
   if (runtime.artifact === 'lifecycle-bundle') {
     if (runtime.expectParseSuccess) {
       return parseLifecycleBundleBytes(bytes);
     }
-    let failed = false;
-    try {
-      await parseLifecycleBundleBytes(bytes);
-    } catch {
-      failed = true;
-    }
-    if (!failed) {
-      throw new Error('lifecycle-bundle parser unexpectedly accepted schema-valid semantic-invalid fixture');
-    }
-    return null;
+    return assertAsyncParserFailure(parseLifecycleBundleBytes, bytes, runtime, 'lifecycle-bundle parser');
   }
   throw new Error(`Unsupported runtime artifact kind: ${runtime.artifact}`);
 }
@@ -222,7 +233,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

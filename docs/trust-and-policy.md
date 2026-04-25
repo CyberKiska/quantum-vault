@@ -437,8 +437,9 @@ Current handling rules:
 
 - OTS may be bundled or supplied externally
 - if multiple OTS proofs target the same detached signature, reporting may prefer one apparently complete proof
-- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from filename hints or proof size, not a cryptographic guarantee that a full external attestation chain was validated; exact acceptance, linkage, deduplication, and ambiguity rules are owned by [`appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting`](appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting)
-- unrelated or ambiguous `.ots` inputs fail closed
+- current `appears complete` / `completeProof` labels are heuristic reporting fields derived from proof-name keywords first and proof size only as a fallback, not a cryptographic guarantee that a full external attestation chain was validated; exact acceptance, linkage, deduplication, and ambiguity rules are owned by [`appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting`](appendices/external-artifacts.md#5-opentimestamps-linkage-and-completion-reporting)
+- attach fails closed on unrelated or ambiguous `.ots` inputs
+- restore reports bad or unresolved OTS linkage on the timestamp-evidence channel and does not let OTS alone satisfy archive policy
 
 This preserves the current policy boundary: OTS can strengthen evidence reporting and future archival interpretation, but it does not upgrade an otherwise unsatisfied archive-approval signature policy.
 
@@ -470,7 +471,9 @@ The initial lifecycle bundle contains:
 Current attach behavior:
 
 - validates detached signatures against the correct canonical target bytes
-- validates OTS target linkage
+- imports archive-approval detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs
+- validates OTS target linkage fail closed during import
+- does not provide a generic browser import path for detached maintenance signatures or detached source-evidence signatures
 - imports public keys and signer identifiers
 - writes an updated lifecycle bundle
 - may rewrite embedded lifecycle bundles across a full shard cohort
@@ -495,6 +498,11 @@ Current pinning consequence:
 
 - pinning affects provenance reporting
 - pinning does not block restore by default once archive policy is satisfied
+
+Current restore-time OTS consequence:
+
+- malformed, unresolved, or badly linked OTS evidence is reported as timestamp-evidence warning material and ignored for policy counting
+- restore MUST NOT fail solely because OTS evidence did not link cleanly when archive policy is otherwise satisfied
 
 ## 10. Conflict and ambiguity handling
 

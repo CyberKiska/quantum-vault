@@ -67,10 +67,19 @@ jobs:
       - name: Schema fixtures
         run: npm run schema:fixtures
 
+      - name: Binary corpus
+        run: npm run corpus:verify
+
       - name: Build
         env:
           BASE_PATH: ${{ inputs.base-path }}
         run: npm run build
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: npm run test:browser
 
       - name: Upload artifact
         if: ${{ inputs.upload-pages-artifact }}
