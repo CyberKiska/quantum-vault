@@ -9,7 +9,9 @@ import {
   textBytes,
 } from '../../../src/core/crypto/selftest.js';
 import {
+  buildSourceEvidence,
   canonicalizeLifecycleBundle,
+  canonicalizeSourceEvidence,
   canonicalizeTransitionRecord,
 } from '../../../src/core/crypto/lifecycle/artifacts.js';
 import {
@@ -47,6 +49,11 @@ async function buildBrowserFixtureSet() {
     minValidSignatures: 1,
   });
   const strongPolicySignature = buildQsigFixture(strongPolicySample.split.archiveStateBytes);
+
+  const buildFlowSample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-build-flow'),
+    authPolicyLevel: 'integrity-only',
+  });
 
   const selfSignedSample = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('browser-qa-self-signed'),
@@ -113,13 +120,41 @@ async function buildBrowserFixtureSet() {
   unsignedMaintenanceBundle.attachments.timestamps = [];
   const unsignedMaintenanceBundleCanonical = await canonicalizeLifecycleBundle(unsignedMaintenanceBundle);
   const maintenanceTransitionRecordCanonical = canonicalizeTransitionRecord(maintenanceAttachBundle.transitionRecord);
+  const maintenanceWrongTargetSignature = buildQsigFixture(maintenanceAttachSample.split.archiveStateBytes);
 
   const sourceEvidenceAttachSample = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('browser-qa-source-evidence-attach'),
     authPolicyLevel: 'integrity-only',
   });
+  const wrongTargetSourceEvidence = canonicalizeSourceEvidence(buildSourceEvidence({
+    relationType: 'supports',
+    sourceObjectType: 'archive-state-descriptor',
+    sourceDigests: [{ alg: 'SHA3-512', value: 'cd'.repeat(64) }],
+    externalSourceSignatureRefs: ['sig:wrong-target-review'],
+  }));
+  const sourceEvidenceWrongTargetSignature = buildQsigFixture(sourceEvidenceAttachSample.split.archiveStateBytes);
+
+  const archiveApprovalAttachSample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-archive-approval-attach'),
+    authPolicyLevel: 'strong-pq-signature',
+    minValidSignatures: 1,
+  });
+  const archiveApprovalAttachSignature = buildQsigFixture(archiveApprovalAttachSample.split.archiveStateBytes);
+
+  const lifecycleMismatchA = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-lifecycle-mismatch-a'),
+    authPolicyLevel: 'integrity-only',
+  });
+  const lifecycleMismatchB = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('browser-qa-lifecycle-mismatch-b'),
+    authPolicyLevel: 'integrity-only',
+  });
 
   return {
+    buildFlowFiles: [
+      filePayload('browser-build-flow.qenc', buildFlowSample.qencBytes),
+      filePayload('browser-build-flow.private.qkey', buildFlowSample.pair.privateKey),
+    ],
     strongPolicyFailFiles: await shardPayloads(strongPolicySample.split.shards, 'strong-pq'),
     strongPolicySatisfiedFiles: [
       ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq')),
@@ -149,6 +184,12 @@ async function buildBrowserFixtureSet() {
       filePayload('attach-archive.pqpk', attachArchiveApproval.pqpkBytes),
       filePayload('attach-archive.ots', wrongOts),
     ],
+    archiveApprovalAttachBaseFiles: [
+      filePayload('archive-approval-base.lifecycle-bundle.json', archiveApprovalAttachSample.split.lifecycleBundleBytes, 'application/json'),
+      filePayload('archive-approval.qsig', archiveApprovalAttachSignature.qsigBytes),
+      filePayload('archive-approval.pqpk', archiveApprovalAttachSignature.pqpkBytes),
+    ],
+    archiveApprovalAttachRestoreShardFiles: await shardPayloads(archiveApprovalAttachSample.split.shards, 'archive-approval-restore'),
     reshareExportFiles: await shardPayloads(reshareExportSample.split.shards, 'reshare-export'),
     maintenanceAttachBaseFiles: [
       filePayload('maintenance-base.lifecycle-bundle.json', unsignedMaintenanceBundleCanonical.bytes, 'application/json'),
@@ -158,11 +199,27 @@ async function buildBrowserFixtureSet() {
       filePayload('maintenance.qsig', maintenanceAttachBundle.fixtures.maintenance.qsigBytes),
       filePayload('maintenance.pqpk', maintenanceAttachBundle.fixtures.maintenance.pqpkBytes),
     ],
+    maintenanceWrongTargetFiles: [
+      filePayload('maintenance-base.lifecycle-bundle.json', unsignedMaintenanceBundleCanonical.bytes, 'application/json'),
+      filePayload('maintenance-base.transition-record.json', maintenanceTransitionRecordCanonical.bytes, 'application/json'),
+      filePayload('wrong-maintenance-target.qsig', maintenanceWrongTargetSignature.qsigBytes),
+      filePayload('wrong-maintenance-target.pqpk', maintenanceWrongTargetSignature.pqpkBytes),
+    ],
     maintenanceRestoreShardFiles: await shardPayloads(maintenanceAttachSample.split.shards, 'maintenance-restore'),
     sourceEvidenceAttachBaseFiles: [
       filePayload('source-evidence-base.lifecycle-bundle.json', sourceEvidenceAttachSample.split.lifecycleBundleBytes, 'application/json'),
     ],
+    sourceEvidenceWrongTargetFiles: [
+      filePayload('source-evidence-base.lifecycle-bundle.json', sourceEvidenceAttachSample.split.lifecycleBundleBytes, 'application/json'),
+      filePayload('wrong-target.source-evidence.json', wrongTargetSourceEvidence.bytes, 'application/json'),
+      filePayload('wrong-source-evidence-target.qsig', sourceEvidenceWrongTargetSignature.qsigBytes),
+      filePayload('wrong-source-evidence-target.pqpk', sourceEvidenceWrongTargetSignature.pqpkBytes),
+    ],
     sourceEvidenceRestoreShardFiles: await shardPayloads(sourceEvidenceAttachSample.split.shards, 'source-evidence-restore'),
+    lifecycleBundleMismatchFiles: [
+      ...(await shardPayloads(lifecycleMismatchA.split.shards, 'lifecycle-mismatch-a')),
+      filePayload('wrong.lifecycle-bundle.json', lifecycleMismatchB.split.lifecycleBundleBytes, 'application/json'),
+    ],
   };
 }
 
