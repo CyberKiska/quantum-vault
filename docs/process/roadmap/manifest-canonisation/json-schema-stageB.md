@@ -1,7 +1,7 @@
 # Quantum Vault Roadmap B — JSON Schema Structural Validation
 
-Status: Historical — completed baseline; superseded by current successor-family design  
-Type: Informative historical record  
+Status: Historical — completed baseline; superseded by current successor-family design
+Type: Informative historical record
 Audience: implementers, spec authors, tooling maintainers, auditors
 
 Historical note:

@@ -222,8 +222,8 @@ All commands emit this shape on failure when `--json` is passed:
 ## Examples
 
 ```bash
-npm run cli -- inspect docs/schema/fixtures/archive-state-valid-basic.json --json
-npm run cli -- canonicalize docs/schema/fixtures/archive-state-valid-basic.json
+npm run cli -- inspect docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json --json
+npm run cli -- canonicalize docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json
 npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json
 ```

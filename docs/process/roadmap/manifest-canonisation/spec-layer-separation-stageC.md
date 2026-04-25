@@ -1,7 +1,7 @@
 # Quantum Vault Roadmap C — Separate Serialization, Schema, and Semantics
 
-Status: Historical — completed baseline; superseded by current successor-family design  
-Type: Informative historical record  
+Status: Historical — completed baseline; superseded by current successor-family design
+Type: Informative historical record
 Audience: spec authors, implementers, reviewers, auditors
 
 Historical note:
