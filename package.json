@@ -1,18 +1,25 @@
 {
   "name": "QuantumVault",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "engines": {
     "node": ">=24.14.0",
     "npm": ">=11.9.0"
   },
   "packageManager": "npm@11.9.0",
+  "bin": {
+    "qv": "./bin/qv.mjs"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
+    "cli": "node bin/qv.mjs",
     "selftest": "node scripts/selftest.mjs",
+    "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
-    "check": "npm run selftest && npm run schema:fixtures && npm run build",
+    "corpus:verify": "node scripts/corpus-verify.mjs",
+    "check": "npm run selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
+    "release:check": "npm run check && npm run test:browser",
     "deploy": "npm run build"
   },
   "dependencies": {
@@ -21,6 +28,7 @@
     "shamir-secret-sharing": "0.0.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "esbuild": "0.28.0"
   }
 }

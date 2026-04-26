@@ -41,7 +41,8 @@ Implemented now:
 
 - one shipped successor lifecycle family: `QVqcont-7` shards, `quantum-vault-archive-state-descriptor/v1`, cohort bindings, and `QV-Lifecycle-Bundle` v1
 - Split emits successor `.qcont` shards plus `*.archive-state.json` and `*.lifecycle-bundle.json`; Pro additionally exports `*.cohort-binding.json`, although successor shards always embed cohort-binding bytes even when Lite does not export a standalone cohort-binding file.
-- Attach accepts successor shards or an existing lifecycle bundle plus optional archive-state descriptors, detached signatures, `.pqpk` signer pins, and `.ots` proofs.
+- The shipped browser Attach workflow accepts successor shards or an existing lifecycle bundle plus optional archive-state descriptors, archive-approval detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs.
+- Maintenance-signature and source-evidence workflows exist in the artifact model and are reported at restore when present, but they are not a generic browser Attach import path yet.
 - Restore evaluates archive approval from canonical archive-state bytes and fails closed when ambiguity remains in `archiveId`, `stateId`, `cohortId`, or embedded lifecycle-bundle digest unless the operator makes an explicit choice; explicit operator selection is a warned override, not an automatic winner selection.
 - Same-state resharing is implemented for successor lifecycle archives and preserves archive-state bytes while emitting a new cohort and required transition record.
 
@@ -66,7 +67,7 @@ Deferred roadmap:
 - **Encrypt** one or more files into a `.qenc` container for long-lived confidentiality.
 - **Decrypt** Quantum Vault `.qenc` containers back into their original payload.
 - **Split** an archive and its ML-KEM private key into threshold successor `.qcont` shards, exporting a signable archive-state descriptor and lifecycle bundle for later approval and maintenance; Pro additionally exports a standalone cohort-binding artifact for operator workflows.
-- **Attach** detached signatures, signer identity material, and timestamp evidence into a lifecycle bundle carried by successor shards or supplied explicitly.
+- **Attach** archive-approval detached signatures, signer pin material, and timestamp evidence into a lifecycle bundle carried by successor shards or supplied explicitly.
 - **Restore** from successor shards plus optional authenticity material, with recovery gated by archive policy.
 - **Verify** detached signatures while keeping integrity, signer pinning, maintenance evidence, source evidence, and policy satisfaction as separate outcomes.
 - **Keep cryptographic operations local** to the client browser during normal operation.
@@ -78,7 +79,7 @@ Deferred roadmap:
 | Generate | Browser entropy | `privateKey.qkey`, `publicKey.qkey` | ML-KEM key pair generated client-side |
 | Encrypt | File(s), `publicKey.qkey` | `.qenc` | Post-quantum confidentiality and AEAD integrity |
 | Split | `.qenc`, `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
-| Attach | Successor shards or lifecycle bundle, optional archive-state descriptor, `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated lifecycle bundle, optional rewritten `.qcont` shards | Portable authenticity material without changing signed archive-state bytes |
+| Attach | Successor shards or lifecycle bundle, optional archive-state descriptor, archive-approval `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated lifecycle bundle, optional rewritten `.qcont` shards | Imports only archive-approval signatures plus `.pqpk` and `.ots`; archive-state and cohort-binding bytes stay unchanged |
 | Restore | `.qcont`, optional archive-state descriptor, lifecycle bundle, signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Policy-gated archive reconstruction with explicit selection whenever ambiguity exists |
 | Decrypt | `.qenc`, `privateKey.qkey` | Original file(s) | Payload recovery and file-hash confirmation |
 
@@ -167,7 +168,7 @@ Attach can start from successor shards carrying an embedded lifecycle bundle or 
 | 2. Encrypt | Encrypt one file or a local file bundle | File(s), `publicKey.qkey` | `.qenc` | Uses ML-KEM-1024 + KMAC256 + AES-256-GCM |
 | 3. Split | Convert one archive into threshold shards | `.qenc`, matching `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Emits `QVqcont-7` shards and successor lifecycle objects |
 | 4. Sign | Sign the archive-state descriptor in an external signer app | `*.archive-state.json` | `.qsig` or `.sig` | Archive approval signs canonical archive-state bytes |
-| 5. Attach | Merge signatures, pins, and timestamps into the mutable bundle | Successor shards or lifecycle bundle, optional archive-state descriptor, detached artifacts | Updated `*.lifecycle-bundle.json`, optional rewritten shards | Archive-state and cohort-binding bytes stay unchanged |
+| 5. Attach | Merge archive-approval signatures, `.pqpk` pins, and `.ots` proofs into the mutable bundle | Successor shards or lifecycle bundle, optional archive-state descriptor, detached artifacts | Updated `*.lifecycle-bundle.json`, optional rewritten shards | The shipped browser path does not generically import maintenance or source-evidence signatures |
 | 6. Restore | Reconstruct from shards with optional authenticity inputs | `.qcont`, optional archive-state descriptor, lifecycle bundle, signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Recovery is blocked unless policy is satisfied; ambiguity requires explicit operator choice |
 | 7. Decrypt | Decrypt the recovered archive | `.qenc`, recovered `privateKey.qkey` | Original file(s) | The UI confirms `privateMeta.fileHash` before export |
 
@@ -205,6 +206,7 @@ Archive approval, maintenance, and source evidence are different channels:
 - maintenance signatures target transition-record bytes and are reported separately
 - source-evidence signatures target source-evidence bytes and are reported separately
 - timestamp evidence is supplementary and does not satisfy archive policy by itself
+- the shipped browser Attach flow imports archive-approval signatures only; maintenance and source-evidence channels are currently populated by other artifact-generation paths, not by a generic detached-file Attach step
 
 Current trust boundary for detached PQ signatures:
 
@@ -234,7 +236,9 @@ Detailed current rules live in:
 - ML-KEM gives confidentiality, not sender authentication; detached signatures and policy evaluation provide provenance at the archive layer.
 - Shamir sharing protects confidentiality below threshold, but users still need independent and reliable shard custody.
 - OpenTimestamps evidence is currently evidence-only and does not replace signature validation or policy satisfaction.
+- Attach fails closed if an `.ots` proof does not match exactly one known detached signature; restore reports bad or unresolved OTS linkage on the timestamp-evidence channel and can still complete when archive policy is otherwise satisfied.
 - Current OTS linkage is real, but `appears complete` / `completeProof` are heuristic reporting labels rather than a claim that a full Bitcoin attestation chain was independently validated.
+- The current heuristic checks filename-style keywords first: `initial`, `pending`, or `incomplete` imply incomplete; `complete`, `completed`, `confirmed`, or `upgraded` imply complete; when no keyword matches, the fallback is proof size `>= 1024` bytes.
 - Quantum Vault is intentionally not a trust-in-a-service system: current verification semantics do not require a QV-operated timestamp server, an "official operator", or a permanent corporate trust root.
 - Future evidence renewal is expected to use portable evidence chains and potentially multiple witness regimes; RFC 4998 is relevant as a renewal benchmark, while current OpenTimestamps support is only one distributed witness regime.
 - Inspired by [diceslice](https://github.com/numago/diceslice) and [tidecoin](https://github.com/tidecoin/tidecoin).

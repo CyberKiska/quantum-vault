@@ -1,8 +1,11 @@
 # Quantum Vault Roadmap C — Separate Serialization, Schema, and Semantics
 
-Status: Draft roadmap  
-Type: Informative planning document  
+Status: Historical — completed baseline; superseded by current successor-family design
+Type: Informative historical record
 Audience: spec authors, implementers, reviewers, auditors
+
+Historical note:
+This file records a completed pre-successor planning baseline. It is retained for background only and is not active execution guidance for the current runtime.
 
 ## 1. Purpose
 

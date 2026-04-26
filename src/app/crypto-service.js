@@ -7,7 +7,10 @@ import {
     generateKeyPair as generateMlKemKeyPair,
     hashBytes as computeHashHex,
 } from '../core/crypto/index.js';
-import { attachLifecycleBundleToShards as attachLifecycleShardBundle } from '../core/crypto/qcont/lifecycle-attach.js';
+import {
+    attachLifecycleBundleToShards as attachLifecycleShardBundle,
+    exportSourceEvidenceForSigning as exportSourceEvidenceArtifactForSigning,
+} from '../core/crypto/qcont/lifecycle-attach.js';
 import {
     buildLifecycleQcontShards as buildSuccessorShardSet,
     isLifecycleParsedShard as isParsedSuccessorLifecycleShard,
@@ -51,6 +54,10 @@ export async function buildQcontShards(qencBytes, privKeyBytes, params, options 
 
 export async function attachLifecycleBundleToShards(shards, options = {}) {
     return attachLifecycleShardBundle(shards, options);
+}
+
+export function exportSourceEvidenceForSigning(options = {}) {
+    return exportSourceEvidenceArtifactForSigning(options);
 }
 
 export async function parseLifecycleShard(bytes, options = {}) {
