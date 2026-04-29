@@ -14,9 +14,12 @@ import {
   parseTransitionRecordBytes,
 } from '../../crypto/lifecycle/artifacts.js';
 import { startsWithAscii } from '../../crypto/byte-prefix.js';
+import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
+
+const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 
 const ATTACH_CHANNELS = Object.freeze({
   'archive-approval': Object.freeze({
@@ -362,6 +365,23 @@ function clearAttachResultPanel() {
   panel.replaceChildren();
 }
 
+function attachRecoveryAction(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  if (message.includes('manifest-side') || message.includes('unsupported attach input')) {
+    return 'Remove legacy manifest-side files and load successor shards, archive-state descriptors, lifecycle bundles, or detached evidence artifacts.';
+  }
+  if (message.includes('ots')) {
+    return 'Check that each OTS proof targets a loaded detached signature by SHA-256(signatureBytes), then retry Attach.';
+  }
+  if (message.includes('transition-record')) {
+    return 'Load the canonical transition-record.json for this lifecycle bundle plus matching maintenance signatures, then retry Attach.';
+  }
+  if (message.includes('source-evidence')) {
+    return 'Load the canonical source-evidence.json plus detached signatures over that exact JSON, then retry Attach.';
+  }
+  return 'Remove conflicting or unsupported attach inputs, keep one archive/state/cohort set, then retry Attach.';
+}
+
 function setPartialRewriteAcknowledgementRequired(required) {
   const panel = document.getElementById('attachPartialRewriteAckPanel');
   const checkbox = document.getElementById('attachPartialRewriteAck');
@@ -660,6 +680,12 @@ async function updateAttachStatus() {
     }
     setPartialRewriteAcknowledgementRequired(false);
     setAttachActionAvailability();
+    showInlineError(ATTACH_INLINE_ERROR_ID, {
+      title: 'Attach inputs blocked',
+      cause: message,
+      artifact: summarizeFileList([...(input.files || [])], 'Attach input set'),
+      action: attachRecoveryAction(error),
+    });
   }
 }
 
@@ -866,12 +892,19 @@ async function attachFilesToShards() {
   const channel = activeAttachChannel();
   const channelConfig = attachChannelConfig(channel);
   if (!files.length) {
+    showInlineError(ATTACH_INLINE_ERROR_ID, {
+      title: 'Attach blocked',
+      cause: 'No attach input files are selected.',
+      artifact: 'Attach input set',
+      action: 'Load successor shards or a lifecycle bundle plus the detached evidence artifacts for the selected channel.',
+    });
     showToast('Select attach files first.', 'warning');
     return;
   }
 
   setButtonsDisabled(true);
   try {
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     const classified = await classifyAttachFiles(files);
     const shards = await parseAttachShards(classified);
     if (!classified.shardFiles.length && !(classified.lifecycleBundleBytes instanceof Uint8Array)) {
@@ -880,6 +913,12 @@ async function attachFilesToShards() {
 
     const plan = deriveAttachPlan(shards);
     if (plan.embedIntoShards && plan.warning && !partialRewriteAcknowledged()) {
+      showInlineError(ATTACH_INLINE_ERROR_ID, {
+        title: 'Attach blocked',
+        cause: 'Partial shard rewrite requires explicit acknowledgement.',
+        artifact: summarizeFileList(files, 'Attach input set'),
+        action: 'Check the partial rewrite acknowledgement or load the full shard cohort before attaching.',
+      });
       showToast('Acknowledge partial shard rewrite before attaching.', 'warning');
       return;
     }
@@ -961,8 +1000,15 @@ async function attachFilesToShards() {
     }
     log('All signing remains external in this workflow. Quantum Vault imports detached artifacts and reports each channel separately at Restore.');
     log('Next actions: export the updated archive-state descriptor, lifecycle bundle, or shard set, or continue to Restore with the merged evidence.');
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     buildAttachResultSummary({ plan, classified, channel });
   } catch (error) {
+    showInlineError(ATTACH_INLINE_ERROR_ID, {
+      title: 'Attach failed',
+      cause: error,
+      artifact: summarizeFileList(files, 'Attach input set'),
+      action: attachRecoveryAction(error),
+    });
     logError(error);
   } finally {
     setButtonsDisabled(false);
@@ -982,15 +1028,18 @@ export function initQcontAttachUI() {
   const partialRewriteAck = document.getElementById('attachPartialRewriteAck');
 
   attachInput?.addEventListener('change', () => {
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     clearAttachResultPanel();
     void updateAttachStatus();
   });
   attachChannel?.addEventListener('change', () => {
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     clearAttachResultPanel();
     setAttachChannelUi(activeAttachChannel());
     void updateAttachStatus();
   });
   partialRewriteAck?.addEventListener('change', () => {
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     void updateAttachStatus();
   });
   attachBtn?.addEventListener('click', attachFilesToShards);

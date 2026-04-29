@@ -521,6 +521,43 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-size: 0.82rem;
   line-height: 1.45;
 }
+
+.inline-error-panel {
+  margin-top: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--accent-danger);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--text-main);
+}
+
+.inline-error-panel h4 {
+  margin: 0 0 0.55rem;
+  color: var(--accent-danger);
+  font-size: 0.92rem;
+  font-family: var(--font-ui);
+}
+
+.inline-error-fields {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.32fr) minmax(0, 1fr);
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.inline-error-fields dt {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.inline-error-fields dd {
+  margin: 0;
+  color: var(--text-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .restore-verification-matrix {
   display: grid;
   gap: 0.35rem;
@@ -1047,7 +1084,8 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   }
 
   .digest-detail-row-head,
-  .digest-detail-list {
+  .digest-detail-list,
+  .inline-error-fields {
     grid-template-columns: 1fr;
   }
 

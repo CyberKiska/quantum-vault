@@ -6,9 +6,12 @@ import { isSupportedAuthPolicyLevel } from '../../crypto/manifest/auth-policy.js
 import { ML_KEM_1024_PRIVATE_KEY_SIZE } from '../../crypto/mlkem.js';
 import { describeAuthPolicyHelp } from './auth-policy-help.js';
 import { evaluateRsParams } from './rs-params-display.js';
+import { clearInlineError, showInlineError } from '../ui/inline-error.js';
 import { log, logError } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
+
+const SPLIT_INLINE_ERROR_ID = 'proSplitInlineError';
 
 function evaluateSplitReadiness({
     qencForQcontInput,
@@ -105,6 +108,19 @@ export function initQcontBuildUI() {
     const authPolicyHelp = document.getElementById('proAuthPolicyHelp');
     const buildQcontBtn = document.getElementById('buildQcontBtn');
 
+    const selectedArtifactSummary = () => {
+        const names = [
+            qencForQcontInput?.files?.[0]?.name,
+            privKeyForQcontInput?.files?.[0]?.name,
+        ].filter(Boolean);
+        return names.length > 0 ? names.join(' + ') : 'Pro Split input set';
+    };
+
+    const clearSplitErrorAndUpdate = () => {
+        clearInlineError(SPLIT_INLINE_ERROR_ID);
+        updateSplitReadiness();
+    };
+
     const updateSplitReadiness = () => {
         const readiness = evaluateSplitReadiness({
             qencForQcontInput,
@@ -122,13 +138,14 @@ export function initQcontBuildUI() {
         authPolicyHelp.textContent = describeAuthPolicyHelp(String(authPolicyInput?.value || PRO_DEFAULT_AUTH_POLICY_LEVEL));
     };
     authPolicyInput?.addEventListener('change', () => {
+        clearInlineError(SPLIT_INLINE_ERROR_ID);
         syncAuthPolicyHelp();
         updateSplitReadiness();
     });
-    qencForQcontInput?.addEventListener('change', updateSplitReadiness);
-    privKeyForQcontInput?.addEventListener('change', updateSplitReadiness);
-    rsNInput?.addEventListener('input', updateSplitReadiness);
-    rsKInput?.addEventListener('input', updateSplitReadiness);
+    qencForQcontInput?.addEventListener('change', clearSplitErrorAndUpdate);
+    privKeyForQcontInput?.addEventListener('change', clearSplitErrorAndUpdate);
+    rsNInput?.addEventListener('input', clearSplitErrorAndUpdate);
+    rsKInput?.addEventListener('input', clearSplitErrorAndUpdate);
     syncAuthPolicyHelp();
     updateSplitReadiness();
 
@@ -136,11 +153,18 @@ export function initQcontBuildUI() {
         const readiness = updateSplitReadiness();
         if (!readiness.ready) {
             const firstBlocking = readiness.prerequisites.find((item) => !item.ok);
+            showInlineError(SPLIT_INLINE_ERROR_ID, {
+                title: 'Split blocked',
+                cause: firstBlocking?.text || 'Split prerequisites are incomplete.',
+                artifact: selectedArtifactSummary(),
+                action: 'Correct the failed prerequisite shown above; private-key/container matching is verified during the split build.',
+            });
             showToast(firstBlocking?.text || 'Split prerequisites are incomplete.', 'warning');
             return;
         }
         setButtonsDisabled(true);
         try {
+            clearInlineError(SPLIT_INLINE_ERROR_ID);
             const qencBytes = await readFileAsUint8Array(readiness.qencFile);
             const privKeyBytes = await readFileAsUint8Array(readiness.privKeyFile);
             const { n, k, t } = readiness.geometry;
@@ -171,6 +195,14 @@ export function initQcontBuildUI() {
             }
             log('Same-state resharing later emits maintenance transition records and preserves archive-approval signatures because the archive-state descriptor bytes stay unchanged.');
             log('.qcont shards built. Distribute files across storage providers.');
-        } catch (e) { logError(e); } finally { setButtonsDisabled(false); updateSplitReadiness(); }
+        } catch (e) {
+            showInlineError(SPLIT_INLINE_ERROR_ID, {
+                title: 'Split failed',
+                cause: e,
+                artifact: selectedArtifactSummary(),
+                action: 'Verify the .qenc and private .qkey pair, keep the shard geometry valid, then retry Split.',
+            });
+            logError(e);
+        } finally { setButtonsDisabled(false); updateSplitReadiness(); }
     });
 }

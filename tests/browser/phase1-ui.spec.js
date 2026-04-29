@@ -97,6 +97,12 @@ test('pro split readiness blocks missing qenc and missing private key', async ({
   await expect(page.getByTestId('split-readiness-text')).toContainText('Split is blocked');
   await expect(page.getByTestId('split-prerequisites')).toContainText('Select the encrypted .qenc container to split');
   await expect(page.getByTestId('split-prerequisites')).toContainText('Select a private .qkey artifact (3168 B)');
+
+  await page.locator('#buildQcontBtn').evaluate((button) => { button.disabled = false; });
+  await page.locator('#buildQcontBtn').click();
+  await expect(page.getByTestId('split-inline-error')).toBeVisible();
+  await expect(page.getByTestId('split-inline-error')).toContainText('Split blocked');
+  await expect(page.getByTestId('split-inline-error')).toContainText('Select the encrypted .qenc container to split');
 });
 
 test('pro split readiness blocks invalid private key size', async ({ page }) => {
@@ -137,10 +143,34 @@ test('strong-PQ restore fails closed without detached archive approval', async (
   await restoreButton.click();
 
   await expect(lastToast(page)).toContainText('strong PQ archive-approval signature');
+  await expect(page.getByTestId('restore-inline-error')).toBeVisible();
+  await expect(page.getByTestId('restore-inline-error')).toContainText('Cause');
+  await expect(page.getByTestId('restore-inline-error')).toContainText('Affected artifact');
+  await expect(page.getByTestId('restore-inline-error')).toContainText('Next recovery action');
+  await expect(page.getByTestId('restore-inline-error')).toContainText('policy-satisfying archive-approval');
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
   await expect(restoreResult).toContainText('Plaintext not released: archive policy not satisfied');
   await expect(restoreResult).toContainText('No policy-satisfying archive-approval signature verified');
+});
+
+test('lite restore policy failure is shown as a persistent inline error', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicyFailFiles);
+
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled();
+  await restoreButton.click();
+
+  const inlineError = page.getByTestId('lite-restore-inline-error');
+  await expect(inlineError).toBeVisible();
+  await expect(inlineError).toContainText('Lite restore blocked');
+  await expect(inlineError).toContainText('Cause');
+  await expect(inlineError).toContainText('Affected artifact');
+  await expect(inlineError).toContainText('Next recovery action');
+  await expect(inlineError).toContainText('policy-satisfying archive-approval');
 });
 
 test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async ({ page }) => {
@@ -282,6 +312,8 @@ test('attach rejects legacy manifest-side files with the explicit unsupported la
   await page.getByTestId('attach-input').setInputFiles(fixtures.legacyManifestFiles);
 
   await expect(page.getByTestId('attach-status-text')).toHaveText('Unsupported attach input');
+  await expect(page.getByTestId('attach-inline-error')).toBeVisible();
+  await expect(page.getByTestId('attach-inline-error')).toContainText('Remove legacy manifest-side files');
   await expect(page.getByTestId('attach-button')).toBeDisabled();
 });
 
@@ -300,6 +332,8 @@ test('attach fails closed when OTS does not match any loaded detached signature'
   await attachButton.click();
 
   await expect(lastToast(page)).toContainText('does not match any detached signature');
+  await expect(page.getByTestId('attach-inline-error')).toBeVisible();
+  await expect(page.getByTestId('attach-inline-error')).toContainText('Check that each OTS proof targets a loaded detached signature');
   await expect(page.getByTestId('attach-result')).toBeHidden();
   expect(downloadCount).toBe(0);
 });

@@ -11,9 +11,11 @@ import {
   logSuccess,
   logWarning,
 } from '../ui/logging.js';
+import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { showToast } from '../ui/toast.js';
 
 const successorSelectionState = new Map();
+const RESTORE_INLINE_ERROR_ID = 'proRestoreInlineError';
 
 function getSuccessorSelectionElements(prefix = 'restore') {
   return {
@@ -31,6 +33,20 @@ function getSuccessorSelectionElements(prefix = 'restore') {
 
 function buildStateSelectionKey(archiveId, stateId) {
   return `${archiveId}:${stateId}`;
+}
+
+function restoreRecoveryAction(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  if (message.includes('archive policy') || message.includes('archive-approval')) {
+    return 'Attach or load policy-satisfying archive-approval signatures and signer pins when required, then retry Restore.';
+  }
+  if (message.includes('lifecycle bundle') || message.includes('cohort') || message.includes('selection')) {
+    return 'Choose the exact archive, cohort, or lifecycle bundle variant, or load the matching descriptor/bundle to disambiguate.';
+  }
+  if (message.includes('qcont') || message.includes('shard')) {
+    return 'Load enough successor QVqcont-7 shards from one archive/state/cohort and remove incompatible files.';
+  }
+  return 'Review the selected restore inputs, correct the blocking condition, and retry Restore.';
 }
 
 function describeStateOption(state) {
@@ -683,18 +699,21 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   const current = successorSelectionState.get(prefix);
   if (elements.stateSelect) {
     elements.stateSelect.onchange = () => {
+      if (prefix === 'restore') clearInlineError(RESTORE_INLINE_ERROR_ID);
       const latest = successorSelectionState.get(prefix);
       void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
     };
   }
   if (elements.cohortSelect) {
     elements.cohortSelect.onchange = () => {
+      if (prefix === 'restore') clearInlineError(RESTORE_INLINE_ERROR_ID);
       const latest = successorSelectionState.get(prefix);
       void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
     };
   }
   if (elements.bundleSelect) {
     elements.bundleSelect.onchange = () => {
+      if (prefix === 'restore') clearInlineError(RESTORE_INLINE_ERROR_ID);
       const latest = successorSelectionState.get(prefix);
       void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
     };
@@ -1163,6 +1182,12 @@ export function initQcontRestoreUI() {
   restoreQcontBtn?.addEventListener('click', async () => {
     const files = qcontShardsInput?.files;
     if (!files?.length) {
+      showInlineError(RESTORE_INLINE_ERROR_ID, {
+        title: 'Restore blocked',
+        cause: 'No restore input files are selected.',
+        artifact: 'Restore input set',
+        action: 'Load successor QVqcont-7 shards and any detached evidence required by the archive policy.',
+      });
       showToast('Select .qcont shards to restore.', 'warning');
       return;
     }
@@ -1176,6 +1201,7 @@ export function initQcontRestoreUI() {
     setButtonsDisabled(true);
     let recoveredPrivKey = null;
     try {
+      clearInlineError(RESTORE_INLINE_ERROR_ID);
       const allFiles = [...files];
       const verificationOptions = await readVerificationOptionsFromDom({
         prefix: 'restore',
@@ -1216,6 +1242,7 @@ export function initQcontRestoreUI() {
         download(qencBlob, qencName);
         download(qkeyBlob, qkeyName);
         logSuccess('Recovered .qenc and .qkey from a policy-satisfying archive cohort.');
+        clearInlineError(RESTORE_INLINE_ERROR_ID);
       } else {
         logError('Verification failed. Automatic download is blocked.');
       }
@@ -1223,6 +1250,12 @@ export function initQcontRestoreUI() {
       buildRestoreResultSummary(result, 'proRestoreResult');
     } catch (error) {
       buildRestorePolicyFailureSummary(error, 'proRestoreResult');
+      showInlineError(RESTORE_INLINE_ERROR_ID, {
+        title: 'Restore blocked',
+        cause: error,
+        artifact: summarizeFileList([...(files || [])], 'Restore input set'),
+        action: restoreRecoveryAction(error),
+      });
       logError(error);
     } finally {
       // Best-effort only: JS runtimes do not guarantee overwriting secrets in memory.
@@ -1231,6 +1264,13 @@ export function initQcontRestoreUI() {
       }
       setButtonsDisabled(false);
     }
+  });
+
+  qcontShardsInput?.addEventListener('change', () => {
+    clearInlineError(RESTORE_INLINE_ERROR_ID);
+  });
+  restoreExpectedEdSigner?.addEventListener('input', () => {
+    clearInlineError(RESTORE_INLINE_ERROR_ID);
   });
 }
 

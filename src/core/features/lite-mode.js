@@ -36,6 +36,7 @@ import {
 } from './ui/logging.js';
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
+import { clearInlineError, showInlineError, summarizeFileList } from './ui/inline-error.js';
 import { updateSidebarStatus } from './ui/ui.js';
 import { describeAuthPolicyHelp } from './qcont/auth-policy-help.js';
 
@@ -46,6 +47,21 @@ let originalFileNames = new Map(); // Track original file names for restoration
 let liteShardsStatusSeq = 0;
 let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
+const LITE_RESTORE_INLINE_ERROR_ID = 'liteRestoreInlineError';
+
+function liteRestoreRecoveryAction(error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    if (message.includes('archive policy') || message.includes('archive-approval')) {
+        return 'Load or attach policy-satisfying archive-approval evidence, then retry Lite Restore.';
+    }
+    if (message.includes('threshold') || message.includes('shard')) {
+        return 'Load enough successor QVqcont-7 shards from one archive/state/cohort and remove incompatible files.';
+    }
+    if (message.includes('lifecycle bundle') || message.includes('selection') || message.includes('cohort')) {
+        return 'Choose the exact archive, cohort, or lifecycle bundle variant, or load the matching lifecycle bundle.';
+    }
+    return 'Review the selected restore inputs, correct the blocking condition, and retry Lite Restore.';
+}
 
 function wipeLiteKeyPair(keyPair) {
     if (keyPair?.privateKey instanceof Uint8Array) {
@@ -500,12 +516,24 @@ async function restoreLiteShards() {
     const shardsInput = document.getElementById('liteShardsInput');
     
     if (!shardsInput?.files?.length) {
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: 'No shard files are selected.',
+            artifact: 'Lite restore input set',
+            action: 'Load successor QVqcont-7 shards and any detached evidence required by the archive policy.',
+        });
         showToast('Please select shard files to restore', 'warning');
         return;
     }
 
     const assessment = await assessShardSelection([...(shardsInput.files || [])]);
     if (!assessment.ready) {
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: assessment.message || 'Selected shards do not meet the recovery threshold.',
+            artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+            action: 'Load enough unique successor shards from one archive/state/cohort, then retry Lite Restore.',
+        });
         showToast(assessment.message || 'Selected shards do not meet the recovery threshold', 'warning');
         return;
     }
@@ -520,6 +548,7 @@ async function restoreLiteShards() {
     }
     
     try {
+        clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
         const verificationOptions = await collectRestoreVerificationOptions('liteRestore', [...shardsInput.files]);
         if (!verificationOptions.shardFiles.length) {
             throw new Error('No .qcont shard files were detected in selected input.');
@@ -555,6 +584,12 @@ async function restoreLiteShards() {
         const { qencBytes, privKey, containerHash, qencOk, qkeyOk } = result;
         
         if (!qencOk || !qkeyOk) {
+            showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+                title: 'Lite restore failed',
+                cause: 'Recovered container or private key failed integrity verification.',
+                artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+                action: 'Replace corrupted or wrong-cohort shards, then retry Lite Restore.',
+            });
             logError('Hash verification failed for container', { isLiteMode: true });
             buildRestoreResultSummary(result, 'liteRestoreResult', {
                 liteDecrypt: { containerOk: false, decryptOk: false },
@@ -568,6 +603,12 @@ async function restoreLiteShards() {
         const integrityOk = metadata.fileHash === decHash;
 
         if (!integrityOk) {
+            showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+                title: 'Lite restore failed',
+                cause: 'Decrypted file hash does not match the container metadata.',
+                artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+                action: 'Treat the restore output as invalid; reload the original shard set and retry.',
+            });
             logError('File integrity check failed - hashes do not match', { isLiteMode: true });
             buildRestoreResultSummary(result, 'liteRestoreResult', {
                 liteDecrypt: { containerOk: true, decryptOk: false },
@@ -602,12 +643,19 @@ async function restoreLiteShards() {
         logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
         logSuccess('Container restored successfully from a policy-satisfying archive cohort', { isLiteMode: true });
+        clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
         buildRestoreResultSummary(result, 'liteRestoreResult', {
             liteDecrypt: { containerOk: true, decryptOk: true },
         });
         
     } catch (error) {
         buildRestorePolicyFailureSummary(error, 'liteRestoreResult');
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: error,
+            artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+            action: liteRestoreRecoveryAction(error),
+        });
         logError(error, { isLiteMode: true });
     } finally {
         setButtonsDisabled(false);
@@ -794,9 +842,15 @@ export function initLiteMode() {
     // Set up shard input monitoring
     const liteShardsInput = document.getElementById('liteShardsInput');
     if (liteShardsInput) {
-        liteShardsInput.addEventListener('change', () => { void updateShardsStatus(); });
+        liteShardsInput.addEventListener('change', () => {
+            clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
+            void updateShardsStatus();
+        });
         void updateShardsStatus();
     }
+    document.getElementById('liteRestoreExpectedEdSigner')?.addEventListener('input', () => {
+        clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
+    });
     
     // Set up button handlers
     const liteDownloadKeysBtn = document.getElementById('liteDownloadKeysBtn');

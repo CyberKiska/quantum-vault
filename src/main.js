@@ -12,10 +12,14 @@ import { installSessionWipeGuards } from './app/session-wipe.js';
 const TRANSIENT_PANEL_IDS = [
     'attachResult',
     'liteRestoreResult',
+    'liteRestoreInlineError',
     'proReshareResult',
     'proRestoreResult',
+    'proRestoreInlineError',
+    'proSplitInlineError',
     'attachStatus',
     'attachModeSummary',
+    'attachInlineError',
     'proReshareStatus',
     'proShardsStatus',
     'shardsStatus',
@@ -65,7 +69,7 @@ function clearTransientPanels() {
         const element = document.getElementById(id);
         if (!element) continue;
         element.style.display = 'none';
-        if (element.classList.contains('restore-result-panel')) {
+        if (element.classList.contains('restore-result-panel') || element.classList.contains('inline-error-panel')) {
             element.replaceChildren();
         } else if (element.tagName === 'PRE') {
             element.textContent = '';
