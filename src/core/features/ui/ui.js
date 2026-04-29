@@ -110,7 +110,6 @@ export function initUI() {
     const rsSegData = el('rsSegData');
     const rsSegParity = el('rsSegParity');
     const rsMarker = el('rsMarker');
-    const buildQcontBtn = el('buildQcontBtn');
     const qcontShardsInput = el('qcontShardsInput');
     const restoreQcontBtn = el('restoreQcontBtn');
     const genKeyBtn = el('genKeyBtn');
@@ -250,7 +249,6 @@ export function initUI() {
         parityLabel: el('rsParityLabel'),
         markerLabel: el('rsMarkerLabel'),
         ticks: el('rsTicks'),
-        splitPrimaryButton: buildQcontBtn,
     }).update;
     void updateProShardsStatus();
     updateProEncryptionControls();

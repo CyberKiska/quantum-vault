@@ -5,13 +5,19 @@ import { ensureObject, ensureString, ensureSafeInteger, ensureHex, assertExactKe
 
 export const AUTH_POLICY_COMMITMENT_ALG = 'SHA3-512';
 
-const AUTH_LEVELS = new Set(['integrity-only', 'any-signature', 'strong-pq-signature']);
+export const AUTH_POLICY_LEVELS = Object.freeze(['integrity-only', 'any-signature', 'strong-pq-signature']);
+
+const AUTH_LEVELS = new Set(AUTH_POLICY_LEVELS);
+
+export function isSupportedAuthPolicyLevel(level) {
+  return AUTH_LEVELS.has(level);
+}
 
 export function normalizeAuthPolicy(authPolicy) {
   const source = ensureObject(authPolicy, 'authPolicy');
   assertExactKeys(source, ['level', 'minValidSignatures'], [], 'authPolicy');
   const level = ensureString(source.level, 'authPolicy.level');
-  if (!AUTH_LEVELS.has(level)) {
+  if (!isSupportedAuthPolicyLevel(level)) {
     throw new Error(`Unsupported authPolicy.level: ${source.level}`);
   }
   return {

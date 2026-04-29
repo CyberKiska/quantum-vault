@@ -706,6 +706,52 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-bottom: 1rem;
 }
 
+.split-readiness {
+  margin-top: 1rem;
+}
+
+.prerequisite-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prerequisite-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: start;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.prerequisite-list li::before {
+  content: "•";
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.prerequisite-list li.ok {
+  color: var(--accent-success);
+}
+
+.prerequisite-list li.ok::before {
+  content: "✓";
+  color: var(--accent-success);
+}
+
+.prerequisite-list li.fail {
+  color: var(--accent-danger);
+}
+
+.prerequisite-list li.fail::before {
+  content: "✗";
+  color: var(--accent-danger);
+}
+
 .strategy-group {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);

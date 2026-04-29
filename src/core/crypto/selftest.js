@@ -1,6 +1,6 @@
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE, decryptFile, encryptFile, generateKeyPair, hashBytes } from './index.js';
 import { asciiBytes, base64ToBytes, bytesToBase64, concatBytes, digestSha256, fromHex, timingSafeEqual, utf8ToBytes } from './bytes.js';
-import { encapsulate, ML_KEM_1024_PUBLIC_KEY_SIZE, validatePublicKey, validatePrivateKey } from './mlkem.js';
+import { encapsulate, ML_KEM_1024_PRIVATE_KEY_SIZE, ML_KEM_1024_PUBLIC_KEY_SIZE, validatePublicKey, validatePrivateKey } from './mlkem.js';
 import { attachLifecycleBundleToShards, exportSourceEvidenceForSigning, mergeLifecycleAttachmentEntriesById } from './qcont/lifecycle-attach.js';
 import { reconstructLifecycleCohortMaterial } from './qcont/lifecycle-cohort-shared.js';
 import { combineSharesFromCopiedSlices } from './qcont/shamir-share-combine.js';
@@ -1367,8 +1367,8 @@ function buildCases() {
       name: 'ML-KEM keygen',
       fn: async () => {
         const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
-        assert(publicKey.length === 1568, `public key length mismatch: ${publicKey.length}`);
-        assert(privateKey.length === 3168, `private key length mismatch: ${privateKey.length}`);
+        assert(publicKey.length === ML_KEM_1024_PUBLIC_KEY_SIZE, `public key length mismatch: ${publicKey.length}`);
+        assert(privateKey.length === ML_KEM_1024_PRIVATE_KEY_SIZE, `private key length mismatch: ${privateKey.length}`);
         validatePublicKey(publicKey);
         validatePrivateKey(privateKey);
       },

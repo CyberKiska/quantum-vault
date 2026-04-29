@@ -50,6 +50,9 @@ test('distribution build exports successor shards and the generated shards resto
 
   const buildButton = page.locator('#buildQcontBtn');
   await expect(buildButton).toBeEnabled();
+  await expect(page.getByTestId('split-readiness-text')).toContainText('Ready to build successor shards');
+  await expect(page.getByTestId('split-prerequisites')).toContainText('Encrypted .qenc selected');
+  await expect(page.getByTestId('split-prerequisites')).toContainText('Private .qkey artifact selected');
 
   const downloads = [];
   page.on('download', (download) => {
@@ -84,6 +87,44 @@ test('distribution build exports successor shards and the generated shards resto
   await expect(restoreResult).toContainText('Allowed by integrity-only policy');
   await expect(restoreResult).toContainText('Archive policy satisfied');
   await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
+});
+
+test('pro split readiness blocks missing qenc and missing private key', async ({ page }) => {
+  await openProMode(page);
+  await page.locator('#proTabDistribution').click();
+
+  await expect(page.locator('#buildQcontBtn')).toBeDisabled();
+  await expect(page.getByTestId('split-readiness-text')).toContainText('Split is blocked');
+  await expect(page.getByTestId('split-prerequisites')).toContainText('Select the encrypted .qenc container to split');
+  await expect(page.getByTestId('split-prerequisites')).toContainText('Select a private .qkey artifact (3168 B)');
+});
+
+test('pro split readiness blocks invalid private key size', async ({ page }) => {
+  await openProMode(page);
+  await page.locator('#proTabDistribution').click();
+
+  await page.locator('#qencForQcontInput').setInputFiles(fixtures.buildFlowFiles[0]);
+  await page.locator('#privKeyForQcontInput').setInputFiles({
+    name: 'wrong-size.private.qkey',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.alloc(32),
+  });
+
+  await expect(page.locator('#buildQcontBtn')).toBeDisabled();
+  await expect(page.getByTestId('split-prerequisites')).toContainText('Private .qkey artifact must be exactly 3168 bytes');
+});
+
+test('pro split readiness blocks invalid shard geometry', async ({ page }) => {
+  await openProMode(page);
+  await page.locator('#proTabDistribution').click();
+
+  await page.locator('#qencForQcontInput').setInputFiles(fixtures.buildFlowFiles[0]);
+  await page.locator('#privKeyForQcontInput').setInputFiles(fixtures.buildFlowFiles[1]);
+  await page.locator('#rsN').fill('4');
+
+  await expect(page.locator('#buildQcontBtn')).toBeDisabled();
+  await expect(page.getByTestId('split-prerequisites')).toContainText('Shard geometry invalid');
+  await expect(page.getByTestId('split-prerequisites')).toContainText('n must be at least 5');
 });
 
 test('strong-PQ restore fails closed without detached archive approval', async ({ page }) => {

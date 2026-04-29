@@ -9,6 +9,42 @@ function setConstraintState(element, isValid) {
   element.classList.add(isValid ? 'ok' : 'fail');
 }
 
+export function evaluateRsParams(nValue, kValue) {
+  const n = parseInt(nValue, 10);
+  const k = parseInt(kValue, 10);
+  const hasN = Number.isInteger(n);
+  const hasK = Number.isInteger(k);
+  const validN = hasN && n >= 5;
+  const validRange = hasN && hasK && k >= 2 && k < n;
+  const validEven = hasN && hasK && ((n - k) % 2 === 0);
+  const valid = validN && validRange && validEven;
+  const m = (hasN && hasK) ? (n - k) : 0;
+  const t = valid ? (k + (m / 2)) : 0;
+  const reasons = [];
+
+  if (!hasN || !hasK) {
+    reasons.push('enter numeric values for n and k');
+  } else {
+    if (!validN) reasons.push('n must be at least 5');
+    if (!validRange) reasons.push('require 2 <= k < n');
+    if (!validEven) reasons.push('(n - k) must be even');
+  }
+
+  return {
+    n,
+    k,
+    hasN,
+    hasK,
+    validN,
+    validRange,
+    validEven,
+    valid,
+    m,
+    t,
+    reasons,
+  };
+}
+
 /**
  * @param {object} config
  * @param {HTMLInputElement|null} config.nInput
@@ -24,7 +60,6 @@ function setConstraintState(element, isValid) {
  * @param {HTMLElement|null} [config.parityLabel]
  * @param {HTMLElement|null} [config.markerLabel]
  * @param {HTMLElement|null} [config.ticks]
- * @param {HTMLButtonElement|null} [config.splitPrimaryButton] - Split tab: disabled when params invalid
  * @param {(valid: boolean) => void} [config.onValidityChange] - e.g. Reshare: refresh button state
  */
 export function bindRsParamsUI(config) {
@@ -42,31 +77,30 @@ export function bindRsParamsUI(config) {
     parityLabel,
     markerLabel,
     ticks,
-    splitPrimaryButton,
     onValidityChange,
   } = config;
 
   function update() {
     if (!nInput || !kInput) return;
-    const n = parseInt(nInput.value, 10);
-    const k = parseInt(kInput.value, 10);
-    const hasN = Number.isInteger(n);
-    const hasK = Number.isInteger(k);
-    const validN = hasN && n >= 5;
-    const validRange = hasN && hasK && k >= 2 && k < n;
-    const validEven = hasN && hasK && ((n - k) % 2 === 0);
-    const allValid = validN && validRange && validEven;
-
-    const m = (hasN && hasK) ? (n - k) : 0;
-    const t = allValid ? (k + (m / 2)) : 0;
+    const state = evaluateRsParams(nInput.value, kInput.value);
+    const {
+      n,
+      k,
+      hasN,
+      hasK,
+      validN,
+      validRange,
+      validEven,
+      valid: allValid,
+      m,
+      t,
+      reasons,
+    } = state;
 
     setConstraintState(ruleN, validN);
     setConstraintState(ruleRange, validRange);
     setConstraintState(ruleEven, validEven);
 
-    if (splitPrimaryButton) {
-      splitPrimaryButton.disabled = !allValid;
-    }
     onValidityChange?.(allValid);
 
     if (summaryEl) {
@@ -74,14 +108,6 @@ export function bindRsParamsUI(config) {
         summaryEl.textContent = `Total: n=${n}. Data: k=${k}. Parity: m=${m}. Threshold: t=${t}. Need >= t shards to restore.`;
         summaryEl.classList.remove('warning', 'error');
       } else {
-        const reasons = [];
-        if (!hasN || !hasK) {
-          reasons.push('enter numeric values for n and k');
-        } else {
-          if (!validN) reasons.push('n must be >= 5');
-          if (!validRange) reasons.push('require 2 <= k < n');
-          if (!validEven) reasons.push('(n - k) must be even');
-        }
         summaryEl.textContent = `Invalid configuration: ${reasons.join('; ')}.`;
         summaryEl.classList.add('warning');
       }

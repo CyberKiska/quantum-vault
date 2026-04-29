@@ -1,5 +1,7 @@
 // --- UI Utility Functions ---
 
+export { validateRsParams, calculateShamirThreshold } from './core/crypto/splitting/rs-params.js';
+
 export function shortenHash(hash) {
     const s = typeof hash === 'string' ? hash : String(hash || '');
     if (s.length < 12) return s;
@@ -39,16 +41,4 @@ export function formatFileSize(bytes) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-export function validateRsParams(n, k) {
-    if (k < 2 || n <= k) return false;
-    if ((n - k) % 2 !== 0) return false;
-    if (n < 5) return false;
-    return true;
-}
-
-export function calculateShamirThreshold(n, k) {
-    const m = n - k;
-    return k + (m / 2);
 }
