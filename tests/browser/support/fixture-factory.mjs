@@ -49,6 +49,7 @@ async function buildBrowserFixtureSet() {
     minValidSignatures: 1,
   });
   const strongPolicySignature = buildQsigFixture(strongPolicySample.split.archiveStateBytes);
+  const strongPolicySecondSelfSignedSignature = buildQsigFixture(strongPolicySample.split.archiveStateBytes);
   const strongPolicyCompleteOts = await buildOtsFixture(strongPolicySignature.qsigBytes, { completeProof: true });
   const strongPolicyIncompleteOts = await buildOtsFixture(strongPolicySignature.qsigBytes, { completeProof: false });
 
@@ -163,6 +164,12 @@ async function buildBrowserFixtureSet() {
       ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq')),
       filePayload('strong-pq-archive.qsig', strongPolicySignature.qsigBytes),
       filePayload('strong-pq-archive.pqpk', strongPolicySignature.pqpkBytes),
+    ],
+    strongPolicyPinnedPlusSelfSignedFiles: [
+      ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq-pinned-plus-self')),
+      filePayload('strong-pq-archive.qsig', strongPolicySignature.qsigBytes),
+      filePayload('strong-pq-archive.pqpk', strongPolicySignature.pqpkBytes),
+      filePayload('ordinary-pq-self-verified.qsig', strongPolicySecondSelfSignedSignature.qsigBytes),
     ],
     strongPolicySatisfiedCompleteOtsFiles: [
       ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq-complete-ots')),

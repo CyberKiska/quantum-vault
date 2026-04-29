@@ -479,6 +479,80 @@ export function logRestoreSelectionSummary(result, onLog) {
   onLog(`Selection source: ${result.selectionSource || 'embedded'}`);
 }
 
+function countSelfVerifiedSignatures(authenticity) {
+  const results = Array.isArray(authenticity?.verification?.results)
+    ? authenticity.verification.results
+    : [];
+  return results.filter((item) => {
+    if (item?.selfSigned === true) return true;
+    const warnings = Array.isArray(item?.warnings) ? item.warnings : [];
+    return warnings.some((warning) => {
+      const text = String(warning || '').toLowerCase();
+      return (
+        text.includes('cryptographic self-verification') ||
+        text.includes('verified only with the signer public key embedded in the .qsig')
+      );
+    });
+  }).length;
+}
+
+function appendSelfVerifiedSignatureRow(addRow, authenticity) {
+  const selfVerifiedCount = countSelfVerifiedSignatures(authenticity);
+  if (selfVerifiedCount > 0) {
+    addRow(
+      'Self-verified signature',
+      'Cryptographically self-verified, ignored for archive policy',
+      'warn',
+      `${selfVerifiedCount} detached PQ signature${selfVerifiedCount === 1 ? '' : 's'} verified only with the public key embedded in the .qsig wrapper. No bundled or user-supplied signer pin corroborated the signer.`
+    );
+  } else {
+    addRow('Self-verified signature', 'None reported', 'neutral');
+  }
+}
+
+function appendSignerPinRows(addRow, addPolarRow, status, archiveApprovalVerified) {
+  const pinSources = [];
+  if (status.bundlePinned === true) pinSources.push('bundle');
+  if (status.userPinned === true) pinSources.push('user input');
+
+  if (pinSources.length > 0) {
+    addRow(
+      'Archive-approval signer pin',
+      `Signer pinned by ${pinSources.join(' and ')}`,
+      'ok',
+      'Pinning strengthens signer provenance reporting but remains separate from archive-policy evaluation.'
+    );
+  } else if (archiveApprovalVerified) {
+    addRow(
+      'Archive-approval signer pin',
+      'Signer not pinned',
+      'warn',
+      'A valid archive-approval signature may satisfy policy without pinning; signer pinning remains a separate status.'
+    );
+  } else {
+    addRow('Archive-approval signer pin', 'No verified archive-approval signer to pin', 'neutral');
+  }
+
+  addPolarRow(
+    'Bundle signer pin',
+    status.bundlePinned === true,
+    'Bundle signer pin matched',
+    'No bundle signer pin matched archive approval',
+    archiveApprovalVerified === true && status.bundlePinned !== true ? 'warn' : 'neutral',
+  );
+  if (status.userPinProvided === true || status.userPinned === true) {
+    addPolarRow(
+      'User-entered signer pin',
+      status.userPinned === true,
+      'User-entered signer pin matched',
+      status.userPinProvided === true ? 'User-entered signer pin did not match a verifying archive-approval signer' : 'User-entered signer pin not active',
+      status.userPinProvided === true && status.userPinned !== true ? 'warn' : 'neutral',
+    );
+  } else {
+    addRow('User-entered signer pin', 'No user-entered signer pin provided', 'neutral');
+  }
+}
+
 /**
  * @param {object} result - restoreFromShards result
  * @param {string} resultPanelId - DOM id of `.restore-result-panel`
@@ -602,6 +676,7 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     'Strong PQ archive-approval signature not present',
     archiveApprovalVerified === true && status.strongPqSignatureVerified !== true ? 'warn' : 'neutral',
   );
+  appendSelfVerifiedSignatureRow(addRow, authenticity);
 
   if (status.transitionRecordPresent !== true) {
     addRow('Maintenance evidence', 'No transition or maintenance evidence present', 'neutral');
@@ -645,24 +720,7 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     addRow('Lifecycle bundle selection', 'One lifecycle bundle variant selected for policy evaluation', 'ok');
   }
 
-  addPolarRow(
-    'Bundle signer pin',
-    status.bundlePinned === true,
-    'Lifecycle-bundle signer pinned',
-    'Lifecycle-bundle signer not pinned',
-    archiveApprovalVerified === true && status.bundlePinned !== true ? 'warn' : 'neutral',
-  );
-  if (status.userPinProvided === true || status.userPinned === true) {
-    addPolarRow(
-      'User signer pin',
-      status.userPinned === true,
-      'User-supplied signer pin matched',
-      status.userPinProvided === true ? 'User-supplied pin did not match a verifying signer' : 'User signer not pinned',
-      status.userPinProvided === true && status.userPinned !== true ? 'warn' : 'neutral',
-    );
-  } else {
-    addRow('User signer pin', 'No user-supplied signer pin provided', 'neutral');
-  }
+  appendSignerPinRows(addRow, addPolarRow, status, archiveApprovalVerified);
 
   const timestampEvidence = Array.isArray(authenticity?.timestampEvidence) ? authenticity.timestampEvidence : [];
   if (timestampEvidence.length > 0) {
@@ -747,12 +805,32 @@ export function buildRestorePolicyFailureSummary(error, resultPanelId) {
     }
     matrix.appendChild(item);
   };
+  const addPolarRow = (label, ok, okText, failText, failTone = 'fail', detail = '') => {
+    addRow(label, ok ? okText : failText, ok ? 'ok' : failTone, detail);
+  };
 
   const reason = String(error?.message || error || 'Archive policy not satisfied');
+  const authenticity = error?.authenticity || null;
+  const status = authenticity?.status || {};
   addRow('Plaintext release', 'Blocked', 'fail');
   addRow('Archive policy', 'Archive policy not satisfied', 'fail', reason);
   addRow('Integrity', 'Not evaluated after policy block', 'neutral');
-  addRow('Archive approval', 'No policy-satisfying archive-approval signature verified', 'fail');
+  addRow(
+    'Archive approval',
+    status.archiveApprovalSignatureVerified === true
+      ? 'Archive-approval signature verified but not policy-satisfying'
+      : 'No policy-satisfying archive-approval signature verified',
+    'fail'
+  );
+  addPolarRow(
+    'Strong PQ approval',
+    status.strongPqSignatureVerified === true,
+    'Strong PQ archive-approval signature verified',
+    'Strong PQ archive-approval signature not present',
+    'neutral'
+  );
+  appendSelfVerifiedSignatureRow(addRow, authenticity);
+  appendSignerPinRows(addRow, addPolarRow, status, status.archiveApprovalSignatureVerified === true);
   addRow('Evidence channels', 'Maintenance, source-evidence, and timestamp evidence cannot satisfy archive policy', 'neutral');
 
   panel.className = 'restore-result-panel fail';

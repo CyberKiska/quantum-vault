@@ -408,6 +408,7 @@ Allowed current status terms include:
 - `integrity verified`
 - `archive approval signature verified`
 - `strong PQ signature verified`
+- `self-verified signature ignored for archive policy`
 - `archive policy satisfied`
 - `bundle signer pinned`
 - `user signer pinned`
@@ -528,6 +529,7 @@ Current handling is:
 - valid but unpinned archive-approval signatures may still satisfy policy
 - invalid extra signatures do not count if another signature satisfies policy
 - self-verified PQ signatures do not count toward trust or policy
+- self-verified PQ signatures should be reported as cryptographically valid but ignored for archive policy, never as trusted or approved
 - no satisfying archive-approval signature blocks restore for `any-signature` and `strong-pq-signature`
 - bundle pinning and user pinning are tracked separately and may both be true
 - timestamp evidence does not upgrade an otherwise unsatisfied signature policy
