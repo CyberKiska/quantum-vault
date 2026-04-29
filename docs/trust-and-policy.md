@@ -471,13 +471,29 @@ The initial lifecycle bundle contains:
 Current attach behavior:
 
 - validates detached signatures against the correct canonical target bytes
-- imports archive-approval detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs
+- exposes archive-approval, maintenance, and source-evidence attach channels
+- imports detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs for the selected channel
 - validates OTS target linkage fail closed during import
-- does not provide a generic browser import path for detached maintenance signatures or detached source-evidence signatures
 - imports public keys and signer identifiers
 - writes an updated lifecycle bundle
 - may rewrite embedded lifecycle bundles across a full shard cohort
 - MUST NOT mutate canonical archive-state or cohort-binding bytes
+
+Current attach channel targets:
+
+| Attach channel | Required target material | Bundle destination | Restore-policy role |
+| --- | --- | --- | --- |
+| `archive-approval` | Selected canonical archive-state descriptor, either embedded in shards/bundle or provided as `*.archive-state.json` | `attachments.archiveApprovalSignatures[]` | Counts toward `any-signature` and `strong-pq-signature` when valid and policy-compatible |
+| `maintenance` | Selected lifecycle bundle plus the matching canonical `transition-record.json` already represented in that bundle | `attachments.maintenanceSignatures[]` | Reported separately; never counted toward archive policy |
+| `source-evidence` | Canonical `source-evidence.json`; Attach adds the source-evidence object to the lifecycle bundle if needed | `sourceEvidence[]` and `attachments.sourceEvidenceSignatures[]` | Reported separately; never counted toward archive policy |
+
+Target-binding expectations:
+
+- archive-approval signatures bind `targetType = archive-state`, `targetRef = state:{stateId}`, and the SHA3-512 digest of the canonical archive-state descriptor
+- maintenance signatures bind `targetType = transition-record`, `targetRef = transition:sha3-512:{transitionRecordDigest}`, and the SHA3-512 digest of the canonical transition record
+- source-evidence signatures bind `targetType = source-evidence`, `targetRef = source-evidence:sha3-512:{sourceEvidenceDigest}`, and the SHA3-512 digest of the canonical source-evidence object
+- `.pqpk` files provide signer public-key material for bundled or user-supplied pinning, but pinning remains separate from archive-policy satisfaction
+- `.ots` files target detached signature bytes by `SHA-256(signatureBytes)`, not archive-state, transition-record, source-evidence, or lifecycle-bundle bytes; attach fails closed when a proof matches zero or multiple known detached signatures
 
 ### 9.3 Restore evaluation
 

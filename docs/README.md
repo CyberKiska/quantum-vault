@@ -62,7 +62,7 @@ Deferred roadmap:
 Current product surfaces:
 
 - Lite: regular-user successor archive creation/export of `.qcont`, `*.archive-state.json`, and `*.lifecycle-bundle.json`, successor restore, and explicit ambiguity resolution when successor archive/state/cohort or lifecycle-bundle selection is required
-- Pro: all Lite successor workflows plus standalone `*.cohort-binding.json` export, explicit successor artifact export/attach/inspection, and same-state resharing controls
+- Pro: all Lite successor workflows plus standalone `*.cohort-binding.json` export, explicit successor artifact export/attach/inspection, archive-approval/maintenance/source-evidence Attach channels, and same-state resharing controls
 - Historical material: roadmap and archival reference files may describe earlier artifact families or earlier planning baselines, but they are not part of the current shipped product surface
 
 Current release-gate note:
