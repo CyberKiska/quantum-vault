@@ -412,8 +412,9 @@ Allowed current status terms include:
 - `bundle signer pinned`
 - `user signer pinned`
 - `OTS evidence linked to signature`
-- `OTS proof appears complete`
-- `OTS proof appears incomplete`
+- `OTS proof appears complete (heuristic)`
+- `OTS proof incomplete or pending`
+- `Timestamp evidence does not satisfy archive policy`
 
 Terms that should not be used loosely:
 
@@ -431,7 +432,7 @@ Current `.ots` semantics are deliberately limited:
 
 Current policy rule:
 
-- timestamps NEVER satisfy archive signature policy by themselves
+- timestamp evidence does not satisfy archive policy
 
 Current handling rules:
 

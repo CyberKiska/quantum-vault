@@ -428,7 +428,10 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
     onWarn(warning);
   }
   for (const evidence of authenticity?.timestampEvidence || []) {
-    onLog(`${evidence.linkLabel}: ${evidence.targetRef}. ${evidence.completionLabel}.`);
+    const completionLabel = evidence.apparentlyComplete === true
+      ? 'OTS proof appears complete (heuristic)'
+      : 'OTS proof incomplete or pending';
+    onLog(`${evidence.linkLabel}: ${evidence.targetRef}. ${completionLabel}. Timestamp evidence does not satisfy archive policy.`);
   }
   if (sourceEvidenceReport?.present) {
     const descriptiveFieldCount = Array.isArray(sourceEvidenceReport.descriptiveFieldNames)
@@ -667,10 +670,10 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     const incompleteCount = timestampEvidence.length - completeCount;
     const completionParts = [];
     if (completeCount > 0) {
-      completionParts.push(`${completeCount} appears complete`);
+      completionParts.push(`OTS proof appears complete (heuristic): ${completeCount}`);
     }
     if (incompleteCount > 0) {
-      completionParts.push(`${incompleteCount} incomplete or pending`);
+      completionParts.push(`OTS proof incomplete or pending: ${incompleteCount}`);
     }
     addRow(
       'Timestamp evidence',

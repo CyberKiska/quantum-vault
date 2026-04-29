@@ -114,6 +114,38 @@ test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async (
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
 
+test('restore reports complete-looking OTS evidence as heuristic and non-policy-satisfying', async ({ page }) => {
+  await openProTab(page, 'tab-restore');
+  await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicySatisfiedCompleteOtsFiles);
+
+  const restoreButton = page.getByTestId('restore-button');
+  await expect(restoreButton).toBeEnabled();
+  await restoreButton.click();
+
+  const restoreResult = page.getByTestId('restore-result');
+  await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('OTS evidence linked to 1 signature');
+  await expect(restoreResult).toContainText('OTS proof appears complete (heuristic): 1');
+  await expect(restoreResult).toContainText('Timestamp evidence does not satisfy archive policy');
+  await expect(restoreResult).toContainText('Archive policy satisfied');
+});
+
+test('restore reports incomplete OTS evidence separately from archive policy', async ({ page }) => {
+  await openProTab(page, 'tab-restore');
+  await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicySatisfiedIncompleteOtsFiles);
+
+  const restoreButton = page.getByTestId('restore-button');
+  await expect(restoreButton).toBeEnabled();
+  await restoreButton.click();
+
+  const restoreResult = page.getByTestId('restore-result');
+  await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('OTS evidence linked to 1 signature');
+  await expect(restoreResult).toContainText('OTS proof incomplete or pending: 1');
+  await expect(restoreResult).toContainText('Timestamp evidence does not satisfy archive policy');
+  await expect(restoreResult).toContainText('Archive policy satisfied');
+});
+
 test('ambiguous same-state cohorts stay blocked until explicit operator choice', async ({ page }) => {
   await openProTab(page, 'tab-restore');
   await page.getByTestId('restore-input').setInputFiles(fixtures.ambiguousCohortFiles);
@@ -199,6 +231,8 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
 
   await expect(page.getByTestId('attach-result')).toBeVisible();
   await expect(page.getByTestId('attach-result')).toContainText('Archive-approval signatures merged');
+  await expect(page.getByTestId('attach-result')).toContainText('OTS evidence targets detached signature bytes by SHA-256(signatureBytes), not archive-state or lifecycle-bundle bytes');
+  await expect(page.getByTestId('attach-result')).toContainText('Timestamp evidence does not satisfy archive policy');
 
   await openProTab(page, 'tab-restore');
   await page.getByTestId('restore-input').setInputFiles([

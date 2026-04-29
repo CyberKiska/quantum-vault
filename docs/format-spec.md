@@ -555,6 +555,7 @@ Current acceptance boundaries:
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
 - `.pqpk` material may be used for bundled or user-supplied PQ pinning
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
+- `.ots` timestamps are timestamp evidence only and do not satisfy archive policy
 - archive-approval attach binds signatures to `targetType = archive-state`, `targetRef = state:{stateId}`, and the SHA3-512 digest of the canonical archive-state descriptor
 - maintenance attach requires a canonical transition-record target already present in the selected lifecycle bundle and binds signatures to `targetType = transition-record`, `targetRef = transition:sha3-512:{transitionRecordDigest}`, and that transition-record digest
 - source-evidence attach requires canonical source-evidence JSON, stores that object in `sourceEvidence[]` if needed, and binds signatures to `targetType = source-evidence`, `targetRef = source-evidence:sha3-512:{sourceEvidenceDigest}`, and that source-evidence digest
@@ -562,6 +563,7 @@ Current acceptance boundaries:
 - OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 - `apparentlyComplete` / `completeProof` are derived by the current implementation from proof-name keywords first (`initial`, `pending`, `incomplete` => incomplete; `complete`, `completed`, `confirmed`, `upgraded` => complete), with proof size `>= 1024` bytes used only as a fallback when no keyword matches
 - the current implementation does not treat `apparentlyComplete` / `completeProof` as validation of a Bitcoin attestation chain
+- user-facing restore summaries should label complete-looking proofs as `OTS proof appears complete (heuristic)` and should state that timestamp evidence does not satisfy archive policy
 
 Detailed linkage, pinning, and ambiguity rules are defined in [appendices/external-artifacts.md](appendices/external-artifacts.md).
 

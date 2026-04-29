@@ -711,8 +711,13 @@ function buildAttachResultSummary({ plan, classified, channel }) {
   }
   if (publicKeyCount > 0) addPolar(true, `.pqpk signer pins merged (${publicKeyCount})`, '');
   else addNeutral('No .pqpk signer pins were supplied.');
-  if (timestampCount > 0) addPolar(true, `.ots proofs merged (${timestampCount})`, '');
-  else addNeutral('No .ots proofs were supplied.');
+  if (timestampCount > 0) {
+    addPolar(true, `.ots proofs merged (${timestampCount})`, '');
+    addNeutral('OTS evidence targets detached signature bytes by SHA-256(signatureBytes), not archive-state or lifecycle-bundle bytes.');
+    addNeutral('Timestamp evidence does not satisfy archive policy.');
+  } else {
+    addNeutral('No .ots proofs were supplied.');
+  }
 
   addSection('Next Actions');
   addNeutral('Continue to Restore to inspect archive approval, maintenance, and source-evidence channels separately.');
