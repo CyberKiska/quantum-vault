@@ -36,6 +36,10 @@ async function openProMode(page) {
   }
 }
 
+function shortenHashForUi(hash) {
+  return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
+}
+
 test('distribution build exports successor shards and the generated shards restore under integrity-only policy', async ({ page }) => {
   await openProMode(page);
   await page.locator('#proTabDistribution').click();
@@ -202,6 +206,25 @@ test('mixed lifecycle bundle digests require explicit selection and surface a wa
 
   await expect(page.getByTestId('restore-bundle-selection-group')).toBeVisible();
   await expect(page.getByTestId('restore-button')).toBeDisabled();
+  await expect(page.getByTestId('restore-bundle-selection').locator('option', {
+    hasText: `Lifecycle bundle ${shortenHashForUi(fixtures.mixedBundleDigestHex)}`,
+  })).toHaveCount(1);
+
+  const digestDetails = page.getByTestId('restore-digest-details');
+  await expect(digestDetails).toBeVisible();
+  await expect(digestDetails.locator('summary')).toContainText('Digest details and copy');
+  await expect(digestDetails.getByText(fixtures.mixedBundleDigestHex).first()).toBeHidden();
+  await digestDetails.locator('summary').click();
+  await expect(digestDetails).toContainText('Source filenames');
+  await expect(digestDetails).toContainText('Artifact type');
+  await expect(digestDetails).toContainText('Policy');
+  await expect(digestDetails).toContainText('Cohort parameters');
+  await expect(digestDetails).toContainText('Lifecycle-bundle digest (SHA3-512)');
+  await expect(digestDetails).toContainText(fixtures.mixedBundleDigestHex);
+  const copyBundleDigest = digestDetails.locator(`button[data-copy-value="${fixtures.mixedBundleDigestHex}"]`).first();
+  await expect(copyBundleDigest).toHaveText('Copy bundle digest');
+  await copyBundleDigest.click();
+  await expect(copyBundleDigest).toHaveText('Copied');
 
   await page.getByTestId('restore-bundle-selection').selectOption(fixtures.mixedBundleDigestHex);
   await expect(page.getByTestId('restore-button')).toBeEnabled();

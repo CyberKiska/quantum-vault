@@ -806,6 +806,91 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-bottom: 0.5rem;
 }
 
+.successor-digest-details {
+  margin-top: 0.85rem;
+}
+
+.digest-details-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  padding: 0.75rem 0.85rem;
+}
+
+.digest-details-panel > summary {
+  cursor: pointer;
+  color: var(--text-main);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.digest-detail-section {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.digest-detail-section h5 {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.digest-detail-row {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.digest-detail-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.digest-detail-title {
+  min-width: 0;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.digest-copy-button {
+  flex: 0 0 auto;
+}
+
+.digest-detail-list {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.34fr) minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.digest-detail-list dt {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.digest-detail-list dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.digest-detail-mono {
+  font-family: var(--font-mono);
+}
+
 .rs-controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -913,5 +998,15 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .config-controls,
   .rs-controls {
     grid-template-columns: 1fr;
+  }
+
+  .digest-detail-row-head,
+  .digest-detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .digest-detail-row-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

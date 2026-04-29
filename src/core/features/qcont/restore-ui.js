@@ -45,6 +45,293 @@ function describeCohortOption(cohort) {
   return `Cohort ${shortenHash(cohort.cohortId)} (${cohort.shardCount}/${cohort.n} shards loaded, threshold ${cohort.t}, ${bundleLabel})`;
 }
 
+function uniqueStrings(values) {
+  return [...new Set(
+    values
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  )].sort((a, b) => a.localeCompare(b));
+}
+
+function formatDetailValue(value) {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.join(', ') : 'None';
+  }
+  return String(value || 'None');
+}
+
+function describePolicyLevels(policyLevels = []) {
+  return policyLevels.length > 0 ? policyLevels.join(', ') : 'unknown';
+}
+
+function createDetailEntry(term, value) {
+  return { term, value };
+}
+
+async function copyTextToClipboard(text) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to the local textarea copy path for restricted browser contexts.
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) {
+    throw new Error('Clipboard API unavailable');
+  }
+}
+
+function bindCopyButton(button, value, copiedLabel = 'Copied') {
+  button.addEventListener('click', async () => {
+    const originalLabel = button.textContent;
+    try {
+      await copyTextToClipboard(value);
+      button.textContent = copiedLabel;
+      showToast('Copied full digest.', 'success');
+      setTimeout(() => {
+        button.textContent = originalLabel;
+      }, 1600);
+    } catch {
+      showToast('Copy failed. Select the expanded digest manually.', 'warning');
+    }
+  });
+}
+
+function appendDigestDetailRow(section, {
+  title,
+  copyValue = '',
+  copyLabel = 'Copy',
+  copyKind = 'digest',
+  entries = [],
+}) {
+  const row = document.createElement('div');
+  row.className = 'digest-detail-row';
+  row.setAttribute('data-digest-kind', copyKind);
+
+  const head = document.createElement('div');
+  head.className = 'digest-detail-row-head';
+  const titleEl = document.createElement('span');
+  titleEl.className = 'digest-detail-title';
+  titleEl.textContent = title;
+  head.appendChild(titleEl);
+
+  if (copyValue) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'button secondary small digest-copy-button';
+    button.textContent = copyLabel;
+    button.setAttribute('data-copy-value', copyValue);
+    button.setAttribute('data-digest-kind', copyKind);
+    bindCopyButton(button, copyValue);
+    head.appendChild(button);
+  }
+
+  const details = document.createElement('dl');
+  details.className = 'digest-detail-list';
+  for (const entry of entries) {
+    const term = document.createElement('dt');
+    term.textContent = entry.term;
+    const value = document.createElement('dd');
+    value.textContent = formatDetailValue(entry.value);
+    if (/digest|archive id|cohort id|state/i.test(entry.term)) {
+      value.classList.add('digest-detail-mono');
+    }
+    details.append(term, value);
+  }
+
+  row.append(head, details);
+  section.appendChild(row);
+}
+
+function ensureSelectionDetailsHost(prefix, elements) {
+  if (!elements.container) return null;
+  let host = elements.container.querySelector('[data-successor-digest-details="true"]');
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'successor-digest-details';
+    host.setAttribute('data-successor-digest-details', 'true');
+    host.setAttribute('data-testid', `${prefix}-digest-details`);
+    elements.container.appendChild(host);
+  }
+  return host;
+}
+
+function clearSelectionDetails(prefix) {
+  const elements = getSuccessorSelectionElements(prefix);
+  const host = elements.container?.querySelector('[data-successor-digest-details="true"]');
+  if (host) {
+    host.replaceChildren();
+    host.classList.add('initially-hidden');
+  }
+}
+
+function addDigestDetailSection(panel, title) {
+  const section = document.createElement('div');
+  section.className = 'digest-detail-section';
+  const heading = document.createElement('h5');
+  heading.textContent = title;
+  section.appendChild(heading);
+  panel.appendChild(section);
+  return section;
+}
+
+function collectStateBundleDigests(state) {
+  return uniqueStrings(state.cohorts.flatMap((cohort) => cohort.bundleDigests));
+}
+
+function collectStateSourceFiles(state) {
+  return uniqueStrings(state.cohorts.flatMap((cohort) => cohort.sourceFileNames || []));
+}
+
+function collectStatePolicies(state) {
+  return uniqueStrings(state.cohorts.flatMap((cohort) => cohort.policyLevels || []));
+}
+
+function renderSuccessorDigestDetails(prefix, {
+  elements,
+  model,
+  selectedState,
+  selectedCohort,
+  selectedLifecycleBundleDigestHex,
+  selectionRequired,
+  helpText,
+}) {
+  const host = ensureSelectionDetailsHost(prefix, elements);
+  if (!host || !model?.states?.length) return;
+  host.replaceChildren();
+  host.classList.remove('initially-hidden');
+
+  const panel = document.createElement('details');
+  panel.className = 'digest-details-panel';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Digest details and copy';
+  panel.appendChild(summary);
+
+  const note = document.createElement('p');
+  note.className = 'muted-copy';
+  note.textContent = 'Short labels stay primary. Expand this panel only when comparing full identifiers or preserving audit notes.';
+  panel.appendChild(note);
+
+  const contextSection = addDigestDetailSection(panel, 'Selection Context');
+  appendDigestDetailRow(contextSection, {
+    title: selectionRequired ? 'Explicit selection required' : 'Single restore path selected',
+    copyKind: 'selection-context',
+    entries: [
+      createDetailEntry('Why selection is required', helpText),
+      createDetailEntry('Artifact type', 'QVqcont-7 successor shard set'),
+      createDetailEntry('Archive-state candidates', String(model.states.length)),
+      createDetailEntry(
+        'Cohort candidates',
+        String(model.states.reduce((count, state) => count + state.cohorts.length, 0))
+      ),
+      createDetailEntry('Policy', describePolicyLevels(uniqueStrings(model.states.flatMap(collectStatePolicies)))),
+    ],
+  });
+
+  const statesToShow = model.states.length > 1 || !selectedState ? model.states : [selectedState];
+  const stateSection = addDigestDetailSection(
+    panel,
+    model.states.length > 1 ? 'Archive/State Candidates' : 'Selected Archive State'
+  );
+  for (const state of statesToShow) {
+    const sourceFileNames = collectStateSourceFiles(state);
+    const bundleDigests = collectStateBundleDigests(state);
+    appendDigestDetailRow(stateSection, {
+      title: `Archive ${shortenHash(state.archiveId)} / State ${shortenHash(state.stateId)}`,
+      copyValue: state.stateId,
+      copyLabel: 'Copy state digest',
+      copyKind: 'state',
+      entries: [
+        createDetailEntry('Source filenames', sourceFileNames),
+        createDetailEntry('Artifact type', 'Archive-state candidate from embedded QVqcont-7 shards'),
+        createDetailEntry('Policy', describePolicyLevels(collectStatePolicies(state))),
+        createDetailEntry('Archive id', state.archiveId),
+        createDetailEntry('State digest (SHA3-512)', state.stateId),
+        createDetailEntry('Cohorts', String(state.cohorts.length)),
+        createDetailEntry('Lifecycle-bundle digest', bundleDigests),
+      ],
+    });
+  }
+
+  const cohortsToShow = selectedState
+    ? selectedState.cohorts
+    : model.states.flatMap((state) => state.cohorts);
+  if (cohortsToShow.length > 0) {
+    const cohortSection = addDigestDetailSection(
+      panel,
+      cohortsToShow.length > 1 ? 'Cohort Candidates' : 'Selected Cohort'
+    );
+    for (const cohort of cohortsToShow) {
+      appendDigestDetailRow(cohortSection, {
+        title: `Cohort ${shortenHash(cohort.cohortId)}`,
+        copyValue: cohort.cohortId,
+        copyLabel: 'Copy cohort id',
+        copyKind: 'cohort',
+        entries: [
+          createDetailEntry('Source filenames', cohort.sourceFileNames),
+          createDetailEntry('Artifact type', 'Same-state cohort candidate'),
+          createDetailEntry('Policy', describePolicyLevels(cohort.policyLevels)),
+          createDetailEntry('Cohort parameters', `${cohort.shardCount}/${cohort.n} shards loaded, threshold ${cohort.t}`),
+          createDetailEntry('Archive id', cohort.archiveId),
+          createDetailEntry('State digest (SHA3-512)', cohort.stateId),
+          createDetailEntry('Cohort id', cohort.cohortId),
+          createDetailEntry('Lifecycle-bundle digest', cohort.bundleDigests),
+        ],
+      });
+    }
+  }
+
+  const bundleRows = [];
+  const bundleCohorts = selectedCohort ? [selectedCohort] : cohortsToShow;
+  for (const cohort of bundleCohorts) {
+    for (const digestHex of cohort.bundleDigests) {
+      if (
+        selectedLifecycleBundleDigestHex &&
+        digestHex !== selectedLifecycleBundleDigestHex &&
+        selectedCohort
+      ) {
+        continue;
+      }
+      bundleRows.push({ cohort, digestHex });
+    }
+  }
+  if (bundleRows.length > 0) {
+    const bundleSection = addDigestDetailSection(
+      panel,
+      bundleRows.length > 1 ? 'Lifecycle Bundle Candidates' : 'Selected Lifecycle Bundle'
+    );
+    for (const { cohort, digestHex } of bundleRows) {
+      appendDigestDetailRow(bundleSection, {
+        title: `Lifecycle bundle ${shortenHash(digestHex)}`,
+        copyValue: digestHex,
+        copyLabel: 'Copy bundle digest',
+        copyKind: 'lifecycle-bundle',
+        entries: [
+          createDetailEntry('Source filenames', cohort.bundleSourceFileNamesByDigest?.[digestHex] || cohort.sourceFileNames),
+          createDetailEntry('Artifact type', 'Embedded successor lifecycle bundle'),
+          createDetailEntry('Policy', describePolicyLevels(cohort.policyLevels)),
+          createDetailEntry('Cohort parameters', `${cohort.shardCount}/${cohort.n} shards loaded, threshold ${cohort.t}`),
+          createDetailEntry('Cohort id', cohort.cohortId),
+          createDetailEntry('Lifecycle-bundle digest (SHA3-512)', digestHex),
+        ],
+      });
+    }
+  }
+
+  host.appendChild(panel);
+}
+
 function populateSelectionOptions(select, options, selectedValue, placeholder) {
   if (!select) return;
   select.replaceChildren();
@@ -82,6 +369,7 @@ function renderSelectionInfoUi(prefix, actionButton, nextState, summaryText, hel
   [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
     if (group) group.style.display = 'none';
   });
+  clearSelectionDetails(prefix);
   successorSelectionState.set(prefix, {
     ...nextState,
     mode,
@@ -103,6 +391,7 @@ function clearSuccessorSelectionUi(prefix, actionButton) {
   [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
     if (group) group.style.display = 'none';
   });
+  clearSelectionDetails(prefix);
   successorSelectionState.set(prefix, {
     mode: 'none',
     assessment: successorSelectionState.get(prefix)?.assessment || null,
@@ -139,11 +428,24 @@ export function buildSuccessorSelectionModel(parsedShards = []) {
       });
     }
     const firstShard = candidate.shards[0];
+    const sourceFileNames = uniqueStrings(candidate.shards.map((shard) => shard.sourceFileName));
+    const policyLevels = uniqueStrings(candidate.shards.map((shard) => shard.lifecycleBundle?.authPolicy?.level));
+    const bundleSourceFileNamesByDigest = {};
+    for (const digestHex of candidate.embeddedLifecycleBundles.keys()) {
+      bundleSourceFileNamesByDigest[digestHex] = uniqueStrings(
+        candidate.shards
+          .filter((shard) => shard.lifecycleBundleDigestHex === digestHex)
+          .map((shard) => shard.sourceFileName)
+      );
+    }
     statesByKey.get(key).cohorts.push({
       archiveId: candidate.archiveId,
       stateId: candidate.stateId,
       cohortId: candidate.cohortId,
       bundleDigests: [...candidate.embeddedLifecycleBundles.keys()].sort(),
+      bundleSourceFileNamesByDigest,
+      sourceFileNames,
+      policyLevels,
       shardCount: candidate.shards.length,
       n: Number(firstShard?.metaJSON?.n || 0),
       t: Number(firstShard?.metaJSON?.t || 0),
@@ -205,7 +507,13 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }
 
     const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
-    const successorShards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
+    const successorShards = await Promise.all(shardBytes.map(async (bytes, index) => {
+      const shard = await parseLifecycleShard(bytes, { strict: true });
+      return {
+        ...shard,
+        sourceFileName: classified.shardFiles[index]?.name || `selected-shard-${index + 1}.qcont`,
+      };
+    }));
 
     if (!successorShards.length) {
       return renderSelectionInfoUi(
@@ -336,6 +644,15 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     } else {
       elements.help.textContent = 'One successor restore path is available from the selected shard set.';
     }
+    renderSuccessorDigestDetails(prefix, {
+      elements,
+      model,
+      selectedState,
+      selectedCohort,
+      selectedLifecycleBundleDigestHex,
+      selectionRequired,
+      helpText: elements.help.textContent,
+    });
 
     const stateForRestore = stateChoiceRequired && selectedState
       ? { selectedArchiveId: selectedState.archiveId, selectedStateId: selectedState.stateId }
