@@ -488,145 +488,272 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
   panel.replaceChildren();
   panel.style.display = 'block';
   const { qencOk, qkeyOk, authenticity } = result;
+  const status = authenticity?.status || {};
+  const policy = authenticity?.policy || {};
+  const policyLevel = String(policy.level || 'unknown');
   const policyOk = authenticity?.status?.policySatisfied === true;
-  let allOk = qencOk && qkeyOk && policyOk;
+  let releaseAllowed = qencOk && qkeyOk && policyOk;
   if (options.liteDecrypt) {
     const { containerOk, decryptOk } = options.liteDecrypt;
-    allOk = qencOk && qkeyOk && containerOk && decryptOk && policyOk;
+    releaseAllowed = qencOk && qkeyOk && containerOk && decryptOk && policyOk;
   }
 
   const header = document.createElement('h4');
-  header.textContent = 'Restore Result';
+  if (releaseAllowed && policyLevel === 'integrity-only') {
+    header.textContent = 'Plaintext released under integrity-only policy';
+  } else if (releaseAllowed && policyLevel === 'strong-pq-signature') {
+    header.textContent = 'Plaintext released under strong PQ archive-approval policy';
+  } else if (releaseAllowed && policyLevel === 'any-signature') {
+    header.textContent = 'Plaintext released under archive-signature policy';
+  } else if (!policyOk) {
+    header.textContent = 'Plaintext not released: archive policy not satisfied';
+  } else {
+    header.textContent = 'Plaintext not released: integrity check failed';
+  }
   panel.appendChild(header);
+
+  const intro = document.createElement('p');
+  intro.className = 'restore-result-lede';
+  intro.textContent = releaseAllowed
+    ? 'Restore release is separated from archive approval, signer pinning, timestamp evidence, maintenance evidence, and source evidence.'
+    : 'No plaintext was released. Review the failed row before retrying restore.';
+  panel.appendChild(intro);
+
+  const matrix = document.createElement('div');
+  matrix.className = 'restore-verification-matrix';
+  panel.appendChild(matrix);
 
   const addSection = (title) => {
     const section = document.createElement('div');
     section.className = 'restore-result-section';
     section.textContent = title;
-    panel.appendChild(section);
+    matrix.appendChild(section);
   };
 
-  const addPolar = (ok, okText, failText, warnOnFail = false) => {
+  const addRow = (label, value, tone = 'neutral', detail = '') => {
     const item = document.createElement('div');
-    const useWarn = !ok && warnOnFail;
-    item.className = `restore-result-item ${useWarn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-    const icon = ok ? '✓' : (useWarn ? '⚠' : '✗');
-    item.textContent = `${icon} ${ok ? okText : failText}`;
-    panel.appendChild(item);
+    item.className = `restore-result-item restore-matrix-row ${tone}`;
+    const labelEl = document.createElement('span');
+    labelEl.className = 'restore-matrix-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'restore-matrix-value';
+    valueEl.textContent = value;
+    item.append(labelEl, valueEl);
+    if (detail) {
+      const detailEl = document.createElement('span');
+      detailEl.className = 'restore-matrix-detail';
+      detailEl.textContent = detail;
+      item.appendChild(detailEl);
+    }
+    matrix.appendChild(item);
+  };
+
+  const addPolarRow = (label, ok, okText, failText, failTone = 'fail', detail = '') => {
+    addRow(label, ok ? okText : failText, ok ? 'ok' : failTone, detail);
   };
 
   const addNeutral = (text) => {
-    const item = document.createElement('div');
-    item.className = 'restore-result-item neutral';
-    item.textContent = `· ${text}`;
-    panel.appendChild(item);
+    addRow('Note', text, 'neutral');
   };
 
-  addSection('Integrity');
-  addPolar(qencOk, 'Container integrity verified', 'Container integrity check failed');
-  addPolar(qkeyOk, 'Private key integrity verified', 'Private key integrity check failed');
-  if (options.liteDecrypt?.containerOk) {
-    addPolar(
+  addSection('Restore Decision');
+  if (releaseAllowed && policyLevel === 'integrity-only') {
+    addRow(
+      'Plaintext release',
+      'Allowed by integrity-only policy',
+      'warn',
+      'No archive-approval signature is required by the selected policy.'
+    );
+  } else if (releaseAllowed) {
+    addRow('Plaintext release', `Allowed by ${policyLevel} policy`, 'ok');
+  } else {
+    addRow('Plaintext release', 'Blocked', 'fail');
+  }
+
+  addSection('Verification Matrix');
+  addPolarRow('Container integrity', qencOk, 'Container integrity verified', 'Container integrity check failed');
+  addPolarRow('Private key recovery', qkeyOk, 'Private key integrity verified', 'Private key integrity check failed');
+  if (options.liteDecrypt) {
+    addPolarRow(
+      'Plaintext integrity',
       options.liteDecrypt.decryptOk,
       'Decryption and file integrity verified',
       'Decryption or file integrity check failed',
     );
   }
 
-  const status = authenticity?.status || {};
   const archiveApprovalVerified = status.archiveApprovalSignatureVerified === true;
   const cohortInspection = result.lifecycleVerification?.cohorts || {};
-  addSection('Archive Approval');
-  addPolar(
+  addPolarRow(
+    'Archive approval',
     archiveApprovalVerified,
     'Archive-approval signature verified',
     'No verified archive-approval signature over archive-state',
+    policyLevel === 'integrity-only' ? 'warn' : 'fail',
   );
-  addPolar(
+  addPolarRow(
+    'Strong PQ approval',
     status.strongPqSignatureVerified === true,
     'Strong PQ archive-approval signature verified',
     'Strong PQ archive-approval signature not present',
-    archiveApprovalVerified === true && status.strongPqSignatureVerified !== true,
+    archiveApprovalVerified === true && status.strongPqSignatureVerified !== true ? 'warn' : 'neutral',
   );
-  addNeutral('Maintenance and source-evidence signatures are reported separately and do not satisfy archive policy.');
 
-  addSection('Maintenance');
   if (status.transitionRecordPresent !== true) {
-    addNeutral('No same-state resharing on this archive yet — transition and maintenance rows are omitted (not an error).');
+    addRow('Maintenance evidence', 'No transition or maintenance evidence present', 'neutral');
   } else {
-    addPolar(true, 'Transition record present', 'Transition record missing');
-    addPolar(
+    addPolarRow('Transition record', true, 'Transition record present', 'Transition record missing');
+    addPolarRow(
+      'Transition chain',
       status.transitionChainValid === true,
       'Transition-chain references valid',
       'Transition-chain references invalid or broken',
     );
-    addPolar(
+    addPolarRow(
+      'Maintenance evidence',
       status.maintenanceSignatureVerified === true,
       'Maintenance signature verified',
       'No verified maintenance signature on transition record(s)',
+      'warn',
+      'Maintenance signatures do not satisfy archive policy.'
     );
-    addNeutral('Maintenance signatures authorize resharing events only; they do not replace archive approval.');
   }
 
-  addSection('Source Evidence');
   if (status.sourceEvidencePresent !== true) {
-    addNeutral('No source-evidence objects on this archive (optional provenance).');
+    addRow('Source evidence', 'No source-evidence objects present', 'neutral');
   } else {
-    addPolar(
+    addPolarRow(
+      'Source evidence',
       status.sourceEvidenceSignatureVerified === true,
       'Source-evidence signature verified',
       'Source-evidence present but no verified signature',
+      'warn',
+      'Source evidence does not satisfy archive policy.'
     );
-    addNeutral('Source evidence is provenance only; it does not imply archive approval.');
   }
 
-  addSection('Selection');
   if (cohortInspection.forkDetected === true) {
-    addPolar(false, '', 'Same-state cohort fork remains known for this archive state', true);
+    addRow('Cohort selection', 'Same-state cohort fork remains known for this archive state', 'warn');
   }
   if (status.bundleCohortMixed === true) {
-    addPolar(false, '', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', true);
+    addRow('Lifecycle bundle selection', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', 'warn');
   } else {
-    addPolar(true, 'One lifecycle bundle variant selected for policy evaluation', '');
+    addRow('Lifecycle bundle selection', 'One lifecycle bundle variant selected for policy evaluation', 'ok');
   }
-  addSection('Pinning & Evidence');
-  addPolar(
+
+  addPolarRow(
+    'Bundle signer pin',
     status.bundlePinned === true,
     'Lifecycle-bundle signer pinned',
     'Lifecycle-bundle signer not pinned',
-    archiveApprovalVerified === true && status.bundlePinned !== true,
+    archiveApprovalVerified === true && status.bundlePinned !== true ? 'warn' : 'neutral',
   );
   if (status.userPinProvided === true || status.userPinned === true) {
-    addPolar(
+    addPolarRow(
+      'User signer pin',
       status.userPinned === true,
       'User-supplied signer pin matched',
       status.userPinProvided === true ? 'User-supplied pin did not match a verifying signer' : 'User signer not pinned',
-      status.userPinProvided === true && status.userPinned !== true,
+      status.userPinProvided === true && status.userPinned !== true ? 'warn' : 'neutral',
     );
+  } else {
+    addRow('User signer pin', 'No user-supplied signer pin provided', 'neutral');
   }
+
   const timestampEvidence = Array.isArray(authenticity?.timestampEvidence) ? authenticity.timestampEvidence : [];
   if (timestampEvidence.length > 0) {
     const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
     const incompleteCount = timestampEvidence.length - completeCount;
-    const appendStatusLine = (ok, text, warn = false) => {
-      const item = document.createElement('div');
-      item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-      item.textContent = `${ok ? '✓' : (warn ? '⚠' : '✗')} ${text}`;
-      panel.appendChild(item);
-    };
-    appendStatusLine(true, `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`);
+    const completionParts = [];
     if (completeCount > 0) {
-      appendStatusLine(true, `OTS proof complete (${completeCount})`);
+      completionParts.push(`${completeCount} appears complete`);
     }
     if (incompleteCount > 0) {
-      appendStatusLine(false, `OTS proof not yet complete (${incompleteCount}) — calendars may still be pending`, true);
+      completionParts.push(`${incompleteCount} incomplete or pending`);
     }
+    addRow(
+      'Timestamp evidence',
+      `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`,
+      incompleteCount > 0 ? 'warn' : 'ok',
+      `${completionParts.join('; ')}. Timestamp evidence does not satisfy archive policy.`
+    );
+  } else {
+    addRow('Timestamp evidence', 'No OTS evidence linked', 'neutral');
   }
-  addSection('Policy');
-  addPolar(status.policySatisfied === true, 'Archive policy satisfied', 'Archive policy not satisfied');
-  addNeutral('Archive policy evaluation remains archive-approval-only in Phase 1.');
 
-  panel.className = `restore-result-panel ${allOk ? 'ok' : 'fail'}`;
+  addPolarRow(
+    'Archive policy',
+    status.policySatisfied === true,
+    'Archive policy satisfied',
+    'Archive policy not satisfied',
+    'fail',
+    'Archive policy evaluation remains archive-approval-only.'
+  );
+  addNeutral('Maintenance, source-evidence, and timestamp evidence are reported separately and do not authorize restore.');
+
+  const panelTone = releaseAllowed && policyLevel !== 'integrity-only' ? 'ok' : (releaseAllowed ? 'warn' : 'fail');
+  panel.className = `restore-result-panel ${panelTone}`;
+}
+
+function isArchivePolicyFailureMessage(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return (
+    message.includes('archive-policy signature') ||
+    message.includes('archive policy') ||
+    message.includes('archive-approval signature satisfies archive policy') ||
+    message.includes('strong pq archive-approval signature satisfies archive policy')
+  );
+}
+
+export function buildRestorePolicyFailureSummary(error, resultPanelId) {
+  const panel = document.getElementById(resultPanelId);
+  if (!panel || !isArchivePolicyFailureMessage(error)) return false;
+
+  panel.replaceChildren();
+  panel.style.display = 'block';
+
+  const header = document.createElement('h4');
+  header.textContent = 'Plaintext not released: archive policy not satisfied';
+  panel.appendChild(header);
+
+  const intro = document.createElement('p');
+  intro.className = 'restore-result-lede';
+  intro.textContent = 'No plaintext or recovered key was exported because archive policy blocked restore before reconstruction.';
+  panel.appendChild(intro);
+
+  const matrix = document.createElement('div');
+  matrix.className = 'restore-verification-matrix';
+  panel.appendChild(matrix);
+
+  const addRow = (label, value, tone = 'neutral', detail = '') => {
+    const item = document.createElement('div');
+    item.className = `restore-result-item restore-matrix-row ${tone}`;
+    const labelEl = document.createElement('span');
+    labelEl.className = 'restore-matrix-label';
+    labelEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'restore-matrix-value';
+    valueEl.textContent = value;
+    item.append(labelEl, valueEl);
+    if (detail) {
+      const detailEl = document.createElement('span');
+      detailEl.className = 'restore-matrix-detail';
+      detailEl.textContent = detail;
+      item.appendChild(detailEl);
+    }
+    matrix.appendChild(item);
+  };
+
+  const reason = String(error?.message || error || 'Archive policy not satisfied');
+  addRow('Plaintext release', 'Blocked', 'fail');
+  addRow('Archive policy', 'Archive policy not satisfied', 'fail', reason);
+  addRow('Integrity', 'Not evaluated after policy block', 'neutral');
+  addRow('Archive approval', 'No policy-satisfying archive-approval signature verified', 'fail');
+  addRow('Evidence channels', 'Maintenance, source-evidence, and timestamp evidence cannot satisfy archive policy', 'neutral');
+
+  panel.className = 'restore-result-panel fail';
+  return true;
 }
 
 export function initQcontRestoreUI() {
@@ -697,6 +824,7 @@ export function initQcontRestoreUI() {
 
       buildRestoreResultSummary(result, 'proRestoreResult');
     } catch (error) {
+      buildRestorePolicyFailureSummary(error, 'proRestoreResult');
       logError(error);
     } finally {
       // Best-effort only: JS runtimes do not guarantee overwriting secrets in memory.

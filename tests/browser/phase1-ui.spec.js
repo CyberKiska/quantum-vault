@@ -75,6 +75,9 @@ test('distribution build exports successor shards and the generated shards resto
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toHaveClass(/warn/);
+  await expect(restoreResult).toContainText('Plaintext released under integrity-only policy');
+  await expect(restoreResult).toContainText('Allowed by integrity-only policy');
   await expect(restoreResult).toContainText('Archive policy satisfied');
   await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
 });
@@ -89,6 +92,10 @@ test('strong-PQ restore fails closed without detached archive approval', async (
   await restoreButton.click();
 
   await expect(lastToast(page)).toContainText('strong PQ archive-approval signature');
+  const restoreResult = page.getByTestId('restore-result');
+  await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('Plaintext not released: archive policy not satisfied');
+  await expect(restoreResult).toContainText('No policy-satisfying archive-approval signature verified');
 });
 
 test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async ({ page }) => {
@@ -102,6 +109,7 @@ test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async (
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('Plaintext released under strong PQ archive-approval policy');
   await expect(restoreResult).toContainText('Strong PQ archive-approval signature verified');
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
@@ -128,6 +136,7 @@ test('self-signed qsig warning is visible and does not satisfy any-signature pol
   await expect(page.getByTestId('operations-log')).toContainText('self-signed');
   await expect(page.getByTestId('operations-log')).toContainText('ignored for trust/policy');
   await expect(lastToast(page)).toContainText('archive-approval signature');
+  await expect(page.getByTestId('restore-result')).toContainText('Plaintext not released: archive policy not satisfied');
 });
 
 test('mixed lifecycle bundle digests require explicit selection and surface a warning after restore', async ({ page }) => {
@@ -203,6 +212,7 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('Plaintext released under strong PQ archive-approval policy');
   await expect(restoreResult).toContainText('Strong PQ archive-approval signature verified');
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
@@ -259,6 +269,7 @@ test('maintenance attach imports detached qsig evidence and restore reports it s
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('Plaintext released under integrity-only policy');
   await expect(restoreResult).toContainText('Maintenance signature verified');
   await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
   await expect(restoreResult).toContainText('Archive policy satisfied');
@@ -339,6 +350,7 @@ test('source-evidence builder exports canonical JSON for external signing, re-im
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
+  await expect(restoreResult).toContainText('Plaintext released under integrity-only policy');
   await expect(restoreResult).toContainText('Source-evidence signature verified');
   await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
   await expect(restoreResult).toContainText('Archive policy satisfied');

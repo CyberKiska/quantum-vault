@@ -13,6 +13,7 @@ import {
 } from '../../app/crypto-service.js';
 import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
 import {
+    buildRestorePolicyFailureSummary,
     buildRestoreResultSummary,
     collectRestoreVerificationOptions,
     logRestoreSelectionSummary,
@@ -606,6 +607,7 @@ async function restoreLiteShards() {
         });
         
     } catch (error) {
+        buildRestorePolicyFailureSummary(error, 'liteRestoreResult');
         logError(error, { isLiteMode: true });
     } finally {
         setButtonsDisabled(false);

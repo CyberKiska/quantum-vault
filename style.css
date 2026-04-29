@@ -510,8 +510,21 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 .restore-result-panel h4 { margin: 0 0 0.5rem; font-size: 0.95rem; font-family: var(--font-ui); }
 .restore-result-panel.ok { background: rgba(16, 185, 129, 0.1); border: 1px solid var(--accent-success); }
 .restore-result-panel.ok h4 { color: var(--accent-success); }
+.restore-result-panel.warn { background: rgba(245, 158, 11, 0.1); border: 1px solid var(--accent-warning); }
+.restore-result-panel.warn h4 { color: var(--accent-warning); }
 .restore-result-panel.fail { background: rgba(239, 68, 68, 0.1); border: 1px solid var(--accent-danger); }
 .restore-result-panel.fail h4 { color: var(--accent-danger); }
+.restore-result-lede {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.restore-verification-matrix {
+  display: grid;
+  gap: 0.35rem;
+}
 .restore-result-section {
   margin-top: 0.75rem;
   margin-bottom: 0.2rem;
@@ -528,6 +541,30 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 .restore-result-item.fail { color: var(--accent-danger); }
 .restore-result-item.warn { color: var(--accent-warning); }
 .restore-result-item.neutral { color: var(--text-muted); font-style: normal; }
+.restore-matrix-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.42fr) minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  align-items: start;
+  padding: 0.2rem 0;
+}
+.restore-matrix-label {
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  font-weight: 700;
+}
+.restore-matrix-value,
+.restore-matrix-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.restore-matrix-detail {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
 
 /* Missing UI blocks used by current markup */
 .mode-section {
