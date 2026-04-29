@@ -362,15 +362,34 @@ function clearAttachResultPanel() {
   panel.replaceChildren();
 }
 
+function setPartialRewriteAcknowledgementRequired(required) {
+  const panel = document.getElementById('attachPartialRewriteAckPanel');
+  const checkbox = document.getElementById('attachPartialRewriteAck');
+  if (panel) {
+    panel.classList.toggle('initially-hidden', !required);
+  }
+  if (checkbox) {
+    checkbox.required = required;
+    checkbox.disabled = !required;
+    if (!required) checkbox.checked = false;
+  }
+}
+
+function partialRewriteAcknowledged() {
+  return document.getElementById('attachPartialRewriteAck')?.checked === true;
+}
+
 function setAttachActionAvailability({
   canAttach = false,
   canExportSignable = false,
   canExportArtifacts = false,
+  partialRewriteRequiresAck = false,
 } = {}) {
   const attachBtn = document.getElementById('attachQcontBtn');
   const exportBtn = document.getElementById('exportSignableArtifactBtn');
   const exportArtifactsBtn = document.getElementById('exportAttachedArtifactsBtn');
-  if (attachBtn) attachBtn.disabled = !canAttach;
+  const partialBlocked = partialRewriteRequiresAck && !partialRewriteAcknowledged();
+  if (attachBtn) attachBtn.disabled = !canAttach || partialBlocked;
   if (exportBtn) exportBtn.disabled = !canExportSignable;
   if (exportArtifactsBtn) exportArtifactsBtn.disabled = !canExportArtifacts;
 }
@@ -454,6 +473,8 @@ function deriveAttachPlan(shards) {
       embedIntoShards: false,
       modeLabel: 'Lifecycle-bundle only',
       hint: 'No shard files are loaded. Attach will update only the standalone lifecycle bundle.',
+      selectedShardCount: 0,
+      expectedShardCount: 0,
       warning: false,
     };
   }
@@ -478,6 +499,8 @@ function deriveAttachPlan(shards) {
       embedIntoShards: true,
       modeLabel: 'Embed into selected successor shards',
       hint: `Full successor shard cohort detected (${uniqueIndices.size}/${expectedShardCount}). Attach will rewrite the selected shard files and update the lifecycle bundle.`,
+      selectedShardCount: uniqueIndices.size,
+      expectedShardCount,
       warning: false,
     };
   }
@@ -485,7 +508,9 @@ function deriveAttachPlan(shards) {
   return {
     embedIntoShards: true,
     modeLabel: 'Partial successor shard rewrite',
-    hint: `Only ${uniqueIndices.size}/${expectedShardCount} successor shard files are loaded. Attach will rewrite only the selected shard files; other shards may continue carrying a different embedded lifecycle-bundle digest within the same cohort.`,
+    hint: `Only ${uniqueIndices.size}/${expectedShardCount} successor shard files are loaded. Attach will rewrite only the selected shard files; other shards from the same cohort may still carry older embedded lifecycle-bundle bytes.`,
+    selectedShardCount: uniqueIndices.size,
+    expectedShardCount,
     warning: true,
   };
 }
@@ -541,6 +566,7 @@ async function updateAttachStatus() {
     status.className = 'shards-status initially-hidden';
     text.textContent = channelConfig.emptySelectionText;
     hint.textContent = '';
+    setPartialRewriteAcknowledgementRequired(false);
     if (modeSummary) {
       modeSummary.textContent = '';
       modeSummary.classList.add('initially-hidden');
@@ -562,6 +588,7 @@ async function updateAttachStatus() {
     const plan = deriveAttachPlan(shards);
     const requirements = deriveAttachRequirements(channel, classified);
     const canAttach = requirements.canAttach;
+    const partialRewriteRequiresAck = canAttach && plan.embedIntoShards && plan.warning;
     const canExportSignable = (
       classified.archiveStateBytes instanceof Uint8Array ||
       classified.lifecycleBundleBytes instanceof Uint8Array ||
@@ -597,8 +624,9 @@ async function updateAttachStatus() {
     text.textContent = summary;
     hint.textContent = `${count} file(s) loaded. ${!canAttach
       ? `Attach stays blocked until the input includes ${requirements.missingLabel}.`
-      : `${plan.hint} ${channelConfig.channelHelp}`}`;
+      : `${plan.hint} ${partialRewriteRequiresAck && !partialRewriteAcknowledged() ? 'Acknowledge partial shard rewrite before attaching.' : ''} ${channelConfig.channelHelp}`}`;
     status.setAttribute('aria-label', summary);
+    setPartialRewriteAcknowledgementRequired(partialRewriteRequiresAck);
     if (modeSummary) {
       const artifactSummary = [
         `Signatures: ${classified.signatures.length}`,
@@ -614,6 +642,7 @@ async function updateAttachStatus() {
       canAttach,
       canExportSignable,
       canExportArtifacts,
+      partialRewriteRequiresAck,
     });
   } catch (error) {
     const message = error?.message || String(error);
@@ -629,6 +658,7 @@ async function updateAttachStatus() {
       modeSummary.textContent = summary;
       modeSummary.classList.remove('initially-hidden');
     }
+    setPartialRewriteAcknowledgementRequired(false);
     setAttachActionAvailability();
   }
 }
@@ -674,7 +704,17 @@ function buildAttachResultSummary({ plan, classified, channel }) {
   addSection('Result');
   addPolar(true, 'Lifecycle bundle updated', '');
   if (plan.embedIntoShards) {
-    addPolar(true, 'Selected shard files updated', '');
+    const shardCountText = `${plan.selectedShardCount}/${plan.expectedShardCount}`;
+    if (plan.warning) {
+      addPolar(
+        false,
+        '',
+        `Only ${shardCountText} selected shard files were rewritten; other shards may still carry older embedded lifecycle-bundle bytes.`,
+        true
+      );
+    } else {
+      addPolar(true, `Selected shard files updated (${shardCountText})`, '');
+    }
   } else {
     addNeutral('Shard files were not rewritten.');
   }
@@ -722,7 +762,7 @@ function buildAttachResultSummary({ plan, classified, channel }) {
   addSection('Next Actions');
   addNeutral('Continue to Restore to inspect archive approval, maintenance, and source-evidence channels separately.');
 
-  panel.className = 'restore-result-panel ok';
+  panel.className = `restore-result-panel ${plan.warning ? 'warn' : 'ok'}`;
 }
 
 async function exportSignableArtifact() {
@@ -839,6 +879,10 @@ async function attachFilesToShards() {
     }
 
     const plan = deriveAttachPlan(shards);
+    if (plan.embedIntoShards && plan.warning && !partialRewriteAcknowledged()) {
+      showToast('Acknowledge partial shard rewrite before attaching.', 'warning');
+      return;
+    }
     if (plan.warning) {
       logWarning(plan.hint);
     } else {
@@ -935,6 +979,7 @@ export function initQcontAttachUI() {
   const exportSourceEvidenceBtn = document.getElementById('exportSourceEvidenceBtn');
   const addDigestBtn = document.getElementById('addSourceEvidenceDigestBtn');
   const mediaTypeOptIn = document.getElementById('sourceEvidenceMediaTypeOptIn');
+  const partialRewriteAck = document.getElementById('attachPartialRewriteAck');
 
   attachInput?.addEventListener('change', () => {
     clearAttachResultPanel();
@@ -943,6 +988,9 @@ export function initQcontAttachUI() {
   attachChannel?.addEventListener('change', () => {
     clearAttachResultPanel();
     setAttachChannelUi(activeAttachChannel());
+    void updateAttachStatus();
+  });
+  partialRewriteAck?.addEventListener('change', () => {
     void updateAttachStatus();
   });
   attachBtn?.addEventListener('click', attachFilesToShards);

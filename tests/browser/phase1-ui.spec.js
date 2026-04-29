@@ -247,6 +247,7 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
 
   const attachButton = page.getByTestId('attach-button');
   await expect(attachButton).toBeEnabled();
+  await expect(page.getByTestId('attach-partial-ack-panel')).toBeHidden();
 
   const [bundleDownload] = await Promise.all([
     page.waitForEvent('download'),
@@ -277,6 +278,37 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
   await expect(restoreResult).toContainText('Signer pinned by bundle');
   await expect(restoreResult).toContainText('Bundle signer pin matched');
   await expect(restoreResult).toContainText('Archive policy satisfied');
+});
+
+test('partial shard attach requires explicit acknowledgement before rewriting selected shards', async ({ page }) => {
+  await openProTab(page, 'tab-attach');
+  await page.getByTestId('attach-channel').selectOption('archive-approval');
+  await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalPartialShardAttachFiles);
+
+  const attachButton = page.getByTestId('attach-button');
+  const partialAckPanel = page.getByTestId('attach-partial-ack-panel');
+  const partialAck = page.getByTestId('attach-partial-ack');
+
+  await expect(partialAckPanel).toBeVisible();
+  await expect(partialAckPanel).toContainText('only the selected shard files will be rewritten');
+  await expect(page.getByTestId('attach-status-text')).toContainText('Ready to update selected shards only');
+  await expect(attachButton).toBeDisabled();
+
+  await partialAck.check();
+  await expect(attachButton).toBeEnabled();
+
+  const downloads = [];
+  page.on('download', (download) => {
+    downloads.push(download);
+  });
+  await Promise.all([
+    page.waitForEvent('download'),
+    attachButton.click(),
+  ]);
+  await expect(page.getByTestId('attach-result')).toBeVisible();
+  await expect(page.getByTestId('attach-result')).toContainText('Only 2/5 selected shard files were rewritten');
+  await expect(page.getByTestId('attach-result')).toContainText('other shards may still carry older embedded lifecycle-bundle bytes');
+  await expect.poll(() => downloads.length, { timeout: 10_000 }).toBe(3);
 });
 
 test('reshare exposes the transition-record export for external maintenance signing', async ({ page }) => {

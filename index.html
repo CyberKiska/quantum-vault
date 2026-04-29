@@ -513,6 +513,13 @@
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
                 <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite" data-testid="attach-mode-summary"></pre>
+                <div id="attachPartialRewriteAckPanel" class="operation-warning partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
+                  <label class="checkbox-row" for="attachPartialRewriteAck">
+                    <input type="checkbox" id="attachPartialRewriteAck" data-testid="attach-partial-ack">
+                    <span>I understand only the selected shard files will be rewritten.</span>
+                  </label>
+                  <small class="muted-copy">The updated lifecycle bundle will still be exported. Any unselected shards from the same cohort may continue carrying older embedded lifecycle-bundle bytes.</small>
+                </div>
               </div>
               <details class="technical-context">
                 <summary>Technical context</summary>
