@@ -604,6 +604,158 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+.artifact-intake-panel {
+  min-width: 0;
+  margin: 0.85rem 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+}
+
+.artifact-intake-panel h4 {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+  font-family: var(--font-ui);
+  color: var(--text-main);
+}
+
+.artifact-intake-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.artifact-intake-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.artifact-intake-table th,
+.artifact-intake-table td {
+  padding: 0.45rem 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.artifact-intake-table th {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.artifact-intake-table td {
+  color: var(--text-main);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.artifact-row.warn td {
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.artifact-row.fail td {
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.artifact-detail-row td {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.artifact-detail-cell {
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.artifact-file-cell {
+  font-family: var(--font-mono);
+  max-width: 13rem;
+}
+
+.artifact-target-cell,
+.artifact-action-cell {
+  max-width: 14rem;
+}
+
+.artifact-status-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.artifact-status-badge.ok {
+  color: var(--accent-success);
+  border-color: rgba(16, 185, 129, 0.7);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.artifact-status-badge.warn {
+  color: var(--accent-warning);
+  border-color: rgba(245, 158, 11, 0.7);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.artifact-status-badge.fail {
+  color: var(--accent-danger);
+  border-color: rgba(239, 68, 68, 0.7);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.artifact-row-details {
+  margin: 0.2rem 0 0.4rem;
+  font-family: var(--font-ui);
+}
+
+.artifact-row-details summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.artifact-detail-list {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.36fr) minmax(0, 1fr);
+  gap: 0.25rem 0.5rem;
+  margin: 0.45rem 0 0;
+}
+
+.artifact-detail-list dt {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.artifact-detail-list dd {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.artifact-detail-value {
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.artifact-copy-button {
+  flex: 0 0 auto;
+}
 .restore-verification-matrix {
   display: grid;
   gap: 0.35rem;
@@ -1156,6 +1308,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .technical-context,
   .shard-geometry-panel,
   .digest-details-panel,
+  .artifact-intake-panel,
   .inline-error-panel,
   .dropzone-area {
     padding: 0.85rem;
@@ -1173,6 +1326,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 
   .digest-detail-row-head,
   .digest-detail-list,
+  .artifact-detail-list,
   .restore-matrix-row,
   .inline-error-fields {
     grid-template-columns: minmax(0, 1fr);
@@ -1210,6 +1364,67 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
     width: 100%;
     min-width: 0;
   }
+
+  .artifact-intake-table {
+    display: block;
+    min-width: 0;
+  }
+
+  .artifact-intake-table thead {
+    display: none;
+  }
+
+  .artifact-intake-table tbody,
+  .artifact-intake-table tr,
+  .artifact-intake-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .artifact-intake-table tr {
+    padding: 0.55rem 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .artifact-intake-table td {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 0.38fr) minmax(0, 1fr);
+    gap: 0.45rem;
+    border-top: 0;
+    padding: 0.25rem 0;
+  }
+
+  .artifact-intake-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .artifact-detail-cell {
+    display: block !important;
+  }
+
+  .artifact-detail-cell::before {
+    content: none !important;
+  }
+
+  .artifact-file-cell,
+  .artifact-target-cell,
+  .artifact-action-cell {
+    max-width: none;
+  }
+
+  .artifact-detail-list dd {
+    flex-direction: column;
+  }
+
+  .artifact-copy-button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 375px) {
@@ -1225,6 +1440,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .technical-context,
   .shard-geometry-panel,
   .digest-details-panel,
+  .artifact-intake-panel,
   .inline-error-panel,
   .dropzone-area {
     padding: 0.7rem;

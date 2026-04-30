@@ -9,6 +9,7 @@ import { updateShardSelectionStatus } from './shards-status.js';
 import { showToast } from './toast.js';
 import { refreshSuccessorSelectionUi } from '../qcont/restore-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
+import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
 import { initRovingTablist } from './tabs.js';
 
 // Pro mode state
@@ -160,12 +161,22 @@ export function initUI() {
         if (!statusDiv || !statusText || !qcontShardsInput) return;
         const files = [...(qcontShardsInput.files || [])];
         const requestId = ++proShardsStatusSeq;
+        if (files.length === 0) {
+            clearArtifactIntakeTable('restoreArtifactIntake');
+        }
         const assessment = await updateShardSelectionStatus({
             files,
             statusDiv,
             statusText,
             actionButton: restoreQcontBtn,
             isCurrent: () => requestId === proShardsStatusSeq
+        });
+        if (requestId !== proShardsStatusSeq) return;
+        await renderArtifactIntakeTable({
+            containerId: 'restoreArtifactIntake',
+            files,
+            workflow: 'restore',
+            label: 'Restore artifact intake',
         });
         if (requestId !== proShardsStatusSeq) return;
         await refreshSuccessorSelectionUi('restore', files, restoreQcontBtn, assessment || { ready: false });

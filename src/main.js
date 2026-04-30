@@ -18,11 +18,15 @@ const TRANSIENT_PANEL_IDS = [
     'proRestoreInlineError',
     'proSplitInlineError',
     'attachStatus',
+    'attachArtifactIntake',
     'attachModeSummary',
     'attachInlineError',
     'proReshareStatus',
+    'reshareArtifactIntake',
     'proShardsStatus',
+    'restoreArtifactIntake',
     'shardsStatus',
+    'liteRestoreArtifactIntake',
     'reshareSuccessorSelection',
     'restoreSuccessorSelection',
     'liteRestoreSuccessorSelection',
@@ -69,7 +73,11 @@ function clearTransientPanels() {
         const element = document.getElementById(id);
         if (!element) continue;
         element.style.display = 'none';
-        if (element.classList.contains('restore-result-panel') || element.classList.contains('inline-error-panel')) {
+        if (
+            element.classList.contains('restore-result-panel') ||
+            element.classList.contains('inline-error-panel') ||
+            element.classList.contains('artifact-intake-panel')
+        ) {
             element.replaceChildren();
         } else if (element.tagName === 'PRE') {
             element.textContent = '';

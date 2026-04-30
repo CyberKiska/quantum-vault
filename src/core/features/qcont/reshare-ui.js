@@ -5,6 +5,7 @@ import { updateShardSelectionStatus } from '../ui/shards-status.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
+import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 
 let reshareStatusSeq = 0;
 let lastReshareExports = null;
@@ -117,12 +118,22 @@ async function updateReshareStatus() {
 
   const files = [...(input.files || [])];
   const requestId = ++reshareStatusSeq;
+  if (files.length === 0) {
+    clearArtifactIntakeTable('reshareArtifactIntake');
+  }
   const assessment = await updateShardSelectionStatus({
     files,
     statusDiv,
     statusText,
     actionButton,
     isCurrent: () => requestId === reshareStatusSeq,
+  });
+  if (requestId !== reshareStatusSeq) return;
+  await renderArtifactIntakeTable({
+    containerId: 'reshareArtifactIntake',
+    files,
+    workflow: 'reshare',
+    label: 'Reshare artifact intake',
   });
   if (requestId !== reshareStatusSeq) return;
   await refreshSuccessorSelectionUi('reshare', files, actionButton, assessment || { ready: false });

@@ -12,6 +12,7 @@ import {
   logWarning,
 } from '../ui/logging.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
+import { renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import { showToast } from '../ui/toast.js';
 
 const successorSelectionState = new Map();
@@ -1250,6 +1251,13 @@ export function initQcontRestoreUI() {
       buildRestoreResultSummary(result, 'proRestoreResult');
     } catch (error) {
       buildRestorePolicyFailureSummary(error, 'proRestoreResult');
+      await renderArtifactIntakeTable({
+        containerId: 'restoreArtifactIntake',
+        files: [...(files || [])],
+        workflow: 'restore',
+        label: 'Restore artifact intake',
+        error,
+      });
       showInlineError(RESTORE_INLINE_ERROR_ID, {
         title: 'Restore blocked',
         cause: error,

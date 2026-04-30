@@ -15,11 +15,13 @@ import {
 } from '../../crypto/lifecycle/artifacts.js';
 import { startsWithAscii } from '../../crypto/byte-prefix.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
+import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
+let lastAttachIntakeError = null;
 
 const ATTACH_CHANNELS = Object.freeze({
   'archive-approval': Object.freeze({
@@ -586,6 +588,8 @@ async function updateAttachStatus() {
     status.className = 'shards-status initially-hidden';
     text.textContent = channelConfig.emptySelectionText;
     hint.textContent = '';
+    lastAttachIntakeError = null;
+    clearArtifactIntakeTable('attachArtifactIntake');
     setPartialRewriteAcknowledgementRequired(false);
     if (modeSummary) {
       modeSummary.textContent = '';
@@ -604,6 +608,14 @@ async function updateAttachStatus() {
   try {
     const files = [...(input.files || [])];
     const classified = await classifyAttachFiles(files);
+    await renderArtifactIntakeTable({
+      containerId: 'attachArtifactIntake',
+      files,
+      workflow: 'attach',
+      channel,
+      label: `${channelConfig.label} artifact intake`,
+      error: lastAttachIntakeError,
+    });
     const shards = await parseAttachShards(classified);
     const plan = deriveAttachPlan(shards);
     const requirements = deriveAttachRequirements(channel, classified);
@@ -678,6 +690,15 @@ async function updateAttachStatus() {
       modeSummary.textContent = summary;
       modeSummary.classList.remove('initially-hidden');
     }
+    lastAttachIntakeError = error;
+    await renderArtifactIntakeTable({
+      containerId: 'attachArtifactIntake',
+      files: [...(input.files || [])],
+      workflow: 'attach',
+      channel,
+      label: `${channelConfig.label} artifact intake`,
+      error,
+    });
     setPartialRewriteAcknowledgementRequired(false);
     setAttachActionAvailability();
     showInlineError(ATTACH_INLINE_ERROR_ID, {
@@ -1000,9 +1021,19 @@ async function attachFilesToShards() {
     }
     log('All signing remains external in this workflow. Quantum Vault imports detached artifacts and reports each channel separately at Restore.');
     log('Next actions: export the updated archive-state descriptor, lifecycle bundle, or shard set, or continue to Restore with the merged evidence.');
+    lastAttachIntakeError = null;
     clearInlineError(ATTACH_INLINE_ERROR_ID);
     buildAttachResultSummary({ plan, classified, channel });
   } catch (error) {
+    lastAttachIntakeError = error;
+    await renderArtifactIntakeTable({
+      containerId: 'attachArtifactIntake',
+      files,
+      workflow: 'attach',
+      channel,
+      label: `${channelConfig.label} artifact intake`,
+      error,
+    });
     showInlineError(ATTACH_INLINE_ERROR_ID, {
       title: 'Attach failed',
       cause: error,
@@ -1028,11 +1059,13 @@ export function initQcontAttachUI() {
   const partialRewriteAck = document.getElementById('attachPartialRewriteAck');
 
   attachInput?.addEventListener('change', () => {
+    lastAttachIntakeError = null;
     clearInlineError(ATTACH_INLINE_ERROR_ID);
     clearAttachResultPanel();
     void updateAttachStatus();
   });
   attachChannel?.addEventListener('change', () => {
+    lastAttachIntakeError = null;
     clearInlineError(ATTACH_INLINE_ERROR_ID);
     clearAttachResultPanel();
     setAttachChannelUi(activeAttachChannel());

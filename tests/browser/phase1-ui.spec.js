@@ -160,6 +160,42 @@ test('narrow layouts do not horizontally overflow with long filenames and digest
   }
 });
 
+test('artifact intake table explains accepted ignored unsupported and wrong-target artifacts', async ({ page }) => {
+  await openProTab(page, 'tab-restore');
+  await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicySatisfiedCompleteOtsFiles);
+
+  const restoreIntake = page.getByTestId('restore-artifact-intake');
+  await expect(restoreIntake).toBeVisible();
+  await expect(restoreIntake).toContainText('QVqcont-7 shard');
+  await expect(restoreIntake).toContainText('archive-approval signature');
+  await expect(restoreIntake).toContainText('PQ signer key');
+  await expect(restoreIntake).toContainText('OTS proof');
+  await expect(restoreIntake.locator('[data-artifact-status="accepted"]').first()).toBeVisible();
+  await expect(restoreIntake.locator('[data-artifact-status="pending"]').first()).toBeVisible();
+  await restoreIntake.locator('.artifact-row-details').first().locator('summary').click();
+  const expandedDigestValue = restoreIntake.locator('.artifact-detail-value').first();
+  await expect(expandedDigestValue).toBeVisible();
+  await expect.poll(async () => expandedDigestValue.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(300);
+
+  await page.getByTestId('restore-input').setInputFiles(fixtures.legacyManifestFiles);
+  await expect(restoreIntake).toContainText('unsupported');
+  await expect(restoreIntake.locator('[data-artifact-status="ignored"]').first()).toBeVisible();
+
+  await openProTab(page, 'tab-attach');
+  await page.getByTestId('attach-input').setInputFiles(fixtures.legacyManifestFiles);
+  const attachIntake = page.getByTestId('attach-artifact-intake');
+  await expect(attachIntake).toBeVisible();
+  await expect(attachIntake.locator('[data-artifact-status="unsupported"]').first()).toBeVisible();
+  await expect(attachIntake).toContainText('Remove legacy manifest-side files');
+
+  await page.getByTestId('attach-input').setInputFiles(fixtures.attachWrongOtsFiles);
+  const attachButton = page.getByTestId('attach-button');
+  await expect(attachButton).toBeEnabled();
+  await attachButton.click();
+  await expect(attachIntake.locator('[data-artifact-kind="ots-proof"][data-artifact-status="wrong target"]')).toBeVisible();
+  await expect(attachIntake).toContainText('Load the detached signature this OTS proof stamps');
+});
+
 test('distribution build exports successor shards and the generated shards restore under integrity-only policy', async ({ page }) => {
   await openProMode(page);
   await page.locator('#proTabDistribution').click();

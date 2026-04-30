@@ -37,6 +37,7 @@ import {
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
 import { clearInlineError, showInlineError, summarizeFileList } from './ui/inline-error.js';
+import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './ui/artifact-intake.js';
 import { initRovingTablist } from './ui/tabs.js';
 import { updateSidebarStatus } from './ui/ui.js';
 import { describeAuthPolicyHelp } from './qcont/auth-policy-help.js';
@@ -329,12 +330,22 @@ async function updateShardsStatus() {
     
     const files = [...(shardsInput.files || [])];
     const requestId = ++liteShardsStatusSeq;
+    if (files.length === 0) {
+        clearArtifactIntakeTable('liteRestoreArtifactIntake');
+    }
     const assessment = await updateShardSelectionStatus({
         files,
         statusDiv,
         statusText,
         actionButton: restoreBtn,
         isCurrent: () => requestId === liteShardsStatusSeq
+    });
+    if (requestId !== liteShardsStatusSeq) return;
+    await renderArtifactIntakeTable({
+        containerId: 'liteRestoreArtifactIntake',
+        files,
+        workflow: 'lite-restore',
+        label: 'Lite restore artifact intake',
     });
     if (requestId !== liteShardsStatusSeq) return;
     await refreshSuccessorSelectionUi('liteRestore', files, restoreBtn, assessment || { ready: false });
