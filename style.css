@@ -918,6 +918,62 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   color: var(--accent-success);
 }
 
+.policy-consequence-panel {
+  margin-top: 0.65rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-main);
+}
+
+.policy-consequence-panel h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-family: var(--font-ui);
+}
+
+.policy-consequence-panel ul {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.policy-consequence-panel li {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.policy-consequence-panel.warning {
+  border-color: rgba(245, 158, 11, 0.85);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.policy-consequence-panel.warning h4 {
+  color: var(--accent-warning);
+}
+
+.policy-consequence-panel.informational {
+  border-color: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.policy-consequence-panel.informational h4 {
+  color: #93c5fd;
+}
+
+.policy-consequence-panel.strict {
+  border-color: rgba(239, 68, 68, 0.85);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.policy-consequence-panel.strict h4 {
+  color: var(--accent-danger);
+}
+
 .operation-input-panel {
   min-width: 0;
   background: var(--bg-app);
@@ -1304,6 +1360,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .module-panel,
   .card,
   .operation-input-panel,
+  .policy-consequence-panel,
   .verification-section,
   .technical-context,
   .shard-geometry-panel,
@@ -1436,6 +1493,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .module-panel,
   .card,
   .operation-input-panel,
+  .policy-consequence-panel,
   .verification-section,
   .technical-context,
   .shard-geometry-panel,

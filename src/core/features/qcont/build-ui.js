@@ -4,7 +4,7 @@ import { buildQcontShards } from '../../../app/crypto-service.js';
 import { PRO_DEFAULT_AUTH_POLICY_LEVEL } from '../../crypto/constants.js';
 import { isSupportedAuthPolicyLevel } from '../../crypto/manifest/auth-policy.js';
 import { ML_KEM_1024_PRIVATE_KEY_SIZE } from '../../crypto/mlkem.js';
-import { describeAuthPolicyHelp } from './auth-policy-help.js';
+import { describeAuthPolicyHelp, renderAuthPolicyConsequence } from './auth-policy-help.js';
 import { evaluateRsParams } from './rs-params-display.js';
 import { clearInlineError, showInlineError } from '../ui/inline-error.js';
 import { log, logError } from '../ui/logging.js';
@@ -106,6 +106,7 @@ export function initQcontBuildUI() {
     const rsKInput = document.getElementById('rsK');
     const authPolicyInput = document.getElementById('proAuthPolicy');
     const authPolicyHelp = document.getElementById('proAuthPolicyHelp');
+    const authPolicyConsequence = document.getElementById('proAuthPolicyConsequence');
     const buildQcontBtn = document.getElementById('buildQcontBtn');
 
     const selectedArtifactSummary = () => {
@@ -134,8 +135,11 @@ export function initQcontBuildUI() {
     };
 
     const syncAuthPolicyHelp = () => {
-        if (!authPolicyHelp) return;
-        authPolicyHelp.textContent = describeAuthPolicyHelp(String(authPolicyInput?.value || PRO_DEFAULT_AUTH_POLICY_LEVEL));
+        const policyLevel = String(authPolicyInput?.value || PRO_DEFAULT_AUTH_POLICY_LEVEL);
+        if (authPolicyHelp) {
+            authPolicyHelp.textContent = describeAuthPolicyHelp(policyLevel);
+        }
+        renderAuthPolicyConsequence(authPolicyConsequence, policyLevel);
     };
     authPolicyInput?.addEventListener('change', () => {
         clearInlineError(SPLIT_INLINE_ERROR_ID);

@@ -40,7 +40,7 @@ import { clearInlineError, showInlineError, summarizeFileList } from './ui/inlin
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './ui/artifact-intake.js';
 import { initRovingTablist } from './ui/tabs.js';
 import { updateSidebarStatus } from './ui/ui.js';
-import { describeAuthPolicyHelp } from './qcont/auth-policy-help.js';
+import { describeAuthPolicyHelp, renderAuthPolicyConsequence } from './qcont/auth-policy-help.js';
 
 // Global state for Lite mode
 let liteKeys = null;
@@ -798,6 +798,7 @@ export function initLiteMode() {
     const liteThreshold = document.getElementById('liteThreshold');
     const liteAuthPolicy = document.getElementById('liteAuthPolicy');
     const liteAuthPolicyHelp = document.getElementById('liteAuthPolicyHelp');
+    const liteAuthPolicyConsequence = document.getElementById('liteAuthPolicyConsequence');
     if (liteN && liteThreshold) {
         liteN.addEventListener('input', updateThresholdDisplay);
         liteThreshold.addEventListener('input', updateThresholdDisplay);
@@ -805,7 +806,9 @@ export function initLiteMode() {
     }
     if (liteAuthPolicy && liteAuthPolicyHelp) {
         const syncLiteAuthPolicyHelp = () => {
-            liteAuthPolicyHelp.textContent = describeAuthPolicyHelp(String(liteAuthPolicy.value || LITE_DEFAULT_AUTH_POLICY_LEVEL));
+            const policyLevel = String(liteAuthPolicy.value || LITE_DEFAULT_AUTH_POLICY_LEVEL);
+            liteAuthPolicyHelp.textContent = describeAuthPolicyHelp(policyLevel);
+            renderAuthPolicyConsequence(liteAuthPolicyConsequence, policyLevel);
         };
         liteAuthPolicy.addEventListener('change', syncLiteAuthPolicyHelp);
         syncLiteAuthPolicyHelp();

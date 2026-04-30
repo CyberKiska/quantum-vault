@@ -132,6 +132,47 @@ test('dropzone file inputs expose a visible focus hook on the drop target', asyn
   expect(focusStyle.boxShadow).not.toBe('none');
 });
 
+test('policy consequence previews update in Lite Create and Pro Split', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+  const litePreview = page.getByTestId('lite-policy-consequence');
+  await expect(litePreview).toContainText('Restore may release plaintext without archive-approval signature.');
+  await expect(litePreview).toContainText('Integrity is checked; archive approval is not claimed.');
+  await expect(litePreview).toHaveClass(/warning/);
+
+  await page.locator('#liteAuthPolicy').selectOption('any-signature');
+  await expect(litePreview).toContainText('Restore requires at least one valid archive-approval signature.');
+  await expect(litePreview).toContainText('Maintenance, source-evidence, and timestamp evidence do not satisfy this policy.');
+  await expect(litePreview).toHaveClass(/informational/);
+  await expect.poll(async () => litePreview.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return { display: style.display, width: Math.round(rect.width), height: Math.round(rect.height) };
+  })).toMatchObject({ display: 'block', width: expect.any(Number), height: expect.any(Number) });
+  await expect.poll(async () => litePreview.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(200);
+
+  await page.locator('#liteAuthPolicy').selectOption('strong-pq-signature');
+  await expect(litePreview).toContainText('Restore requires a strong PQ archive-approval signature over the archive-state descriptor.');
+  await expect(litePreview).toContainText('Self-verified signatures are ignored for policy.');
+  await expect(litePreview).toHaveClass(/strict/);
+
+  await openProMode(page);
+  await page.locator('#proTabDistribution').click();
+  const proPreview = page.getByTestId('pro-policy-consequence');
+  await expect(proPreview).toContainText('Restore requires a strong PQ archive-approval signature over the archive-state descriptor.');
+  await expect(proPreview).toHaveClass(/strict/);
+
+  await page.locator('#proAuthPolicy').selectOption('integrity-only');
+  await expect(proPreview).toContainText('Restore may release plaintext without archive-approval signature.');
+  await expect(proPreview).toHaveClass(/warning/);
+
+  await page.locator('#proAuthPolicy').selectOption('any-signature');
+  await expect(proPreview).toContainText('Restore requires at least one valid archive-approval signature.');
+  await expect(proPreview).toHaveClass(/informational/);
+  await expect.poll(async () => proPreview.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(200);
+});
+
 test('narrow layouts do not horizontally overflow with long filenames and digest details', async ({ page }) => {
   const viewportWidths = [320, 375, 768, 1280];
   const longName = `${'quarterly-custody-rotation-restore-artifact-'.repeat(5)}.plaintext`;
