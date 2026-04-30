@@ -40,6 +40,36 @@ function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
 }
 
+async function expectNoHorizontalOverflow(page) {
+  const overflow = await page.evaluate(() => {
+    const root = document.documentElement;
+    const viewportWidth = root.clientWidth;
+    const documentOverflow = root.scrollWidth - viewportWidth;
+    const offenders = [...document.body.querySelectorAll('*')]
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          tag: element.tagName.toLowerCase(),
+          id: element.id,
+          className: typeof element.className === 'string' ? element.className : '',
+          rightOverflow: rect.right - viewportWidth,
+          leftOverflow: -rect.left,
+          width: rect.width,
+        };
+      })
+      .filter((entry) => entry.rightOverflow > 1 || entry.leftOverflow > 1)
+      .sort((a, b) => Math.max(b.rightOverflow, b.leftOverflow) - Math.max(a.rightOverflow, a.leftOverflow))
+      .slice(0, 5);
+    return { viewportWidth, scrollWidth: root.scrollWidth, documentOverflow, offenders };
+  });
+
+  expect(overflow, JSON.stringify(overflow, null, 2)).toMatchObject({
+    documentOverflow: expect.any(Number),
+  });
+  expect(overflow.documentOverflow, JSON.stringify(overflow, null, 2)).toBeLessThanOrEqual(1);
+  expect(overflow.offenders, JSON.stringify(overflow, null, 2)).toHaveLength(0);
+}
+
 test('lite tablist supports roving keyboard navigation', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
@@ -100,6 +130,34 @@ test('dropzone file inputs expose a visible focus hook on the drop target', asyn
   expect(focusStyle.outlineStyle).toBe('solid');
   expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
   expect(focusStyle.boxShadow).not.toBe('none');
+});
+
+test('narrow layouts do not horizontally overflow with long filenames and digest details', async ({ page }) => {
+  const viewportWidths = [320, 375, 768, 1280];
+  const longName = `${'quarterly-custody-rotation-restore-artifact-'.repeat(5)}.plaintext`;
+
+  for (const width of viewportWidths) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+    await page.locator('#liteFilesInput').setInputFiles({
+      name: longName,
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.from('responsive-layout-check'),
+    });
+    await expect(page.locator('#liteFilesList .file-name')).toContainText(longName);
+    await expectNoHorizontalOverflow(page);
+
+    await openProMode(page);
+    await page.getByTestId('tab-restore').click();
+    await page.getByTestId('restore-input').setInputFiles(fixtures.mixedBundleFiles);
+    const digestDetails = page.getByTestId('restore-digest-details');
+    await expect(digestDetails).toBeVisible();
+    await digestDetails.locator('summary').click();
+    await expect(digestDetails).toContainText(fixtures.mixedBundleDigestHex);
+    await expectNoHorizontalOverflow(page);
+  }
 });
 
 test('distribution build exports successor shards and the generated shards restore under integrity-only policy', async ({ page }) => {
