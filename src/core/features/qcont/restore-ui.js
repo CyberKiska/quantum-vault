@@ -13,6 +13,12 @@ import {
 } from '../ui/logging.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { renderArtifactIntakeTable } from '../ui/artifact-intake.js';
+import {
+  buildRestoreEvidenceMatrixSections,
+  buildRestorePolicyFailureEvidenceMatrixSections,
+  getRestoreReleaseState,
+  renderEvidenceMatrix,
+} from '../ui/evidence-matrix.js';
 import { showToast } from '../ui/toast.js';
 
 const successorSelectionState = new Map();
@@ -1200,80 +1206,6 @@ export function logRestoreSelectionSummary(result, onLog) {
   onLog(`Selection source: ${result.selectionSource || 'embedded'}`);
 }
 
-function countSelfVerifiedSignatures(authenticity) {
-  const results = Array.isArray(authenticity?.verification?.results)
-    ? authenticity.verification.results
-    : [];
-  return results.filter((item) => {
-    if (item?.selfSigned === true) return true;
-    const warnings = Array.isArray(item?.warnings) ? item.warnings : [];
-    return warnings.some((warning) => {
-      const text = String(warning || '').toLowerCase();
-      return (
-        text.includes('cryptographic self-verification') ||
-        text.includes('verified only with the signer public key embedded in the .qsig')
-      );
-    });
-  }).length;
-}
-
-function appendSelfVerifiedSignatureRow(addRow, authenticity) {
-  const selfVerifiedCount = countSelfVerifiedSignatures(authenticity);
-  if (selfVerifiedCount > 0) {
-    addRow(
-      'Self-verified signature',
-      'Cryptographically self-verified, ignored for archive policy',
-      'warn',
-      `${selfVerifiedCount} detached PQ signature${selfVerifiedCount === 1 ? '' : 's'} verified only with the public key embedded in the .qsig wrapper. No bundled or user-supplied signer pin corroborated the signer.`
-    );
-  } else {
-    addRow('Self-verified signature', 'None reported', 'neutral');
-  }
-}
-
-function appendSignerPinRows(addRow, addPolarRow, status, archiveApprovalVerified) {
-  const pinSources = [];
-  if (status.bundlePinned === true) pinSources.push('bundle');
-  if (status.userPinned === true) pinSources.push('user input');
-
-  if (pinSources.length > 0) {
-    addRow(
-      'Archive-approval signer pin',
-      `Signer pinned by ${pinSources.join(' and ')}`,
-      'ok',
-      'Pinning strengthens signer provenance reporting but remains separate from archive-policy evaluation.'
-    );
-  } else if (archiveApprovalVerified) {
-    addRow(
-      'Archive-approval signer pin',
-      'Signer not pinned',
-      'warn',
-      'A valid archive-approval signature may satisfy policy without pinning; signer pinning remains a separate status.'
-    );
-  } else {
-    addRow('Archive-approval signer pin', 'No verified archive-approval signer to pin', 'neutral');
-  }
-
-  addPolarRow(
-    'Bundle signer pin',
-    status.bundlePinned === true,
-    'Bundle signer pin matched',
-    'No bundle signer pin matched archive approval',
-    archiveApprovalVerified === true && status.bundlePinned !== true ? 'warn' : 'neutral',
-  );
-  if (status.userPinProvided === true || status.userPinned === true) {
-    addPolarRow(
-      'User-entered signer pin',
-      status.userPinned === true,
-      'User-entered signer pin matched',
-      status.userPinProvided === true ? 'User-entered signer pin did not match a verifying archive-approval signer' : 'User-entered signer pin not active',
-      status.userPinProvided === true && status.userPinned !== true ? 'warn' : 'neutral',
-    );
-  } else {
-    addRow('User-entered signer pin', 'No user-entered signer pin provided', 'neutral');
-  }
-}
-
 /**
  * @param {object} result - restoreFromShards result
  * @param {string} resultPanelId - DOM id of `.restore-result-panel`
@@ -1285,16 +1217,7 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
 
   panel.replaceChildren();
   panel.style.display = 'block';
-  const { qencOk, qkeyOk, authenticity } = result;
-  const status = authenticity?.status || {};
-  const policy = authenticity?.policy || {};
-  const policyLevel = String(policy.level || 'unknown');
-  const policyOk = authenticity?.status?.policySatisfied === true;
-  let releaseAllowed = qencOk && qkeyOk && policyOk;
-  if (options.liteDecrypt) {
-    const { containerOk, decryptOk } = options.liteDecrypt;
-    releaseAllowed = qencOk && qkeyOk && containerOk && decryptOk && policyOk;
-  }
+  const { releaseAllowed, policyLevel, policyOk } = getRestoreReleaseState(result, options);
   const releasePerformed = options.releasePerformed !== false;
 
   const header = document.createElement('h4');
@@ -1328,162 +1251,9 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     : 'No plaintext was released. Review the failed row before retrying restore.';
   panel.appendChild(intro);
 
-  const matrix = document.createElement('div');
-  matrix.className = 'restore-verification-matrix';
-  panel.appendChild(matrix);
-
-  const addSection = (title) => {
-    const section = document.createElement('div');
-    section.className = 'restore-result-section';
-    section.textContent = title;
-    matrix.appendChild(section);
-  };
-
-  const addRow = (label, value, tone = 'neutral', detail = '') => {
-    const item = document.createElement('div');
-    item.className = `restore-result-item restore-matrix-row ${tone}`;
-    const labelEl = document.createElement('span');
-    labelEl.className = 'restore-matrix-label';
-    labelEl.textContent = label;
-    const valueEl = document.createElement('span');
-    valueEl.className = 'restore-matrix-value';
-    valueEl.textContent = value;
-    item.append(labelEl, valueEl);
-    if (detail) {
-      const detailEl = document.createElement('span');
-      detailEl.className = 'restore-matrix-detail';
-      detailEl.textContent = detail;
-      item.appendChild(detailEl);
-    }
-    matrix.appendChild(item);
-  };
-
-  const addPolarRow = (label, ok, okText, failText, failTone = 'fail', detail = '') => {
-    addRow(label, ok ? okText : failText, ok ? 'ok' : failTone, detail);
-  };
-
-  const addNeutral = (text) => {
-    addRow('Note', text, 'neutral');
-  };
-
-  addSection('Restore Decision');
-  if (releaseAllowed && policyLevel === 'integrity-only') {
-    addRow(
-      'Plaintext release',
-      'Allowed by integrity-only policy',
-      'warn',
-      'No archive-approval signature is required by the selected policy.'
-    );
-  } else if (releaseAllowed) {
-    addRow('Plaintext release', `Allowed by ${policyLevel} policy`, 'ok');
-  } else {
-    addRow('Plaintext release', 'Blocked', 'fail');
-  }
-
-  addSection('Verification Matrix');
-  addPolarRow('Container integrity', qencOk, 'Container integrity verified', 'Container integrity check failed');
-  addPolarRow('Private key recovery', qkeyOk, 'Private key integrity verified', 'Private key integrity check failed');
-  if (options.liteDecrypt) {
-    addPolarRow(
-      'Plaintext integrity',
-      options.liteDecrypt.decryptOk,
-      'Decryption and file integrity verified',
-      'Decryption or file integrity check failed',
-    );
-  }
-
-  const archiveApprovalVerified = status.archiveApprovalSignatureVerified === true;
-  const cohortInspection = result.lifecycleVerification?.cohorts || {};
-  addPolarRow(
-    'Archive approval',
-    archiveApprovalVerified,
-    'Archive-approval signature verified',
-    'No verified archive-approval signature over archive-state',
-    policyLevel === 'integrity-only' ? 'warn' : 'fail',
-  );
-  addPolarRow(
-    'Strong PQ approval',
-    status.strongPqSignatureVerified === true,
-    'Strong PQ archive-approval signature verified',
-    'Strong PQ archive-approval signature not present',
-    archiveApprovalVerified === true && status.strongPqSignatureVerified !== true ? 'warn' : 'neutral',
-  );
-  appendSelfVerifiedSignatureRow(addRow, authenticity);
-
-  if (status.transitionRecordPresent !== true) {
-    addRow('Maintenance evidence', 'No transition or maintenance evidence present', 'neutral');
-  } else {
-    addPolarRow('Transition record', true, 'Transition record present', 'Transition record missing');
-    addPolarRow(
-      'Transition chain',
-      status.transitionChainValid === true,
-      'Transition-chain references valid',
-      'Transition-chain references invalid or broken',
-    );
-    addPolarRow(
-      'Maintenance evidence',
-      status.maintenanceSignatureVerified === true,
-      'Maintenance signature verified',
-      'No verified maintenance signature on transition record(s)',
-      'warn',
-      'Maintenance signatures do not satisfy archive policy.'
-    );
-  }
-
-  if (status.sourceEvidencePresent !== true) {
-    addRow('Source evidence', 'No source-evidence objects present', 'neutral');
-  } else {
-    addPolarRow(
-      'Source evidence',
-      status.sourceEvidenceSignatureVerified === true,
-      'Source-evidence signature verified',
-      'Source-evidence present but no verified signature',
-      'warn',
-      'Source evidence does not satisfy archive policy.'
-    );
-  }
-
-  if (cohortInspection.forkDetected === true) {
-    addRow('Cohort selection', 'Same-state cohort fork remains known for this archive state', 'warn');
-  }
-  if (status.bundleCohortMixed === true) {
-    addRow('Lifecycle bundle selection', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', 'warn');
-  } else {
-    addRow('Lifecycle bundle selection', 'One lifecycle bundle variant selected for policy evaluation', 'ok');
-  }
-
-  appendSignerPinRows(addRow, addPolarRow, status, archiveApprovalVerified);
-
-  const timestampEvidence = Array.isArray(authenticity?.timestampEvidence) ? authenticity.timestampEvidence : [];
-  if (timestampEvidence.length > 0) {
-    const completeCount = timestampEvidence.filter((item) => item.apparentlyComplete === true).length;
-    const incompleteCount = timestampEvidence.length - completeCount;
-    const completionParts = [];
-    if (completeCount > 0) {
-      completionParts.push(`OTS proof appears complete (heuristic): ${completeCount}`);
-    }
-    if (incompleteCount > 0) {
-      completionParts.push(`OTS proof incomplete or pending: ${incompleteCount}`);
-    }
-    addRow(
-      'Timestamp evidence',
-      `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`,
-      incompleteCount > 0 ? 'warn' : 'ok',
-      `${completionParts.join('; ')}. Timestamp evidence does not satisfy archive policy.`
-    );
-  } else {
-    addRow('Timestamp evidence', 'No OTS evidence linked', 'neutral');
-  }
-
-  addPolarRow(
-    'Archive policy',
-    status.policySatisfied === true,
-    'Archive policy satisfied',
-    'Archive policy not satisfied',
-    'fail',
-    'Archive policy evaluation remains archive-approval-only.'
-  );
-  addNeutral('Maintenance, source-evidence, and timestamp evidence are reported separately and do not authorize restore.');
+  renderEvidenceMatrix(panel, buildRestoreEvidenceMatrixSections(result, options), {
+    compact: options.compact === true,
+  });
 
   const panelTone = releaseAllowed && policyLevel !== 'integrity-only' ? 'ok' : (releaseAllowed ? 'warn' : 'fail');
   panel.className = `restore-result-panel ${panelTone}`;
@@ -1515,55 +1285,7 @@ export function buildRestorePolicyFailureSummary(error, resultPanelId) {
   intro.textContent = 'No plaintext or recovered key was exported because archive policy blocked restore before reconstruction.';
   panel.appendChild(intro);
 
-  const matrix = document.createElement('div');
-  matrix.className = 'restore-verification-matrix';
-  panel.appendChild(matrix);
-
-  const addRow = (label, value, tone = 'neutral', detail = '') => {
-    const item = document.createElement('div');
-    item.className = `restore-result-item restore-matrix-row ${tone}`;
-    const labelEl = document.createElement('span');
-    labelEl.className = 'restore-matrix-label';
-    labelEl.textContent = label;
-    const valueEl = document.createElement('span');
-    valueEl.className = 'restore-matrix-value';
-    valueEl.textContent = value;
-    item.append(labelEl, valueEl);
-    if (detail) {
-      const detailEl = document.createElement('span');
-      detailEl.className = 'restore-matrix-detail';
-      detailEl.textContent = detail;
-      item.appendChild(detailEl);
-    }
-    matrix.appendChild(item);
-  };
-  const addPolarRow = (label, ok, okText, failText, failTone = 'fail', detail = '') => {
-    addRow(label, ok ? okText : failText, ok ? 'ok' : failTone, detail);
-  };
-
-  const reason = String(error?.message || error || 'Archive policy not satisfied');
-  const authenticity = error?.authenticity || null;
-  const status = authenticity?.status || {};
-  addRow('Plaintext release', 'Blocked', 'fail');
-  addRow('Archive policy', 'Archive policy not satisfied', 'fail', reason);
-  addRow('Integrity', 'Not evaluated after policy block', 'neutral');
-  addRow(
-    'Archive approval',
-    status.archiveApprovalSignatureVerified === true
-      ? 'Archive-approval signature verified but not policy-satisfying'
-      : 'No policy-satisfying archive-approval signature verified',
-    'fail'
-  );
-  addPolarRow(
-    'Strong PQ approval',
-    status.strongPqSignatureVerified === true,
-    'Strong PQ archive-approval signature verified',
-    'Strong PQ archive-approval signature not present',
-    'neutral'
-  );
-  appendSelfVerifiedSignatureRow(addRow, authenticity);
-  appendSignerPinRows(addRow, addPolarRow, status, status.archiveApprovalSignatureVerified === true);
-  addRow('Evidence channels', 'Maintenance, source-evidence, and timestamp evidence cannot satisfy archive policy', 'neutral');
+  renderEvidenceMatrix(panel, buildRestorePolicyFailureEvidenceMatrixSections(error), { compact: true });
 
   panel.className = 'restore-result-panel fail';
   return true;

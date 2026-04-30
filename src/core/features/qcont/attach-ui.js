@@ -16,6 +16,7 @@ import {
 import { startsWithAscii } from '../../crypto/byte-prefix.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
+import { buildAttachEvidenceMatrixSections, renderEvidenceMatrix } from '../ui/evidence-matrix.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
@@ -722,92 +723,11 @@ function buildAttachResultSummary({ plan, classified, channel }) {
   header.textContent = 'Attach Result';
   panel.appendChild(header);
 
-  const addSection = (title) => {
-    const section = document.createElement('div');
-    section.className = 'restore-result-section';
-    section.textContent = title;
-    panel.appendChild(section);
-  };
-
-  const addPolar = (ok, okText, failText, warnOnFail = false) => {
-    const item = document.createElement('div');
-    const useWarn = !ok && warnOnFail;
-    item.className = `restore-result-item ${useWarn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-    item.textContent = `${ok ? '✓' : (useWarn ? '⚠' : '✗')} ${ok ? okText : failText}`;
-    panel.appendChild(item);
-  };
-
-  const addNeutral = (textValue) => {
-    const item = document.createElement('div');
-    item.className = 'restore-result-item neutral';
-    item.textContent = `· ${textValue}`;
-    panel.appendChild(item);
-  };
-
-  const signatureCount = classified.signatures.length;
-  const timestampCount = classified.timestamps.length;
-  const publicKeyCount = classified.pqPublicKeyFileBytesList.length;
-
-  addSection('Result');
-  addPolar(true, 'Lifecycle bundle updated', '');
-  if (plan.embedIntoShards) {
-    const shardCountText = `${plan.selectedShardCount}/${plan.expectedShardCount}`;
-    if (plan.warning) {
-      addPolar(
-        false,
-        '',
-        `Only ${shardCountText} selected shard files were rewritten; other shards may still carry older embedded lifecycle-bundle bytes.`,
-        true
-      );
-    } else {
-      addPolar(true, `Selected shard files updated (${shardCountText})`, '');
-    }
-  } else {
-    addNeutral('Shard files were not rewritten.');
-  }
-  addPolar(true, 'Signable archive-state bytes remained unchanged', '');
-
-  addSection('Evidence Channel');
-  addNeutral(`${channelConfig.label} selected for this attach run.`);
-  if (channel === 'maintenance') {
-    addPolar(true, 'Transition-record target stayed separate from archive approval', '');
-  } else if (channel === 'source-evidence') {
-    addPolar(true, 'Source-evidence signatures stayed separate from archive approval', '');
-  } else {
-    addPolar(true, 'Archive-approval signatures stayed on archive-state bytes', '');
-  }
-
-  addSection('Imported Files');
-  if (signatureCount > 0) {
-    const label = channel === 'archive-approval'
-      ? 'Archive-approval signatures merged'
-      : channel === 'maintenance'
-        ? 'Maintenance signatures merged'
-        : 'Source-evidence signatures merged';
-    addPolar(true, `${label} (${signatureCount})`, '');
-  } else {
-    addNeutral(`No ${channelConfig.label.toLowerCase()} .qsig/.sig files were supplied.`);
-  }
-  if (channel === 'maintenance') {
-    if (classified.transitionRecordBytes instanceof Uint8Array) addPolar(true, 'Canonical transition-record target loaded', '');
-    else addNeutral('No transition-record.json target was supplied.');
-  }
-  if (channel === 'source-evidence') {
-    if (classified.sourceEvidenceBytes instanceof Uint8Array) addPolar(true, 'Canonical source-evidence artifact loaded', '');
-    else addNeutral('No source-evidence.json artifact was supplied.');
-  }
-  if (publicKeyCount > 0) addPolar(true, `.pqpk signer pins merged (${publicKeyCount})`, '');
-  else addNeutral('No .pqpk signer pins were supplied.');
-  if (timestampCount > 0) {
-    addPolar(true, `.ots proofs merged (${timestampCount})`, '');
-    addNeutral('OTS evidence targets detached signature bytes by SHA-256(signatureBytes), not archive-state or lifecycle-bundle bytes.');
-    addNeutral('Timestamp evidence does not satisfy archive policy.');
-  } else {
-    addNeutral('No .ots proofs were supplied.');
-  }
-
-  addSection('Next Actions');
-  addNeutral('Continue to Restore to inspect archive approval, maintenance, and source-evidence channels separately.');
+  renderEvidenceMatrix(
+    panel,
+    buildAttachEvidenceMatrixSections({ classified, plan, channelConfig, channel }),
+    { compact: true }
+  );
 
   panel.className = `restore-result-panel ${plan.warning ? 'warn' : 'ok'}`;
 }

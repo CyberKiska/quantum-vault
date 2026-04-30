@@ -831,6 +831,11 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   display: grid;
   gap: 0.35rem;
 }
+
+.evidence-matrix.compact {
+  gap: 0.3rem;
+}
+
 .restore-result-section {
   margin-top: 0.75rem;
   margin-bottom: 0.2rem;
