@@ -9,6 +9,7 @@ import { updateShardSelectionStatus } from './shards-status.js';
 import { showToast } from './toast.js';
 import { refreshSuccessorSelectionUi } from '../qcont/restore-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
+import { initRovingTablist } from './tabs.js';
 
 // Pro mode state
 let collectedUserEntropy = null;
@@ -528,36 +529,16 @@ export function initUI() {
         };
         const tabIds = Object.keys(tabs);
 
-        function activateProTab(tabId, { focus = false } = {}) {
-            tabIds.forEach((currentTabId) => {
-                const tabEl = document.getElementById(currentTabId);
-                const panelEl = document.getElementById(tabs[currentTabId]);
-                const active = currentTabId === tabId;
-                if (tabEl) {
-                    tabEl.classList.toggle('active', active);
-                    tabEl.setAttribute('aria-selected', String(active));
-                    tabEl.tabIndex = active ? 0 : -1;
-                    if (active && focus) tabEl.focus();
+        initRovingTablist({
+            tabIds,
+            panelByTabId: tabs,
+            onActivate: (tabId) => {
+                if (tabId === 'proTabDistribution') {
+                    setTimeout(() => {
+                        rsNInput?.dispatchEvent(new Event('input'));
+                    }, 10);
                 }
-                if (panelEl) {
-                    panelEl.classList.toggle('active', active);
-                    panelEl.style.display = active ? 'block' : 'none';
-                }
-            });
-
-            if (tabId === 'proTabDistribution') {
-                setTimeout(() => {
-                    rsNInput?.dispatchEvent(new Event('input'));
-                }, 10);
-            }
-        }
-
-        tabIds.forEach((tabId) => {
-            const tabEl = document.getElementById(tabId);
-            if (!tabEl) return;
-            tabEl.addEventListener('click', () => {
-                activateProTab(tabId);
-            });
+            },
         });
     }
 

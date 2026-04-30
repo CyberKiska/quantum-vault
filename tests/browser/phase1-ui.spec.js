@@ -40,6 +40,68 @@ function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
 }
 
+test('lite tablist supports roving keyboard navigation', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+  await page.locator('#liteTabProtect').focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('#liteTabRestore')).toBeFocused();
+  await expect(page.locator('#liteTabRestore')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#liteShardsInput')).toBeVisible();
+  await expect(page.locator('#liteTabProtect')).toHaveAttribute('tabindex', '-1');
+
+  await page.keyboard.press('Home');
+  await expect(page.locator('#liteTabProtect')).toBeFocused();
+  await expect(page.locator('#liteTabProtect')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#liteFilesInput')).toBeVisible();
+});
+
+test('pro tablist supports arrow home end and explicit activation keys', async ({ page }) => {
+  await openProMode(page);
+
+  await page.locator('#proTabIdentity').focus();
+  await page.keyboard.press('End');
+  await expect(page.getByTestId('tab-reshare')).toBeFocused();
+  await expect(page.getByTestId('tab-reshare')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('reshare-input')).toBeVisible();
+
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.getByTestId('tab-attach')).toBeFocused();
+  await expect(page.getByTestId('tab-attach')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('attach-input')).toBeVisible();
+
+  await page.getByTestId('tab-restore').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('tab-restore')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('restore-input')).toBeVisible();
+
+  await page.keyboard.press('Home');
+  await expect(page.locator('#proTabIdentity')).toBeFocused();
+  await expect(page.locator('#proTabIdentity')).toHaveAttribute('aria-selected', 'true');
+});
+
+test('dropzone file inputs expose a visible focus hook on the drop target', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').focus();
+
+  const focusStyle = await page.locator('#liteShardsDropzone').evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      outlineStyle: style.outlineStyle,
+      outlineWidth: Number.parseFloat(style.outlineWidth),
+      boxShadow: style.boxShadow,
+    };
+  });
+
+  expect(focusStyle.outlineStyle).toBe('solid');
+  expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
+  expect(focusStyle.boxShadow).not.toBe('none');
+});
+
 test('distribution build exports successor shards and the generated shards restore under integrity-only policy', async ({ page }) => {
   await openProMode(page);
   await page.locator('#proTabDistribution').click();

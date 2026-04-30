@@ -132,9 +132,9 @@
             <div class="card full-width">
               <div class="dropzone-area" id="liteDropzone">
                 <h3>Select files to protect</h3>
-                <p class="muted-copy">Drag & drop or click to select</p>
+                <p id="liteFilesHelp" class="muted-copy">Drag files here or use the file picker to select plaintext inputs for local encryption.</p>
                 <label for="liteFilesInput" class="visually-hidden">Select files to protect</label>
-                <input type="file" id="liteFilesInput" multiple>
+                <input type="file" id="liteFilesInput" multiple aria-describedby="liteFilesHelp">
                 <div id="liteFilesList" class="files-list initially-hidden"></div>
               </div>
               
@@ -218,11 +218,11 @@
             <div class="card full-width">
               <div class="dropzone-area" id="liteShardsDropzone">
                 <h3>Select Shards to Restore</h3>
-                <p class="muted-copy">Load successor <code>.qcont</code> shards and any detached signatures, signer keys, or timestamp proofs you want checked.</p>
+                <p id="liteShardsHelp" class="muted-copy">Load successor <code>.qcont</code> shards and any detached signatures, signer keys, or timestamp proofs you want checked.</p>
                 <label for="liteShardsInput" class="visually-hidden">Select shard and verification files</label>
-                <input type="file" id="liteShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                <input type="file" id="liteShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple aria-describedby="liteShardsHelp">
               </div>
-              <div id="shardsStatus" class="shards-status initially-hidden">
+              <div id="shardsStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
               <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
@@ -295,11 +295,13 @@
               <h3>Active Session</h3>
               <div class="form-group">
                 <label for="privKeyInput">Private Key (.qkey) <span class="info" title="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span></label>
-                <input type="file" id="privKeyInput" accept=".qkey">
+                <input type="file" id="privKeyInput" accept=".qkey" aria-describedby="privKeyInputHelp">
+                <small id="privKeyInputHelp" class="muted-copy">Select an ML-KEM private <code>.qkey</code> only for local decryption or split operations.</small>
               </div>
               <div class="form-group">
                 <label for="pubKeyInput">Public Key (.qkey) <span class="info" title="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span></label>
-                <input type="file" id="pubKeyInput" accept=".qkey">
+                <input type="file" id="pubKeyInput" accept=".qkey" aria-describedby="pubKeyInputHelp">
+                <small id="pubKeyInputHelp" class="muted-copy">Select an ML-KEM public <code>.qkey</code> for encryption targets.</small>
               </div>
             </div>
           </div>
@@ -317,7 +319,8 @@
               <h3>File Operations</h3>
               <div class="form-group">
                 <label for="dataFileInput">Input Files</label>
-                <input type="file" id="dataFileInput" multiple>
+                <input type="file" id="dataFileInput" multiple aria-describedby="dataFileInputHelp">
+                <small id="dataFileInputHelp" class="muted-copy">Select plaintext files to encrypt, or an encrypted container to decrypt when a private key is loaded.</small>
                 <div id="proFilesList" class="files-list initially-hidden"></div>
               </div>
               <div id="proEncStrategyGroup" class="strategy-group initially-hidden">
@@ -357,11 +360,13 @@
                 <div class="split-grid">
                   <div class="form-group">
                     <label for="qencForQcontInput">Encrypted container (.qenc)</label>
-                    <input type="file" id="qencForQcontInput" accept=".qenc">
+                    <input type="file" id="qencForQcontInput" accept=".qenc" aria-describedby="qencForQcontHelp">
+                    <small id="qencForQcontHelp" class="muted-copy">Select the encrypted container that will be converted into successor shards.</small>
                   </div>
                   <div class="form-group">
                     <label for="privKeyForQcontInput">Private Key (.qkey)</label>
-                    <input type="file" id="privKeyForQcontInput" accept=".qkey">
+                    <input type="file" id="privKeyForQcontInput" accept=".qkey" aria-describedby="privKeyForQcontHelp">
+                    <small id="privKeyForQcontHelp" class="muted-copy">Select the 3168 B private <code>.qkey</code> needed to unwrap the encrypted container locally.</small>
                   </div>
                 </div>
               </div>
@@ -467,7 +472,7 @@
                 <p id="attachChannelHelp" class="muted-copy operation-hint" data-testid="attach-channel-help">Archive approval attaches detached signatures over the canonical archive-state descriptor. Maintenance and source-evidence remain separate evidence channels and never satisfy archive policy on their own.</p>
                 <div class="form-group">
                   <label for="qcontAttachInput">Attach inputs</label>
-                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input">
+                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input" aria-describedby="attachInputHint">
                 </div>
                 <p id="attachInputHint" class="muted-copy operation-hint">Load one archive cohort plus any detached signatures, signer pins, timestamps, and channel-specific JSON artifacts you want to merge. Signing remains external.</p>
               </div>
@@ -517,7 +522,7 @@
                 </div>
               </details>
               <div class="operation-readiness">
-                <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status">
+                <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status" aria-live="polite">
                   <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
@@ -568,11 +573,11 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontReshareInput">Reshare inputs</label>
-                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input">
+                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input" aria-describedby="reshareInputHint">
                 </div>
-                <p class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
+                <p id="reshareInputHint" class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
               </div>
-              <div id="proReshareStatus" class="shards-status initially-hidden">
+              <div id="proReshareStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="proReshareStatusText">0 shards selected</span>
               </div>
               <div id="reshareSuccessorSelection" class="verification-section successor-selection initially-hidden">
@@ -689,11 +694,11 @@
               <div class="operation-input-panel">
                 <div class="form-group">
                   <label for="qcontShardsInput">Restore inputs</label>
-                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input">
+                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input" aria-describedby="restoreInputHint">
                 </div>
-                <p class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
+                <p id="restoreInputHint" class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
               </div>
-              <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status">
+              <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status" aria-live="polite">
                 <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
               <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">

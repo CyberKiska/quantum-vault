@@ -37,6 +37,7 @@ import {
 import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
 import { clearInlineError, showInlineError, summarizeFileList } from './ui/inline-error.js';
+import { initRovingTablist } from './ui/tabs.js';
 import { updateSidebarStatus } from './ui/ui.js';
 import { describeAuthPolicyHelp } from './qcont/auth-policy-help.js';
 
@@ -665,8 +666,6 @@ async function restoreLiteShards() {
 }
 
 function initLiteTabs() {
-    const tabProtect = document.getElementById('liteTabProtect');
-    const tabRestore = document.getElementById('liteTabRestore');
     const viewProtect = document.getElementById('liteViewProtect');
     const viewRestore = document.getElementById('liteViewRestore');
     const tabIds = ['liteTabProtect', 'liteTabRestore'];
@@ -675,35 +674,7 @@ function initLiteTabs() {
         liteTabRestore: viewRestore,
     };
 
-    function activateLiteTab(tabId, { focus = false } = {}) {
-        tabIds.forEach((currentTabId) => {
-            const tabEl = document.getElementById(currentTabId);
-            const panelEl = panelByTabId[currentTabId];
-            const active = currentTabId === tabId;
-
-            if (tabEl) {
-                tabEl.classList.toggle('active', active);
-                tabEl.setAttribute('aria-selected', String(active));
-                tabEl.tabIndex = active ? 0 : -1;
-                if (active && focus) tabEl.focus();
-            }
-
-            if (panelEl) {
-                panelEl.style.display = active ? 'block' : 'none';
-                panelEl.classList.toggle('active', active);
-            }
-        });
-    }
-
-    if (tabProtect && tabRestore && viewProtect && viewRestore) {
-        tabProtect.addEventListener('click', () => {
-            activateLiteTab('liteTabProtect');
-        });
-
-        tabRestore.addEventListener('click', () => {
-            activateLiteTab('liteTabRestore');
-        });
-    }
+    if (viewProtect && viewRestore) initRovingTablist({ tabIds, panelByTabId });
 }
 
 function updateOperationsLogVisibility() {
