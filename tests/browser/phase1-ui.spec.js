@@ -40,6 +40,19 @@ function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
 }
 
+async function evaluateAndReleaseRestore(page, expectedPreflightText) {
+  await page.getByTestId('restore-button').click();
+  const preflight = page.getByTestId('restore-preflight');
+  await expect(preflight).toBeVisible();
+  if (expectedPreflightText) {
+    await expect(preflight).toContainText(expectedPreflightText);
+  }
+  const releaseButton = page.getByTestId('release-button');
+  await expect(releaseButton).toBeVisible();
+  await expect(releaseButton).toBeEnabled();
+  await releaseButton.click();
+}
+
 async function expectNoHorizontalOverflow(page) {
   const overflow = await page.evaluate(() => {
     const root = document.documentElement;
@@ -275,7 +288,8 @@ test('distribution build exports successor shards and the generated shards resto
 
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
-  await restoreButton.click();
+  await expect(page.getByTestId('restore-preflight')).toContainText('Plaintext release: allowed by integrity-only policy');
+  await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by integrity-only policy');
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
@@ -339,16 +353,15 @@ test('strong-PQ restore fails closed without detached archive approval', async (
 
   await restoreButton.click();
 
+  await expect(page.getByTestId('restore-preflight')).toContainText('Plaintext release: blocked');
+  await expect(page.getByTestId('restore-preflight')).toContainText('before reconstruction');
   await expect(lastToast(page)).toContainText('strong PQ archive-approval signature');
   await expect(page.getByTestId('restore-inline-error')).toBeVisible();
   await expect(page.getByTestId('restore-inline-error')).toContainText('Cause');
   await expect(page.getByTestId('restore-inline-error')).toContainText('Affected artifact');
   await expect(page.getByTestId('restore-inline-error')).toContainText('Next recovery action');
   await expect(page.getByTestId('restore-inline-error')).toContainText('policy-satisfying archive-approval');
-  const restoreResult = page.getByTestId('restore-result');
-  await expect(restoreResult).toBeVisible();
-  await expect(restoreResult).toContainText('Plaintext not released: archive policy not satisfied');
-  await expect(restoreResult).toContainText('No policy-satisfying archive-approval signature verified');
+  await expect(page.getByTestId('restore-result')).toBeHidden();
 });
 
 test('lite restore policy failure is shown as a persistent inline error', async ({ page }) => {
@@ -377,7 +390,8 @@ test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async (
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
 
-  await restoreButton.click();
+  await expect(page.getByTestId('restore-preflight')).toContainText('Plaintext release: blocked');
+  await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by strong PQ archive-approval policy');
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
@@ -396,7 +410,7 @@ test('restore reports unpinned embedded-key qsig as self-verified when another s
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
 
-  await restoreButton.click();
+  await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by strong PQ archive-approval policy');
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
@@ -563,7 +577,7 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
 
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
-  await restoreButton.click();
+  await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by strong PQ archive-approval policy');
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
@@ -654,7 +668,7 @@ test('maintenance attach imports detached qsig evidence and restore reports it s
 
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
-  await restoreButton.click();
+  await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by integrity-only policy');
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
@@ -735,7 +749,7 @@ test('source-evidence builder exports canonical JSON for external signing, re-im
 
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
-  await restoreButton.click();
+  await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by integrity-only policy');
 
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();

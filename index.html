@@ -243,6 +243,7 @@
                   <select id="liteRestoreBundleSelection"></select>
                 </div>
               </div>
+              <div id="liteRestorePreflightDecision" class="restore-preflight-card initially-hidden" data-testid="lite-restore-preflight"></div>
               <details class="technical-context">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -723,6 +724,7 @@
                   <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
               </div>
+              <div id="restorePreflightDecision" class="restore-preflight-card initially-hidden" data-testid="restore-preflight"></div>
               <details class="technical-context">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -738,7 +740,8 @@
                 </div>
               </details>
               <div class="button-group">
-                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Restore Selected Archive</button>
+                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Evaluate Restore Inputs</button>
+                <button id="releaseRestoredFilesBtn" class="button secondary initially-hidden" disabled type="button" data-testid="release-button">Release Recovered Files</button>
               </div>
               <div id="proRestoreInlineError" class="inline-error-panel initially-hidden" data-testid="restore-inline-error"></div>
               <div id="proRestoreResult" class="restore-result-panel initially-hidden" data-testid="restore-result"></div>

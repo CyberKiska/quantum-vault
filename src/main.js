@@ -16,6 +16,8 @@ const TRANSIENT_PANEL_IDS = [
     'proReshareResult',
     'proRestoreResult',
     'proRestoreInlineError',
+    'restorePreflightDecision',
+    'liteRestorePreflightDecision',
     'proSplitInlineError',
     'attachStatus',
     'attachArtifactIntake',

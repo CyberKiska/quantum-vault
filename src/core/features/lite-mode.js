@@ -19,6 +19,7 @@ import {
     logRestoreSelectionSummary,
     logVerificationSummary,
     refreshSuccessorSelectionUi,
+    renderRestorePreflightForFiles,
 } from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
@@ -349,6 +350,13 @@ async function updateShardsStatus() {
     });
     if (requestId !== liteShardsStatusSeq) return;
     await refreshSuccessorSelectionUi('liteRestore', files, restoreBtn, assessment || { ready: false });
+    if (requestId !== liteShardsStatusSeq) return;
+    await renderRestorePreflightForFiles({
+        prefix: 'liteRestore',
+        containerId: 'liteRestorePreflightDecision',
+        files,
+        expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+    });
 }
 
 // Update create shards button state
@@ -547,6 +555,23 @@ async function restoreLiteShards() {
             action: 'Load enough unique successor shards from one archive/state/cohort, then retry Lite Restore.',
         });
         showToast(assessment.message || 'Selected shards do not meet the recovery threshold', 'warning');
+        return;
+    }
+
+    const preflight = await renderRestorePreflightForFiles({
+        prefix: 'liteRestore',
+        containerId: 'liteRestorePreflightDecision',
+        files: [...(shardsInput.files || [])],
+        expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+    });
+    if (preflight?.canEvaluate === false) {
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: preflight.blockingReason || 'Restore preflight blocked evaluation.',
+            artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+            action: 'Load policy-satisfying archive-approval evidence, then retry Lite Restore.',
+        });
+        showToast(preflight.blockingReason || 'Restore preflight blocked evaluation.', 'warning');
         return;
     }
     
@@ -835,6 +860,15 @@ export function initLiteMode() {
     }
     document.getElementById('liteRestoreExpectedEdSigner')?.addEventListener('input', () => {
         clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
+        const files = [...(liteShardsInput?.files || [])];
+        if (files.length) {
+            void renderRestorePreflightForFiles({
+                prefix: 'liteRestore',
+                containerId: 'liteRestorePreflightDecision',
+                files,
+                expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+            });
+        }
     });
     
     // Set up button handlers

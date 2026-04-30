@@ -7,7 +7,7 @@ import { log, logError, logSuccess, logWarning } from './logging.js';
 import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
-import { refreshSuccessorSelectionUi } from '../qcont/restore-ui.js';
+import { refreshSuccessorSelectionUi, renderRestorePreflightForFiles } from '../qcont/restore-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
 import { initRovingTablist } from './tabs.js';
@@ -180,6 +180,13 @@ export function initUI() {
         });
         if (requestId !== proShardsStatusSeq) return;
         await refreshSuccessorSelectionUi('restore', files, restoreQcontBtn, assessment || { ready: false });
+        if (requestId !== proShardsStatusSeq) return;
+        await renderRestorePreflightForFiles({
+            prefix: 'restore',
+            containerId: 'restorePreflightDecision',
+            files,
+            expectedSignerInput: el('restoreExpectedEdSigner'),
+        });
     }
 
     async function updateSidebarFingerprintsFromInputs() {

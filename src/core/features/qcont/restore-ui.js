@@ -1,7 +1,7 @@
 import { parseLifecycleShard, restoreFromShards } from '../../../app/crypto-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { download, readFileAsUint8Array, setButtonsDisabled, shortenHash } from '../../../utils.js';
-import { parseArchiveStateDescriptorBytes } from '../../crypto/lifecycle/artifacts.js';
+import { parseArchiveStateDescriptorBytes, parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
 import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
 import {
   formatAuthenticityStatusMessage,
@@ -17,6 +17,8 @@ import { showToast } from '../ui/toast.js';
 
 const successorSelectionState = new Map();
 const RESTORE_INLINE_ERROR_ID = 'proRestoreInlineError';
+const RESTORE_PREFLIGHT_CARD_ID = 'restorePreflightDecision';
+let proRestoreEvaluation = null;
 
 function getSuccessorSelectionElements(prefix = 'restore') {
   return {
@@ -83,6 +85,83 @@ function describePolicyLevels(policyLevels = []) {
 
 function createDetailEntry(term, value) {
   return { term, value };
+}
+
+function collectLifecycleAttachmentCounts(lifecycleBundles = []) {
+  const archiveApprovalIds = new Set();
+  const publicKeyIds = new Set();
+  for (const bundle of lifecycleBundles) {
+    const attachments = bundle?.attachments || {};
+    for (const signature of attachments.archiveApprovalSignatures || []) {
+      archiveApprovalIds.add(String(signature?.id || signature?.signature || archiveApprovalIds.size));
+    }
+    for (const publicKey of attachments.publicKeys || []) {
+      publicKeyIds.add(String(publicKey?.id || publicKey?.value || publicKeyIds.size));
+    }
+  }
+  return {
+    archiveApprovalSignatureCount: archiveApprovalIds.size,
+    publicKeyCount: publicKeyIds.size,
+  };
+}
+
+function releaseTextForPolicy(policyLevel, allowed) {
+  if (!allowed) return 'Plaintext release: blocked';
+  if (policyLevel === 'integrity-only') return 'Plaintext release: allowed by integrity-only policy';
+  if (policyLevel === 'strong-pq-signature') return 'Plaintext release: allowed by strong PQ archive-approval policy';
+  if (policyLevel === 'any-signature') return 'Plaintext release: allowed by archive-signature policy';
+  return 'Plaintext release: allowed by selected archive policy';
+}
+
+function addPreflightRow(list, label, value, tone = 'neutral') {
+  const item = document.createElement('div');
+  item.className = `restore-preflight-row ${tone}`;
+  const labelEl = document.createElement('span');
+  labelEl.className = 'restore-preflight-label';
+  labelEl.textContent = label;
+  const valueEl = document.createElement('span');
+  valueEl.className = 'restore-preflight-value';
+  valueEl.textContent = value;
+  item.append(labelEl, valueEl);
+  list.appendChild(item);
+}
+
+function renderRestorePreflightCard(containerId, decision) {
+  const panel = document.getElementById(containerId);
+  if (!panel) return;
+  if (!decision) {
+    panel.replaceChildren();
+    panel.style.display = 'none';
+    panel.className = 'restore-preflight-card initially-hidden';
+    return;
+  }
+
+  panel.replaceChildren();
+  panel.style.display = 'block';
+  panel.className = `restore-preflight-card ${decision.tone || 'neutral'}`;
+  panel.setAttribute('data-release-state', decision.releaseState || 'blocked');
+
+  const header = document.createElement('h4');
+  header.textContent = decision.releaseText || 'Plaintext release: blocked';
+  panel.appendChild(header);
+
+  const lede = document.createElement('p');
+  lede.className = 'restore-preflight-lede';
+  lede.textContent = decision.lede || 'Restore inputs are evaluated before any recovered bytes can be released.';
+  panel.appendChild(lede);
+
+  const rows = document.createElement('div');
+  rows.className = 'restore-preflight-rows';
+  addPreflightRow(rows, 'Threshold readiness', decision.thresholdReadiness || 'Not evaluated', decision.thresholdTone || 'neutral');
+  addPreflightRow(rows, 'Selected archive/state/cohort', decision.selection || 'Pending selection', decision.selectionTone || 'neutral');
+  addPreflightRow(rows, 'Selected lifecycle-bundle digest', decision.lifecycleBundleDigest || 'Pending selection', decision.bundleTone || 'neutral');
+  addPreflightRow(rows, 'Policy', decision.policy || 'unknown', decision.policyTone || 'neutral');
+  addPreflightRow(rows, 'Blocking reason', decision.blockingReason || 'None', decision.blockingTone || 'neutral');
+  panel.appendChild(rows);
+}
+
+function clearRestorePreflightCard(containerId) {
+  renderRestorePreflightCard(containerId, null);
 }
 
 async function copyTextToClipboard(text) {
@@ -447,6 +526,7 @@ export function buildSuccessorSelectionModel(parsedShards = []) {
     const firstShard = candidate.shards[0];
     const sourceFileNames = uniqueStrings(candidate.shards.map((shard) => shard.sourceFileName));
     const policyLevels = uniqueStrings(candidate.shards.map((shard) => shard.lifecycleBundle?.authPolicy?.level));
+    const attachmentCounts = collectLifecycleAttachmentCounts(candidate.shards.map((shard) => shard.lifecycleBundle));
     const bundleSourceFileNamesByDigest = {};
     for (const digestHex of candidate.embeddedLifecycleBundles.keys()) {
       bundleSourceFileNamesByDigest[digestHex] = uniqueStrings(
@@ -463,6 +543,8 @@ export function buildSuccessorSelectionModel(parsedShards = []) {
       bundleSourceFileNamesByDigest,
       sourceFileNames,
       policyLevels,
+      archiveApprovalSignatureCount: attachmentCounts.archiveApprovalSignatureCount,
+      publicKeyCount: attachmentCounts.publicKeyCount,
       shardCount: candidate.shards.length,
       n: Number(firstShard?.metaJSON?.n || 0),
       t: Number(firstShard?.metaJSON?.t || 0),
@@ -700,27 +782,329 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   const current = successorSelectionState.get(prefix);
   if (elements.stateSelect) {
     elements.stateSelect.onchange = () => {
-      if (prefix === 'restore') clearInlineError(RESTORE_INLINE_ERROR_ID);
+      if (prefix === 'restore') {
+        clearInlineError(RESTORE_INLINE_ERROR_ID);
+        clearProRestoreEvaluation();
+      }
       const latest = successorSelectionState.get(prefix);
-      void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
+      void refreshSelectionAndPreflight(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
     };
   }
   if (elements.cohortSelect) {
     elements.cohortSelect.onchange = () => {
-      if (prefix === 'restore') clearInlineError(RESTORE_INLINE_ERROR_ID);
+      if (prefix === 'restore') {
+        clearInlineError(RESTORE_INLINE_ERROR_ID);
+        clearProRestoreEvaluation();
+      }
       const latest = successorSelectionState.get(prefix);
-      void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
+      void refreshSelectionAndPreflight(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
     };
   }
   if (elements.bundleSelect) {
     elements.bundleSelect.onchange = () => {
-      if (prefix === 'restore') clearInlineError(RESTORE_INLINE_ERROR_ID);
+      if (prefix === 'restore') {
+        clearInlineError(RESTORE_INLINE_ERROR_ID);
+        clearProRestoreEvaluation();
+      }
       const latest = successorSelectionState.get(prefix);
-      void refreshSuccessorSelectionUi(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
+      void refreshSelectionAndPreflight(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
     };
   }
   setRestoreActionAvailability(prefix, actionButton);
   return current;
+}
+
+async function refreshSelectionAndPreflight(prefix, files, actionButton, assessment) {
+  await refreshSuccessorSelectionUi(prefix, files, actionButton, assessment);
+  if (!files?.length) return;
+  const containerId = prefix === 'restore' ? RESTORE_PREFLIGHT_CARD_ID : `${prefix}PreflightDecision`;
+  await renderRestorePreflightForFiles({
+    prefix,
+    containerId,
+    files,
+    expectedSignerInput: document.getElementById(`${prefix}ExpectedEdSigner`),
+  });
+}
+
+function getSelectedPreflightPath(model, selection = {}) {
+  const states = Array.isArray(model?.states) ? model.states : [];
+  let selectedState = states.find((state) => state.key === selection.selectedStateKey) || null;
+  if (!selectedState && selection.selectedArchiveId && selection.selectedStateId) {
+    selectedState = states.find((state) => (
+      state.archiveId === selection.selectedArchiveId && state.stateId === selection.selectedStateId
+    )) || null;
+  }
+  if (!selectedState && states.length === 1) {
+    selectedState = states[0];
+  }
+
+  let selectedCohort = null;
+  if (selectedState) {
+    selectedCohort = selectedState.cohorts.find((cohort) => cohort.cohortId === selection.selectedCohortId) || null;
+    if (!selectedCohort && selectedState.cohorts.length === 1) {
+      selectedCohort = selectedState.cohorts[0];
+    }
+  }
+
+  let selectedLifecycleBundleDigestHex = selection.selectedLifecycleBundleDigestHex || null;
+  if (!selectedLifecycleBundleDigestHex && selectedCohort?.bundleDigests.length === 1) {
+    selectedLifecycleBundleDigestHex = selectedCohort.bundleDigests[0];
+  }
+
+  return { selectedState, selectedCohort, selectedLifecycleBundleDigestHex };
+}
+
+function formatPreflightSelection({ selectedState, selectedCohort }) {
+  if (!selectedState && !selectedCohort) return 'Pending selection';
+  const archiveState = selectedState
+    ? `Archive ${shortenHash(selectedState.archiveId)} / State ${shortenHash(selectedState.stateId)}`
+    : 'Archive/state selected by supplied lifecycle bundle';
+  const cohort = selectedCohort ? `Cohort ${shortenHash(selectedCohort.cohortId)}` : 'cohort pending';
+  return `${archiveState} / ${cohort}`;
+}
+
+function countProvidedLifecycleEvidence(parsedProvidedBundle) {
+  return collectLifecycleAttachmentCounts(parsedProvidedBundle?.lifecycleBundle ? [parsedProvidedBundle.lifecycleBundle] : []);
+}
+
+function buildPreflightBlockedDecision({
+  assessment,
+  selectedState,
+  selectedCohort,
+  selectedLifecycleBundleDigestHex,
+  policyLevel = 'unknown',
+  reason,
+  tone = 'fail',
+}) {
+  const thresholdReady = assessment?.ready === true;
+  return {
+    releaseText: releaseTextForPolicy(policyLevel, false),
+    releaseState: 'blocked',
+    tone,
+    lede: 'No recovered bytes will be released while this condition is unresolved.',
+    thresholdReadiness: thresholdReady
+      ? assessment.message || 'Threshold ready'
+      : assessment?.message || 'Threshold not ready',
+    thresholdTone: thresholdReady ? 'ok' : 'fail',
+    selection: formatPreflightSelection({ selectedState, selectedCohort }),
+    selectionTone: selectedState && selectedCohort ? 'ok' : 'warn',
+    lifecycleBundleDigest: selectedLifecycleBundleDigestHex
+      ? shortenHash(selectedLifecycleBundleDigestHex)
+      : 'Pending selection',
+    bundleTone: selectedLifecycleBundleDigestHex ? 'ok' : 'warn',
+    policy: policyLevel,
+    policyTone: policyLevel === 'integrity-only' ? 'warn' : 'neutral',
+    blockingReason: reason,
+    blockingTone: 'fail',
+    canEvaluate: false,
+  };
+}
+
+async function buildRestorePreflightDecisionForFiles({
+  prefix = 'restore',
+  files = [],
+  expectedSignerInput,
+}) {
+  const selected = successorSelectionState.get(prefix) || {};
+  const assessment = selected.assessment || null;
+  if (!files.length) return null;
+
+  let classified;
+  try {
+    classified = await classifyRestoreInputFiles(files);
+  } catch (error) {
+    return buildPreflightBlockedDecision({
+      assessment,
+      policyLevel: 'unknown',
+      reason: error?.message || String(error),
+    });
+  }
+
+  const model = selected.model || { states: [] };
+  const { selectedState, selectedCohort, selectedLifecycleBundleDigestHex } = getSelectedPreflightPath(model, selected);
+  let parsedProvidedBundle = null;
+  if (classified.lifecycleBundleBytes instanceof Uint8Array) {
+    try {
+      parsedProvidedBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+    } catch {
+      parsedProvidedBundle = null;
+    }
+  }
+  const providedCounts = countProvidedLifecycleEvidence(parsedProvidedBundle);
+  const policyLevel = String(
+    parsedProvidedBundle?.lifecycleBundle?.authPolicy?.level ||
+    selectedCohort?.policyLevels?.[0] ||
+    selectedState?.cohorts?.flatMap((cohort) => cohort.policyLevels || [])?.[0] ||
+    'unknown'
+  );
+  const lifecycleBundleDigest = parsedProvidedBundle?.digest?.value || selectedLifecycleBundleDigestHex;
+
+  if (!classified.shardFiles.length) {
+    return buildPreflightBlockedDecision({
+      assessment,
+      selectedState,
+      selectedCohort,
+      selectedLifecycleBundleDigestHex: lifecycleBundleDigest,
+      policyLevel,
+      reason: 'No successor QVqcont-7 shard files were detected.',
+    });
+  }
+  if (assessment?.ready !== true) {
+    return buildPreflightBlockedDecision({
+      assessment,
+      selectedState,
+      selectedCohort,
+      selectedLifecycleBundleDigestHex: lifecycleBundleDigest,
+      policyLevel,
+      reason: assessment?.message || 'Selected shards do not meet the recovery threshold.',
+    });
+  }
+  if (selected.selectionComplete === false) {
+    return buildPreflightBlockedDecision({
+      assessment,
+      selectedState,
+      selectedCohort,
+      selectedLifecycleBundleDigestHex: lifecycleBundleDigest,
+      policyLevel,
+      reason: 'Resolve archive/state/cohort/lifecycle-bundle selection before restore evaluation.',
+    });
+  }
+
+  const detachedSignatureCount = classified.signatures.length;
+  const embeddedArchiveApprovalCount = (
+    Number(selectedCohort?.archiveApprovalSignatureCount || 0) +
+    Number(providedCounts.archiveApprovalSignatureCount || 0)
+  );
+  const signatureCount = detachedSignatureCount + embeddedArchiveApprovalCount;
+  const userPinnedPqKeyCount = Array.isArray(classified.pinnedPqPublicKeyFileBytesList)
+    ? classified.pinnedPqPublicKeyFileBytesList.length
+    : 0;
+  const embeddedPublicKeyCount = (
+    Number(selectedCohort?.publicKeyCount || 0) +
+    Number(providedCounts.publicKeyCount || 0)
+  );
+  const expectedEd25519Signer = String(expectedSignerInput?.value || '').trim();
+
+  const thresholdText = assessment?.message || 'Threshold ready';
+  const common = {
+    thresholdReadiness: thresholdText,
+    thresholdTone: 'ok',
+    selection: formatPreflightSelection({ selectedState, selectedCohort }),
+    selectionTone: selectedState && selectedCohort ? 'ok' : 'neutral',
+    lifecycleBundleDigest: lifecycleBundleDigest ? shortenHash(lifecycleBundleDigest) : 'Embedded or provided bundle selected',
+    bundleTone: lifecycleBundleDigest ? 'ok' : 'neutral',
+    policy: policyLevel,
+    policyTone: policyLevel === 'integrity-only' ? 'warn' : 'neutral',
+  };
+
+  if (policyLevel === 'integrity-only') {
+    return {
+      ...common,
+      releaseText: releaseTextForPolicy(policyLevel, true),
+      releaseState: 'allowed-provisional',
+      tone: 'warn',
+      lede: 'Policy consequence is clear before evaluation: archive approval is not required, but integrity checks must still pass before release.',
+      blockingReason: 'None. Archive approval is not required by this policy.',
+      blockingTone: 'warn',
+      canEvaluate: true,
+    };
+  }
+
+  if ((policyLevel === 'strong-pq-signature' || policyLevel === 'any-signature') && signatureCount < 1) {
+    const reason = policyLevel === 'strong-pq-signature'
+      ? 'strong PQ archive-approval signature evidence is required before reconstruction.'
+      : 'Archive-signature policy requires archive-approval signature evidence before reconstruction.';
+    return {
+      ...common,
+      releaseText: releaseTextForPolicy(policyLevel, false),
+      releaseState: 'blocked',
+      tone: 'fail',
+      lede: 'Restore evaluation is blocked before reconstruction because required approval evidence is absent.',
+      blockingReason: reason,
+      blockingTone: 'fail',
+      canEvaluate: false,
+    };
+  }
+
+  const evidenceParts = [
+    `${signatureCount} archive-approval signature artifact${signatureCount === 1 ? '' : 's'}`,
+    `${userPinnedPqKeyCount + embeddedPublicKeyCount} signer pin artifact${userPinnedPqKeyCount + embeddedPublicKeyCount === 1 ? '' : 's'}`,
+  ];
+  if (expectedEd25519Signer) evidenceParts.push('expected Ed25519 signer entered');
+
+  return {
+    ...common,
+    releaseText: releaseTextForPolicy(policyLevel, false),
+    releaseState: 'pending-evaluation',
+    tone: 'neutral',
+    lede: `Evidence is present (${evidenceParts.join(', ')}). Release remains blocked until cryptographic evaluation succeeds.`,
+    blockingReason: 'Run Evaluate Restore Inputs; release remains blocked until integrity and archive policy checks pass.',
+    blockingTone: 'neutral',
+    canEvaluate: true,
+  };
+}
+
+export async function renderRestorePreflightForFiles({
+  prefix = 'restore',
+  containerId = RESTORE_PREFLIGHT_CARD_ID,
+  files = [],
+  expectedSignerInput = null,
+}) {
+  const decision = await buildRestorePreflightDecisionForFiles({ prefix, files, expectedSignerInput });
+  renderRestorePreflightCard(containerId, decision);
+  return decision;
+}
+
+function buildRestorePreflightFromResult(result) {
+  const policyLevel = String(result?.authenticity?.policy?.level || 'unknown');
+  const releaseAllowed = (
+    result?.qencOk === true &&
+    result?.qkeyOk === true &&
+    result?.authenticity?.status?.policySatisfied === true
+  );
+  let reason = 'None';
+  if (!result?.qencOk || !result?.qkeyOk) {
+    reason = 'Recovered container or private key failed integrity verification.';
+  } else if (result?.authenticity?.status?.policySatisfied !== true) {
+    reason = 'Archive policy is not satisfied by verified archive-approval evidence.';
+  }
+
+  return {
+    releaseText: releaseTextForPolicy(policyLevel, releaseAllowed),
+    releaseState: releaseAllowed ? 'allowed' : 'blocked',
+    tone: releaseAllowed ? (policyLevel === 'integrity-only' ? 'warn' : 'ok') : 'fail',
+    lede: releaseAllowed
+      ? 'Evaluation passed. Recovered bytes remain local until Release Recovered Files is pressed.'
+      : 'Evaluation completed without release permission.',
+    thresholdReadiness: 'Threshold met and reconstruction evaluated',
+    thresholdTone: 'ok',
+    selection: `Archive ${shortenHash(result?.archiveId || '')} / State ${shortenHash(result?.stateId || '')} / Cohort ${shortenHash(result?.cohortId || '')}`,
+    selectionTone: 'ok',
+    lifecycleBundleDigest: result?.lifecycleBundleDigestHex ? shortenHash(result.lifecycleBundleDigestHex) : 'unknown',
+    bundleTone: result?.lifecycleBundleDigestHex ? 'ok' : 'neutral',
+    policy: policyLevel,
+    policyTone: policyLevel === 'integrity-only' ? 'warn' : 'neutral',
+    blockingReason: reason,
+    blockingTone: releaseAllowed ? (policyLevel === 'integrity-only' ? 'warn' : 'ok') : 'fail',
+    canEvaluate: true,
+    canRelease: releaseAllowed,
+  };
+}
+
+function setReleaseButtonState(enabled) {
+  const button = document.getElementById('releaseRestoredFilesBtn');
+  if (!button) return;
+  button.disabled = !enabled;
+  button.classList.toggle('initially-hidden', !enabled);
+  button.style.display = enabled ? 'inline-flex' : 'none';
+}
+
+function clearProRestoreEvaluation() {
+  if (proRestoreEvaluation?.result?.privKey instanceof Uint8Array) {
+    proRestoreEvaluation.result.privKey.fill(0);
+  }
+  proRestoreEvaluation = null;
+  setReleaseButtonState(false);
 }
 
 async function readVerificationOptionsFromDom({
@@ -911,9 +1295,16 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     const { containerOk, decryptOk } = options.liteDecrypt;
     releaseAllowed = qencOk && qkeyOk && containerOk && decryptOk && policyOk;
   }
+  const releasePerformed = options.releasePerformed !== false;
 
   const header = document.createElement('h4');
-  if (releaseAllowed && policyLevel === 'integrity-only') {
+  if (releaseAllowed && !releasePerformed && policyLevel === 'integrity-only') {
+    header.textContent = 'Plaintext release allowed under integrity-only policy';
+  } else if (releaseAllowed && !releasePerformed && policyLevel === 'strong-pq-signature') {
+    header.textContent = 'Plaintext release allowed under strong PQ archive-approval policy';
+  } else if (releaseAllowed && !releasePerformed && policyLevel === 'any-signature') {
+    header.textContent = 'Plaintext release allowed under archive-signature policy';
+  } else if (releaseAllowed && policyLevel === 'integrity-only') {
     header.textContent = 'Plaintext released under integrity-only policy';
   } else if (releaseAllowed && policyLevel === 'strong-pq-signature') {
     header.textContent = 'Plaintext released under strong PQ archive-approval policy';
@@ -929,7 +1320,11 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
   const intro = document.createElement('p');
   intro.className = 'restore-result-lede';
   intro.textContent = releaseAllowed
-    ? 'Restore release is separated from archive approval, signer pinning, timestamp evidence, maintenance evidence, and source evidence.'
+    ? (
+        releasePerformed
+          ? 'Restore release is separated from archive approval, signer pinning, timestamp evidence, maintenance evidence, and source evidence.'
+          : 'Evaluation passed. Recovered bytes are held in memory until Release Recovered Files is pressed.'
+      )
     : 'No plaintext was released. Review the failed row before retrying restore.';
   panel.appendChild(intro);
 
@@ -1177,6 +1572,7 @@ export function buildRestorePolicyFailureSummary(error, resultPanelId) {
 export function initQcontRestoreUI() {
   const qcontShardsInput = document.getElementById('qcontShardsInput');
   const restoreQcontBtn = document.getElementById('restoreQcontBtn');
+  const releaseRestoredFilesBtn = document.getElementById('releaseRestoredFilesBtn');
 
   const restoreExpectedEdSigner = document.getElementById('restoreExpectedEdSigner');
 
@@ -1193,6 +1589,7 @@ export function initQcontRestoreUI() {
       return;
     }
 
+    clearProRestoreEvaluation();
     const resultPanel = document.getElementById('proRestoreResult');
     if (resultPanel) {
       resultPanel.style.display = 'none';
@@ -1200,10 +1597,21 @@ export function initQcontRestoreUI() {
     }
 
     setButtonsDisabled(true);
-    let recoveredPrivKey = null;
+    let renderedPreflightDecision = null;
     try {
       clearInlineError(RESTORE_INLINE_ERROR_ID);
       const allFiles = [...files];
+      const preflight = await renderRestorePreflightForFiles({
+        prefix: 'restore',
+        containerId: RESTORE_PREFLIGHT_CARD_ID,
+        files: allFiles,
+        expectedSignerInput: restoreExpectedEdSigner,
+      });
+      renderedPreflightDecision = preflight;
+      if (preflight && preflight.canEvaluate === false) {
+        throw new Error(preflight.blockingReason || 'Restore preflight blocked evaluation.');
+      }
+
       const verificationOptions = await readVerificationOptionsFromDom({
         prefix: 'restore',
         allFiles,
@@ -1229,28 +1637,44 @@ export function initQcontRestoreUI() {
       logRestoreSelectionSummary(result, log);
       logVerificationSummary(result.authenticity, log, logWarning, logSuccess);
 
-      const { qencBytes, privKey, containerId, containerHash, privateKeyHash, recoveredQencHash, recoveredPrivHash, qencOk, qkeyOk } = result;
-      recoveredPrivKey = privKey instanceof Uint8Array ? privKey : null;
+      const { containerHash, privateKeyHash, recoveredQencHash, recoveredPrivHash, qencOk, qkeyOk } = result;
       log(`Recovered .qenc SHA3-512=${recoveredQencHash} (expected ${containerHash})`);
       log(`Recovered .qkey SHA3-512=${recoveredPrivHash}${privateKeyHash ? ` (expected ${privateKeyHash})` : ''}`);
 
-      const qencBlob = new Blob([qencBytes], { type: 'application/octet-stream' });
-      const qkeyBlob = new Blob([privKey], { type: 'application/octet-stream' });
-      const qencName = `${containerId}.recovered.qenc`;
-      const qkeyName = `${containerId}.recovered.privateKey.qkey`;
-
       if (qencOk && qkeyOk && result.authenticity?.status?.policySatisfied) {
-        download(qencBlob, qencName);
-        download(qkeyBlob, qkeyName);
-        logSuccess('Recovered .qenc and .qkey from a policy-satisfying archive cohort.');
+        proRestoreEvaluation = { result };
+        setReleaseButtonState(true);
+        logSuccess('Restore inputs evaluated. Release Recovered Files is now available.');
         clearInlineError(RESTORE_INLINE_ERROR_ID);
       } else {
-        logError('Verification failed. Automatic download is blocked.');
+        clearProRestoreEvaluation();
+        logError('Verification failed. Release Recovered Files remains blocked.');
       }
 
-      buildRestoreResultSummary(result, 'proRestoreResult');
+      renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, buildRestorePreflightFromResult(result));
+      buildRestoreResultSummary(result, 'proRestoreResult', { releasePerformed: false });
     } catch (error) {
       buildRestorePolicyFailureSummary(error, 'proRestoreResult');
+      if (renderedPreflightDecision?.canEvaluate === false) {
+        renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, renderedPreflightDecision);
+      } else {
+        renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, {
+          releaseText: releaseTextForPolicy('unknown', false),
+          releaseState: 'blocked',
+          tone: 'fail',
+          lede: 'Restore evaluation did not release recovered bytes.',
+          thresholdReadiness: 'See restore input status',
+          thresholdTone: 'neutral',
+          selection: 'See selected archive/state/cohort',
+          selectionTone: 'neutral',
+          lifecycleBundleDigest: 'See selected lifecycle bundle',
+          bundleTone: 'neutral',
+          policy: 'unknown',
+          policyTone: 'neutral',
+          blockingReason: error?.message || String(error),
+          blockingTone: 'fail',
+        });
+      }
       await renderArtifactIntakeTable({
         containerId: 'restoreArtifactIntake',
         files: [...(files || [])],
@@ -1266,19 +1690,59 @@ export function initQcontRestoreUI() {
       });
       logError(error);
     } finally {
-      // Best-effort only: JS runtimes do not guarantee overwriting secrets in memory.
-      if (recoveredPrivKey instanceof Uint8Array) {
-        recoveredPrivKey.fill(0);
-      }
       setButtonsDisabled(false);
+      setReleaseButtonState(Boolean(proRestoreEvaluation));
+    }
+  });
+
+  releaseRestoredFilesBtn?.addEventListener('click', () => {
+    const result = proRestoreEvaluation?.result;
+    if (!result) {
+      showToast('Evaluate restore inputs before release.', 'warning');
+      return;
+    }
+    try {
+      const { qencBytes, privKey, containerId, qencOk, qkeyOk } = result;
+      if (!(qencOk && qkeyOk && result.authenticity?.status?.policySatisfied)) {
+        throw new Error('Release blocked: restore evaluation is no longer policy-satisfying.');
+      }
+      download(new Blob([qencBytes], { type: 'application/octet-stream' }), `${containerId}.recovered.qenc`);
+      download(new Blob([privKey], { type: 'application/octet-stream' }), `${containerId}.recovered.privateKey.qkey`);
+      buildRestoreResultSummary(result, 'proRestoreResult', { releasePerformed: true });
+      renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, buildRestorePreflightFromResult(result));
+      logSuccess('Recovered .qenc and .qkey released from a policy-satisfying archive cohort.');
+      clearInlineError(RESTORE_INLINE_ERROR_ID);
+    } catch (error) {
+      showInlineError(RESTORE_INLINE_ERROR_ID, {
+        title: 'Release blocked',
+        cause: error,
+        artifact: 'Evaluated restore output',
+        action: 'Re-evaluate the selected restore inputs and release only after the preflight card allows it.',
+      });
+      logError(error);
+    } finally {
+      clearProRestoreEvaluation();
     }
   });
 
   qcontShardsInput?.addEventListener('change', () => {
+    clearProRestoreEvaluation();
     clearInlineError(RESTORE_INLINE_ERROR_ID);
+    const files = [...(qcontShardsInput.files || [])];
+    if (!files.length) clearRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID);
   });
   restoreExpectedEdSigner?.addEventListener('input', () => {
+    clearProRestoreEvaluation();
     clearInlineError(RESTORE_INLINE_ERROR_ID);
+    const files = [...(qcontShardsInput?.files || [])];
+    if (files.length) {
+      void renderRestorePreflightForFiles({
+        prefix: 'restore',
+        containerId: RESTORE_PREFLIGHT_CARD_ID,
+        files,
+        expectedSignerInput: restoreExpectedEdSigner,
+      });
+    }
   });
 }
 

@@ -567,6 +567,77 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   line-height: 1.45;
 }
 
+.restore-preflight-card {
+  min-width: 0;
+  margin: 0.9rem 0 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+}
+
+.restore-preflight-card.ok {
+  border-color: var(--accent-success);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.restore-preflight-card.warn {
+  border-color: var(--accent-warning);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.restore-preflight-card.fail {
+  border-color: var(--accent-danger);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.restore-preflight-card h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.94rem;
+  font-family: var(--font-ui);
+  color: var(--text-main);
+}
+
+.restore-preflight-card.ok h4 { color: var(--accent-success); }
+.restore-preflight-card.warn h4 { color: var(--accent-warning); }
+.restore-preflight-card.fail h4 { color: var(--accent-danger); }
+
+.restore-preflight-lede {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.restore-preflight-rows {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.restore-preflight-row {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.36fr) minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  align-items: start;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.restore-preflight-label {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.restore-preflight-value {
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.restore-preflight-row.ok .restore-preflight-value { color: var(--accent-success); }
+.restore-preflight-row.warn .restore-preflight-value { color: var(--accent-warning); }
+.restore-preflight-row.fail .restore-preflight-value { color: var(--accent-danger); }
+
 .inline-error-panel {
   min-width: 0;
   margin-top: 0.75rem;
@@ -1366,6 +1437,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .shard-geometry-panel,
   .digest-details-panel,
   .artifact-intake-panel,
+  .restore-preflight-card,
   .inline-error-panel,
   .dropzone-area {
     padding: 0.85rem;
@@ -1384,6 +1456,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .digest-detail-row-head,
   .digest-detail-list,
   .artifact-detail-list,
+  .restore-preflight-row,
   .restore-matrix-row,
   .inline-error-fields {
     grid-template-columns: minmax(0, 1fr);
@@ -1499,6 +1572,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .shard-geometry-panel,
   .digest-details-panel,
   .artifact-intake-panel,
+  .restore-preflight-card,
   .inline-error-panel,
   .dropzone-area {
     padding: 0.7rem;
