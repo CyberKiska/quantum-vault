@@ -12,6 +12,7 @@ import {
   parseTransitionRecordBytes,
 } from '../../crypto/lifecycle/artifacts.js';
 import { showToast } from './toast.js';
+import { createDisclosurePanel } from './disclosure.js';
 
 const DEFAULT_TABLE_LABEL = 'Selected artifact intake';
 
@@ -393,14 +394,19 @@ function statusLabel(row) {
   return row.status.charAt(0).toUpperCase() + row.status.slice(1);
 }
 
+function artifactRowDisclosureDefaultOpen(row) {
+  if (row.tone === 'fail') return true;
+  const s = String(row.status || '').toLowerCase();
+  return (
+    s === 'unsupported' ||
+    s === 'wrong target' ||
+    s === 'conflict' ||
+    s === 'duplicate'
+  );
+}
+
 function createDetails(row) {
   if (!row.details.length) return null;
-  const details = document.createElement('details');
-  details.className = 'artifact-row-details';
-  const summary = document.createElement('summary');
-  summary.textContent = 'Details/copy';
-  details.appendChild(summary);
-
   const list = document.createElement('dl');
   list.className = 'artifact-detail-list';
   for (const entry of row.details) {
@@ -428,8 +434,15 @@ function createDetails(row) {
     }
     list.append(dt, dd);
   }
-  details.appendChild(list);
-  return details;
+  const badgeTone = row.tone === 'fail' ? 'fail' : row.tone === 'warn' ? 'warn' : 'ok';
+  return createDisclosurePanel({
+    summary: 'Details/copy',
+    badgeText: String(row.details.length),
+    badgeTone,
+    defaultOpen: artifactRowDisclosureDefaultOpen(row),
+    className: 'artifact-row-details',
+    body: list,
+  });
 }
 
 function renderRows(host, rows, label) {

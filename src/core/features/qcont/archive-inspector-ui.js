@@ -2,6 +2,7 @@ import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { parseLifecycleShard } from '../../../app/crypto-service.js';
 import { readFileAsUint8Array, shortenHash } from '../../../utils.js';
 import { parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
+import { createDisclosurePanel } from '../ui/disclosure.js';
 
 const INSPECTOR_POLICY_NOTE = 'Maintenance signatures and source-evidence objects are separate from archive approval. They do not satisfy archive restore policy on their own. Timestamp (.ots) evidence is timestamp-only and also does not satisfy archive policy.';
 
@@ -215,11 +216,14 @@ function renderInspectorDom(root, {
   root.appendChild(ev);
 
   if (bundleJson) {
-    const details = el('details', 'technical-details archive-inspector-json');
-    const sum = el('summary', null, 'Full lifecycle bundle JSON');
     const pre = el('pre', 'mono-box archive-inspector-json-pre');
     pre.textContent = bundleJson.length > 12000 ? `${bundleJson.slice(0, 12000)}\n… (truncated)` : bundleJson;
-    details.append(sum, pre);
+    const details = createDisclosurePanel({
+      summary: 'Full lifecycle bundle JSON',
+      defaultOpen: false,
+      className: 'technical-details archive-inspector-json',
+      body: pre,
+    });
     root.appendChild(details);
   }
 }

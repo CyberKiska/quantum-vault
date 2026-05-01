@@ -21,6 +21,7 @@ import {
   renderEvidenceMatrix,
 } from '../ui/evidence-matrix.js';
 import { showToast } from '../ui/toast.js';
+import { createDisclosurePanel } from '../ui/disclosure.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
 
 const successorSelectionState = new Map();
@@ -349,18 +350,15 @@ function renderSuccessorDigestDetails(prefix, {
   host.replaceChildren();
   host.classList.remove('initially-hidden');
 
-  const panel = document.createElement('details');
-  panel.className = 'digest-details-panel';
-  const summary = document.createElement('summary');
-  summary.textContent = 'Digest details and copy';
-  panel.appendChild(summary);
+  const body = document.createElement('div');
+  body.className = 'digest-details-body';
 
   const note = document.createElement('p');
   note.className = 'muted-copy';
   note.textContent = 'Short labels stay primary. Expand this panel only when comparing full identifiers or preserving audit notes.';
-  panel.appendChild(note);
+  body.appendChild(note);
 
-  const contextSection = addDigestDetailSection(panel, 'Selection Context');
+  const contextSection = addDigestDetailSection(body, 'Selection Context');
   appendDigestDetailRow(contextSection, {
     title: selectionRequired ? 'Explicit selection required' : 'Single restore path selected',
     copyKind: 'selection-context',
@@ -378,7 +376,7 @@ function renderSuccessorDigestDetails(prefix, {
 
   const statesToShow = model.states.length > 1 || !selectedState ? model.states : [selectedState];
   const stateSection = addDigestDetailSection(
-    panel,
+    body,
     model.states.length > 1 ? 'Archive/State Candidates' : 'Selected Archive State'
   );
   for (const state of statesToShow) {
@@ -406,7 +404,7 @@ function renderSuccessorDigestDetails(prefix, {
     : model.states.flatMap((state) => state.cohorts);
   if (cohortsToShow.length > 0) {
     const cohortSection = addDigestDetailSection(
-      panel,
+      body,
       cohortsToShow.length > 1 ? 'Cohort Candidates' : 'Selected Cohort'
     );
     for (const cohort of cohortsToShow) {
@@ -445,7 +443,7 @@ function renderSuccessorDigestDetails(prefix, {
   }
   if (bundleRows.length > 0) {
     const bundleSection = addDigestDetailSection(
-      panel,
+      body,
       bundleRows.length > 1 ? 'Lifecycle Bundle Candidates' : 'Selected Lifecycle Bundle'
     );
     for (const { cohort, digestHex } of bundleRows) {
@@ -466,6 +464,14 @@ function renderSuccessorDigestDetails(prefix, {
     }
   }
 
+  const panel = createDisclosurePanel({
+    summary: 'Digest details and copy',
+    badgeText: selectionRequired ? 'Required' : '',
+    badgeTone: selectionRequired ? 'warn' : 'neutral',
+    defaultOpen: false,
+    className: 'digest-details-panel technical-details',
+    body,
+  });
   host.appendChild(panel);
 }
 

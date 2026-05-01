@@ -7,6 +7,7 @@ import { initQcontAttachUI } from './core/features/qcont/attach-ui.js';
 import { initQcontReshareUI } from './core/features/qcont/reshare-ui.js';
 import { initQcontRestoreUI } from './core/features/qcont/restore-ui.js';
 import { initLiteMode } from './core/features/lite-mode.js';
+import { initDisclosureShells } from './core/features/ui/disclosure.js';
 import { installSessionWipeGuards } from './app/session-wipe.js';
 
 const TRANSIENT_PANEL_IDS = [
@@ -141,6 +142,7 @@ export function initializeApplication() {
     initQcontReshareUI();
     initQcontRestoreUI();
     initLiteMode();
+    initDisclosureShells();
 
     console.log('Quantum Vault application initialized successfully');
 }

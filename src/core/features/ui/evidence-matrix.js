@@ -1,3 +1,5 @@
+import { createDisclosurePanel } from './disclosure.js';
+
 export function evidenceSection(title, rows = []) {
   return { title, rows };
 }
@@ -17,21 +19,13 @@ export function evidenceNoteRow(text) {
 export function renderEvidenceMatrix(host, sections = [], options = {}) {
   if (!host) return null;
 
-  const parent = options.disclosureLabel ? document.createElement('details') : host;
-  if (options.disclosureLabel) {
-    parent.className = `evidence-matrix-details technical-details ${options.compact ? 'compact' : 'expanded'}`;
-    parent.open = options.startExpanded === true;
-    const summary = document.createElement('summary');
-    summary.textContent = options.disclosureLabel;
-    parent.appendChild(summary);
-    host.appendChild(parent);
-  }
-
   const matrix = document.createElement('div');
   const mode = options.compact ? 'compact' : 'expanded';
   matrix.className = `restore-verification-matrix evidence-matrix ${mode}`;
   if (options.testId) matrix.setAttribute('data-testid', options.testId);
 
+  let rowCount = 0;
+  let failCount = 0;
   for (const section of sections) {
     if (!section) continue;
     const title = typeof section === 'string' ? section : section.title;
@@ -45,6 +39,8 @@ export function renderEvidenceMatrix(host, sections = [], options = {}) {
     const rows = Array.isArray(section.rows) ? section.rows : [];
     for (const row of rows) {
       if (!row) continue;
+      rowCount += 1;
+      if (row.tone === 'fail') failCount += 1;
       const item = document.createElement('div');
       item.className = `restore-result-item restore-matrix-row evidence-matrix-row ${row.tone || 'neutral'}`;
 
@@ -68,7 +64,23 @@ export function renderEvidenceMatrix(host, sections = [], options = {}) {
     }
   }
 
-  parent.appendChild(matrix);
+  if (options.disclosureLabel) {
+    const defaultOpen =
+      options.startExpanded === true || failCount > 0;
+    const parent = createDisclosurePanel({
+      summary: options.disclosureLabel,
+      badgeText: failCount > 0 ? `${failCount} issue${failCount === 1 ? '' : 's'}` : rowCount > 0 ? `${rowCount}` : '',
+      badgeTone: failCount > 0 ? 'warn' : 'neutral',
+      defaultOpen,
+      className: `evidence-matrix-details technical-details ${options.compact ? 'compact' : 'expanded'}`,
+      testId: options.disclosureTestId,
+      body: matrix,
+    });
+    host.appendChild(parent);
+  } else {
+    host.appendChild(matrix);
+  }
+
   return matrix;
 }
 

@@ -5,8 +5,9 @@
  * -----------------------------------------------------------------------------
  * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); restore/split/attach/reshare reuse it.
  * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); operation-warning pairs for spacing.
- * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact, nested details
+ * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact; optional .qv-disclosure wrapper
  * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, .artifact-intake-scroll
+ * disclosure         — Shared <details>: .qv-disclosure (+ __summary, __badge, __body); initDisclosureShells() for static markup
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
  * action-bar         — Primary + secondary actions: .button-group (prefer flex-wrap for narrow viewports)
  * restore-result     — Post-operation summary: .restore-result-panel (+ .ok|.warn|.fail)
@@ -1125,7 +1126,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-family: var(--font-ui);
 }
 
-.artifact-row-details summary {
+.artifact-row-details .qv-disclosure__summary {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.75rem;
@@ -1179,7 +1180,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-family: var(--font-ui);
 }
 
-.evidence-matrix-details > summary {
+.evidence-matrix-details > .qv-disclosure__summary {
   cursor: pointer;
   color: var(--text-main);
   font-size: 0.86rem;
@@ -1656,6 +1657,72 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-top: 1rem;
 }
 
+/* Shared disclosure shell (programmatic + initDisclosureShells static <details>) */
+.qv-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.qv-disclosure__summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.55rem;
+  list-style: none;
+}
+
+.qv-disclosure__title {
+  font-weight: 700;
+}
+
+.qv-disclosure__summary-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.qv-disclosure__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: var(--text-muted);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.qv-disclosure__badge--neutral {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: var(--text-muted);
+}
+
+.qv-disclosure__badge--ok {
+  border-color: rgba(16, 185, 129, 0.55);
+  color: var(--accent-success);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.qv-disclosure__badge--warn {
+  border-color: rgba(245, 158, 11, 0.55);
+  color: var(--accent-warning);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.qv-disclosure__badge--fail {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: var(--accent-danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.qv-disclosure__body {
+  margin-top: 0.5rem;
+  min-width: 0;
+}
+
 .technical-details {
   margin-top: 0;
 }
@@ -1698,7 +1765,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   padding: 0.75rem 0.85rem;
 }
 
-.digest-details-panel > summary {
+.digest-details-panel > .qv-disclosure__summary {
   cursor: pointer;
   color: var(--text-main);
   font-size: 0.86rem;
