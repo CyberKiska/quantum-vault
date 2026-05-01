@@ -6,7 +6,7 @@
  * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); restore/split/attach/reshare reuse it.
  * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); operation-warning pairs for spacing.
  * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact; optional .qv-disclosure wrapper
- * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, .artifact-intake-scroll
+ * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, consecutive accepted rows grouped (.artifact-row-group)
  * disclosure         — Shared <details>: .qv-disclosure (+ __summary, __badge, __body); initDisclosureShells() for static markup
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
  * action-bar         — Primary + secondary actions: .button-group (prefer flex-wrap for narrow viewports)
@@ -1131,6 +1131,46 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   cursor: pointer;
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+.artifact-group-details .qv-disclosure__summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.artifact-row-group .artifact-file-cell {
+  font-weight: 700;
+}
+
+.artifact-group-detail-intro {
+  margin: 0 0 0.35rem;
+}
+
+.artifact-group-member {
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.artifact-group-member:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.artifact-group-member-file {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  overflow-wrap: anywhere;
+}
+
+.artifact-group-member .artifact-detail-list {
+  margin-top: 0.25rem;
 }
 
 .artifact-detail-list {
