@@ -71,8 +71,8 @@
         <div class="context-row">
           <span>System Status</span>
           <span class="context-val status-line">
-            <span id="sys-status-dot" class="status-indicator" aria-label="System status: Ready"></span>
-            <span id="sys-status-text">Ready</span>
+            <span id="sys-status-dot" class="status-indicator no-key-loaded" aria-label="System status: No key loaded"></span>
+            <span id="sys-status-text">No key loaded</span>
           </span>
         </div>
         <div class="context-row">
@@ -85,7 +85,7 @@
         </div>
         <button id="sidebar-selftest" class="sidebar-selftest" type="button">Run Self-test</button>
         <div class="sidebar-note">
-          Memory-only session.<br />
+          Browser memory only; wipe is best effort.<br />
           No network calls.<br />
           <a href="https://github.com/CyberKiska/quantum-vault" target="_blank" rel="noopener noreferrer">Source code</a>
         </div>
@@ -657,7 +657,7 @@
                 <div class="detail-copy">
                   <small class="muted-copy">Successor attach can update only the lifecycle bundle or also re-embed that bundle into the selected shard files, depending on what you load.</small>
                   <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, detached signatures, <code>.pqpk</code> signer pins, <code>.ots</code> proofs, and when needed a canonical <code>.transition-record.json</code> or <code>.source-evidence.json</code> artifact. Attach never changes the signable archive-state bytes.</small>
-                  <small class="muted-copy">All signing remains external in Phase 1. This UI does not generate signing keys and it does not collapse maintenance or source-evidence into archive approval.</small>
+                  <small class="muted-copy">All signing remains external to this browser UI. This UI does not generate signing keys and it does not collapse maintenance or source-evidence into archive approval.</small>
                 </div>
               </details>
               <details class="verification-section">

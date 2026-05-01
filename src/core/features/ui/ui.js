@@ -75,18 +75,18 @@ export function updateSidebarStatus(pubHash, secHash) {
 
     if (sysDot && sysText) {
         sysDot.className = 'status-indicator';
-        let statusLabel = 'Ready';
+        let statusLabel = 'No key loaded';
         if (hasSec) {
-            sysDot.classList.add('armed');
-            sysText.textContent = 'Armed';
-            statusLabel = 'Armed';
+            sysDot.classList.add('private-key-loaded');
+            sysText.textContent = 'Private key loaded in memory';
+            statusLabel = 'Private key loaded in memory';
         } else if (hasPub) {
-            sysDot.classList.add('verify-ready');
-            sysText.textContent = 'Verify-Ready';
-            statusLabel = 'Verify-Ready';
+            sysDot.classList.add('public-key-loaded');
+            sysText.textContent = 'Public key loaded';
+            statusLabel = 'Public key loaded';
         } else {
-            sysDot.classList.add('ready');
-            sysText.textContent = 'Ready';
+            sysDot.classList.add('no-key-loaded');
+            sysText.textContent = 'No key loaded';
         }
         sysDot.setAttribute('aria-label', `System status: ${statusLabel}`);
     }

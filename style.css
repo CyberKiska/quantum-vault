@@ -239,17 +239,25 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   color: var(--text-muted);
 }
 
-.status-line { display: inline-flex; align-items: center; }
+.status-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  font-family: var(--font-sans);
+  word-break: normal;
+}
+#sys-status-text { overflow-wrap: anywhere; }
 .status-indicator {
   display: inline-block;
   width: 8px; height: 8px;
   border-radius: 50%;
-  margin-right: 6px;
+  flex: 0 0 auto;
   background: var(--text-muted);
 }
-.status-indicator.ready { background: var(--text-muted); }
-.status-indicator.verify-ready { background: var(--accent-success); box-shadow: 0 0 8px rgba(16, 185, 129, 0.4); }
-.status-indicator.armed { background: var(--accent-warning); box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); }
+.status-indicator.no-key-loaded { background: var(--text-muted); }
+.status-indicator.public-key-loaded { background: var(--accent-success); box-shadow: 0 0 8px rgba(16, 185, 129, 0.4); }
+.status-indicator.private-key-loaded { background: var(--accent-warning); box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); }
 
 .sidebar-note {
   margin-top: 1rem;
