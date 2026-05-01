@@ -151,24 +151,45 @@ function addPreflightRow(list, label, value, tone = 'neutral') {
   list.appendChild(item);
 }
 
-function renderRestorePreflightCard(containerId, decision) {
+function preflightAlertLabel(blockingTone, compact) {
+  if (blockingTone === 'fail') return compact ? 'Block' : 'Blocking reason';
+  if (blockingTone === 'warn') return 'Warning';
+  return compact ? 'Note' : 'Next step';
+}
+
+function shouldShowPreflightAlertRow(decision) {
+  const reason = String(decision.blockingReason || '').trim();
+  if (decision.blockingTone === 'fail' || decision.blockingTone === 'warn') return true;
+  if (decision.blockingTone === 'ok' && (!reason || reason === 'None')) return false;
+  return Boolean(reason);
+}
+
+function renderRestorePreflightCard(containerId, decision, options = {}) {
+  const compact = options.compact === true;
   const panel = document.getElementById(containerId);
   if (!panel) return;
   if (!decision) {
     panel.replaceChildren();
     panel.style.display = 'none';
-    panel.className = 'restore-preflight-card initially-hidden';
+    panel.className = 'restore-preflight-card decision-card initially-hidden';
+    panel.removeAttribute('data-release-state');
     return;
   }
 
   panel.replaceChildren();
   panel.style.display = 'block';
-  panel.className = `restore-preflight-card ${decision.tone || 'neutral'}`;
+  panel.className = `restore-preflight-card decision-card ${decision.tone || 'neutral'}`;
   panel.setAttribute('data-release-state', decision.releaseState || 'blocked');
 
-  const header = document.createElement('h4');
-  header.textContent = decision.releaseText || 'Plaintext release: blocked';
-  panel.appendChild(header);
+  const title = document.createElement('h4');
+  title.className = 'restore-decision-title';
+  title.textContent = 'Restore decision';
+  panel.appendChild(title);
+
+  const primary = document.createElement('p');
+  primary.className = 'restore-preflight-primary-outcome';
+  primary.textContent = decision.releaseText || 'Plaintext release: blocked';
+  panel.appendChild(primary);
 
   const lede = document.createElement('p');
   lede.className = 'restore-preflight-lede';
@@ -177,11 +198,20 @@ function renderRestorePreflightCard(containerId, decision) {
 
   const rows = document.createElement('div');
   rows.className = 'restore-preflight-rows';
-  addPreflightRow(rows, 'Threshold readiness', decision.thresholdReadiness || 'Not evaluated', decision.thresholdTone || 'neutral');
-  addPreflightRow(rows, 'Selected archive/state/cohort', decision.selection || 'Pending selection', decision.selectionTone || 'neutral');
-  addPreflightRow(rows, 'Selected lifecycle-bundle digest', decision.lifecycleBundleDigest || 'Pending selection', decision.bundleTone || 'neutral');
-  addPreflightRow(rows, 'Policy', decision.policy || 'unknown', decision.policyTone || 'neutral');
-  addPreflightRow(rows, 'Blocking reason', decision.blockingReason || 'None', decision.blockingTone || 'neutral');
+  const policyLabel = 'Policy';
+  const archiveLabel = compact ? 'Archive / state / cohort' : 'Archive, state, and cohort';
+  const thresholdLabel = compact ? 'Threshold' : 'Threshold readiness';
+  addPreflightRow(rows, policyLabel, decision.policy || 'unknown', decision.policyTone || 'neutral');
+  addPreflightRow(rows, archiveLabel, decision.selection || 'Pending selection', decision.selectionTone || 'neutral');
+  addPreflightRow(rows, thresholdLabel, decision.thresholdReadiness || 'Not evaluated', decision.thresholdTone || 'neutral');
+  if (shouldShowPreflightAlertRow(decision)) {
+    addPreflightRow(
+      rows,
+      preflightAlertLabel(decision.blockingTone, compact),
+      decision.blockingReason || 'None',
+      decision.blockingTone || 'neutral'
+    );
+  }
   panel.appendChild(rows);
 }
 
@@ -903,13 +933,16 @@ function buildPreflightBlockedDecision({
   policyLevel = 'unknown',
   reason,
   tone = 'fail',
+  compact = false,
 }) {
   const thresholdReady = assessment?.ready === true;
   return {
     releaseText: releaseTextForPolicy(policyLevel, false),
     releaseState: 'blocked',
     tone,
-    lede: 'No recovered bytes will be released while this condition is unresolved.',
+    lede: compact
+      ? 'Release stays blocked until this is resolved.'
+      : 'No recovered bytes will be released while this condition is unresolved.',
     thresholdReadiness: thresholdReady
       ? assessment.message || 'Threshold ready'
       : assessment?.message || 'Threshold not ready',
@@ -928,36 +961,45 @@ function buildPreflightBlockedDecision({
   };
 }
 
-async function buildRestorePreflightDecisionForFiles({
-  prefix = 'restore',
-  files = [],
-  expectedSignerInput,
+/**
+ * Pure view-model for the restore decision card (shared by Lite and Pro preflight).
+ * Callers supply classified inputs and optional parsed lifecycle bundle; async I/O stays outside.
+ */
+export function buildRestoreDecisionViewModel({
+  assessment = null,
+  classified,
+  parsedProvidedBundle = null,
+  successorSelection = {},
+  classifyError = null,
+  expectedEd25519Signer = '',
+  compact = false,
 }) {
-  const selected = successorSelectionState.get(prefix) || {};
-  const assessment = selected.assessment || null;
-  if (!files.length) return null;
-
-  let classified;
-  try {
-    classified = await classifyRestoreInputFiles(files);
-  } catch (error) {
+  if (classifyError) {
     return buildPreflightBlockedDecision({
       assessment,
+      selectedState: null,
+      selectedCohort: null,
+      selectedLifecycleBundleDigestHex: null,
       policyLevel: 'unknown',
-      reason: error?.message || String(error),
+      reason: classifyError,
+      compact,
+    });
+  }
+  if (!classified) {
+    return buildPreflightBlockedDecision({
+      assessment,
+      selectedState: null,
+      selectedCohort: null,
+      selectedLifecycleBundleDigestHex: null,
+      policyLevel: 'unknown',
+      reason: 'Restore inputs could not be classified.',
+      compact,
     });
   }
 
+  const selected = successorSelection;
   const model = selected.model || { states: [] };
   const { selectedState, selectedCohort, selectedLifecycleBundleDigestHex } = getSelectedPreflightPath(model, selected);
-  let parsedProvidedBundle = null;
-  if (classified.lifecycleBundleBytes instanceof Uint8Array) {
-    try {
-      parsedProvidedBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
-    } catch {
-      parsedProvidedBundle = null;
-    }
-  }
   const providedCounts = countProvidedLifecycleEvidence(parsedProvidedBundle);
   const policyLevel = String(
     parsedProvidedBundle?.lifecycleBundle?.authPolicy?.level ||
@@ -975,6 +1017,7 @@ async function buildRestorePreflightDecisionForFiles({
       selectedLifecycleBundleDigestHex: lifecycleBundleDigest,
       policyLevel,
       reason: 'No successor QVqcont-7 shard files were detected.',
+      compact,
     });
   }
   if (assessment?.ready !== true) {
@@ -985,6 +1028,7 @@ async function buildRestorePreflightDecisionForFiles({
       selectedLifecycleBundleDigestHex: lifecycleBundleDigest,
       policyLevel,
       reason: assessment?.message || 'Selected shards do not meet the recovery threshold.',
+      compact,
     });
   }
   if (selected.selectionComplete === false) {
@@ -995,6 +1039,7 @@ async function buildRestorePreflightDecisionForFiles({
       selectedLifecycleBundleDigestHex: lifecycleBundleDigest,
       policyLevel,
       reason: 'Resolve archive/state/cohort/lifecycle-bundle selection before restore evaluation.',
+      compact,
     });
   }
 
@@ -1011,7 +1056,6 @@ async function buildRestorePreflightDecisionForFiles({
     Number(selectedCohort?.publicKeyCount || 0) +
     Number(providedCounts.publicKeyCount || 0)
   );
-  const expectedEd25519Signer = String(expectedSignerInput?.value || '').trim();
 
   const thresholdText = assessment?.message || 'Threshold ready';
   const common = {
@@ -1031,7 +1075,9 @@ async function buildRestorePreflightDecisionForFiles({
       releaseText: releaseTextForPolicy(policyLevel, true),
       releaseState: 'allowed-provisional',
       tone: 'warn',
-      lede: 'Policy consequence is clear before evaluation: archive approval is not required, but integrity checks must still pass before release.',
+      lede: compact
+        ? 'Integrity-only policy: external archive approval is not required; verification must still pass.'
+        : 'Policy consequence is clear before evaluation: archive approval is not required, but integrity checks must still pass before release.',
       blockingReason: 'None. Archive approval is not required by this policy.',
       blockingTone: 'warn',
       canEvaluate: true,
@@ -1047,7 +1093,9 @@ async function buildRestorePreflightDecisionForFiles({
       releaseText: releaseTextForPolicy(policyLevel, false),
       releaseState: 'blocked',
       tone: 'fail',
-      lede: 'Restore evaluation is blocked before reconstruction because required approval evidence is absent.',
+      lede: compact
+        ? 'Required archive-approval signature evidence is missing before reconstruction.'
+        : 'Restore evaluation is blocked before reconstruction because required approval evidence is absent.',
       blockingReason: reason,
       blockingTone: 'fail',
       canEvaluate: false,
@@ -1065,11 +1113,60 @@ async function buildRestorePreflightDecisionForFiles({
     releaseText: releaseTextForPolicy(policyLevel, false),
     releaseState: 'pending-evaluation',
     tone: 'neutral',
-    lede: `Evidence is present (${evidenceParts.join(', ')}). Release remains blocked until cryptographic evaluation succeeds.`,
-    blockingReason: 'Run Evaluate Restore Inputs; release remains blocked until integrity and archive policy checks pass.',
+    lede: compact
+      ? `Evidence present (${evidenceParts.join(', ')}). Run Restore to verify before release.`
+      : `Evidence is present (${evidenceParts.join(', ')}). Release remains blocked until cryptographic evaluation succeeds.`,
+    blockingReason: compact
+      ? 'Run Restore to verify; release stays blocked until integrity and policy checks pass.'
+      : 'Run Evaluate Restore Inputs; release remains blocked until integrity and archive policy checks pass.',
     blockingTone: 'neutral',
     canEvaluate: true,
   };
+}
+
+async function buildRestorePreflightDecisionForFiles({
+  prefix = 'restore',
+  files = [],
+  expectedSignerInput,
+}) {
+  const selected = successorSelectionState.get(prefix) || {};
+  const assessment = selected.assessment || null;
+  const compact = prefix === 'liteRestore';
+  if (!files.length) return null;
+
+  let classified;
+  try {
+    classified = await classifyRestoreInputFiles(files);
+  } catch (error) {
+    return buildRestoreDecisionViewModel({
+      assessment,
+      classified: null,
+      parsedProvidedBundle: null,
+      successorSelection: selected,
+      classifyError: error?.message || String(error),
+      expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+      compact,
+    });
+  }
+
+  let parsedProvidedBundle = null;
+  if (classified.lifecycleBundleBytes instanceof Uint8Array) {
+    try {
+      parsedProvidedBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+    } catch {
+      parsedProvidedBundle = null;
+    }
+  }
+
+  return buildRestoreDecisionViewModel({
+    assessment,
+    classified,
+    parsedProvidedBundle,
+    successorSelection: selected,
+    classifyError: null,
+    expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+    compact,
+  });
 }
 
 export async function renderRestorePreflightForFiles({
@@ -1079,11 +1176,11 @@ export async function renderRestorePreflightForFiles({
   expectedSignerInput = null,
 }) {
   const decision = await buildRestorePreflightDecisionForFiles({ prefix, files, expectedSignerInput });
-  renderRestorePreflightCard(containerId, decision);
+  renderRestorePreflightCard(containerId, decision, { compact: prefix === 'liteRestore' });
   return decision;
 }
 
-function buildRestorePreflightFromResult(result) {
+export function buildRestoreDecisionViewModelFromEvaluationResult(result) {
   const policyLevel = String(result?.authenticity?.policy?.level || 'unknown');
   const releaseAllowed = (
     result?.qencOk === true &&
@@ -1095,6 +1192,12 @@ function buildRestorePreflightFromResult(result) {
     reason = 'Recovered container or private key failed integrity verification.';
   } else if (result?.authenticity?.status?.policySatisfied !== true) {
     reason = 'Archive policy is not satisfied by verified archive-approval evidence.';
+  }
+
+  let blockingReason = reason;
+  const blockingTone = releaseAllowed ? (policyLevel === 'integrity-only' ? 'warn' : 'ok') : 'fail';
+  if (releaseAllowed && policyLevel === 'integrity-only') {
+    blockingReason = 'Integrity-only: external archive approval is not claimed for this recovery.';
   }
 
   return {
@@ -1112,8 +1215,8 @@ function buildRestorePreflightFromResult(result) {
     bundleTone: result?.lifecycleBundleDigestHex ? 'ok' : 'neutral',
     policy: policyLevel,
     policyTone: policyLevel === 'integrity-only' ? 'warn' : 'neutral',
-    blockingReason: reason,
-    blockingTone: releaseAllowed ? (policyLevel === 'integrity-only' ? 'warn' : 'ok') : 'fail',
+    blockingReason,
+    blockingTone,
     canEvaluate: true,
     canRelease: releaseAllowed,
   };
@@ -1397,7 +1500,7 @@ export function initQcontRestoreUI() {
         logError('Verification failed. Release Recovered Files remains blocked.');
       }
 
-      renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, buildRestorePreflightFromResult(result));
+      renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, buildRestoreDecisionViewModelFromEvaluationResult(result));
       buildRestoreResultSummary(result, 'proRestoreResult', { releasePerformed: false });
     } catch (error) {
       buildRestorePolicyFailureSummary(error, 'proRestoreResult');
@@ -1455,7 +1558,7 @@ export function initQcontRestoreUI() {
       download(new Blob([qencBytes], { type: 'application/octet-stream' }), `${containerId}.recovered.qenc`);
       download(new Blob([privKey], { type: 'application/octet-stream' }), `${containerId}.recovered.privateKey.qkey`);
       buildRestoreResultSummary(result, 'proRestoreResult', { releasePerformed: true });
-      renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, buildRestorePreflightFromResult(result));
+      renderRestorePreflightCard(RESTORE_PREFLIGHT_CARD_ID, buildRestoreDecisionViewModelFromEvaluationResult(result));
       logSuccess('Recovered .qenc and .qkey released from a policy-satisfying archive cohort.');
       clearInlineError(RESTORE_INLINE_ERROR_ID);
     } catch (error) {

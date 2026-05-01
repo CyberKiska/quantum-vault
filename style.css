@@ -3,8 +3,8 @@
 /*
  * Design-system primitives (internal guardrails; keep new UI aligned with these)
  * -----------------------------------------------------------------------------
- * decision-card      — Primary decision / preflight framing: .restore-preflight-card.decision-card,
- *                        .lite-export-checklist context; archive inspector: .archive-inspector.decision-card
+ * decision-card      — Restore decision-first: .restore-preflight-card.decision-card + .restore-decision-title,
+ *                        .restore-preflight-primary-outcome; lite checklist / archive inspector decision framing
  * warning-callout    — Inline workflow cautions: .operation-warning.warning-callout (+ parent .warning|.success)
  * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact, nested details
  * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, .artifact-intake-scroll
@@ -831,16 +831,26 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   background: rgba(239, 68, 68, 0.08);
 }
 
-.restore-preflight-card h4 {
+.restore-preflight-card h4,
+.restore-preflight-card .restore-decision-title {
   margin: 0 0 0.45rem;
   font-size: 0.94rem;
   font-family: var(--font-ui);
   color: var(--text-main);
+  font-weight: 700;
 }
 
-.restore-preflight-card.ok h4 { color: var(--accent-success); }
-.restore-preflight-card.warn h4 { color: var(--accent-warning); }
-.restore-preflight-card.fail h4 { color: var(--accent-danger); }
+.restore-preflight-primary-outcome {
+  margin: 0 0 0.55rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.35;
+  font-family: var(--font-ui);
+}
+
+.restore-preflight-card.ok .restore-preflight-primary-outcome { color: var(--accent-success); }
+.restore-preflight-card.warn .restore-preflight-primary-outcome { color: var(--accent-warning); }
+.restore-preflight-card.fail .restore-preflight-primary-outcome { color: var(--accent-danger); }
 
 .restore-preflight-lede {
   margin: 0 0 0.75rem;

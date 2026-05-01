@@ -208,7 +208,7 @@
         <div id="liteViewRestore" class="tab-panel module-panel workflow-panel" role="tabpanel" aria-labelledby="liteTabRestore">
           <header class="section-header">
             <h2>Restore</h2>
-            <p class="muted-copy section-step-hint">Load shards and detached verification artifacts, then restore the selected archive.</p>
+            <p class="muted-copy section-step-hint">The restore decision updates as you load shards and evidence; details and selection follow below.</p>
           </header>
 
           <div class="visual-pipeline-container">
@@ -239,6 +239,7 @@
               <div id="shardsStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
+              <div id="liteRestorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
               <div id="liteRestoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
               <div id="liteRestoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="lite-restore-archive-inspector"></div>
               <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
@@ -257,7 +258,6 @@
                   <select id="liteRestoreBundleSelection"></select>
                 </div>
               </div>
-              <div id="liteRestorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
               <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -763,7 +763,7 @@
         <div id="proViewRestore" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabRestore">
           <header class="section-header">
             <h2>Restore</h2>
-            <p class="muted-copy section-step-hint">Step 4: combine shards and verification artifacts, then recover the archive when policy is satisfied.</p>
+            <p class="muted-copy section-step-hint">Step 4: read the restore decision first, then load shards and evidence; recover when policy is satisfied.</p>
           </header>
 
           <div class="panel-grid">
@@ -779,6 +779,7 @@
               <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status" aria-live="polite">
                 <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
+              <div id="restorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="restore-preflight"></div>
               <div id="restoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
               <div id="restoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="restore-archive-inspector"></div>
               <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
@@ -797,7 +798,6 @@
                   <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
               </div>
-              <div id="restorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="restore-preflight"></div>
               <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">

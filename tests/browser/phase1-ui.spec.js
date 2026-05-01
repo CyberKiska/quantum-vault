@@ -353,7 +353,16 @@ test('distribution build exports successor shards and the generated shards resto
 
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
-  await expect(page.getByTestId('restore-preflight')).toContainText('Plaintext release: allowed by integrity-only policy');
+  const preflight = page.getByTestId('restore-preflight');
+  await expect(preflight).toContainText('Restore decision');
+  await expect(
+    preflight.evaluate((el) => {
+      const intake = document.getElementById('restoreArtifactIntake');
+      if (!el || !intake) return false;
+      return (el.compareDocumentPosition(intake) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    })
+  ).resolves.toBe(true);
+  await expect(preflight).toContainText('Plaintext release: allowed by integrity-only policy');
   await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by integrity-only policy');
 
   const restoreResult = page.getByTestId('restore-result');
@@ -418,8 +427,17 @@ test('strong-PQ restore fails closed without detached archive approval', async (
 
   await restoreButton.click();
 
-  await expect(page.getByTestId('restore-preflight')).toContainText('Plaintext release: blocked');
-  await expect(page.getByTestId('restore-preflight')).toContainText('before reconstruction');
+  const preflight = page.getByTestId('restore-preflight');
+  await expect(preflight).toContainText('Restore decision');
+  await expect(
+    preflight.evaluate((el) => {
+      const intake = document.getElementById('restoreArtifactIntake');
+      if (!el || !intake) return false;
+      return (el.compareDocumentPosition(intake) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    })
+  ).resolves.toBe(true);
+  await expect(preflight).toContainText('Plaintext release: blocked');
+  await expect(preflight).toContainText('before reconstruction');
   await expect(lastToast(page)).toContainText('strong PQ archive-approval signature');
   await expect(page.getByTestId('restore-inline-error')).toBeVisible();
   await expect(page.getByTestId('restore-inline-error')).toContainText('Cause');
@@ -437,6 +455,15 @@ test('lite restore policy failure is shown as a persistent inline error', async 
 
   const restoreButton = page.locator('#liteRestoreBtn');
   await expect(restoreButton).toBeEnabled();
+  const litePreflight = page.getByTestId('lite-restore-preflight');
+  await expect(litePreflight).toContainText('Restore decision');
+  await expect(
+    litePreflight.evaluate((el) => {
+      const intake = document.getElementById('liteRestoreArtifactIntake');
+      if (!el || !intake) return false;
+      return (el.compareDocumentPosition(intake) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    })
+  ).resolves.toBe(true);
   await restoreButton.click();
 
   const inlineError = page.getByTestId('lite-restore-inline-error');
@@ -455,7 +482,16 @@ test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async (
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
 
-  await expect(page.getByTestId('restore-preflight')).toContainText('Plaintext release: blocked');
+  const preflight = page.getByTestId('restore-preflight');
+  await expect(preflight).toContainText('Restore decision');
+  await expect(
+    preflight.evaluate((el) => {
+      const intake = document.getElementById('restoreArtifactIntake');
+      if (!el || !intake) return false;
+      return (el.compareDocumentPosition(intake) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    })
+  ).resolves.toBe(true);
+  await expect(preflight).toContainText('Plaintext release: blocked');
   await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by strong PQ archive-approval policy');
 
   const restoreResult = page.getByTestId('restore-result');
