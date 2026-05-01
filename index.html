@@ -44,7 +44,7 @@
           </label>
           <span class="mode-label">Pro</span>
         </div>
-        <p class="muted-copy mode-switch-hint">Lite encrypts and splits in one step. Pro separates keys, encrypt/decrypt, split, restore, plus optional attach and reshare tools.</p>
+        <p class="muted-copy mode-switch-hint">Lite encrypts and splits in one step. Pro follows the archive workflow: create, review, maintain, evolve, restore.</p>
 
         <!-- Lite Mode Nav -->
         <nav class="nav-menu" role="tablist" aria-label="Lite workflow tabs" id="liteNav">
@@ -55,19 +55,13 @@
         <!-- Pro Mode Nav -->
         <nav class="nav-groups initially-hidden" role="tablist" aria-label="Pro workflow tabs" id="proNav">
           <div class="nav-group" role="presentation">
-            <p class="nav-group-label">Core Workflow</p>
+            <p class="nav-group-label">Archive Workflow</p>
             <div class="nav-menu" role="presentation">
-              <button id="proTabIdentity" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity" tabindex="0" type="button"><span class="icon">🔑</span> Key Management</button>
-              <button id="proTabEncryption" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewEncryption" tabindex="-1" type="button"><span class="icon">🔒</span> Encryption</button>
-              <button id="proTabDistribution" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewDistribution" tabindex="-1" type="button"><span class="icon">🧩</span> Split</button>
+              <button id="proTabDistribution" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity proViewEncryption proViewDistribution" tabindex="0" type="button" data-testid="tab-create"><span class="icon">🧩</span> Create</button>
+              <button id="proTabReview" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReview" tabindex="-1" type="button" data-testid="tab-review"><span class="icon">🔎</span> Review</button>
+              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Maintain</button>
+              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Evolve</button>
               <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button" data-testid="tab-restore"><span class="icon">♻️</span> Restore</button>
-            </div>
-          </div>
-          <div class="nav-group" role="presentation">
-            <p class="nav-group-label">Maintenance Tools</p>
-            <div class="nav-menu" role="presentation">
-              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Attach</button>
-              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Reshare</button>
             </div>
           </div>
         </nav>
@@ -289,12 +283,34 @@
 
       <!-- PRO MODE -->
       <section id="proMode" class="mode-section" style="display: none;">
+        <div id="proWorkflowStatusStrip" class="workflow-status-strip" data-testid="pro-workflow-status" aria-live="polite">
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Workflow</span>
+            <span id="proWorkflowStatusActive" class="workflow-status-value" data-testid="pro-workflow-active">Create</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Archive state</span>
+            <span id="proWorkflowStatusArchive" class="workflow-status-value" data-testid="pro-workflow-archive">No archive selected</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Policy</span>
+            <span id="proWorkflowStatusPolicy" class="workflow-status-value" data-testid="pro-workflow-policy">strong-pq-signature</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Threshold</span>
+            <span id="proWorkflowStatusThreshold" class="workflow-status-value" data-testid="pro-workflow-threshold">not configured</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Evidence</span>
+            <span id="proWorkflowStatusEvidence" class="workflow-status-value" data-testid="pro-workflow-evidence">not loaded</span>
+          </div>
+        </div>
         
         <!-- Pro View: Identity -->
-        <div id="proViewIdentity" class="tab-panel module-panel workflow-panel module-keys active" role="tabpanel" aria-labelledby="proTabIdentity">
+        <div id="proViewIdentity" class="tab-panel module-panel workflow-panel module-keys active create-workflow-stage" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
-            <h2>Key Management</h2>
-            <p class="muted-copy section-step-hint">Step 1: generate or load keys before encrypt, split, or restore.</p>
+            <h2>Create Archive</h2>
+            <p class="muted-copy section-step-hint">Generate or load keys, encrypt data, then split the encrypted container into successor shards and archive JSON.</p>
           </header>
 
           <div class="panel-grid">
@@ -333,10 +349,10 @@
         </div>
 
         <!-- Pro View: Encryption -->
-        <div id="proViewEncryption" class="tab-panel module-panel workflow-panel module-sign" role="tabpanel" aria-labelledby="proTabEncryption">
+        <div id="proViewEncryption" class="tab-panel module-panel workflow-panel module-sign create-workflow-stage" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
             <h2>Encryption</h2>
-            <p class="muted-copy section-step-hint">Step 2: encrypt to .qenc with a loaded public key, or decrypt with a loaded private key.</p>
+            <p class="muted-copy section-step-hint">Encrypt to <code>.qenc</code> with a loaded public key, or decrypt locally with a loaded private key.</p>
           </header>
 
           <div class="panel-grid">
@@ -371,10 +387,10 @@
         </div>
 
         <!-- Pro View: Distribution -->
-        <div id="proViewDistribution" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabDistribution">
+        <div id="proViewDistribution" class="tab-panel module-panel workflow-panel module-verify create-workflow-stage" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
             <h2>Split Into Successor Shards</h2>
-            <p class="muted-copy section-step-hint">Step 3: load a .qenc and matching private key to export successor shards and archive JSON.</p>
+            <p class="muted-copy section-step-hint">Load a <code>.qenc</code> and matching private key to export successor shards and archive JSON.</p>
           </header>
 
           <div class="panel-grid">
@@ -477,10 +493,37 @@
           </div>
         </div>
 
+        <div id="proViewReview" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabReview">
+          <header class="section-header">
+            <h2>Review Archive State</h2>
+            <p class="muted-copy section-step-hint">Inspect selected archive artifacts before maintenance or restore. This review classifies files locally and does not validate policy by itself.</p>
+          </header>
+
+          <div class="panel-grid">
+            <div class="card full-width">
+              <h3>Artifact Intake</h3>
+              <div class="operation-input-panel input-group">
+                <div class="form-group">
+                  <label for="proReviewInput">Review inputs</label>
+                  <input type="file" id="proReviewInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="review-input" aria-describedby="reviewInputHint">
+                </div>
+                <p id="reviewInputHint" class="muted-copy operation-hint">Load successor shards, archive-state descriptors, lifecycle bundles, detached signatures, signer pins, and timestamp evidence to inspect how the UI classifies them.</p>
+              </div>
+              <div id="proReviewStatus" class="shards-status initially-hidden" data-testid="review-status" aria-live="polite">
+                <span id="proReviewStatusText" data-testid="review-status-text">0 review files selected</span>
+              </div>
+              <div id="reviewArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="review-artifact-intake"></div>
+              <div class="operation-warning warning-callout">
+                <small>Review is an inspector. Restore remains the policy gate for plaintext release, and Attach remains the evidence merge workflow.</small>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="proViewAttach" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
           <header class="section-header">
-            <h2>Attach</h2>
-            <p class="muted-copy section-step-hint">Optional tool: merge archive-approval, maintenance, or source-evidence artifacts into the lifecycle bundle or selected shards without changing archive-state bytes or archive-policy semantics.</p>
+            <h2>Maintain Evidence</h2>
+            <p class="muted-copy section-step-hint">Merge archive approval, maintenance, source evidence, signer pins, or OTS artifacts without changing archive-state bytes or archive-policy semantics.</p>
           </header>
 
           <div class="panel-grid">
@@ -593,8 +636,8 @@
 
         <div id="proViewReshare" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabReshare">
           <header class="section-header">
-            <h2>Same-State Resharing</h2>
-            <p class="muted-copy section-step-hint">Optional tool: rotate a successor cohort while preserving the archive-state approval target.</p>
+            <h2>Evolve Successor Cohort</h2>
+            <p class="muted-copy section-step-hint">Rotate a successor cohort while preserving the archive-state approval target.</p>
           </header>
 
           <div class="panel-grid">

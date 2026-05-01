@@ -42,7 +42,7 @@ async function openProMode(page) {
 
 test('advanced entropy collection shows heuristic progress and success copy without bit estimates', async ({ page }) => {
   await openProMode(page);
-  await page.locator('#proTabIdentity').click();
+  await page.getByTestId('tab-create').click();
 
   await page.getByTestId('advanced-entropy-btn').click();
 
@@ -154,16 +154,17 @@ test('lite tablist supports roving keyboard navigation', async ({ page }) => {
 test('pro tablist supports arrow home end and explicit activation keys', async ({ page }) => {
   await openProMode(page);
 
-  await page.locator('#proTabIdentity').focus();
+  await page.getByTestId('tab-create').focus();
   await page.keyboard.press('End');
+  await expect(page.getByTestId('tab-restore')).toBeFocused();
+  await expect(page.getByTestId('tab-restore')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('restore-input')).toBeVisible();
+  await expect(page.getByTestId('pro-workflow-active')).toContainText('Restore');
+
+  await page.keyboard.press('ArrowLeft');
   await expect(page.getByTestId('tab-reshare')).toBeFocused();
   await expect(page.getByTestId('tab-reshare')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('reshare-input')).toBeVisible();
-
-  await page.keyboard.press('ArrowLeft');
-  await expect(page.getByTestId('tab-attach')).toBeFocused();
-  await expect(page.getByTestId('tab-attach')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByTestId('attach-input')).toBeVisible();
 
   await page.getByTestId('tab-restore').focus();
   await page.keyboard.press('Enter');
@@ -171,8 +172,12 @@ test('pro tablist supports arrow home end and explicit activation keys', async (
   await expect(page.getByTestId('restore-input')).toBeVisible();
 
   await page.keyboard.press('Home');
-  await expect(page.locator('#proTabIdentity')).toBeFocused();
-  await expect(page.locator('#proTabIdentity')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('tab-create')).toBeFocused();
+  await expect(page.getByTestId('tab-create')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#proViewIdentity')).toBeVisible();
+  await expect(page.locator('#proViewEncryption')).toBeVisible();
+  await expect(page.locator('#proViewDistribution')).toBeVisible();
+  await expect(page.getByTestId('pro-workflow-active')).toContainText('Create');
 });
 
 test('dropzone file inputs expose a visible focus hook on the drop target', async ({ page }) => {
@@ -348,6 +353,15 @@ test('artifact intake table explains accepted ignored unsupported and wrong-targ
   await attachButton.click();
   await expect(attachIntake.locator('[data-artifact-kind="ots-proof"][data-artifact-status="wrong target"]')).toBeVisible();
   await expect(attachIntake).toContainText('Load the detached signature this OTS proof stamps');
+
+  await openProTab(page, 'tab-review');
+  await page.getByTestId('review-input').setInputFiles(fixtures.strongPolicySatisfiedCompleteOtsFiles);
+  const reviewIntake = page.getByTestId('review-artifact-intake');
+  await expect(reviewIntake).toBeVisible();
+  await expect(reviewIntake).toContainText('QVqcont-7 shard');
+  await expect(reviewIntake).toContainText('archive-approval signature');
+  await expect(page.getByTestId('pro-workflow-active')).toContainText('Review');
+  await expect(page.getByTestId('pro-workflow-evidence')).toContainText('review artifacts selected');
 });
 
 test('distribution build exports successor shards and the generated shards restore under integrity-only policy', async ({ page }) => {

@@ -16,6 +16,7 @@ import { initRovingTablist } from './tabs.js';
 let collectedUserEntropy = null;
 let entropyCollector = null;
 let proShardsStatusSeq = 0;
+let proReviewStatusSeq = 0;
 let unregisterUiSessionWipe = null;
 
 function wipeCollectedUserEntropy() {
@@ -113,6 +114,7 @@ export function initUI() {
     const rsSegParity = el('rsSegParity');
     const rsMarker = el('rsMarker');
     const qcontShardsInput = el('qcontShardsInput');
+    const proReviewInput = el('proReviewInput');
     const restoreQcontBtn = el('restoreQcontBtn');
     const genKeyBtn = el('genKeyBtn');
     const encBtn = el('encBtn');
@@ -121,6 +123,84 @@ export function initUI() {
     const proEncStrategyGroup = el('proEncStrategyGroup');
     const proEncStrategyPerFile = el('proEncStrategyPerFile');
     const proEncryptionWarning = el('proEncryptionWarning');
+    let currentProWorkflowTab = 'proTabDistribution';
+
+    function policyLabel(value) {
+        if (value === 'integrity-only') return 'integrity-only';
+        if (value === 'any-signature') return 'any-signature';
+        return 'strong-pq-signature';
+    }
+
+    function selectedFileCount(input) {
+        return input?.files?.length || 0;
+    }
+
+    function updateProWorkflowStatus(activeTabId = currentProWorkflowTab) {
+        currentProWorkflowTab = activeTabId || currentProWorkflowTab;
+        const workflowNames = {
+            proTabDistribution: 'Create',
+            proTabReview: 'Review',
+            proTabAttach: 'Maintain',
+            proTabReshare: 'Evolve',
+            proTabRestore: 'Restore',
+        };
+        const activeEl = el('proWorkflowStatusActive');
+        const archiveEl = el('proWorkflowStatusArchive');
+        const policyEl = el('proWorkflowStatusPolicy');
+        const thresholdEl = el('proWorkflowStatusThreshold');
+        const evidenceEl = el('proWorkflowStatusEvidence');
+
+        if (activeEl) activeEl.textContent = workflowNames[currentProWorkflowTab] || 'Create';
+
+        const qencCount = selectedFileCount(qencForQcontInput);
+        const restoreCount = selectedFileCount(qcontShardsInput);
+        const reviewCount = selectedFileCount(proReviewInput);
+        const attachCount = selectedFileCount(el('qcontAttachInput'));
+        const reshareCount = selectedFileCount(el('qcontReshareInput'));
+        const selectedArtifactText = (count, label) => `${count} ${label} artifact${count === 1 ? '' : 's'} selected`;
+        if (archiveEl) {
+            if (currentProWorkflowTab === 'proTabReview' && reviewCount > 0) archiveEl.textContent = selectedArtifactText(reviewCount, 'review');
+            else if (currentProWorkflowTab === 'proTabAttach' && attachCount > 0) archiveEl.textContent = selectedArtifactText(attachCount, 'maintenance');
+            else if (currentProWorkflowTab === 'proTabReshare' && reshareCount > 0) archiveEl.textContent = selectedArtifactText(reshareCount, 'evolution');
+            else if (currentProWorkflowTab === 'proTabRestore' && restoreCount > 0) archiveEl.textContent = selectedArtifactText(restoreCount, 'restore');
+            else if (restoreCount > 0) archiveEl.textContent = selectedArtifactText(restoreCount, 'restore');
+            else if (reviewCount > 0) archiveEl.textContent = selectedArtifactText(reviewCount, 'review');
+            else if (attachCount > 0) archiveEl.textContent = selectedArtifactText(attachCount, 'maintenance');
+            else if (reshareCount > 0) archiveEl.textContent = selectedArtifactText(reshareCount, 'evolution');
+            else if (qencCount > 0) archiveEl.textContent = 'encrypted container selected';
+            else archiveEl.textContent = 'No archive selected';
+        }
+
+        if (policyEl) policyEl.textContent = policyLabel(el('proAuthPolicy')?.value || 'strong-pq-signature');
+        if (thresholdEl) {
+            const thresholdText = String(rsTextEl?.textContent || '').trim();
+            thresholdEl.textContent = thresholdText && !thresholdText.includes('Params info') ? thresholdText : 'not configured';
+        }
+        if (evidenceEl) {
+            const attachText = String(el('attachStatusText')?.textContent || '').trim();
+            const restoreText = String(el('proShardsStatusText')?.textContent || '').trim();
+            const reviewText = String(el('proReviewStatusText')?.textContent || '').trim();
+            const reshareText = String(el('proReshareStatusText')?.textContent || '').trim();
+            if (currentProWorkflowTab === 'proTabAttach' && attachText) evidenceEl.textContent = attachText;
+            else if (currentProWorkflowTab === 'proTabReview' && reviewText) evidenceEl.textContent = reviewText;
+            else if (currentProWorkflowTab === 'proTabReshare' && reshareText) evidenceEl.textContent = reshareText;
+            else if (restoreText && restoreCount > 0) evidenceEl.textContent = restoreText;
+            else evidenceEl.textContent = 'not loaded';
+        }
+    }
+
+    function observeProWorkflowStatusSource(id) {
+        const source = el(id);
+        if (!source || typeof MutationObserver === 'undefined') return;
+        const observer = new MutationObserver(() => updateProWorkflowStatus());
+        observer.observe(source, {
+            attributes: true,
+            childList: true,
+            characterData: true,
+            subtree: true,
+        });
+    }
+
     // Update Pro file list display
     function updateProFilesList() {
         const filesList = el('proFilesList');
@@ -129,6 +209,7 @@ export function initUI() {
         if (!dataFileInput.files || dataFileInput.files.length === 0) {
             filesList.style.display = 'none';
             if (proEncStrategyGroup) proEncStrategyGroup.style.display = 'none';
+            updateProWorkflowStatus();
             return;
         }
         
@@ -152,6 +233,7 @@ export function initUI() {
         if (proEncStrategyGroup) {
             proEncStrategyGroup.style.display = dataFileInput.files.length > 1 ? 'block' : 'none';
         }
+        updateProWorkflowStatus();
     }
     
     // Update Pro shards status
@@ -187,6 +269,36 @@ export function initUI() {
             files,
             expectedSignerInput: el('restoreExpectedEdSigner'),
         });
+        updateProWorkflowStatus();
+    }
+
+    async function updateProReviewStatus() {
+        const statusDiv = el('proReviewStatus');
+        const statusText = el('proReviewStatusText');
+        if (!statusDiv || !statusText || !proReviewInput) return;
+        const files = [...(proReviewInput.files || [])];
+        const requestId = ++proReviewStatusSeq;
+        if (files.length === 0) {
+            clearArtifactIntakeTable('reviewArtifactIntake');
+            statusDiv.className = 'shards-status initially-hidden';
+            statusDiv.style.display = 'none';
+            statusText.textContent = '0 review files selected';
+            updateProWorkflowStatus();
+            return;
+        }
+
+        statusDiv.classList.remove('initially-hidden');
+        statusDiv.style.display = 'block';
+        statusDiv.className = 'shards-status unknown';
+        statusText.textContent = `${files.length} review artifact${files.length === 1 ? '' : 's'} selected`;
+        await renderArtifactIntakeTable({
+            containerId: 'reviewArtifactIntake',
+            files,
+            workflow: 'restore',
+            label: 'Review artifact intake',
+        });
+        if (requestId !== proReviewStatusSeq) return;
+        updateProWorkflowStatus();
     }
 
     async function updateSidebarFingerprintsFromInputs() {
@@ -251,6 +363,12 @@ export function initUI() {
     // Set up file input event listeners
     dataFileInput?.addEventListener('change', updateProFilesList);
     qcontShardsInput?.addEventListener('change', () => { void updateProShardsStatus(); });
+    proReviewInput?.addEventListener('change', () => { void updateProReviewStatus(); });
+    qencForQcontInput?.addEventListener('change', () => updateProWorkflowStatus());
+    privKeyForQcontInput?.addEventListener('change', () => updateProWorkflowStatus());
+    el('qcontAttachInput')?.addEventListener('change', () => updateProWorkflowStatus());
+    el('qcontReshareInput')?.addEventListener('change', () => updateProWorkflowStatus());
+    el('proAuthPolicy')?.addEventListener('change', () => updateProWorkflowStatus());
     pubKeyInput?.addEventListener('change', updateProEncryptionControls);
     privKeyInput?.addEventListener('change', updateProEncryptionControls);
 
@@ -270,8 +388,17 @@ export function initUI() {
         ticks: el('rsTicks'),
     }).update;
     void updateProShardsStatus();
+    void updateProReviewStatus();
     updateProEncryptionControls();
     updateProFilesList();
+    rsNInput?.addEventListener('input', () => updateProWorkflowStatus());
+    rsKInput?.addEventListener('input', () => updateProWorkflowStatus());
+    observeProWorkflowStatusSource('rsText');
+    observeProWorkflowStatusSource('proSplitReadinessText');
+    observeProWorkflowStatusSource('proShardsStatusText');
+    observeProWorkflowStatusSource('proReviewStatusText');
+    observeProWorkflowStatusSource('attachStatusText');
+    observeProWorkflowStatusSource('proReshareStatusText');
 
     // Advanced entropy collection
     const advancedEntropyBtn = el('advancedEntropyBtn');
@@ -550,12 +677,11 @@ export function initUI() {
 
     function initProTabs() {
         const tabs = {
-            proTabIdentity: 'proViewIdentity',
-            proTabEncryption: 'proViewEncryption',
-            proTabDistribution: 'proViewDistribution',
-            proTabRestore: 'proViewRestore',
+            proTabDistribution: ['proViewIdentity', 'proViewEncryption', 'proViewDistribution'],
+            proTabReview: 'proViewReview',
             proTabAttach: 'proViewAttach',
             proTabReshare: 'proViewReshare',
+            proTabRestore: 'proViewRestore',
         };
         const tabIds = Object.keys(tabs);
 
@@ -568,9 +694,11 @@ export function initUI() {
                         rsNInput?.dispatchEvent(new Event('input'));
                     }, 10);
                 }
+                updateProWorkflowStatus(tabId);
             },
         });
     }
 
     initProTabs();
+    updateProWorkflowStatus();
 }

@@ -21,6 +21,9 @@ export async function openProTab(page, tabTestId) {
   if (tabTestId === 'tab-reshare') {
     await expect(page.getByTestId('reshare-input')).toBeVisible();
   }
+  if (tabTestId === 'tab-review') {
+    await expect(page.getByTestId('review-input')).toBeVisible();
+  }
 }
 
 export function lastToast(page) {

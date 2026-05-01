@@ -23,6 +23,8 @@ const TRANSIENT_PANEL_IDS = [
     'attachArtifactIntake',
     'attachModeSummary',
     'attachInlineError',
+    'proReviewStatus',
+    'reviewArtifactIntake',
     'proReshareStatus',
     'reshareArtifactIntake',
     'proShardsStatus',

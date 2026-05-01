@@ -11,13 +11,19 @@ export function initRovingTablist({ tabIds, panelByTabId, onActivate = null }) {
 
   const orderedTabIds = orderedTabs.map((tabEl) => tabEl.id);
 
+  function resolvePanels(panelRef) {
+    const refs = Array.isArray(panelRef) ? panelRef : [panelRef];
+    return refs
+      .map((ref) => (typeof ref === 'string' ? document.getElementById(ref) : ref))
+      .filter(Boolean);
+  }
+
   function activateTab(tabId, { focus = false } = {}) {
     if (!orderedTabIds.includes(tabId)) return;
 
     orderedTabIds.forEach((currentTabId) => {
       const tabEl = document.getElementById(currentTabId);
-      const panelRef = panelByTabId[currentTabId];
-      const panelEl = typeof panelRef === 'string' ? document.getElementById(panelRef) : panelRef;
+      const panelEls = resolvePanels(panelByTabId[currentTabId]);
       const active = currentTabId === tabId;
 
       if (tabEl) {
@@ -27,7 +33,7 @@ export function initRovingTablist({ tabIds, panelByTabId, onActivate = null }) {
         if (active && focus) tabEl.focus({ preventScroll: true });
       }
 
-      if (panelEl) {
+      for (const panelEl of panelEls) {
         panelEl.classList.toggle('active', active);
         panelEl.hidden = !active;
         panelEl.style.display = active ? 'block' : 'none';
