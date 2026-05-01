@@ -276,10 +276,22 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   margin-bottom: 1.25rem;
 }
 
+.workflow-panel.module-panel {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
 .module-panel::before {
   content: ''; position: absolute; left: 0; right: 0; top: 0; height: 4px;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: linear-gradient(90deg, #3b82f6, #2563eb);
+}
+
+.workflow-panel.module-panel::before {
+  display: none;
 }
 
 .panel-grid {
@@ -300,8 +312,65 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   box-shadow: var(--shadow-sm);
 }
 
+.workflow-panel .panel-grid {
+  gap: 1rem;
+  margin-top: 0.9rem;
+}
+
+.workflow-panel .panel-grid > .card.full-width {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.workflow-panel .panel-grid > .card.full-width > h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-main);
+}
+
+.workflow-panel .panel-grid > .card.full-width > .muted-copy,
+.workflow-panel .panel-grid > .card.full-width > .operation-hint {
+  margin-bottom: 0;
+}
+
+.workflow-panel .panel-grid > .card.full-width > .button-group,
+.workflow-panel .panel-grid > .card.full-width > #reshareExportActions {
+  order: 50;
+}
+
+.workflow-panel .panel-grid > .card.full-width > .inline-error-panel,
+.workflow-panel .panel-grid > .card.full-width > .restore-result-panel {
+  order: 60;
+}
+
+.workflow-panel .panel-grid > .card.full-width > .technical-details,
+.workflow-panel .panel-grid > .card.full-width > details.verification-section {
+  order: 80;
+}
+
 .section-header {
-  margin-bottom: 1.25rem;
+  max-width: 70rem;
+  margin-bottom: 1.1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.section-header h2 {
+  margin-bottom: 0.35rem;
+  font-size: clamp(1.55rem, 2.2vw, 2rem);
+  line-height: 1.15;
+}
+
+.section-step-hint {
+  max-width: 70ch;
+  margin-bottom: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 /* Forms & Inputs */
@@ -566,8 +635,8 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 
 .restore-result-panel { margin-top: 1rem; padding: 1rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.85rem; }
 .restore-result-panel h4 { margin: 0 0 0.5rem; font-size: 0.95rem; font-family: var(--font-ui); }
-.restore-result-panel.ok { background: rgba(16, 185, 129, 0.1); border: 1px solid var(--accent-success); }
-.restore-result-panel.ok h4 { color: var(--accent-success); }
+.restore-result-panel.ok { background: rgba(30, 41, 59, 0.55); border: 1px solid var(--border-subtle); }
+.restore-result-panel.ok h4 { color: var(--text-main); }
 .restore-result-panel.warn { background: rgba(245, 158, 11, 0.1); border: 1px solid var(--accent-warning); }
 .restore-result-panel.warn h4 { color: var(--accent-warning); }
 .restore-result-panel.fail { background: rgba(239, 68, 68, 0.1); border: 1px solid var(--accent-danger); }
@@ -847,6 +916,27 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 
 .evidence-matrix.compact {
   gap: 0.3rem;
+}
+
+.evidence-matrix-details {
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(15, 23, 42, 0.28);
+  font-family: var(--font-ui);
+}
+
+.evidence-matrix-details > summary {
+  cursor: pointer;
+  color: var(--text-main);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.evidence-matrix-details .evidence-matrix {
+  margin-top: 0.65rem;
+  font-family: var(--font-mono);
 }
 
 .restore-result-section {
@@ -1155,6 +1245,14 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-bottom: 1rem;
 }
 
+.input-group.operation-input-panel {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin-bottom: 0.35rem;
+}
+
 .operation-input-panel .form-group:last-child {
   margin-bottom: 0;
 }
@@ -1256,11 +1354,21 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 
 .verification-section {
   min-width: 0;
-  background: var(--bg-app);
+  background: rgba(15, 23, 42, 0.45);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 0.85rem 1rem;
   margin-top: 1rem;
+}
+
+.workflow-panel .verification-section {
+  margin-top: 0;
+}
+
+.workflow-panel details.verification-section,
+.workflow-panel .technical-details {
+  background: transparent;
+  border-color: rgba(148, 163, 184, 0.22);
 }
 
 .verification-section summary {
@@ -1289,11 +1397,15 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 }
 
 .technical-context {
-  background: var(--bg-app);
+  background: rgba(15, 23, 42, 0.45);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 0.85rem 1rem;
   margin-top: 1rem;
+}
+
+.technical-details {
+  margin-top: 0;
 }
 
 .technical-context summary {
@@ -1441,11 +1553,11 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 
 .shard-geometry-panel {
   min-width: 0;
-  margin: 1rem 0;
+  margin: 0.35rem 0;
   padding: 1rem;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-app);
+  background: rgba(15, 23, 42, 0.45);
 }
 
 .shard-geometry-heading {

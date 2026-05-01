@@ -1253,6 +1253,8 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
 
   renderEvidenceMatrix(panel, buildRestoreEvidenceMatrixSections(result, options), {
     compact: options.compact === true,
+    disclosureLabel: 'Evidence matrix',
+    startExpanded: options.evidenceExpanded === true,
   });
 
   const panelTone = releaseAllowed && policyLevel !== 'integrity-only' ? 'ok' : (releaseAllowed ? 'warn' : 'fail');

@@ -17,6 +17,16 @@ export function evidenceNoteRow(text) {
 export function renderEvidenceMatrix(host, sections = [], options = {}) {
   if (!host) return null;
 
+  const parent = options.disclosureLabel ? document.createElement('details') : host;
+  if (options.disclosureLabel) {
+    parent.className = `evidence-matrix-details technical-details ${options.compact ? 'compact' : 'expanded'}`;
+    parent.open = options.startExpanded === true;
+    const summary = document.createElement('summary');
+    summary.textContent = options.disclosureLabel;
+    parent.appendChild(summary);
+    host.appendChild(parent);
+  }
+
   const matrix = document.createElement('div');
   const mode = options.compact ? 'compact' : 'expanded';
   matrix.className = `restore-verification-matrix evidence-matrix ${mode}`;
@@ -58,7 +68,7 @@ export function renderEvidenceMatrix(host, sections = [], options = {}) {
     }
   }
 
-  host.appendChild(matrix);
+  parent.appendChild(matrix);
   return matrix;
 }
 

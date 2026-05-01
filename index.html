@@ -105,7 +105,7 @@
       <!-- LITE MODE -->
       <section id="liteMode" class="mode-section active">
         <!-- Lite View: Protect -->
-        <div id="liteViewProtect" class="tab-panel module-panel active" role="tabpanel" aria-labelledby="liteTabProtect">
+        <div id="liteViewProtect" class="tab-panel module-panel workflow-panel active" role="tabpanel" aria-labelledby="liteTabProtect">
           <header class="section-header">
             <h2>Create Archive</h2>
             <p class="muted-copy section-step-hint">Select files once, and Quantum Vault will encrypt them and export successor shards plus archive JSON.</p>
@@ -173,7 +173,7 @@
                   </select>
                   <small class="muted-copy">Choose whether restore should require detached archive approval.</small>
                   <div id="liteAuthPolicyConsequence" class="policy-consequence-panel warning" data-testid="lite-policy-consequence" aria-live="polite"></div>
-                  <details class="technical-context mt-2">
+                  <details class="technical-context technical-details mt-2">
                     <summary>Technical context</summary>
                     <div class="detail-copy">
                       <small class="muted-copy">Lite creates successor lifecycle archives by default and exports successor <code>.qcont</code> shards, a signable <code>.archive-state.json</code>, and a mutable <code>.lifecycle-bundle.json</code>.</small>
@@ -211,7 +211,7 @@
         </div>
 
         <!-- Lite View: Restore -->
-        <div id="liteViewRestore" class="tab-panel module-panel" role="tabpanel" aria-labelledby="liteTabRestore">
+        <div id="liteViewRestore" class="tab-panel module-panel workflow-panel" role="tabpanel" aria-labelledby="liteTabRestore">
           <header class="section-header">
             <h2>Restore</h2>
             <p class="muted-copy section-step-hint">Load shards and detached verification artifacts, then restore the selected archive.</p>
@@ -245,7 +245,7 @@
               <div id="shardsStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
-              <div id="liteRestoreArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="lite-restore-artifact-intake"></div>
+              <div id="liteRestoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
               <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
                 <small id="liteRestoreSuccessorSelectionSummary" class="muted-copy"></small>
                 <small id="liteRestoreSuccessorSelectionHelp" class="muted-copy"></small>
@@ -262,8 +262,8 @@
                   <select id="liteRestoreBundleSelection"></select>
                 </div>
               </div>
-              <div id="liteRestorePreflightDecision" class="restore-preflight-card initially-hidden" data-testid="lite-restore-preflight"></div>
-              <details class="technical-context">
+              <div id="liteRestorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Load successor <code>.qcont</code> shards plus any optional <code>.archive-state.json</code>, <code>.lifecycle-bundle.json</code>, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs in the main selector above.</small>
@@ -291,7 +291,7 @@
       <section id="proMode" class="mode-section" style="display: none;">
         
         <!-- Pro View: Identity -->
-        <div id="proViewIdentity" class="tab-panel module-panel module-keys active" role="tabpanel" aria-labelledby="proTabIdentity">
+        <div id="proViewIdentity" class="tab-panel module-panel workflow-panel module-keys active" role="tabpanel" aria-labelledby="proTabIdentity">
           <header class="section-header">
             <h2>Key Management</h2>
             <p class="muted-copy section-step-hint">Step 1: generate or load keys before encrypt, split, or restore.</p>
@@ -333,7 +333,7 @@
         </div>
 
         <!-- Pro View: Encryption -->
-        <div id="proViewEncryption" class="tab-panel module-panel module-sign" role="tabpanel" aria-labelledby="proTabEncryption">
+        <div id="proViewEncryption" class="tab-panel module-panel workflow-panel module-sign" role="tabpanel" aria-labelledby="proTabEncryption">
           <header class="section-header">
             <h2>Encryption</h2>
             <p class="muted-copy section-step-hint">Step 2: encrypt to .qenc with a loaded public key, or decrypt with a loaded private key.</p>
@@ -359,7 +359,7 @@
                   One container per file
                 </label>
               </div>
-              <div id="proEncryptionWarning" class="operation-warning warning">
+              <div id="proEncryptionWarning" class="operation-warning warning-callout warning">
                 <small>Load keys in Key Management: public key for encryption and private key for decryption.</small>
               </div>
               <div class="button-group">
@@ -371,7 +371,7 @@
         </div>
 
         <!-- Pro View: Distribution -->
-        <div id="proViewDistribution" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabDistribution">
+        <div id="proViewDistribution" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
             <h2>Split Into Successor Shards</h2>
             <p class="muted-copy section-step-hint">Step 3: load a .qenc and matching private key to export successor shards and archive JSON.</p>
@@ -381,7 +381,7 @@
             <div class="card full-width">
               <h3>Split Configuration</h3>
               <p class="muted-copy operation-hint">Load the encrypted container and matching private key, then choose shard geometry and restore policy.</p>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="split-grid">
                   <div class="form-group">
                     <label for="qencForQcontInput">Encrypted container (.qenc)</label>
@@ -452,7 +452,7 @@
                   </select>
                 <small class="muted-copy">Choose whether restore should require detached archive approval.</small>
                 <div id="proAuthPolicyConsequence" class="policy-consequence-panel strict" data-testid="pro-policy-consequence" aria-live="polite"></div>
-                <details class="technical-context mt-2">
+                <details class="technical-context technical-details mt-2">
                   <summary>Technical context</summary>
                   <div class="detail-copy">
                     <small class="muted-copy">Split exports successor <code>QVqcont-7</code> shards plus <code>.archive-state.json</code>, <code>.cohort-binding.json</code>, and <code>.lifecycle-bundle.json</code>.</small>
@@ -477,7 +477,7 @@
           </div>
         </div>
 
-        <div id="proViewAttach" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
+        <div id="proViewAttach" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
           <header class="section-header">
             <h2>Attach</h2>
             <p class="muted-copy section-step-hint">Optional tool: merge archive-approval, maintenance, or source-evidence artifacts into the lifecycle bundle or selected shards without changing archive-state bytes or archive-policy semantics.</p>
@@ -486,7 +486,7 @@
           <div class="panel-grid">
             <div class="card full-width">
               <h3>Merge Lifecycle Evidence</h3>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="form-group">
                   <label for="attachEvidenceChannel">Evidence channel</label>
                   <select id="attachEvidenceChannel" data-testid="attach-channel">
@@ -554,9 +554,9 @@
                   <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
-                <div id="attachArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="attach-artifact-intake"></div>
+                <div id="attachArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="attach-artifact-intake"></div>
                 <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite" data-testid="attach-mode-summary"></pre>
-                <div id="attachPartialRewriteAckPanel" class="operation-warning partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
+                <div id="attachPartialRewriteAckPanel" class="operation-warning warning-callout partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
                   <label class="checkbox-row" for="attachPartialRewriteAck">
                     <input type="checkbox" id="attachPartialRewriteAck" data-testid="attach-partial-ack">
                     <span>I understand only the selected shard files will be rewritten.</span>
@@ -565,7 +565,7 @@
                 </div>
                 <pre id="attachTargetBindingPreview" class="mono-box attach-target-binding-preview initially-hidden" data-testid="attach-target-binding-preview" aria-live="polite"></pre>
               </div>
-              <details class="technical-context">
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor attach can update only the lifecycle bundle or also re-embed that bundle into the selected shard files, depending on what you load.</small>
@@ -591,7 +591,7 @@
           </div>
         </div>
 
-        <div id="proViewReshare" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabReshare">
+        <div id="proViewReshare" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabReshare">
           <header class="section-header">
             <h2>Same-State Resharing</h2>
             <p class="muted-copy section-step-hint">Optional tool: rotate a successor cohort while preserving the archive-state approval target.</p>
@@ -600,7 +600,7 @@
           <div class="panel-grid">
             <div class="card full-width">
               <h3>Emit a New Successor Cohort</h3>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="form-group">
                   <label for="qcontReshareInput">Reshare inputs</label>
                   <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input" aria-describedby="reshareInputHint">
@@ -610,7 +610,7 @@
               <div id="proReshareStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="proReshareStatusText">0 shards selected</span>
               </div>
-              <div id="reshareArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="reshare-artifact-intake"></div>
+              <div id="reshareArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="reshare-artifact-intake"></div>
               <div id="reshareSuccessorSelection" class="verification-section successor-selection initially-hidden">
                 <small id="reshareSuccessorSelectionSummary" class="muted-copy"></small>
                 <small id="reshareSuccessorSelectionHelp" class="muted-copy"></small>
@@ -627,7 +627,7 @@
                   <select id="reshareBundleSelection"></select>
                 </div>
               </div>
-              <details class="technical-context">
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Same-state resharing is maintenance, not archive re-approval. It keeps the archive-state approval target unchanged and emits a new cohort plus a transition record.</small>
@@ -713,7 +713,7 @@
         </div>
 
         <!-- Pro View: Restore -->
-        <div id="proViewRestore" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabRestore">
+        <div id="proViewRestore" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabRestore">
           <header class="section-header">
             <h2>Restore</h2>
             <p class="muted-copy section-step-hint">Step 4: combine shards and verification artifacts, then recover the archive when policy is satisfied.</p>
@@ -722,7 +722,7 @@
           <div class="panel-grid">
             <div class="card full-width">
               <h3>Restore Archive</h3>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="form-group">
                   <label for="qcontShardsInput">Restore inputs</label>
                   <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input" aria-describedby="restoreInputHint">
@@ -732,7 +732,7 @@
               <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status" aria-live="polite">
                 <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
-              <div id="restoreArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="restore-artifact-intake"></div>
+              <div id="restoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
               <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
                 <small id="restoreSuccessorSelectionSummary" class="muted-copy" data-testid="restore-selection-summary"></small>
                 <small id="restoreSuccessorSelectionHelp" class="muted-copy" data-testid="restore-selection-help"></small>
@@ -749,8 +749,8 @@
                   <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
               </div>
-              <div id="restorePreflightDecision" class="restore-preflight-card initially-hidden" data-testid="restore-preflight"></div>
-              <details class="technical-context">
+              <div id="restorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="restore-preflight"></div>
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor restore is the regular-user path. Load successor <code>.qcont</code> shards plus any optional <code>.archive-state.json</code>, <code>.lifecycle-bundle.json</code>, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs in the main selector above.</small>
