@@ -22,9 +22,11 @@ import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
 import { renderDecisionCard } from '../ui/decision-card.js';
+import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 let lastAttachIntakeError = null;
+let attachStatusSeq = 0;
 
 const ATTACH_CHANNELS = Object.freeze({
   'archive-approval': Object.freeze({
@@ -971,6 +973,7 @@ async function resolveAttachSourceBundle(classified) {
 }
 
 async function updateAttachStatus() {
+  const requestId = ++attachStatusSeq;
   const input = document.getElementById('qcontAttachInput');
   const status = document.getElementById('attachStatus');
   const text = document.getElementById('attachStatusText');
@@ -998,6 +1001,8 @@ async function updateAttachStatus() {
     setAttachActionAvailability();
     clearAttachResultPanel();
     clearAttachTargetBindingPreview();
+    if (requestId !== attachStatusSeq) return;
+    syncArchiveReviewHub('attach');
     return;
   }
 
@@ -1010,6 +1015,7 @@ async function updateAttachStatus() {
   try {
     const files = [...(input.files || [])];
     classified = await classifyAttachFiles(files);
+    if (requestId !== attachStatusSeq) return;
     await renderArtifactIntakeTable({
       containerId: 'attachArtifactIntake',
       files,
@@ -1018,7 +1024,9 @@ async function updateAttachStatus() {
       label: `${channelConfig.label} artifact intake`,
       error: lastAttachIntakeError,
     });
+    if (requestId !== attachStatusSeq) return;
     const shards = await parseAttachShards(classified);
+    if (requestId !== attachStatusSeq) return;
     const plan = deriveAttachPlan(shards);
     const requirements = deriveAttachRequirements(channel, classified);
     const canAttach = requirements.canAttach;
@@ -1038,6 +1046,8 @@ async function updateAttachStatus() {
     } catch {
       canExportArtifacts = false;
     }
+
+    if (requestId !== attachStatusSeq) return;
 
     let stateClass = 'sufficient';
     let summary;
@@ -1102,11 +1112,14 @@ async function updateAttachStatus() {
       plan,
       error: lastAttachIntakeError || undefined,
     });
+    if (requestId !== attachStatusSeq) return;
     if (shards.length > 0) {
       void renderArchiveInspectorPanel('attachArchiveInspector', { attachShards: shards });
     } else {
       void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
     }
+    if (requestId !== attachStatusSeq) return;
+    syncArchiveReviewHub('attach');
   } catch (error) {
     const message = error?.message || String(error);
     const summary = message.startsWith('Unsupported attach input:')
@@ -1148,7 +1161,9 @@ async function updateAttachStatus() {
       label: `${channelConfig.label} artifact intake`,
       error,
     });
+    if (requestId !== attachStatusSeq) return;
     const previewCtx = await safeAttachPreviewPlan(classified);
+    if (requestId !== attachStatusSeq) return;
     await refreshAttachTargetBindingPreview({
       channel,
       classified,
@@ -1156,6 +1171,7 @@ async function updateAttachStatus() {
       plan: previewCtx.plan,
       error,
     });
+    if (requestId !== attachStatusSeq) return;
     void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
     setPartialRewriteAcknowledgementRequired(false);
     setAttachActionAvailability();
@@ -1165,6 +1181,8 @@ async function updateAttachStatus() {
       artifact: summarizeFileList([...(input.files || [])], 'Attach input set'),
       action: attachRecoveryAction(error),
     });
+    if (requestId !== attachStatusSeq) return;
+    syncArchiveReviewHub('attach');
   }
 }
 

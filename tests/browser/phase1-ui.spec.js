@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { getBrowserFixtureSet } from './support/fixture-factory.mjs';
 import { buildQsigFixture } from '../../src/core/crypto/selftest.js';
-import { lastToast, openProMode, openProTab, evaluateAndReleaseRestore } from './support/ui-helpers.mjs';
+import { lastToast, openArchiveReviewHub, openProMode, openProTab, evaluateAndReleaseRestore } from './support/ui-helpers.mjs';
 import { expectNoHorizontalOverflow } from './support/visual-assertions.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -269,13 +269,16 @@ test('narrow layouts do not horizontally overflow with long filenames and digest
 test('artifact intake table explains accepted ignored unsupported and wrong-target artifacts', async ({ page }) => {
   await openProTab(page, 'tab-restore');
   await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicySatisfiedCompleteOtsFiles);
-
   const restoreIntake = page.getByTestId('restore-artifact-intake');
+  await expect(restoreIntake).toContainText('QVqcont-7', { timeout: 15_000 });
+  await openArchiveReviewHub(page, 'restore');
+
   await expect(restoreIntake).toBeVisible();
   await expect(restoreIntake).toContainText('QVqcont-7 shard');
   await expect(restoreIntake).toContainText('archive-approval signature');
   await expect(restoreIntake).toContainText('PQ signer key');
   await expect(restoreIntake).toContainText('OTS proof');
+  await openArchiveReviewHub(page, 'restore');
   await expect(restoreIntake.locator('[data-artifact-status="accepted"]').first()).toBeVisible();
   await expect(restoreIntake.locator('[data-artifact-status="pending"]').first()).toBeVisible();
   await restoreIntake.locator('.artifact-row-details').first().locator('summary').click();
@@ -284,11 +287,13 @@ test('artifact intake table explains accepted ignored unsupported and wrong-targ
   await expect.poll(async () => expandedDigestValue.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(300);
 
   await page.getByTestId('restore-input').setInputFiles(fixtures.legacyManifestFiles);
-  await expect(restoreIntake).toContainText('unsupported');
+  await expect(restoreIntake).toContainText('unsupported', { timeout: 15_000 });
+  await openArchiveReviewHub(page, 'restore');
   await expect(restoreIntake.locator('[data-artifact-status="ignored"]').first()).toBeVisible();
 
   await openProTab(page, 'tab-attach');
   await page.getByTestId('attach-input').setInputFiles(fixtures.legacyManifestFiles);
+  await openArchiveReviewHub(page, 'attach');
   const attachIntake = page.getByTestId('attach-artifact-intake');
   await expect(attachIntake).toBeVisible();
   await expect(attachIntake.locator('[data-artifact-status="unsupported"]').first()).toBeVisible();
@@ -304,6 +309,8 @@ test('artifact intake table explains accepted ignored unsupported and wrong-targ
   await openProTab(page, 'tab-review');
   await page.getByTestId('review-input').setInputFiles(fixtures.strongPolicySatisfiedCompleteOtsFiles);
   const reviewIntake = page.getByTestId('review-artifact-intake');
+  await expect(reviewIntake).toContainText('QVqcont-7', { timeout: 15_000 });
+  await openArchiveReviewHub(page, 'review');
   await expect(reviewIntake).toBeVisible();
   await expect(reviewIntake).toContainText('QVqcont-7 shard');
   await expect(reviewIntake).toContainText('archive-approval signature');
@@ -803,6 +810,7 @@ test('maintenance attach rejects a qsig signed over archive-state bytes instead 
   await openProTab(page, 'tab-attach');
   await page.getByTestId('attach-channel').selectOption('maintenance');
   await page.getByTestId('attach-input').setInputFiles(fixtures.maintenanceWrongTargetFiles);
+  await openArchiveReviewHub(page, 'attach');
 
   const bindingPreview = page.getByTestId('attach-target-binding-preview');
   await expect(bindingPreview).toBeVisible();
@@ -849,6 +857,7 @@ test('attach target-binding preview reflects channel, archive binding, and shard
   await openProTab(page, 'tab-attach');
 
   await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalAttachBaseFiles);
+  await openArchiveReviewHub(page, 'attach');
   let preview = page.getByTestId('attach-target-binding-preview');
   await expect(preview).toBeVisible();
   await expect(preview).toContainText('Archive approval');
@@ -858,6 +867,7 @@ test('attach target-binding preview reflects channel, archive binding, and shard
 
   await page.getByTestId('attach-channel').selectOption('maintenance');
   await page.getByTestId('attach-input').setInputFiles(fixtures.maintenanceWrongTargetFiles);
+  await openArchiveReviewHub(page, 'attach');
   preview = page.getByTestId('attach-target-binding-preview');
   await expect(preview).toContainText('Maintenance');
   await expect(preview).toContainText('transition:sha3-512:');
@@ -865,12 +875,14 @@ test('attach target-binding preview reflects channel, archive binding, and shard
 
   await page.getByTestId('attach-channel').selectOption('source-evidence');
   await page.getByTestId('attach-input').setInputFiles(fixtures.sourceEvidenceWrongTargetFiles);
+  await openArchiveReviewHub(page, 'attach');
   preview = page.getByTestId('attach-target-binding-preview');
   await expect(preview).toContainText('Source evidence');
   await expect(preview).toContainText('source-evidence:sha3-512:');
 
   await page.getByTestId('attach-channel').selectOption('archive-approval');
   await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalPartialShardAttachFiles);
+  await openArchiveReviewHub(page, 'attach');
   preview = page.getByTestId('attach-target-binding-preview');
   await expect(preview).toContainText('partial cohort');
 });
@@ -940,6 +952,7 @@ test('source-evidence attach rejects a qsig signed over archive-state bytes inst
   await openProTab(page, 'tab-attach');
   await page.getByTestId('attach-channel').selectOption('source-evidence');
   await page.getByTestId('attach-input').setInputFiles(fixtures.sourceEvidenceWrongTargetFiles);
+  await openArchiveReviewHub(page, 'attach');
 
   const bindingPreview = page.getByTestId('attach-target-binding-preview');
   await expect(bindingPreview).toBeVisible();

@@ -9,6 +9,7 @@ import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
 import { refreshSuccessorSelectionUi, renderRestorePreflightForFiles } from '../qcont/restore-ui.js';
+import { syncArchiveReviewHub } from './archive-review-hub.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from '../qcont/archive-inspector-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
@@ -287,6 +288,7 @@ export function initUI() {
             statusDiv.style.display = 'none';
             statusText.textContent = '0 review files selected';
             updateProWorkflowStatus();
+            syncArchiveReviewHub('review');
             return;
         }
 
@@ -303,6 +305,7 @@ export function initUI() {
         if (requestId !== proReviewStatusSeq) return;
         await renderArchiveInspectorPanel('reviewArchiveInspector', { files });
         updateProWorkflowStatus();
+        syncArchiveReviewHub('review');
     }
 
     async function updateSidebarFingerprintsFromInputs() {

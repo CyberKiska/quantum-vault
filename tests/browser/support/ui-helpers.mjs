@@ -49,3 +49,33 @@ export async function evaluateAndReleaseRestore(page, expectedPreflightText) {
 export function lastToast(page) {
   return page.getByTestId('toast').last();
 }
+
+const ARCHIVE_REVIEW_HUB_ROOT_BY_PREFIX = Object.freeze({
+  restore: 'restoreArchiveReviewRoot',
+  liteRestore: 'liteRestoreArchiveReviewRoot',
+  attach: 'attachArchiveReviewRoot',
+  reshare: 'reshareArchiveReviewRoot',
+  review: 'reviewArchiveReviewRoot',
+});
+
+/**
+ * Expands the shared Archive review disclosure so nested intake / inspector / technical panels
+ * satisfy Playwright visibility checks (content in a closed `details` element is not visible).
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {'restore'|'liteRestore'|'attach'|'reshare'|'review'} prefix
+ */
+export async function openArchiveReviewHub(page, prefix) {
+  const id = ARCHIVE_REVIEW_HUB_ROOT_BY_PREFIX[prefix];
+  if (!id) throw new Error(`openArchiveReviewHub: unknown prefix "${prefix}"`);
+  const root = page.locator(`#${id}`);
+  await expect(root).toBeAttached();
+  if (prefix === 'attach') {
+    await expect(page.getByTestId('attach-status-text')).not.toContainText('Analyzing attach', { timeout: 15_000 });
+  }
+  await page.evaluate((hid) => {
+    const el = document.getElementById(hid);
+    if (el instanceof HTMLDetailsElement) el.open = true;
+  }, id);
+  await expect.poll(async () => root.evaluate((el) => el instanceof HTMLDetailsElement && el.open)).toBe(true);
+}

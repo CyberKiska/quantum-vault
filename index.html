@@ -240,9 +240,17 @@
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
               <div id="liteRestorePreflightDecision" class="qv-decision-card restore-preflight-card decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
-              <div id="liteRestoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
-              <div id="liteRestoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="lite-restore-archive-inspector"></div>
-              <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
+              <details id="liteRestoreArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded archive details</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+                    <div id="liteRestoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                    <div id="liteRestoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="lite-restore-archive-inspector"></div>
+                    <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
                 <small id="liteRestoreSuccessorSelectionSummary" class="muted-copy"></small>
                 <small id="liteRestoreSuccessorSelectionHelp" class="muted-copy"></small>
                 <div id="liteRestoreStateSelectionGroup" class="form-group initially-hidden">
@@ -257,7 +265,14 @@
                   <label for="liteRestoreBundleSelection">Lifecycle bundle selection</label>
                   <select id="liteRestoreBundleSelection"></select>
                 </div>
-              </div>
+                    </div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <p class="muted-copy archive-review-hub__lede">Detached signatures, signer pins, and OTS proofs are listed under Artifacts. Verification counts appear in Lite restore output after you run restore.</p>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Technical</h4>
               <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -270,6 +285,9 @@
                 <div class="form-group verification-fields">
                   <label for="liteRestoreExpectedEdSigner">Expected Ed25519 signer (optional)</label>
                   <input type="text" id="liteRestoreExpectedEdSigner" placeholder="G...">
+                </div>
+              </details>
+                  </section>
                 </div>
               </details>
               <div class="button-group">
@@ -508,11 +526,25 @@
               <div id="proReviewStatus" class="shards-status initially-hidden" data-testid="review-status" aria-live="polite">
                 <span id="proReviewStatusText" data-testid="review-status-text">0 review files selected</span>
               </div>
-              <div id="reviewArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="review-artifact-intake"></div>
-              <div id="reviewArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="review-archive-inspector"></div>
-              <div class="qv-callout qv-callout--info operation-warning warning-callout">
+              <details id="reviewArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded archive details</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+                    <div id="reviewArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="review-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                    <div id="reviewArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="review-archive-inspector"></div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <div class="qv-callout qv-callout--info operation-warning warning-callout">
                 <p class="qv-callout__body"><small>Review is an inspector. Restore remains the policy gate for plaintext release, and Attach remains the evidence merge workflow.</small></p>
-              </div>
+                    </div>
+                  </section>
+                </div>
+              </details>
             </div>
           </div>
         </div>
@@ -595,8 +627,6 @@
                   <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
-                <div id="attachArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="attach-artifact-intake"></div>
-                <div id="attachArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="attach-archive-inspector"></div>
                 <div id="attachPartialRewriteAckPanel" class="qv-callout qv-callout--warning operation-warning warning-callout partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
                   <label class="checkbox-row" for="attachPartialRewriteAck">
                     <input type="checkbox" id="attachPartialRewriteAck" data-testid="attach-partial-ack">
@@ -604,8 +634,24 @@
                   </label>
                   <small class="muted-copy">The updated lifecycle bundle will still be exported. Any unselected shards from the same cohort may continue carrying older embedded lifecycle-bundle bytes.</small>
                 </div>
+                <details id="attachArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                  <summary>Review loaded attach evidence</summary>
+                  <div class="archive-review-hub__body">
+                    <section class="archive-review-hub__section">
+                      <h4 class="archive-review-hub__heading">Artifacts</h4>
+                <div id="attachArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="attach-artifact-intake"></div>
+                    </section>
+                    <section class="archive-review-hub__section">
+                      <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                <div id="attachArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="attach-archive-inspector"></div>
+                    </section>
+                    <section class="archive-review-hub__section archive-review-hub__section--muted">
+                      <h4 class="archive-review-hub__heading">Evidence</h4>
+                      <p class="muted-copy archive-review-hub__lede">The Attach plan card summarizes counts by channel. A verification matrix appears in Attach result after a successful merge.</p>
+                    </section>
+                    <section class="archive-review-hub__section">
+                      <h4 class="archive-review-hub__heading">Technical</h4>
                 <pre id="attachTargetBindingPreview" class="mono-box attach-target-binding-preview initially-hidden" data-testid="attach-target-binding-preview" aria-live="polite"></pre>
-              </div>
               <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -621,6 +667,10 @@
                   <input type="text" id="attachExpectedEdSigner" placeholder="G...">
                 </div>
               </details>
+                    </section>
+                  </div>
+                </details>
+              </div>
               <div class="button-group">
                 <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Selected Evidence</button>
                 <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Archive-State Descriptor</button>
@@ -652,7 +702,15 @@
               <div id="proReshareStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="proReshareStatusText">0 shards selected</span>
               </div>
+              <details id="reshareArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded reshare evidence</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
               <div id="reshareArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="reshare-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
               <div id="reshareArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="reshare-archive-inspector"></div>
               <div id="reshareSuccessorSelection" class="verification-section successor-selection initially-hidden">
                 <small id="reshareSuccessorSelectionSummary" class="muted-copy"></small>
@@ -670,6 +728,13 @@
                   <select id="reshareBundleSelection"></select>
                 </div>
               </div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <p class="muted-copy archive-review-hub__lede">The Reshare plan card summarizes counts by channel. Verification details appear after you emit a cohort.</p>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Technical</h4>
               <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -683,6 +748,9 @@
                 <div class="form-group verification-fields">
                   <label for="reshareExpectedEdSigner">Expected Ed25519 signer (optional)</label>
                   <input type="text" id="reshareExpectedEdSigner" placeholder="G...">
+                </div>
+              </details>
+                  </section>
                 </div>
               </details>
 
@@ -776,9 +844,17 @@
                 <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
               <div id="restorePreflightDecision" class="qv-decision-card restore-preflight-card decision-card initially-hidden" data-testid="restore-preflight"></div>
-              <div id="restoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
-              <div id="restoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="restore-archive-inspector"></div>
-              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
+              <details id="restoreArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded archive details</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+                    <div id="restoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                    <div id="restoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="restore-archive-inspector"></div>
+                    <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
                 <small id="restoreSuccessorSelectionSummary" class="muted-copy" data-testid="restore-selection-summary"></small>
                 <small id="restoreSuccessorSelectionHelp" class="muted-copy" data-testid="restore-selection-help"></small>
                 <div id="restoreStateSelectionGroup" class="form-group initially-hidden" data-testid="restore-state-selection-group">
@@ -793,7 +869,14 @@
                   <label for="restoreBundleSelection">Lifecycle bundle selection</label>
                   <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
-              </div>
+                    </div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <p class="muted-copy archive-review-hub__lede">Detached signatures, signer pins, and OTS proofs are classified under Artifacts. The verification matrix appears in Restore result after Evaluate Restore Inputs.</p>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Technical</h4>
               <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
@@ -806,6 +889,9 @@
                 <div class="form-group verification-fields">
                   <label for="restoreExpectedEdSigner">Expected Ed25519 signer (optional)</label>
                   <input type="text" id="restoreExpectedEdSigner" placeholder="G..." data-testid="restore-expected-ed-signer">
+                </div>
+              </details>
+                  </section>
                 </div>
               </details>
               <div class="button-group">

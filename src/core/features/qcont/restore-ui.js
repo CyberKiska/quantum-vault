@@ -27,8 +27,14 @@ import {
 import { showToast } from '../ui/toast.js';
 import { createDisclosurePanel } from '../ui/disclosure.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
+import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 
 const successorSelectionState = new Map();
+
+/** Read-only snapshot for hub / tests (no mutation guarantees on nested fields). */
+export function peekSuccessorSelectionState(prefix) {
+  return successorSelectionState.get(prefix) || null;
+}
 const ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX = Object.freeze({
   restore: 'restoreArchiveInspector',
   reshare: 'reshareArchiveInspector',
@@ -644,18 +650,20 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
 
   successorSelectionState.set(prefix, nextState);
   if (!elements.container || !elements.summary || !elements.help) {
+    syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
     return nextState;
   }
   if (!files.length) {
     clearArchiveInspector(ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix]);
     clearSuccessorSelectionUi(prefix, actionButton);
+    syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
     return successorSelectionState.get(prefix);
   }
 
   try {
     const classified = await classifyRestoreInputFiles(files);
     if (!classified.shardFiles.length) {
-      return renderSelectionInfoUi(
+      const out = renderSelectionInfoUi(
         prefix,
         actionButton,
         nextState,
@@ -663,6 +671,8 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
         'Load successor .qcont shards plus any optional archive-state descriptors, lifecycle bundles, detached signatures, .pqpk signer pins, or .ots proofs.',
         'unsupported'
       );
+      syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
+      return out;
     }
 
     const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
@@ -675,7 +685,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }));
 
     if (!successorShards.length) {
-      return renderSelectionInfoUi(
+      const out = renderSelectionInfoUi(
         prefix,
         actionButton,
         nextState,
@@ -683,6 +693,8 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
         'Load successor .qcont shards to choose an archive-state, same-state cohort, or lifecycle bundle.',
         'unsupported'
       );
+      syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
+      return out;
     }
 
     const model = buildSuccessorSelectionModel(successorShards);
@@ -884,6 +896,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   }
   setRestoreActionAvailability(prefix, actionButton);
   syncArchiveInspectorForPrefix(prefix, files);
+  syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
   return current;
 }
 

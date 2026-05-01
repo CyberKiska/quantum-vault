@@ -1767,6 +1767,60 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-top: 0;
 }
 
+/* Archive review hub (single disclosure: artifacts / lifecycle / evidence / technical) */
+.archive-review-hub {
+  margin-top: 1rem;
+}
+
+.operation-readiness .archive-review-hub {
+  margin-top: 0.85rem;
+}
+
+.archive-review-hub__body {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.65rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.archive-review-hub__section {
+  min-width: 0;
+}
+
+.archive-review-hub__section--muted .archive-review-hub__heading {
+  color: var(--text-muted);
+}
+
+.archive-review-hub__heading {
+  margin: 0 0 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.archive-review-hub__lede {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.archive-review-hub .successor-selection {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+}
+
+.archive-review-hub .technical-context,
+.archive-review-hub details.verification-section {
+  margin-top: 0.75rem;
+}
+
+.archive-review-hub .attach-target-binding-preview {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
 .technical-context summary {
   cursor: pointer;
   color: var(--text-muted);
