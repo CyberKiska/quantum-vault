@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { getBrowserFixtureSet } from './support/fixture-factory.mjs';
 import { buildQsigFixture } from '../../src/core/crypto/selftest.js';
-import { lastToast, openProTab } from './support/ui-helpers.mjs';
+import { lastToast, openProMode, openProTab, evaluateAndReleaseRestore } from './support/ui-helpers.mjs';
+import { expectNoHorizontalOverflow } from './support/visual-assertions.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -27,17 +28,6 @@ async function payloadFromDownload(download, overrideName = '') {
     mimeType: mimeTypeForFilename(name),
     buffer: await readFile(path),
   };
-}
-
-async function openProMode(page) {
-  await page.goto('/');
-  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
-
-  const modeToggle = page.getByTestId('mode-toggle');
-  if (!(await modeToggle.isChecked())) {
-    await page.getByTestId('mode-toggle-control').click();
-    await expect(modeToggle).toBeChecked();
-  }
 }
 
 test('advanced entropy collection shows heuristic progress and success copy without bit estimates', async ({ page }) => {
@@ -89,49 +79,6 @@ test('scoped workflow busy leaves sidebar navigation and log toggle enabled', as
 
 function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
-}
-
-async function evaluateAndReleaseRestore(page, expectedPreflightText) {
-  await page.getByTestId('restore-button').click();
-  const preflight = page.getByTestId('restore-preflight');
-  await expect(preflight).toBeVisible();
-  if (expectedPreflightText) {
-    await expect(preflight).toContainText(expectedPreflightText);
-  }
-  const releaseButton = page.getByTestId('release-button');
-  await expect(releaseButton).toBeVisible();
-  await expect(releaseButton).toBeEnabled();
-  await releaseButton.click();
-}
-
-async function expectNoHorizontalOverflow(page) {
-  const overflow = await page.evaluate(() => {
-    const root = document.documentElement;
-    const viewportWidth = root.clientWidth;
-    const documentOverflow = root.scrollWidth - viewportWidth;
-    const offenders = [...document.body.querySelectorAll('*')]
-      .map((element) => {
-        const rect = element.getBoundingClientRect();
-        return {
-          tag: element.tagName.toLowerCase(),
-          id: element.id,
-          className: typeof element.className === 'string' ? element.className : '',
-          rightOverflow: rect.right - viewportWidth,
-          leftOverflow: -rect.left,
-          width: rect.width,
-        };
-      })
-      .filter((entry) => entry.rightOverflow > 1 || entry.leftOverflow > 1)
-      .sort((a, b) => Math.max(b.rightOverflow, b.leftOverflow) - Math.max(a.rightOverflow, a.leftOverflow))
-      .slice(0, 5);
-    return { viewportWidth, scrollWidth: root.scrollWidth, documentOverflow, offenders };
-  });
-
-  expect(overflow, JSON.stringify(overflow, null, 2)).toMatchObject({
-    documentOverflow: expect.any(Number),
-  });
-  expect(overflow.documentOverflow, JSON.stringify(overflow, null, 2)).toBeLessThanOrEqual(1);
-  expect(overflow.offenders, JSON.stringify(overflow, null, 2)).toHaveLength(0);
 }
 
 test('lite tablist supports roving keyboard navigation', async ({ page }) => {

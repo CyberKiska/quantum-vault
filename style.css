@@ -1,4 +1,19 @@
-/* Quantum Vault - High Assurance Theme matching UX-STYLE.md */
+/* Quantum Vault - High Assurance Theme */
+
+/*
+ * Design-system primitives (internal guardrails; keep new UI aligned with these)
+ * -----------------------------------------------------------------------------
+ * decision-card      — Primary decision / preflight framing: .restore-preflight-card.decision-card,
+ *                        .lite-export-checklist context; archive inspector: .archive-inspector.decision-card
+ * warning-callout    — Inline workflow cautions: .operation-warning.warning-callout (+ parent .warning|.success)
+ * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact, nested details
+ * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, .artifact-intake-scroll
+ * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
+ * action-bar         — Primary + secondary actions: .button-group (prefer flex-wrap for narrow viewports)
+ * restore-result     — Post-operation summary: .restore-result-panel (+ .ok|.warn|.fail)
+ * inline-error       — Blocking errors near actions: .inline-error-panel
+ * policy-consequence — Policy choice explainer: .policy-consequence-panel (+ .warning|.informational|.strict)
+ */
 
 :root {
   /* UX-STYLE.md required tokens */
