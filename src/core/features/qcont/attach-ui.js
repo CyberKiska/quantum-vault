@@ -19,7 +19,7 @@ import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artif
 import { buildAttachEvidenceMatrixSections, renderEvidenceMatrix } from '../ui/evidence-matrix.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
-import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
+import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 let lastAttachIntakeError = null;
@@ -740,7 +740,7 @@ async function exportSignableArtifact() {
     return;
   }
 
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
     const classified = await classifyAttachFiles(files);
 
@@ -764,7 +764,7 @@ async function exportSignableArtifact() {
   } catch (error) {
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
@@ -777,7 +777,7 @@ async function exportAttachedArtifacts() {
     return;
   }
 
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
     const classified = await classifyAttachFiles(files);
     const bundle = await resolveAttachSourceBundle(classified);
@@ -800,13 +800,13 @@ async function exportAttachedArtifacts() {
   } catch (error) {
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
 
 async function exportSourceEvidenceArtifact() {
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
     const input = document.getElementById('qcontAttachInput');
     const files = [...(input?.files || [])];
@@ -821,7 +821,7 @@ async function exportSourceEvidenceArtifact() {
   } catch (error) {
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
@@ -843,7 +843,7 @@ async function attachFilesToShards() {
     return;
   }
 
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
     clearInlineError(ATTACH_INLINE_ERROR_ID);
     const classified = await classifyAttachFiles(files);
@@ -962,7 +962,7 @@ async function attachFilesToShards() {
     });
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }

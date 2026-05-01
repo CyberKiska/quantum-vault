@@ -1,6 +1,6 @@
 import { parseLifecycleShard, restoreFromShards } from '../../../app/crypto-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
-import { download, readFileAsUint8Array, setButtonsDisabled, shortenHash } from '../../../utils.js';
+import { download, readFileAsUint8Array, setWorkflowBusy, shortenHash } from '../../../utils.js';
 import { parseArchiveStateDescriptorBytes, parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
 import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
 import {
@@ -1318,7 +1318,7 @@ export function initQcontRestoreUI() {
       resultPanel.replaceChildren();
     }
 
-    setButtonsDisabled(true);
+    setWorkflowBusy('proViewRestore', true);
     let renderedPreflightDecision = null;
     try {
       clearInlineError(RESTORE_INLINE_ERROR_ID);
@@ -1412,7 +1412,7 @@ export function initQcontRestoreUI() {
       });
       logError(error);
     } finally {
-      setButtonsDisabled(false);
+      setWorkflowBusy('proViewRestore', false);
       setReleaseButtonState(Boolean(proRestoreEvaluation));
     }
   });

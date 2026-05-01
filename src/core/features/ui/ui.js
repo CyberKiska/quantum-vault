@@ -1,7 +1,7 @@
 import { BrowserEntropyCollector } from '../../../app/browser-entropy-collector.js';
 import { encryptFile, decryptFile, hashBytes, generateKeyPair, runSelfTest } from '../../../app/crypto-service.js';
 import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
-import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
+import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
 import { updateShardSelectionStatus } from './shards-status.js';
@@ -284,11 +284,12 @@ export function initUI() {
 
         const entropyHeuristicNote = el('entropyHeuristicNote');
         let progressInterval = null;
+        let collectionSucceeded = false;
 
+        setWorkflowBusy('proViewIdentity', true);
         try {
             entropyStatus.style.display = 'block';
             entropyText.textContent = 'Move mouse, type, or resize the window — collecting supplemental entropy (optional).';
-            advancedEntropyBtn.disabled = true;
             advancedEntropyBtn.textContent = '🎲 Collecting…';
             entropyHeuristicNote?.classList.remove('initially-hidden');
 
@@ -315,6 +316,7 @@ export function initUI() {
             }
             entropyCollector = null;
 
+            collectionSucceeded = true;
             entropyText.textContent = '✅ Supplemental entropy collected and mixed into next key generation.';
             entropyBar.style.width = '100%';
             advancedEntropyBtn.textContent = '✅ Supplemental entropy ready';
@@ -323,7 +325,6 @@ export function initUI() {
         } catch (error) {
             log(`Entropy collection failed: ${error.message}`);
             entropyText.textContent = '❌ Supplemental collection failed. Next key generation will use the browser CSPRNG only.';
-            advancedEntropyBtn.disabled = false;
             advancedEntropyBtn.textContent = 'Collect supplemental entropy (optional)';
             entropyHeuristicNote?.classList.remove('initially-hidden');
             if (entropyCollector && typeof entropyCollector.dispose === 'function') {
@@ -333,6 +334,10 @@ export function initUI() {
         } finally {
             if (progressInterval !== null) {
                 clearInterval(progressInterval);
+            }
+            setWorkflowBusy('proViewIdentity', false);
+            if (collectionSucceeded) {
+                advancedEntropyBtn.disabled = true;
             }
         }
     }
@@ -394,7 +399,7 @@ export function initUI() {
             }
         }
         
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewIdentity', true);
         try {
             log('Generating ML-KEM-1024 keypair...');
             
@@ -440,7 +445,7 @@ export function initUI() {
             el('entropyHeuristicNote')?.classList.add('initially-hidden');
             
         } catch (e) { logError(e); } finally {
-            setButtonsDisabled(false);
+            setWorkflowBusy('proViewIdentity', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
             void updateProShardsStatus();
@@ -450,7 +455,7 @@ export function initUI() {
     encBtn?.addEventListener('click', async () => {
         if (!pubKeyInput?.files?.[0]) { showToast('Load a public key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to encrypt.', 'warning'); return; }
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewEncryption', true);
         try {
             const publicKey = await readFileAsUint8Array(pubKeyInput.files[0]);
             const selectedFiles = [...dataFileInput.files];
@@ -483,7 +488,7 @@ export function initUI() {
                 }
             }
         } catch (e) { logError(e); } finally {
-            setButtonsDisabled(false);
+            setWorkflowBusy('proViewEncryption', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
             void updateProShardsStatus();
@@ -495,7 +500,7 @@ export function initUI() {
     decBtn?.addEventListener('click', async () => {
         if (!privKeyInput?.files?.[0]) { showToast('Load a private key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to decrypt (.qenc).', 'warning'); return; }
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewEncryption', true);
         try {
             const privateKey = await readFileAsUint8Array(privKeyInput.files[0]);
             for (const file of dataFileInput.files) {
@@ -534,7 +539,7 @@ export function initUI() {
                 log(`Encrypted on (UTC): ${metadata.timestamp}`);
             }
         } catch (e) { logError(e); } finally {
-            setButtonsDisabled(false);
+            setWorkflowBusy('proViewEncryption', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
             void updateProShardsStatus();

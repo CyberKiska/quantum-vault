@@ -22,7 +22,7 @@ import {
     renderRestorePreflightForFiles,
 } from './qcont/restore-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
-import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
+import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setWorkflowBusy, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import {
     log,
@@ -544,7 +544,7 @@ async function createLiteShards() {
     
     hideLiteExportChecklist();
 
-    setButtonsDisabled(true);
+    setWorkflowBusy('liteViewProtect', true);
     updateLitePipeline('liteViewProtect', 'step-lock'); // Start: Encrypting
     
     try {
@@ -627,7 +627,7 @@ async function createLiteShards() {
     } catch (error) {
         logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
     } finally {
-        setButtonsDisabled(false);
+        setWorkflowBusy('liteViewProtect', false);
         updateCreateShardsButton();
         setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
     }
@@ -676,7 +676,7 @@ async function restoreLiteShards() {
         return;
     }
     
-    setButtonsDisabled(true);
+    setWorkflowBusy('liteViewRestore', true);
     updateLitePipeline('liteViewRestore', 'step-combine');
 
     const liteResultPanel = document.getElementById('liteRestoreResult');
@@ -796,7 +796,7 @@ async function restoreLiteShards() {
         });
         logError(error, { isLiteMode: true });
     } finally {
-        setButtonsDisabled(false);
+        setWorkflowBusy('liteViewRestore', false);
         void updateShardsStatus();
         setTimeout(() => updateLitePipeline('liteViewRestore', null), 2000); // Reset after delay
     }

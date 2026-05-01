@@ -9,7 +9,7 @@ import { evaluateRsParams } from './rs-params-display.js';
 import { clearInlineError, showInlineError } from '../ui/inline-error.js';
 import { log, logError } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
-import { setButtonsDisabled, readFileAsUint8Array, download } from '../../../utils.js';
+import { setWorkflowBusy, readFileAsUint8Array, download } from '../../../utils.js';
 
 const SPLIT_INLINE_ERROR_ID = 'proSplitInlineError';
 
@@ -166,7 +166,7 @@ export function initQcontBuildUI() {
             showToast(firstBlocking?.text || 'Split prerequisites are incomplete.', 'warning');
             return;
         }
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewDistribution', true);
         try {
             clearInlineError(SPLIT_INLINE_ERROR_ID);
             const qencBytes = await readFileAsUint8Array(readiness.qencFile);
@@ -207,6 +207,6 @@ export function initQcontBuildUI() {
                 action: 'Verify the .qenc and private .qkey pair, keep the shard geometry valid, then retry Split.',
             });
             logError(e);
-        } finally { setButtonsDisabled(false); updateSplitReadiness(); }
+        } finally { setWorkflowBusy('proViewDistribution', false); updateSplitReadiness(); }
     });
 }

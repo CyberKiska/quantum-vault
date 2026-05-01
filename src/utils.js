@@ -23,8 +23,22 @@ export function download(blob, filename) {
     a.remove();
 }
 
-export function setButtonsDisabled(disabled) {
-    document.querySelectorAll('button').forEach(btn => { btn.disabled = disabled; });
+/** Interactive controls disabled while a workflow runs (avoids double-submit and mid-flight input changes). */
+const WORKFLOW_BUSY_SELECTOR = 'button, input:not([type="hidden"]), select, textarea';
+
+/**
+ * @param {string | HTMLElement | null | undefined} containerIdOrElement - Panel root element or its id
+ * @param {boolean} busy
+ */
+export function setWorkflowBusy(containerIdOrElement, busy) {
+    const root = typeof containerIdOrElement === 'string'
+        ? document.getElementById(containerIdOrElement)
+        : containerIdOrElement;
+    if (!root) return;
+    root.setAttribute('aria-busy', busy ? 'true' : 'false');
+    root.querySelectorAll(WORKFLOW_BUSY_SELECTOR).forEach((control) => {
+        control.disabled = Boolean(busy);
+    });
 }
 
 export function formatTimestamp() {

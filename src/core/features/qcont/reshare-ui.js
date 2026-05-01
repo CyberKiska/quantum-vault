@@ -2,7 +2,7 @@ import { isLifecycleParsedShard, parseLifecycleShard, reshareSameState } from '.
 import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './restore-ui.js';
 import { bindRsParamsUI } from './rs-params-display.js';
 import { updateShardSelectionStatus } from '../ui/shards-status.js';
-import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
+import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
@@ -199,7 +199,7 @@ export function initQcontReshareUI() {
       resultPanel.replaceChildren();
     }
 
-    setButtonsDisabled(true);
+    setWorkflowBusy('proViewReshare', true);
     try {
       const verificationOptions = await collectRestoreVerificationOptions('reshare', files);
       if (!verificationOptions.shardFiles.length) {
@@ -308,7 +308,7 @@ export function initQcontReshareUI() {
       clearReshareExportState();
       logError(error);
     } finally {
-      setButtonsDisabled(false);
+      setWorkflowBusy('proViewReshare', false);
       void updateReshareStatus();
     }
   });

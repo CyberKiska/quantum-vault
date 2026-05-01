@@ -65,6 +65,28 @@ test('advanced entropy collection shows heuristic progress and success copy with
   await expect(entropyText).not.toContainText('Est.');
 });
 
+test('scoped workflow busy leaves sidebar navigation and log toggle enabled', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+  await page.evaluate(() => {
+    const root = document.getElementById('liteViewProtect');
+    if (!root) return;
+    root.setAttribute('aria-busy', 'true');
+    root.querySelectorAll('button, input:not([type="hidden"]), select, textarea').forEach((el) => {
+      el.disabled = true;
+    });
+  });
+
+  await expect(page.locator('#liteCreateShardsBtn')).toBeDisabled();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeDisabled();
+  await expect(page.locator('#liteTabRestore')).not.toBeDisabled();
+  await expect(page.locator('#liteTabProtect')).not.toBeDisabled();
+  await expect(page.getByTestId('mode-toggle')).toBeEnabled();
+  await expect(page.locator('#logToggleBtn')).toBeEnabled();
+  await expect(page.locator('#sidebar-selftest')).toBeEnabled();
+});
+
 function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
 }
