@@ -23,6 +23,7 @@ import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.
 import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
 import { renderDecisionCard } from '../ui/decision-card.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
+import { deriveArchiveBaseName } from './archive-name.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 let lastAttachIntakeError = null;
@@ -388,22 +389,6 @@ export async function classifyAttachFiles(files) {
     timestamps,
     pqPublicKeyFileBytesList,
   };
-}
-
-function stripArchiveVariantSuffix(name) {
-  return String(name || 'archive')
-    .replace(/\.archive-state\.json$/i, '')
-    .replace(/\.cohort-binding\.json$/i, '')
-    .replace(/\.transition-record\.json$/i, '')
-    .replace(/\.lifecycle-bundle\.json$/i, '');
-}
-
-function deriveArchiveBaseName(sourceFiles) {
-  const explicit = sourceFiles.find((file) => /\.(archive-state\.json|lifecycle-bundle\.json)$/i.test(String(file?.name || '')));
-  if (explicit) return stripArchiveVariantSuffix(explicit.name);
-  const shard = sourceFiles.find((file) => String(file?.name || '').toLowerCase().endsWith('.qcont'));
-  if (!shard) return 'archive';
-  return stripArchiveVariantSuffix(shard.name.replace(/\.part\d+-of-\d+\.qcont$/i, ''));
 }
 
 function deriveSignableFilename(sourceFiles) {

@@ -28,6 +28,7 @@ import { showToast } from '../ui/toast.js';
 import { createDisclosurePanel } from '../ui/disclosure.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
+import { buildRestoreRecoveryAction } from './restore-recovery-action.js';
 
 const successorSelectionState = new Map();
 
@@ -76,17 +77,7 @@ function buildStateSelectionKey(archiveId, stateId) {
 }
 
 function restoreRecoveryAction(error) {
-  const message = String(error?.message || error || '').toLowerCase();
-  if (message.includes('archive policy') || message.includes('archive-approval')) {
-    return 'Attach or load policy-satisfying archive-approval signatures and signer pins when required, then retry Restore.';
-  }
-  if (message.includes('lifecycle bundle') || message.includes('cohort') || message.includes('selection')) {
-    return 'Choose the exact archive, cohort, or lifecycle bundle variant, or load the matching descriptor/bundle to disambiguate.';
-  }
-  if (message.includes('qcont') || message.includes('shard')) {
-    return 'Load enough successor QVqcont-7 shards from one archive/state/cohort and remove incompatible files.';
-  }
-  return 'Review the selected restore inputs, correct the blocking condition, and retry Restore.';
+  return buildRestoreRecoveryAction(error, { verb: 'Restore' });
 }
 
 function describeStateOption(state) {
@@ -706,48 +697,45 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       ? buildStateSelectionKey(uploadedArchiveState.archiveState.archiveId, uploadedArchiveState.digest.value)
       : null;
 
-    let selectedStateKey = uploadedStateKey;
-    if (!selectedStateKey && model.states.length === 1) {
-      selectedStateKey = model.states[0].key;
-    }
-    if (!selectedStateKey && model.states.some((state) => state.key === previous.selectedStateKey)) {
-      selectedStateKey = previous.selectedStateKey;
-    }
-    if (!selectedStateKey && model.states.some((state) => state.key === elements.stateSelect?.value)) {
-      selectedStateKey = elements.stateSelect.value;
-    }
+    const pickFirstAvailable = (candidates, isMember) => {
+      for (const candidate of candidates) {
+        if (candidate && isMember(candidate)) return candidate;
+      }
+      return null;
+    };
 
+    const selectedStateKey = uploadedStateKey || pickFirstAvailable(
+      [
+        model.states.length === 1 ? model.states[0].key : null,
+        previous.selectedStateKey,
+        elements.stateSelect?.value,
+      ],
+      (key) => model.states.some((state) => state.key === key),
+    );
     const selectedState = model.states.find((state) => state.key === selectedStateKey) || null;
 
-    let selectedCohortId = null;
-    if (!lifecycleBundleProvided && selectedState?.cohorts.length === 1) {
-      selectedCohortId = selectedState.cohorts[0].cohortId;
-    }
-    if (!selectedCohortId && selectedState?.cohorts.some((cohort) => cohort.cohortId === previous.selectedCohortId)) {
-      selectedCohortId = previous.selectedCohortId;
-    }
-    if (!selectedCohortId && selectedState?.cohorts.some((cohort) => cohort.cohortId === elements.cohortSelect?.value)) {
-      selectedCohortId = elements.cohortSelect.value;
-    }
-
+    const selectedCohortId = lifecycleBundleProvided
+      ? null
+      : pickFirstAvailable(
+          [
+            selectedState?.cohorts.length === 1 ? selectedState.cohorts[0].cohortId : null,
+            previous.selectedCohortId,
+            elements.cohortSelect?.value,
+          ],
+          (id) => Boolean(selectedState?.cohorts.some((cohort) => cohort.cohortId === id)),
+        );
     const selectedCohort = selectedState?.cohorts.find((cohort) => cohort.cohortId === selectedCohortId) || null;
 
-    let selectedLifecycleBundleDigestHex = null;
-    if (!lifecycleBundleProvided && selectedCohort?.bundleDigests.length === 1) {
-      selectedLifecycleBundleDigestHex = selectedCohort.bundleDigests[0];
-    }
-    if (
-      !selectedLifecycleBundleDigestHex &&
-      selectedCohort?.bundleDigests.includes(previous.selectedLifecycleBundleDigestHex)
-    ) {
-      selectedLifecycleBundleDigestHex = previous.selectedLifecycleBundleDigestHex;
-    }
-    if (
-      !selectedLifecycleBundleDigestHex &&
-      selectedCohort?.bundleDigests.includes(elements.bundleSelect?.value)
-    ) {
-      selectedLifecycleBundleDigestHex = elements.bundleSelect.value;
-    }
+    const selectedLifecycleBundleDigestHex = lifecycleBundleProvided
+      ? null
+      : pickFirstAvailable(
+          [
+            selectedCohort?.bundleDigests.length === 1 ? selectedCohort.bundleDigests[0] : null,
+            previous.selectedLifecycleBundleDigestHex,
+            elements.bundleSelect?.value,
+          ],
+          (digest) => Boolean(selectedCohort?.bundleDigests.includes(digest)),
+        );
 
     const stateChoiceRequired = !lifecycleBundleProvided && !uploadedArchiveState && model.states.length > 1;
     const cohortChoiceRequired = !lifecycleBundleProvided && !!selectedState && selectedState.cohorts.length > 1;
@@ -770,42 +758,42 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       elements.container.className = 'verification-section successor-selection';
     }
 
-    populateSelectionOptions(
-      elements.stateSelect,
-      model.states.map((state) => ({ value: state.key, label: describeStateOption(state) })),
-      stateChoiceRequired ? selectedStateKey : '',
-      stateChoiceRequired ? 'Choose one archive and state' : null
-    );
-    if (elements.stateGroup) {
-      elements.stateGroup.style.display = stateChoiceRequired ? 'block' : 'none';
-    }
+    const renderSelectionGroup = (select, group, options, value, required, placeholder) => {
+      populateSelectionOptions(select, options, required ? value : '', required ? placeholder : null);
+      if (group) group.style.display = required ? 'block' : 'none';
+    };
 
-    populateSelectionOptions(
+    renderSelectionGroup(
+      elements.stateSelect,
+      elements.stateGroup,
+      model.states.map((state) => ({ value: state.key, label: describeStateOption(state) })),
+      selectedStateKey,
+      stateChoiceRequired,
+      'Choose one archive and state',
+    );
+    renderSelectionGroup(
       elements.cohortSelect,
+      elements.cohortGroup,
       selectedState
         ? selectedState.cohorts.map((cohort) => ({ value: cohort.cohortId, label: describeCohortOption(cohort) }))
         : [],
-      cohortChoiceRequired ? selectedCohortId : '',
-      cohortChoiceRequired ? 'Choose one same-state cohort' : null
+      selectedCohortId,
+      cohortChoiceRequired,
+      'Choose one same-state cohort',
     );
-    if (elements.cohortGroup) {
-      elements.cohortGroup.style.display = cohortChoiceRequired ? 'block' : 'none';
-    }
-
-    populateSelectionOptions(
+    renderSelectionGroup(
       elements.bundleSelect,
+      elements.bundleGroup,
       selectedCohort
         ? selectedCohort.bundleDigests.map((digestHex) => ({
             value: digestHex,
             label: `Lifecycle bundle ${shortenHash(digestHex)}`,
           }))
         : [],
-      bundleChoiceRequired ? selectedLifecycleBundleDigestHex : '',
-      bundleChoiceRequired ? 'Choose one embedded lifecycle bundle' : null
+      selectedLifecycleBundleDigestHex,
+      bundleChoiceRequired,
+      'Choose one embedded lifecycle bundle',
     );
-    if (elements.bundleGroup) {
-      elements.bundleGroup.style.display = bundleChoiceRequired ? 'block' : 'none';
-    }
 
     const totalCohorts = model.states.reduce((acc, state) => acc + state.cohorts.length, 0);
     const totalBundleVariants = model.states.reduce((acc, state) => (
@@ -864,35 +852,21 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   }
 
   const current = successorSelectionState.get(prefix);
-  if (elements.stateSelect) {
-    elements.stateSelect.onchange = () => {
-      if (prefix === 'restore') {
-        clearInlineError(RESTORE_INLINE_ERROR_ID);
-        clearProRestoreEvaluation();
-      }
-      const latest = successorSelectionState.get(prefix);
-      void refreshSelectionAndPreflight(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
-    };
-  }
-  if (elements.cohortSelect) {
-    elements.cohortSelect.onchange = () => {
-      if (prefix === 'restore') {
-        clearInlineError(RESTORE_INLINE_ERROR_ID);
-        clearProRestoreEvaluation();
-      }
-      const latest = successorSelectionState.get(prefix);
-      void refreshSelectionAndPreflight(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
-    };
-  }
-  if (elements.bundleSelect) {
-    elements.bundleSelect.onchange = () => {
-      if (prefix === 'restore') {
-        clearInlineError(RESTORE_INLINE_ERROR_ID);
-        clearProRestoreEvaluation();
-      }
-      const latest = successorSelectionState.get(prefix);
-      void refreshSelectionAndPreflight(prefix, latest?.files || [], latest?.actionButton || actionButton, latest?.assessment || assessment);
-    };
+  const onSelectionChange = () => {
+    if (prefix === 'restore') {
+      clearInlineError(RESTORE_INLINE_ERROR_ID);
+      clearProRestoreEvaluation();
+    }
+    const latest = successorSelectionState.get(prefix);
+    void refreshSelectionAndPreflight(
+      prefix,
+      latest?.files || [],
+      latest?.actionButton || actionButton,
+      latest?.assessment || assessment,
+    );
+  };
+  for (const select of [elements.stateSelect, elements.cohortSelect, elements.bundleSelect]) {
+    if (select) select.onchange = onSelectionChange;
   }
   setRestoreActionAvailability(prefix, actionButton);
   syncArchiveInspectorForPrefix(prefix, files);

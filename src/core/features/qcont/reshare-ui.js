@@ -1,26 +1,21 @@
 import { isLifecycleParsedShard, parseLifecycleShard, reshareSameState } from '../../../app/crypto-service.js';
-import { collectRestoreVerificationOptions, refreshSuccessorSelectionUi } from './restore-ui.js';
+import { collectRestoreVerificationOptions } from './restore-ui.js';
 import { bindRsParamsUI } from './rs-params-display.js';
-import { updateShardSelectionStatus } from '../ui/shards-status.js';
 import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
-import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import { renderDecisionCard } from '../ui/decision-card.js';
+import { refreshRestoreInputPanel } from './restore-input-panel.js';
+import {
+  evidenceNoteRow,
+  evidenceRow,
+  evidenceSection,
+  renderEvidenceMatrix,
+} from '../ui/evidence-matrix.js';
+import { deriveArchiveBaseName } from './archive-name.js';
 
 let reshareStatusSeq = 0;
 let lastReshareExports = null;
-
-function deriveReshareBaseName(files = []) {
-  const shard = files.find((file) => String(file?.name || '').toLowerCase().endsWith('.qcont'));
-  if (!shard) return 'archive';
-  return String(shard.name)
-    .replace(/\.part\d+-of-\d+\.qcont$/i, '')
-    .replace(/\.archive-state\.json$/i, '')
-    .replace(/\.cohort-binding\.json$/i, '')
-    .replace(/\.lifecycle-bundle\.json$/i, '')
-    .replace(/\.transition-record\.json$/i, '');
-}
 
 function parsePositiveInteger(input, field) {
   const value = parseInt(String(input?.value || ''), 10);
@@ -41,44 +36,53 @@ function buildReshareResultSummary(result) {
   header.textContent = 'Reshare Result';
   panel.appendChild(header);
 
-  const addSection = (title) => {
-    const section = document.createElement('div');
-    section.className = 'restore-result-section';
-    section.textContent = title;
-    panel.appendChild(section);
-  };
+  const cohortRotated = result.predecessorCohortId !== result.cohortId;
+  const maintenanceSignatureCount = Number(result.maintenanceSignatureCountAdded || 0);
 
-  const addItem = (ok, text, warn = false) => {
-    const item = document.createElement('div');
-    item.className = `restore-result-item ${warn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-    item.textContent = `${warn ? '⚠' : (ok ? '✓' : '✗')} ${text}`;
-    panel.appendChild(item);
-  };
+  const sections = [
+    evidenceSection('Result', [
+      evidenceRow('Archive state', 'Archive-state descriptor preserved exactly', 'ok'),
+      evidenceRow(
+        'Successor cohort',
+        cohortRotated ? 'New successor cohort emitted' : 'No cohort rotation occurred',
+        cohortRotated ? 'ok' : 'warn'
+      ),
+      evidenceRow(
+        'Transition record',
+        result.transitionRecordDigestHex ? 'Transition record emitted' : 'Transition record missing',
+        result.transitionRecordDigestHex ? 'ok' : 'fail'
+      ),
+      evidenceRow(
+        'Lifecycle bundle',
+        result.lifecycleBundleDigestHex ? 'Lifecycle bundle updated for the new cohort' : 'Lifecycle bundle digest missing',
+        result.lifecycleBundleDigestHex ? 'ok' : 'fail'
+      ),
+    ]),
+    evidenceSection('Maintenance Evidence', [
+      evidenceRow('Archive approval', 'Archive approval remains separate from maintenance resharing', 'ok'),
+      maintenanceSignatureCount > 0
+        ? evidenceRow(
+            'Maintenance signatures',
+            `Maintenance signatures added to the transition record (${maintenanceSignatureCount})`,
+            'ok'
+          )
+        : evidenceRow(
+            'Maintenance signatures',
+            'No new maintenance signatures were attached. The transition record can be signed and attached later.',
+            'neutral'
+          ),
+      evidenceNoteRow('The emitted transition-record.json is the external signing target for maintenance signatures.'),
+    ]),
+    evidenceSection('Next Actions', [
+      evidenceRow(
+        'Next step',
+        'Distribute the new cohort, attach maintenance signatures later if needed, or continue to Restore with the updated evidence set.',
+        'neutral'
+      ),
+    ]),
+  ];
 
-  const addNeutral = (text) => {
-    const item = document.createElement('div');
-    item.className = 'restore-result-item neutral';
-    item.textContent = `· ${text}`;
-    panel.appendChild(item);
-  };
-
-  addSection('Result');
-  addItem(true, 'Archive-state descriptor preserved exactly');
-  addItem(result.predecessorCohortId !== result.cohortId, 'New successor cohort emitted');
-  addItem(Boolean(result.transitionRecordDigestHex), 'Transition record emitted');
-  addItem(Boolean(result.lifecycleBundleDigestHex), 'Lifecycle bundle updated for the new cohort');
-
-  addSection('Maintenance Evidence');
-  addItem(true, 'Archive approval remains separate from maintenance resharing');
-  if (result.maintenanceSignatureCountAdded > 0) {
-    addItem(true, `Maintenance signatures added to the transition record (${result.maintenanceSignatureCountAdded})`);
-  } else {
-    addNeutral('No new maintenance signatures were attached. The transition record can be signed and attached later.');
-  }
-  addNeutral('The emitted transition-record.json is the external signing target for maintenance signatures.');
-
-  addSection('Next Actions');
-  addNeutral('Distribute the new cohort, attach maintenance signatures later if needed, or continue to Restore with the updated evidence set.');
+  renderEvidenceMatrix(panel, sections, { compact: true });
 
   panel.className = 'restore-result-panel ok';
 }
@@ -148,25 +152,18 @@ async function updateReshareStatus() {
 
   const files = [...(input.files || [])];
   const requestId = ++reshareStatusSeq;
-  if (files.length === 0) {
-    clearArtifactIntakeTable('reshareArtifactIntake');
-  }
-  const assessment = await updateShardSelectionStatus({
+  const { assessment } = await refreshRestoreInputPanel({
+    prefix: 'reshare',
     files,
     statusDiv,
     statusText,
     actionButton,
+    intakeContainerId: 'reshareArtifactIntake',
+    intakeLabel: 'Reshare artifact intake',
+    intakeWorkflow: 'reshare',
+    preflightContainerId: null,
     isCurrent: () => requestId === reshareStatusSeq,
   });
-  if (requestId !== reshareStatusSeq) return;
-  await renderArtifactIntakeTable({
-    containerId: 'reshareArtifactIntake',
-    files,
-    workflow: 'reshare',
-    label: 'Reshare artifact intake',
-  });
-  if (requestId !== reshareStatusSeq) return;
-  await refreshSuccessorSelectionUi('reshare', files, actionButton, assessment || { ready: false });
   if (requestId !== reshareStatusSeq) return;
   renderResharePlanDecision(files, assessment);
 }
@@ -284,7 +281,7 @@ export function initQcontReshareUI() {
         onWarn: (message) => logWarning(message),
       });
 
-      const baseName = deriveReshareBaseName(files);
+      const baseName = deriveArchiveBaseName(files);
       result.shards.forEach(({ blob, index }) => {
         const name = `${baseName}.reshared.part${index + 1}-of-${result.shards.length}.qcont`;
         download(blob, name);

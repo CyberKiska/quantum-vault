@@ -18,9 +18,9 @@ import {
     collectRestoreVerificationOptions,
     logRestoreSelectionSummary,
     logVerificationSummary,
-    refreshSuccessorSelectionUi,
     renderRestorePreflightForFiles,
 } from './qcont/restore-ui.js';
+import { refreshRestoreInputPanel } from './qcont/restore-input-panel.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setWorkflowBusy, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
@@ -35,13 +35,12 @@ import {
     logRestorationSuccess,
     logWarning,
 } from './ui/logging.js';
-import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
 import { clearInlineError, showInlineError, summarizeFileList } from './ui/inline-error.js';
-import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './ui/artifact-intake.js';
 import { initRovingTablist } from './ui/tabs.js';
 import { updateSidebarStatus } from './ui/ui.js';
 import { describeAuthPolicyHelp, renderAuthPolicyConsequence } from './qcont/auth-policy-help.js';
+import { buildRestoreRecoveryAction } from './qcont/restore-recovery-action.js';
 
 // Global state for Lite mode
 let liteKeys = null;
@@ -138,17 +137,7 @@ function refreshLiteExportChecklistAfterKeyBackup() {
 }
 
 function liteRestoreRecoveryAction(error) {
-    const message = String(error?.message || error || '').toLowerCase();
-    if (message.includes('archive policy') || message.includes('archive-approval')) {
-        return 'Load or attach policy-satisfying archive-approval evidence, then retry Lite Restore.';
-    }
-    if (message.includes('threshold') || message.includes('shard')) {
-        return 'Load enough successor QVqcont-7 shards from one archive/state/cohort and remove incompatible files.';
-    }
-    if (message.includes('lifecycle bundle') || message.includes('selection') || message.includes('cohort')) {
-        return 'Choose the exact archive, cohort, or lifecycle bundle variant, or load the matching lifecycle bundle.';
-    }
-    return 'Review the selected restore inputs, correct the blocking condition, and retry Lite Restore.';
+    return buildRestoreRecoveryAction(error, { verb: 'Lite Restore' });
 }
 
 function wipeLiteKeyPair(keyPair) {
@@ -419,36 +408,23 @@ async function updateShardsStatus() {
     const statusDiv = document.getElementById('shardsStatus');
     const statusText = document.getElementById('shardsStatusText');
     const restoreBtn = document.getElementById('liteRestoreBtn');
-    
+
     if (!shardsInput || !statusDiv || !statusText) return;
-    
+
     const files = [...(shardsInput.files || [])];
     const requestId = ++liteShardsStatusSeq;
-    if (files.length === 0) {
-        clearArtifactIntakeTable('liteRestoreArtifactIntake');
-    }
-    const assessment = await updateShardSelectionStatus({
+    await refreshRestoreInputPanel({
+        prefix: 'liteRestore',
         files,
         statusDiv,
         statusText,
         actionButton: restoreBtn,
-        isCurrent: () => requestId === liteShardsStatusSeq
-    });
-    if (requestId !== liteShardsStatusSeq) return;
-    await renderArtifactIntakeTable({
-        containerId: 'liteRestoreArtifactIntake',
-        files,
-        workflow: 'lite-restore',
-        label: 'Lite restore artifact intake',
-    });
-    if (requestId !== liteShardsStatusSeq) return;
-    await refreshSuccessorSelectionUi('liteRestore', files, restoreBtn, assessment || { ready: false });
-    if (requestId !== liteShardsStatusSeq) return;
-    await renderRestorePreflightForFiles({
-        prefix: 'liteRestore',
-        containerId: 'liteRestorePreflightDecision',
-        files,
+        intakeContainerId: 'liteRestoreArtifactIntake',
+        intakeLabel: 'Lite restore artifact intake',
+        intakeWorkflow: 'lite-restore',
+        preflightContainerId: 'liteRestorePreflightDecision',
         expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+        isCurrent: () => requestId === liteShardsStatusSeq,
     });
 }
 

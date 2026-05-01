@@ -5,14 +5,13 @@ import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize, shorte
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
 import { renderSuccessCallout, renderWarningCallout } from './callout.js';
-import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
-import { refreshSuccessorSelectionUi, renderRestorePreflightForFiles } from '../qcont/restore-ui.js';
 import { syncArchiveReviewHub } from './archive-review-hub.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from '../qcont/archive-inspector-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
+import { refreshRestoreInputPanel } from '../qcont/restore-input-panel.js';
 import { initRovingTablist } from './tabs.js';
 
 // Pro mode state
@@ -246,31 +245,18 @@ export function initUI() {
         if (!statusDiv || !statusText || !qcontShardsInput) return;
         const files = [...(qcontShardsInput.files || [])];
         const requestId = ++proShardsStatusSeq;
-        if (files.length === 0) {
-            clearArtifactIntakeTable('restoreArtifactIntake');
-        }
-        const assessment = await updateShardSelectionStatus({
+        await refreshRestoreInputPanel({
+            prefix: 'restore',
             files,
             statusDiv,
             statusText,
             actionButton: restoreQcontBtn,
-            isCurrent: () => requestId === proShardsStatusSeq
-        });
-        if (requestId !== proShardsStatusSeq) return;
-        await renderArtifactIntakeTable({
-            containerId: 'restoreArtifactIntake',
-            files,
-            workflow: 'restore',
-            label: 'Restore artifact intake',
-        });
-        if (requestId !== proShardsStatusSeq) return;
-        await refreshSuccessorSelectionUi('restore', files, restoreQcontBtn, assessment || { ready: false });
-        if (requestId !== proShardsStatusSeq) return;
-        await renderRestorePreflightForFiles({
-            prefix: 'restore',
-            containerId: 'restorePreflightDecision',
-            files,
+            intakeContainerId: 'restoreArtifactIntake',
+            intakeLabel: 'Restore artifact intake',
+            intakeWorkflow: 'restore',
+            preflightContainerId: 'restorePreflightDecision',
             expectedSignerInput: el('restoreExpectedEdSigner'),
+            isCurrent: () => requestId === proShardsStatusSeq,
         });
         updateProWorkflowStatus();
     }
