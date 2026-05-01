@@ -20,6 +20,7 @@ import { buildAttachEvidenceMatrixSections, renderEvidenceMatrix } from '../ui/e
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
+import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 let lastAttachIntakeError = null;
@@ -986,6 +987,7 @@ async function updateAttachStatus() {
     hint.textContent = '';
     lastAttachIntakeError = null;
     clearArtifactIntakeTable('attachArtifactIntake');
+    clearArchiveInspector('attachArchiveInspector');
     setPartialRewriteAcknowledgementRequired(false);
     if (modeSummary) {
       modeSummary.textContent = '';
@@ -1081,6 +1083,11 @@ async function updateAttachStatus() {
       plan,
       error: lastAttachIntakeError || undefined,
     });
+    if (shards.length > 0) {
+      void renderArchiveInspectorPanel('attachArchiveInspector', { attachShards: shards });
+    } else {
+      void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
+    }
   } catch (error) {
     const message = error?.message || String(error);
     const summary = message.startsWith('Unsupported attach input:')
@@ -1112,6 +1119,7 @@ async function updateAttachStatus() {
       plan: previewCtx.plan,
       error,
     });
+    void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
     setPartialRewriteAcknowledgementRequired(false);
     setAttachActionAvailability();
     showInlineError(ATTACH_INLINE_ERROR_ID, {

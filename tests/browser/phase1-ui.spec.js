@@ -360,6 +360,10 @@ test('artifact intake table explains accepted ignored unsupported and wrong-targ
   await expect(reviewIntake).toBeVisible();
   await expect(reviewIntake).toContainText('QVqcont-7 shard');
   await expect(reviewIntake).toContainText('archive-approval signature');
+  const reviewInspector = page.getByTestId('review-archive-inspector');
+  await expect(reviewInspector).toBeVisible();
+  await expect(reviewInspector).toContainText('Lifecycle timeline');
+  await expect(reviewInspector).toContainText('Evidence present in bundle (counts)');
   await expect(page.getByTestId('pro-workflow-active')).toContainText('Review');
   await expect(page.getByTestId('pro-workflow-evidence')).toContainText('review artifacts selected');
 });
@@ -575,6 +579,11 @@ test('ambiguous same-state cohorts stay blocked until explicit operator choice',
   await expect(page.getByTestId('restore-cohort-selection-group')).toBeVisible();
   await expect(page.getByTestId('restore-selection-help')).toContainText('will not auto-select an ambiguous successor path');
   await expect(page.getByTestId('restore-button')).toBeDisabled();
+
+  const restoreInspector = page.getByTestId('restore-archive-inspector');
+  await expect(restoreInspector).toBeVisible();
+  await expect(restoreInspector).toContainText('Multiple archive states, same-state cohorts, or embedded lifecycle bundle variants are present');
+  await expect(restoreInspector).toContainText('Maintenance signatures and source-evidence objects are separate from archive approval');
 });
 
 test('self-signed qsig warning is visible and does not satisfy any-signature policy', async ({ page }) => {
@@ -602,6 +611,10 @@ test('mixed lifecycle bundle digests require explicit selection and surface a wa
 
   await expect(page.getByTestId('restore-bundle-selection-group')).toBeVisible();
   await expect(page.getByTestId('restore-button')).toBeDisabled();
+  const mixedInspector = page.getByTestId('restore-archive-inspector');
+  await expect(mixedInspector).toBeVisible();
+  await expect(mixedInspector).toContainText('This cohort carries multiple embedded lifecycle bundle digests');
+  await expect(mixedInspector).toContainText('Timestamp (.ots) proofs');
   await expect(page.getByTestId('restore-bundle-selection').locator('option', {
     hasText: `Lifecycle bundle ${shortenHashForUi(fixtures.mixedBundleDigestHex)}`,
   })).toHaveCount(1);

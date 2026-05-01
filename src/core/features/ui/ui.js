@@ -8,6 +8,7 @@ import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
 import { refreshSuccessorSelectionUi, renderRestorePreflightForFiles } from '../qcont/restore-ui.js';
+import { clearArchiveInspector, renderArchiveInspectorPanel } from '../qcont/archive-inspector-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
 import { initRovingTablist } from './tabs.js';
@@ -280,6 +281,7 @@ export function initUI() {
         const requestId = ++proReviewStatusSeq;
         if (files.length === 0) {
             clearArtifactIntakeTable('reviewArtifactIntake');
+            clearArchiveInspector('reviewArchiveInspector');
             statusDiv.className = 'shards-status initially-hidden';
             statusDiv.style.display = 'none';
             statusText.textContent = '0 review files selected';
@@ -298,6 +300,7 @@ export function initUI() {
             label: 'Review artifact intake',
         });
         if (requestId !== proReviewStatusSeq) return;
+        await renderArchiveInspectorPanel('reviewArchiveInspector', { files });
         updateProWorkflowStatus();
     }
 

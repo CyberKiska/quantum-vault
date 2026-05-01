@@ -31,6 +31,11 @@ const TRANSIENT_PANEL_IDS = [
     'restoreArtifactIntake',
     'shardsStatus',
     'liteRestoreArtifactIntake',
+    'restoreArchiveInspector',
+    'reviewArchiveInspector',
+    'attachArchiveInspector',
+    'reshareArchiveInspector',
+    'liteRestoreArchiveInspector',
     'reshareSuccessorSelection',
     'restoreSuccessorSelection',
     'liteRestoreSuccessorSelection',
@@ -80,9 +85,13 @@ function clearTransientPanels() {
         if (
             element.classList.contains('restore-result-panel') ||
             element.classList.contains('inline-error-panel') ||
-            element.classList.contains('artifact-intake-panel')
+            element.classList.contains('artifact-intake-panel') ||
+            element.id.endsWith('ArchiveInspector')
         ) {
             element.replaceChildren();
+            if (element.id.endsWith('ArchiveInspector')) {
+                element.className = 'archive-inspector-host initially-hidden';
+            }
         } else if (element.tagName === 'PRE') {
             element.textContent = '';
         }

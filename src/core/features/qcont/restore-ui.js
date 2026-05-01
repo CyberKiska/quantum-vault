@@ -20,8 +20,27 @@ import {
   renderEvidenceMatrix,
 } from '../ui/evidence-matrix.js';
 import { showToast } from '../ui/toast.js';
+import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
 
 const successorSelectionState = new Map();
+const ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX = Object.freeze({
+  restore: 'restoreArchiveInspector',
+  reshare: 'reshareArchiveInspector',
+  liteRestore: 'liteRestoreArchiveInspector',
+});
+
+function syncArchiveInspectorForPrefix(prefix, files = []) {
+  const containerId = ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix];
+  if (!containerId) return;
+  const selection = successorSelectionState.get(prefix);
+  if (selection?.parsedSuccessorShards?.length && selection?.model) {
+    void renderArchiveInspectorPanel(containerId, { files, successorSelection: selection });
+  } else if (files.length > 0) {
+    void renderArchiveInspectorPanel(containerId, { files, successorSelection: null });
+  } else {
+    clearArchiveInspector(containerId);
+  }
+}
 const RESTORE_INLINE_ERROR_ID = 'proRestoreInlineError';
 const RESTORE_PREFLIGHT_CARD_ID = 'restorePreflightDecision';
 let proRestoreEvaluation = null;
@@ -594,6 +613,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     return nextState;
   }
   if (!files.length) {
+    clearArchiveInspector(ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix]);
     clearSuccessorSelectionUi(prefix, actionButton);
     return successorSelectionState.get(prefix);
   }
@@ -766,6 +786,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       ...nextState,
       mode: 'successor',
       model,
+      parsedSuccessorShards: successorShards,
       selectedStateKey,
       selectedArchiveId: stateForRestore.selectedArchiveId,
       selectedStateId: stateForRestore.selectedStateId,
@@ -817,6 +838,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     };
   }
   setRestoreActionAvailability(prefix, actionButton);
+  syncArchiveInspectorForPrefix(prefix, files);
   return current;
 }
 
