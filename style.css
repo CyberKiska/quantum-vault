@@ -354,6 +354,11 @@ summary:focus-visible,
   color: var(--accent-danger);
 }
 
+.attach-target-binding-preview {
+  margin-top: 0.65rem;
+  white-space: pre-wrap;
+}
+
 .radio-inline {
   display: inline-flex; align-items: center; gap: 0.4rem;
   margin: 0; text-transform: none; letter-spacing: normal;

@@ -783,6 +783,10 @@ test('maintenance attach rejects a qsig signed over archive-state bytes instead 
   await page.getByTestId('attach-channel').selectOption('maintenance');
   await page.getByTestId('attach-input').setInputFiles(fixtures.maintenanceWrongTargetFiles);
 
+  const bindingPreview = page.getByTestId('attach-target-binding-preview');
+  await expect(bindingPreview).toBeVisible();
+  await expect(bindingPreview).toContainText('transition:sha3-512:');
+
   const attachButton = page.getByTestId('attach-button');
   await expect(attachButton).toBeEnabled();
 
@@ -818,6 +822,36 @@ test('source-evidence builder preview states archive policy and blocks export un
 
   await page.locator('#sourceEvidenceDigestRows .source-evidence-digest-value').first().fill('ab'.repeat(64));
   await expect(exportBtn).toBeEnabled();
+});
+
+test('attach target-binding preview reflects channel, archive binding, and shard rewrite mode', async ({ page }) => {
+  await openProTab(page, 'tab-attach');
+
+  await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalAttachBaseFiles);
+  let preview = page.getByTestId('attach-target-binding-preview');
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText('Archive approval');
+  await expect(preview).toContainText('state:');
+  await expect(preview).toContainText('bundle-only');
+  await expect(preview).toContainText('Archive policy binding: verified signatures on this channel can satisfy archive restore policy');
+
+  await page.getByTestId('attach-channel').selectOption('maintenance');
+  await page.getByTestId('attach-input').setInputFiles(fixtures.maintenanceWrongTargetFiles);
+  preview = page.getByTestId('attach-target-binding-preview');
+  await expect(preview).toContainText('Maintenance');
+  await expect(preview).toContainText('transition:sha3-512:');
+  await expect(preview).toContainText('does not satisfy archive restore policy by itself');
+
+  await page.getByTestId('attach-channel').selectOption('source-evidence');
+  await page.getByTestId('attach-input').setInputFiles(fixtures.sourceEvidenceWrongTargetFiles);
+  preview = page.getByTestId('attach-target-binding-preview');
+  await expect(preview).toContainText('Source evidence');
+  await expect(preview).toContainText('source-evidence:sha3-512:');
+
+  await page.getByTestId('attach-channel').selectOption('archive-approval');
+  await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalPartialShardAttachFiles);
+  preview = page.getByTestId('attach-target-binding-preview');
+  await expect(preview).toContainText('partial cohort');
 });
 
 test('source-evidence builder exports canonical JSON for external signing, re-imports the matching qsig, and restore reports it separately', async ({ page }) => {
@@ -885,6 +919,10 @@ test('source-evidence attach rejects a qsig signed over archive-state bytes inst
   await openProTab(page, 'tab-attach');
   await page.getByTestId('attach-channel').selectOption('source-evidence');
   await page.getByTestId('attach-input').setInputFiles(fixtures.sourceEvidenceWrongTargetFiles);
+
+  const bindingPreview = page.getByTestId('attach-target-binding-preview');
+  await expect(bindingPreview).toBeVisible();
+  await expect(bindingPreview).toContainText('source-evidence:sha3-512:');
 
   const attachButton = page.getByTestId('attach-button');
   await expect(attachButton).toBeEnabled();

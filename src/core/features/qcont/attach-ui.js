@@ -766,6 +766,193 @@ function deriveAttachRequirements(channel, classified) {
   };
 }
 
+function shortHexForAttachPreview(value) {
+  const s = String(value || '').trim();
+  if (!s) return '—';
+  if (s.length <= 40) return s;
+  return `${s.slice(0, 18)}…${s.slice(-12)}`;
+}
+
+async function safeAttachPreviewPlan(classified) {
+  if (!classified) {
+    return { shards: [], plan: deriveAttachPlan([]) };
+  }
+  try {
+    const shards = await parseAttachShards(classified);
+    return { shards, plan: deriveAttachPlan(shards) };
+  } catch {
+    return { shards: [], plan: deriveAttachPlan([]) };
+  }
+}
+
+async function resolveAttachBindingTarget(classified, channel, shards) {
+  if (channel === 'maintenance') {
+    if (classified.transitionRecordBytes instanceof Uint8Array) {
+      try {
+        const parsed = parseTransitionRecordBytes(classified.transitionRecordBytes);
+        return {
+          artifactLabel: 'transition-record (canonical JSON)',
+          targetRef: `transition:sha3-512:${parsed.digest.value}`,
+          digestSummary: shortHexForAttachPreview(parsed.digest.value),
+        };
+      } catch {
+        return {
+          artifactLabel: 'transition-record',
+          targetRef: '(unreadable transition-record.json)',
+          digestSummary: '—',
+        };
+      }
+    }
+    return {
+      artifactLabel: 'transition-record',
+      targetRef: '(load canonical transition-record.json)',
+      digestSummary: '—',
+    };
+  }
+  if (channel === 'source-evidence') {
+    if (classified.sourceEvidenceBytes instanceof Uint8Array) {
+      try {
+        const parsed = parseSourceEvidenceBytes(classified.sourceEvidenceBytes);
+        return {
+          artifactLabel: 'source-evidence (canonical JSON)',
+          targetRef: `source-evidence:sha3-512:${parsed.digest.value}`,
+          digestSummary: shortHexForAttachPreview(parsed.digest.value),
+        };
+      } catch {
+        return {
+          artifactLabel: 'source-evidence',
+          targetRef: '(unreadable source-evidence.json)',
+          digestSummary: '—',
+        };
+      }
+    }
+    return {
+      artifactLabel: 'source-evidence',
+      targetRef: '(load canonical source-evidence.json)',
+      digestSummary: '—',
+    };
+  }
+  try {
+    if (Array.isArray(shards) && shards.length > 0 && shards[0]?.archiveStateBytes instanceof Uint8Array) {
+      const embedded = parseArchiveStateDescriptorBytes(shards[0].archiveStateBytes);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${embedded.stateId}`,
+        digestSummary: shortHexForAttachPreview(embedded.digest.value),
+      };
+    }
+    if (classified.lifecycleBundleBytes instanceof Uint8Array) {
+      const parsed = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+      const canon = canonicalizeArchiveStateDescriptor(parsed.lifecycleBundle.archiveState);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${canon.stateId}`,
+        digestSummary: shortHexForAttachPreview(canon.digest.value),
+      };
+    }
+    if (classified.archiveStateBytes instanceof Uint8Array) {
+      const parsed = parseArchiveStateDescriptorBytes(classified.archiveStateBytes);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${parsed.stateId}`,
+        digestSummary: shortHexForAttachPreview(parsed.digest.value),
+      };
+    }
+  } catch {
+    return {
+      artifactLabel: 'archive-state descriptor',
+      targetRef: '(could not resolve)',
+      digestSummary: '—',
+    };
+  }
+  return {
+    artifactLabel: 'archive-state descriptor',
+    targetRef: '(load successor shards or a lifecycle bundle)',
+    digestSummary: '—',
+  };
+}
+
+function describeAttachShardRewrite(plan, shardsParseLikelyFailed) {
+  if (shardsParseLikelyFailed) {
+    return 'Shard rewrite: not evaluated — fix shard or lifecycle bundle inputs first.';
+  }
+  if (!plan.embedIntoShards) {
+    return 'Shard rewrite: bundle-only (no successor shard files loaded).';
+  }
+  if (plan.warning) {
+    return `Shard rewrite: partial cohort (${plan.selectedShardCount}/${plan.expectedShardCount} shards selected).`;
+  }
+  return `Shard rewrite: full cohort (${plan.selectedShardCount}/${plan.expectedShardCount} shards).`;
+}
+
+function attachSignatureFamilyDescription(channel) {
+  if (channel === 'maintenance') return 'maintenance — detached signatures over canonical transition-record JSON';
+  if (channel === 'source-evidence') return 'source-evidence — detached signatures over canonical source-evidence JSON';
+  return 'archive-approval — detached signatures over canonical archive-state descriptor JSON';
+}
+
+function attachArchivePolicyBindingLine(channel) {
+  if (channel === 'archive-approval') {
+    return 'Archive policy binding: verified signatures on this channel can satisfy archive restore policy when Restore trusts them.';
+  }
+  return 'Archive policy binding: this channel does not satisfy archive restore policy by itself (maintenance or provenance only).';
+}
+
+function attachOtsRuleLine() {
+  return 'OTS rule: each proof must stamp SHA-256(detached signature bytes) for a signature file present in this intake (.qsig / supported .sig).';
+}
+
+async function formatAttachTargetBindingPreview({ channel, classified, shards, plan, error }) {
+  const lines = [];
+  lines.push('Attach target binding (expected)');
+  const channelConfig = attachChannelConfig(channel);
+  lines.push(`Evidence channel: ${channelConfig.label}`);
+  const requirements = classified
+    ? deriveAttachRequirements(channel, classified)
+    : { canAttach: false, missingLabel: 'load attach inputs' };
+  lines.push(
+    `Lifecycle merge target: ${requirements.canAttach ? 'successor shards and/or lifecycle bundle present' : `incomplete — ${requirements.missingLabel}`}`
+  );
+
+  const shardsLikelyInvalid = Boolean(
+    classified && classified.shardFiles.length > 0 && shards.length === 0
+  );
+  lines.push(describeAttachShardRewrite(plan, shardsLikelyInvalid));
+
+  const binding = classified ? await resolveAttachBindingTarget(classified, channel, shards) : null;
+  lines.push(`Target artifact: ${binding?.artifactLabel || '—'}`);
+  lines.push(`Target ref: ${binding?.targetRef || '—'}`);
+  lines.push(`Target digest (hex): ${binding?.digestSummary || '—'}`);
+
+  lines.push(`Signature family: ${attachSignatureFamilyDescription(channel)}`);
+  lines.push(
+    `Signer public-key material: ${classified ? classified.pqPublicKeyFileBytesList.length : 0} pin file(s) (.pqpk / packaged pins)`
+  );
+  lines.push(`Detached signatures loaded: ${classified ? classified.signatures.length : 0}`);
+  lines.push(`OTS proofs loaded: ${classified ? classified.timestamps.length : 0}`);
+  lines.push(attachOtsRuleLine());
+  lines.push(attachArchivePolicyBindingLine(channel));
+  lines.push('Per-file classification and wrong-target hints: see artifact intake table above.');
+  if (error) {
+    lines.push(`Evaluation note: ${String(error.message || error)}`);
+  }
+  return lines.join('\n');
+}
+
+async function refreshAttachTargetBindingPreview({ channel, classified, shards, plan, error }) {
+  const el = document.getElementById('attachTargetBindingPreview');
+  if (!el) return;
+  el.textContent = await formatAttachTargetBindingPreview({ channel, classified, shards, plan, error });
+  el.classList.remove('initially-hidden');
+}
+
+function clearAttachTargetBindingPreview() {
+  const el = document.getElementById('attachTargetBindingPreview');
+  if (!el) return;
+  el.textContent = '';
+  el.classList.add('initially-hidden');
+}
+
 async function resolveAttachSourceBundle(classified) {
   if (classified.lifecycleBundleBytes instanceof Uint8Array) {
     return (await parseLifecycleBundleBytes(classified.lifecycleBundleBytes)).lifecycleBundle;
@@ -806,6 +993,7 @@ async function updateAttachStatus() {
     }
     setAttachActionAvailability();
     clearAttachResultPanel();
+    clearAttachTargetBindingPreview();
     return;
   }
 
@@ -814,9 +1002,10 @@ async function updateAttachStatus() {
   text.textContent = 'Analyzing attach inputs...';
   hint.textContent = `${count} file(s) loaded.`;
   status.setAttribute('aria-label', text.textContent);
+  let classified = null;
   try {
     const files = [...(input.files || [])];
-    const classified = await classifyAttachFiles(files);
+    classified = await classifyAttachFiles(files);
     await renderArtifactIntakeTable({
       containerId: 'attachArtifactIntake',
       files,
@@ -885,6 +1074,13 @@ async function updateAttachStatus() {
       canExportArtifacts,
       partialRewriteRequiresAck,
     });
+    await refreshAttachTargetBindingPreview({
+      channel,
+      classified,
+      shards,
+      plan,
+      error: lastAttachIntakeError || undefined,
+    });
   } catch (error) {
     const message = error?.message || String(error);
     const summary = message.startsWith('Unsupported attach input:')
@@ -906,6 +1102,14 @@ async function updateAttachStatus() {
       workflow: 'attach',
       channel,
       label: `${channelConfig.label} artifact intake`,
+      error,
+    });
+    const previewCtx = await safeAttachPreviewPlan(classified);
+    await refreshAttachTargetBindingPreview({
+      channel,
+      classified,
+      shards: previewCtx.shards,
+      plan: previewCtx.plan,
       error,
     });
     setPartialRewriteAcknowledgementRequired(false);
