@@ -346,6 +346,14 @@ summary:focus-visible,
   color: var(--text-main);
 }
 
+.source-evidence-export-preview {
+  margin-top: 0.65rem;
+}
+
+.source-evidence-digest-hint.source-evidence-digest-hint--error {
+  color: var(--accent-danger);
+}
+
 .radio-inline {
   display: inline-flex; align-items: center; gap: 0.4rem;
   margin: 0; text-transform: none; letter-spacing: normal;

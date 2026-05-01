@@ -798,6 +798,28 @@ test('maintenance attach rejects a qsig signed over archive-state bytes instead 
   expect(downloadCount).toBe(0);
 });
 
+test('source-evidence builder preview states archive policy and blocks export until digests are valid', async ({ page }) => {
+  await openProTab(page, 'tab-attach');
+  await page.getByTestId('attach-channel').selectOption('source-evidence');
+
+  const preview = page.getByTestId('source-evidence-export-preview');
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText('never satisfies archive restore policy');
+
+  const exportBtn = page.getByTestId('source-evidence-export');
+  await expect(exportBtn).toBeDisabled();
+
+  await page.locator('#sourceEvidenceDigestRows .source-evidence-digest-value').first().fill('gg'.repeat(64));
+  await expect(exportBtn).toBeDisabled();
+  await expect(preview).toContainText('invalid');
+
+  await page.locator('#sourceEvidenceDigestRows .source-evidence-digest-value').first().fill('aa'.repeat(63));
+  await expect(exportBtn).toBeDisabled();
+
+  await page.locator('#sourceEvidenceDigestRows .source-evidence-digest-value').first().fill('ab'.repeat(64));
+  await expect(exportBtn).toBeEnabled();
+});
+
 test('source-evidence builder exports canonical JSON for external signing, re-imports the matching qsig, and restore reports it separately', async ({ page }) => {
   await openProTab(page, 'tab-attach');
   await page.getByTestId('attach-channel').selectOption('source-evidence');
