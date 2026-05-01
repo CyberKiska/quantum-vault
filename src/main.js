@@ -21,11 +21,11 @@ const TRANSIENT_PANEL_IDS = [
     'proSplitInlineError',
     'attachStatus',
     'attachArtifactIntake',
-    'attachModeSummary',
+    'attachPlanDecision',
     'attachInlineError',
     'proReviewStatus',
     'reviewArtifactIntake',
-    'proReshareStatus',
+    'resharePlanDecision',
     'reshareArtifactIntake',
     'proShardsStatus',
     'restoreArtifactIntake',
@@ -92,6 +92,15 @@ function clearTransientPanels() {
             if (element.id.endsWith('ArchiveInspector')) {
                 element.className = 'archive-inspector-host initially-hidden';
             }
+        } else if (element.id === 'restorePreflightDecision' || element.id === 'liteRestorePreflightDecision') {
+            element.replaceChildren();
+            element.className = 'qv-decision-card restore-preflight-card decision-card initially-hidden';
+            element.removeAttribute('data-release-state');
+            element.setAttribute('data-testid', element.id === 'liteRestorePreflightDecision' ? 'lite-restore-preflight' : 'restore-preflight');
+        } else if (element.id === 'attachPlanDecision' || element.id === 'resharePlanDecision') {
+            element.replaceChildren();
+            element.className = 'initially-hidden';
+            element.setAttribute('data-testid', element.id === 'attachPlanDecision' ? 'attach-plan-decision' : 'reshare-plan-decision');
         } else if (element.tagName === 'PRE') {
             element.textContent = '';
         }

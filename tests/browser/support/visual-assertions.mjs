@@ -49,6 +49,7 @@ export async function expectCriticalPanelsNotClipped(page) {
       '[data-testid="lite-policy-consequence"]',
       '[data-testid="pro-policy-consequence"]',
       '[data-testid="split-readiness"]',
+      '[data-testid="attach-plan-decision"]',
       '[data-testid="attach-partial-ack-panel"]',
       '[data-testid="attach-status"]',
       '[data-testid="restore-archive-inspector"]',

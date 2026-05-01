@@ -4,6 +4,7 @@ import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
 import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
+import { renderSuccessCallout, renderWarningCallout } from './callout.js';
 import { updateShardSelectionStatus } from './shards-status.js';
 
 import { showToast } from './toast.js';
@@ -335,27 +336,20 @@ export function initUI() {
         if (!proEncryptionWarning) return;
 
         let message;
-        let stateClass;
 
         if (!hasPublicKey && !hasPrivateKey) {
             message = 'Load keys in Key Management: public key for encryption and private key for decryption.';
-            stateClass = 'warning';
+            renderWarningCallout(proEncryptionWarning, { body: message });
         } else if (!hasPublicKey) {
             message = 'Encryption is blocked: load a public key in Key Management.';
-            stateClass = 'warning';
+            renderWarningCallout(proEncryptionWarning, { body: message });
         } else if (!hasPrivateKey) {
             message = 'Decryption is blocked: load a private key in Key Management.';
-            stateClass = 'warning';
+            renderWarningCallout(proEncryptionWarning, { body: message });
         } else {
             message = 'Keys are loaded. Encryption and decryption are available.';
-            stateClass = 'success';
+            renderSuccessCallout(proEncryptionWarning, { body: message });
         }
-
-        proEncryptionWarning.className = `operation-warning ${stateClass}`;
-        proEncryptionWarning.replaceChildren();
-        const warningMessage = document.createElement('small');
-        warningMessage.textContent = message;
-        proEncryptionWarning.appendChild(warningMessage);
     }
 
     function getEncryptionStrategy() {

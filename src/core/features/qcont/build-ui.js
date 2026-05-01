@@ -7,6 +7,7 @@ import { ML_KEM_1024_PRIVATE_KEY_SIZE } from '../../crypto/mlkem.js';
 import { describeAuthPolicyHelp, renderAuthPolicyConsequence } from './auth-policy-help.js';
 import { evaluateRsParams } from './rs-params-display.js';
 import { clearInlineError, showInlineError } from '../ui/inline-error.js';
+import { renderDecisionCard } from '../ui/decision-card.js';
 import { log, logError } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { setWorkflowBusy, readFileAsUint8Array, download } from '../../../utils.js';
@@ -69,31 +70,45 @@ function evaluateSplitReadiness({
     };
 }
 
-function renderSplitReadiness(readiness, buildQcontBtn) {
-    const status = document.getElementById('proSplitReadinessStatus');
-    const text = document.getElementById('proSplitReadinessText');
-    const list = document.getElementById('proSplitPrerequisites');
+const PREREQ_LABELS = {
+    qenc: 'Container',
+    'private-key': 'Private key',
+    geometry: 'Geometry',
+    policy: 'Policy',
+};
 
-    if (status) {
-        status.style.display = 'block';
-        status.className = `shards-status ${readiness.ready ? 'sufficient' : 'invalid'}`;
-        status.setAttribute('aria-label', readiness.ready ? 'Split prerequisites satisfied' : 'Split prerequisites incomplete');
-    }
-    if (text) {
-        text.textContent = readiness.ready
-            ? 'Ready to build successor shards.'
-            : 'Split is blocked until all prerequisites pass.';
-    }
-    if (list) {
-        list.replaceChildren();
-        for (const item of readiness.prerequisites) {
-            const row = document.createElement('li');
-            row.className = item.ok ? 'ok' : 'fail';
-            row.dataset.prerequisite = item.id;
-            row.textContent = item.text;
-            list.appendChild(row);
+function renderSplitReadiness(readiness, buildQcontBtn) {
+    const panel = document.getElementById('proSplitReadiness');
+    if (!panel) return;
+
+    const tone = readiness.ready ? 'ok' : 'fail';
+    const rows = readiness.prerequisites.map((item) => ({
+        label: PREREQ_LABELS[item.id] || item.id,
+        value: item.text,
+        tone: item.ok ? 'ok' : 'fail',
+    }));
+
+    renderDecisionCard(
+        panel,
+        {
+            title: 'Split readiness',
+            tone,
+            primaryOutcome: readiness.ready
+                ? 'Ready to build successor shards.'
+                : 'Split is blocked until all prerequisites pass.',
+            rows,
+        },
+        {
+            extraRootClasses: ['operation-readiness', 'split-readiness'],
+            ariaLive: 'polite',
+            rootDataTestId: 'split-readiness',
+            testIds: {
+                primary: 'split-readiness-text',
+                rows: 'split-prerequisites',
+            },
         }
-    }
+    );
+
     if (buildQcontBtn) {
         buildQcontBtn.disabled = !readiness.ready;
     }

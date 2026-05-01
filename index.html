@@ -178,8 +178,8 @@
                 </div>
               </div>
 
-              <div id="liteCustodyGuidance" class="lite-custody-panel policy-consequence-panel informational initially-hidden" data-testid="lite-custody-guidance" aria-live="polite">
-                <h4>Custody and archive exports</h4>
+              <div id="liteCustodyGuidance" class="qv-decision-card qv-decision-card--informational lite-custody-panel policy-consequence-panel informational initially-hidden" data-testid="lite-custody-guidance" aria-live="polite">
+                <h4 class="qv-decision-card__title">Custody and archive exports</h4>
                 <p id="liteCustodyGuidanceSummary" class="muted-copy lite-custody-lede">
                   Recovery normally depends on independent shard custody and the exported JSON descriptors, not on keeping ML-KEM container keys in the browser or on disk.
                 </p>
@@ -239,7 +239,7 @@
               <div id="shardsStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
-              <div id="liteRestorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
+              <div id="liteRestorePreflightDecision" class="qv-decision-card restore-preflight-card decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
               <div id="liteRestoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
               <div id="liteRestoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="lite-restore-archive-inspector"></div>
               <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
@@ -376,7 +376,7 @@
                   One container per file
                 </label>
               </div>
-              <div id="proEncryptionWarning" class="operation-warning warning-callout warning">
+              <div id="proEncryptionWarning" class="operation-warning">
                 <small>Load keys in Key Management: public key for encryption and private key for decryption.</small>
               </div>
               <div class="button-group">
@@ -479,12 +479,7 @@
                 </details>
               </div>
 
-              <div id="proSplitReadiness" class="operation-readiness split-readiness" data-testid="split-readiness" aria-live="polite">
-                <div id="proSplitReadinessStatus" class="shards-status unknown" data-testid="split-readiness-status">
-                  <span id="proSplitReadinessText" data-testid="split-readiness-text">Split prerequisites not evaluated.</span>
-                </div>
-                <ul id="proSplitPrerequisites" class="prerequisite-list" data-testid="split-prerequisites"></ul>
-              </div>
+              <div id="proSplitReadiness" class="operation-readiness split-readiness" data-testid="split-readiness" aria-live="polite"></div>
 
               <div class="button-group">
                 <button id="buildQcontBtn" class="button primary" disabled type="button">Build Successor Shards</button>
@@ -515,8 +510,8 @@
               </div>
               <div id="reviewArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="review-artifact-intake"></div>
               <div id="reviewArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="review-archive-inspector"></div>
-              <div class="operation-warning warning-callout">
-                <small>Review is an inspector. Restore remains the policy gate for plaintext release, and Attach remains the evidence merge workflow.</small>
+              <div class="qv-callout qv-callout--info operation-warning warning-callout">
+                <p class="qv-callout__body"><small>Review is an inspector. Restore remains the policy gate for plaintext release, and Attach remains the evidence merge workflow.</small></p>
               </div>
             </div>
           </div>
@@ -595,14 +590,14 @@
                 </div>
               </details>
               <div class="operation-readiness">
+                <div id="attachPlanDecision" class="initially-hidden" data-testid="attach-plan-decision" aria-live="polite"></div>
                 <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status" aria-live="polite">
                   <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
                 <div id="attachArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="attach-artifact-intake"></div>
                 <div id="attachArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="attach-archive-inspector"></div>
-                <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite" data-testid="attach-mode-summary"></pre>
-                <div id="attachPartialRewriteAckPanel" class="operation-warning warning-callout partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
+                <div id="attachPartialRewriteAckPanel" class="qv-callout qv-callout--warning operation-warning warning-callout partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
                   <label class="checkbox-row" for="attachPartialRewriteAck">
                     <input type="checkbox" id="attachPartialRewriteAck" data-testid="attach-partial-ack">
                     <span>I understand only the selected shard files will be rewritten.</span>
@@ -653,6 +648,7 @@
                 </div>
                 <p id="reshareInputHint" class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
               </div>
+              <div id="resharePlanDecision" class="initially-hidden" data-testid="reshare-plan-decision" aria-live="polite"></div>
               <div id="proReshareStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="proReshareStatusText">0 shards selected</span>
               </div>
@@ -779,7 +775,7 @@
               <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status" aria-live="polite">
                 <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
-              <div id="restorePreflightDecision" class="restore-preflight-card decision-card initially-hidden" data-testid="restore-preflight"></div>
+              <div id="restorePreflightDecision" class="qv-decision-card restore-preflight-card decision-card initially-hidden" data-testid="restore-preflight"></div>
               <div id="restoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
               <div id="restoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="restore-archive-inspector"></div>
               <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">

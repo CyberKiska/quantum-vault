@@ -21,6 +21,7 @@ import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
+import { renderDecisionCard } from '../ui/decision-card.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 let lastAttachIntakeError = null;
@@ -974,7 +975,7 @@ async function updateAttachStatus() {
   const status = document.getElementById('attachStatus');
   const text = document.getElementById('attachStatusText');
   const hint = document.getElementById('attachStatusHint');
-  const modeSummary = document.getElementById('attachModeSummary');
+  const planPanel = document.getElementById('attachPlanDecision');
   const channel = activeAttachChannel();
   const channelConfig = attachChannelConfig(channel);
   setAttachChannelUi(channel);
@@ -989,9 +990,10 @@ async function updateAttachStatus() {
     clearArtifactIntakeTable('attachArtifactIntake');
     clearArchiveInspector('attachArchiveInspector');
     setPartialRewriteAcknowledgementRequired(false);
-    if (modeSummary) {
-      modeSummary.textContent = '';
-      modeSummary.classList.add('initially-hidden');
+    if (planPanel) {
+      renderDecisionCard(planPanel, null, {
+        rootDataTestId: 'attach-plan-decision',
+      });
     }
     setAttachActionAvailability();
     clearAttachResultPanel();
@@ -1059,16 +1061,33 @@ async function updateAttachStatus() {
       : `${plan.hint} ${partialRewriteRequiresAck && !partialRewriteAcknowledged() ? 'Acknowledge partial shard rewrite before attaching.' : ''} ${channelConfig.channelHelp}`}`;
     status.setAttribute('aria-label', summary);
     setPartialRewriteAcknowledgementRequired(partialRewriteRequiresAck);
-    if (modeSummary) {
-      const artifactSummary = [
-        `Signatures: ${classified.signatures.length}`,
-        `Pins: ${classified.pqPublicKeyFileBytesList.length}`,
-        `OTS proofs: ${classified.timestamps.length}`,
-        `Transition record: ${classified.transitionRecordBytes instanceof Uint8Array ? 'yes' : 'no'}`,
-        `Source evidence: ${classified.sourceEvidenceBytes instanceof Uint8Array ? 'yes' : 'no'}`,
-      ].join('\n');
-      modeSummary.textContent = `${summary}\n${plan.modeLabel}\n${artifactSummary}`;
-      modeSummary.classList.remove('initially-hidden');
+    const lede = hint.textContent;
+    if (planPanel) {
+      const planTone = stateClass === 'invalid' ? 'fail' : stateClass === 'insufficient' ? 'warn' : 'ok';
+      renderDecisionCard(
+        planPanel,
+        {
+          title: 'Attach plan',
+          tone: planTone,
+          primaryOutcome: summary,
+          lede,
+          detailsId: 'attachTargetBindingPreview',
+          rows: [
+            { label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' },
+            { label: 'Lifecycle target', value: plan.modeLabel, tone: plan.warning ? 'warn' : 'neutral' },
+            { label: 'Detached signatures', value: String(classified.signatures.length), tone: 'neutral' },
+            { label: 'Signer pins', value: String(classified.pqPublicKeyFileBytesList.length), tone: 'neutral' },
+            { label: 'OTS proofs', value: String(classified.timestamps.length), tone: 'neutral' },
+            { label: 'Transition record loaded', value: classified.transitionRecordBytes instanceof Uint8Array ? 'yes' : 'no', tone: 'neutral' },
+            { label: 'Source evidence loaded', value: classified.sourceEvidenceBytes instanceof Uint8Array ? 'yes' : 'no', tone: 'neutral' },
+          ],
+        },
+        {
+          rootDataTestId: 'attach-plan-decision',
+          ariaLive: 'polite',
+          testIds: { primary: 'attach-mode-summary' },
+        }
+      );
     }
     setAttachActionAvailability({
       canAttach,
@@ -1098,9 +1117,27 @@ async function updateAttachStatus() {
     text.textContent = summary;
     hint.textContent = `${count} file(s) loaded. ${message}`;
     status.setAttribute('aria-label', summary);
-    if (modeSummary) {
-      modeSummary.textContent = summary;
-      modeSummary.classList.remove('initially-hidden');
+    if (planPanel) {
+      renderDecisionCard(
+        planPanel,
+        {
+          title: 'Attach plan',
+          tone: 'fail',
+          primaryOutcome: summary,
+          lede: `${count} file(s) loaded. ${message}`,
+          rows: classified
+            ? [
+                { label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' },
+                { label: 'Details', value: message, tone: 'fail' },
+              ]
+            : [{ label: 'Details', value: message, tone: 'fail' }],
+        },
+        {
+          rootDataTestId: 'attach-plan-decision',
+          ariaLive: 'polite',
+          testIds: { primary: 'attach-mode-summary' },
+        }
+      );
     }
     lastAttachIntakeError = error;
     await renderArtifactIntakeTable({

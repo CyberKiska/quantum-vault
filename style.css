@@ -3,9 +3,8 @@
 /*
  * Design-system primitives (internal guardrails; keep new UI aligned with these)
  * -----------------------------------------------------------------------------
- * decision-card      — Restore decision-first: .restore-preflight-card.decision-card + .restore-decision-title,
- *                        .restore-preflight-primary-outcome; lite checklist / archive inspector decision framing
- * warning-callout    — Inline workflow cautions: .operation-warning.warning-callout (+ parent .warning|.success)
+ * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); restore/split/attach/reshare reuse it.
+ * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); operation-warning pairs for spacing.
  * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact, nested details
  * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, .artifact-intake-scroll
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
@@ -807,6 +806,8 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-size: 0.72rem;
 }
 
+/* --- Shared decision card (QV primitive) --- */
+.qv-decision-card,
 .restore-preflight-card {
   min-width: 0;
   margin: 0.9rem 0 1rem;
@@ -816,23 +817,40 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   background: var(--bg-app);
 }
 
-.restore-preflight-card.ok {
+.qv-decision-card.split-readiness,
+.operation-readiness > .qv-decision-card.split-readiness {
+  margin-top: 1rem;
+}
+
+.qv-decision-card--ok,
+.restore-preflight-card.qv-decision-card--ok {
   border-color: var(--accent-success);
   background: rgba(16, 185, 129, 0.08);
 }
 
-.restore-preflight-card.warn {
+.qv-decision-card--warn,
+.restore-preflight-card.qv-decision-card--warn {
   border-color: var(--accent-warning);
   background: rgba(245, 158, 11, 0.08);
 }
 
-.restore-preflight-card.fail {
+.qv-decision-card--fail,
+.restore-preflight-card.qv-decision-card--fail {
   border-color: var(--accent-danger);
   background: rgba(239, 68, 68, 0.08);
 }
 
-.restore-preflight-card h4,
-.restore-preflight-card .restore-decision-title {
+.qv-decision-card--neutral {
+  border-color: var(--border-subtle);
+  background: var(--bg-app);
+}
+
+.qv-decision-card--informational {
+  border-color: rgba(59, 130, 246, 0.8);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.qv-decision-card__title {
   margin: 0 0 0.45rem;
   font-size: 0.94rem;
   font-family: var(--font-ui);
@@ -840,7 +858,11 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-weight: 700;
 }
 
-.restore-preflight-primary-outcome {
+.qv-decision-card--informational .qv-decision-card__title {
+  color: #93c5fd;
+}
+
+.qv-decision-card__primary {
   margin: 0 0 0.55rem;
   font-size: 0.88rem;
   font-weight: 700;
@@ -848,23 +870,23 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-family: var(--font-ui);
 }
 
-.restore-preflight-card.ok .restore-preflight-primary-outcome { color: var(--accent-success); }
-.restore-preflight-card.warn .restore-preflight-primary-outcome { color: var(--accent-warning); }
-.restore-preflight-card.fail .restore-preflight-primary-outcome { color: var(--accent-danger); }
+.qv-decision-card--ok .qv-decision-card__primary { color: var(--accent-success); }
+.qv-decision-card--warn .qv-decision-card__primary { color: var(--accent-warning); }
+.qv-decision-card--fail .qv-decision-card__primary { color: var(--accent-danger); }
 
-.restore-preflight-lede {
+.qv-decision-card__lede {
   margin: 0 0 0.75rem;
   color: var(--text-muted);
   font-size: 0.82rem;
   line-height: 1.45;
 }
 
-.restore-preflight-rows {
+.qv-decision-card__rows {
   display: grid;
   gap: 0.35rem;
 }
 
-.restore-preflight-row {
+.qv-decision-card__row {
   display: grid;
   grid-template-columns: minmax(11rem, 0.36fr) minmax(0, 1fr);
   gap: 0.35rem 0.75rem;
@@ -873,20 +895,82 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   line-height: 1.4;
 }
 
-.restore-preflight-label {
+.qv-decision-card__label {
   color: var(--text-main);
   font-weight: 700;
 }
 
-.restore-preflight-value {
+.qv-decision-card__value {
   min-width: 0;
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 
-.restore-preflight-row.ok .restore-preflight-value { color: var(--accent-success); }
-.restore-preflight-row.warn .restore-preflight-value { color: var(--accent-warning); }
-.restore-preflight-row.fail .restore-preflight-value { color: var(--accent-danger); }
+.qv-decision-card__row--ok .qv-decision-card__value { color: var(--accent-success); }
+.qv-decision-card__row--warn .qv-decision-card__value { color: var(--accent-warning); }
+.qv-decision-card__row--fail .qv-decision-card__value { color: var(--accent-danger); }
+
+.qv-decision-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+/* --- Shared callouts (QV primitive) --- */
+.qv-callout {
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+  margin: var(--space-sm) 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.qv-callout__title {
+  margin: 0 0 0.35rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-family: var(--font-ui);
+}
+
+.qv-callout__body {
+  margin: 0;
+  color: inherit;
+}
+
+.qv-callout--warning {
+  border: 1px solid var(--accent-warning);
+  background: var(--bg-input);
+  color: var(--accent-warning);
+}
+
+.qv-callout--blocking {
+  border: 1px solid var(--accent-danger);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--text-main);
+}
+
+.qv-callout--blocking .qv-callout__title {
+  color: var(--accent-danger);
+}
+
+.qv-callout--info {
+  border: 1px solid rgba(59, 130, 246, 0.75);
+  background: rgba(59, 130, 246, 0.08);
+  color: #93c5fd;
+}
+
+.qv-callout--success {
+  border: 1px solid var(--accent-success);
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--accent-success);
+}
+
+.qv-callout.partial-rewrite-ack:not(.initially-hidden) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
 
 .inline-error-panel {
   min-width: 0;
@@ -1742,9 +1826,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-top: 1.25rem;
 }
 
-#attachModeSummary.mono-box {
-  white-space: pre-wrap;
-  font-size: 0.82rem;
+#attachPlanDecision.qv-decision-card {
   margin-bottom: 0.5rem;
 }
 
@@ -1833,6 +1915,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .digest-details-panel,
   .artifact-intake-panel,
   .restore-preflight-card,
+  .qv-decision-card,
   .inline-error-panel,
   .lite-export-checklist,
   .lite-custody-panel,
@@ -1858,7 +1941,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .digest-detail-row-head,
   .digest-detail-list,
   .artifact-detail-list,
-  .restore-preflight-row,
+  .qv-decision-card__row,
   .restore-matrix-row,
   .inline-error-fields {
     grid-template-columns: minmax(0, 1fr);
@@ -1979,6 +2062,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .digest-details-panel,
   .artifact-intake-panel,
   .restore-preflight-card,
+  .qv-decision-card,
   .inline-error-panel,
   .lite-export-checklist,
   .lite-custody-panel,

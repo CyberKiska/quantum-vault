@@ -11,6 +11,7 @@ import {
   logSuccess,
   logWarning,
 } from '../ui/logging.js';
+import { renderDecisionCard } from '../ui/decision-card.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import {
@@ -138,19 +139,6 @@ function releaseTextForPolicy(policyLevel, allowed) {
   return 'Plaintext release: allowed by selected archive policy';
 }
 
-function addPreflightRow(list, label, value, tone = 'neutral') {
-  const item = document.createElement('div');
-  item.className = `restore-preflight-row ${tone}`;
-  const labelEl = document.createElement('span');
-  labelEl.className = 'restore-preflight-label';
-  labelEl.textContent = label;
-  const valueEl = document.createElement('span');
-  valueEl.className = 'restore-preflight-value';
-  valueEl.textContent = value;
-  item.append(labelEl, valueEl);
-  list.appendChild(item);
-}
-
 function preflightAlertLabel(blockingTone, compact) {
   if (blockingTone === 'fail') return compact ? 'Block' : 'Blocking reason';
   if (blockingTone === 'warn') return 'Warning';
@@ -168,51 +156,49 @@ function renderRestorePreflightCard(containerId, decision, options = {}) {
   const compact = options.compact === true;
   const panel = document.getElementById(containerId);
   if (!panel) return;
+
+  const rootTestId = containerId === 'liteRestorePreflightDecision' ? 'lite-restore-preflight' : 'restore-preflight';
+
   if (!decision) {
-    panel.replaceChildren();
-    panel.style.display = 'none';
-    panel.className = 'restore-preflight-card decision-card initially-hidden';
-    panel.removeAttribute('data-release-state');
+    renderDecisionCard(panel, null, {
+      extraRootClasses: ['restore-preflight-card', 'decision-card'],
+      rootDataTestId: rootTestId,
+    });
     return;
   }
 
-  panel.replaceChildren();
-  panel.style.display = 'block';
-  panel.className = `restore-preflight-card decision-card ${decision.tone || 'neutral'}`;
-  panel.setAttribute('data-release-state', decision.releaseState || 'blocked');
-
-  const title = document.createElement('h4');
-  title.className = 'restore-decision-title';
-  title.textContent = 'Restore decision';
-  panel.appendChild(title);
-
-  const primary = document.createElement('p');
-  primary.className = 'restore-preflight-primary-outcome';
-  primary.textContent = decision.releaseText || 'Plaintext release: blocked';
-  panel.appendChild(primary);
-
-  const lede = document.createElement('p');
-  lede.className = 'restore-preflight-lede';
-  lede.textContent = decision.lede || 'Restore inputs are evaluated before any recovered bytes can be released.';
-  panel.appendChild(lede);
-
-  const rows = document.createElement('div');
-  rows.className = 'restore-preflight-rows';
   const policyLabel = 'Policy';
   const archiveLabel = compact ? 'Archive / state / cohort' : 'Archive, state, and cohort';
   const thresholdLabel = compact ? 'Threshold' : 'Threshold readiness';
-  addPreflightRow(rows, policyLabel, decision.policy || 'unknown', decision.policyTone || 'neutral');
-  addPreflightRow(rows, archiveLabel, decision.selection || 'Pending selection', decision.selectionTone || 'neutral');
-  addPreflightRow(rows, thresholdLabel, decision.thresholdReadiness || 'Not evaluated', decision.thresholdTone || 'neutral');
+  const rows = [
+    { label: policyLabel, value: decision.policy || 'unknown', tone: decision.policyTone || 'neutral' },
+    { label: archiveLabel, value: decision.selection || 'Pending selection', tone: decision.selectionTone || 'neutral' },
+    { label: thresholdLabel, value: decision.thresholdReadiness || 'Not evaluated', tone: decision.thresholdTone || 'neutral' },
+  ];
   if (shouldShowPreflightAlertRow(decision)) {
-    addPreflightRow(
-      rows,
-      preflightAlertLabel(decision.blockingTone, compact),
-      decision.blockingReason || 'None',
-      decision.blockingTone || 'neutral'
-    );
+    rows.push({
+      label: preflightAlertLabel(decision.blockingTone, compact),
+      value: decision.blockingReason || 'None',
+      tone: decision.blockingTone || 'neutral',
+    });
   }
-  panel.appendChild(rows);
+
+  renderDecisionCard(
+    panel,
+    {
+      title: 'Restore decision',
+      tone: decision.tone || 'neutral',
+      primaryOutcome: decision.releaseText || 'Plaintext release: blocked',
+      lede: decision.lede || 'Restore inputs are evaluated before any recovered bytes can be released.',
+      rows,
+    },
+    {
+      extraRootClasses: ['restore-preflight-card', 'decision-card'],
+      dataAttrs: { 'release-state': decision.releaseState || 'blocked' },
+      rootDataTestId: rootTestId,
+      ariaLive: 'polite',
+    }
+  );
 }
 
 function clearRestorePreflightCard(containerId) {

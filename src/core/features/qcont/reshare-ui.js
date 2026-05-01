@@ -6,6 +6,7 @@ import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
+import { renderDecisionCard } from '../ui/decision-card.js';
 
 let reshareStatusSeq = 0;
 let lastReshareExports = null;
@@ -109,6 +110,35 @@ function exportCachedReshareArtifact(kind) {
   }
 }
 
+function renderResharePlanDecision(files, assessment) {
+  const panel = document.getElementById('resharePlanDecision');
+  if (!panel) return;
+  if (!files.length) {
+    renderDecisionCard(panel, null, { rootDataTestId: 'reshare-plan-decision' });
+    return;
+  }
+  const a = assessment || { state: 'unknown', ready: false, message: 'Cannot evaluate shard threshold.' };
+  let tone = 'neutral';
+  if (a.ready === true && a.state === 'sufficient') tone = 'ok';
+  else if (a.state === 'invalid') tone = 'fail';
+  else if (a.state === 'insufficient' || a.state === 'unknown') tone = 'warn';
+
+  renderDecisionCard(
+    panel,
+    {
+      title: 'Reshare plan',
+      tone,
+      primaryOutcome: a.message || 'Analyze shard inputs to plan reshare.',
+      lede: 'Same archive-state bytes; emits a new successor cohort, transition record, and updated lifecycle bundle. Does not re-evaluate full archive restore policy.',
+      rows: [
+        { label: 'Selected files', value: String(files.length), tone: 'neutral' },
+        { label: 'Threshold gate', value: a.ready === true ? 'Satisfied for loaded cohort' : 'Not satisfied', tone: a.ready === true ? 'ok' : 'warn' },
+      ],
+    },
+    { rootDataTestId: 'reshare-plan-decision', ariaLive: 'polite' }
+  );
+}
+
 async function updateReshareStatus() {
   const input = document.getElementById('qcontReshareInput');
   const statusDiv = document.getElementById('proReshareStatus');
@@ -137,6 +167,8 @@ async function updateReshareStatus() {
   });
   if (requestId !== reshareStatusSeq) return;
   await refreshSuccessorSelectionUi('reshare', files, actionButton, assessment || { ready: false });
+  if (requestId !== reshareStatusSeq) return;
+  renderResharePlanDecision(files, assessment);
 }
 
 export function initQcontReshareUI() {
