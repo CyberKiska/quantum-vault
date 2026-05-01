@@ -889,6 +889,137 @@ function describeAttachShardRewrite(plan, shardsParseLikelyFailed) {
   return `Shard rewrite: full cohort (${plan.selectedShardCount}/${plan.expectedShardCount} shards).`;
 }
 
+/**
+ * View model for the Attach plan decision card.
+ * Keeps an operator-first summary on the card; raw binding dump stays in `refreshAttachTargetBindingPreview`.
+ *
+ * @param {object} p
+ * @param {string} p.channel
+ * @param {object} p.channelConfig
+ * @param {object|null} p.classified
+ * @param {object[]} p.shards
+ * @param {ReturnType<typeof deriveAttachPlan>} p.plan
+ * @param {ReturnType<typeof deriveAttachRequirements>} p.requirements
+ * @param {boolean} p.canAttach
+ * @param {'sufficient'|'insufficient'|'invalid'} p.stateClass
+ * @param {string} p.summary
+ * @param {string} p.lede
+ * @param {boolean} [p.errorMode]
+ * @param {string} [p.errorMessage]
+ * @param {Awaited<ReturnType<typeof resolveAttachBindingTarget>>|null} [p.binding]
+ */
+async function buildAttachPlanDecisionModel(p) {
+  const {
+    channel,
+    channelConfig,
+    classified,
+    shards,
+    plan,
+    requirements,
+    canAttach,
+    stateClass,
+    summary,
+    lede,
+    errorMode = false,
+    errorMessage = '',
+    binding: bindingOverride,
+  } = p;
+
+  const tone = errorMode ? 'fail' : stateClass === 'invalid' ? 'fail' : stateClass === 'insufficient' ? 'warn' : 'ok';
+
+  if (errorMode) {
+    const rows = [];
+    if (classified) {
+      rows.push({ label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' });
+      const policyTone = channel === 'archive-approval' ? 'neutral' : 'warn';
+      rows.push({
+        label: 'Archive restore policy',
+        value: attachArchivePolicyBindingLine(channel),
+        tone: policyTone,
+      });
+      const binding = bindingOverride ?? await resolveAttachBindingTarget(classified, channel, shards);
+      rows.push(
+        { label: 'Target artifact', value: binding?.artifactLabel || '—', tone: 'neutral' },
+        { label: 'Anchor digest (SHA3-512)', value: binding?.digestSummary || '—', tone: 'neutral' },
+        { label: 'Shard rewrite scope', value: describeAttachShardRewrite(plan, Boolean(
+          classified.shardFiles.length > 0 && shards.length === 0
+        )), tone: plan.warning ? 'warn' : 'neutral' },
+        { label: 'Lifecycle update', value: plan.modeLabel, tone: plan.warning ? 'warn' : 'neutral' },
+      );
+    }
+    rows.push({
+      label: classified ? 'Blocking detail' : 'Details',
+      value: errorMessage,
+      tone: 'fail',
+    });
+    return {
+      title: 'Attach plan',
+      tone,
+      primaryOutcome: summary,
+      lede,
+      rows,
+    };
+  }
+
+  const shardsLikelyInvalid = Boolean(
+    classified && classified.shardFiles.length > 0 && shards.length === 0
+  );
+  const binding = bindingOverride ?? (classified
+    ? await resolveAttachBindingTarget(classified, channel, shards)
+    : null);
+
+  const policyTone = channel === 'archive-approval' ? 'ok' : 'warn';
+  const mergeTargetTone = !canAttach ? 'fail' : plan.warning ? 'warn' : 'neutral';
+
+  const rows = [
+    { label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' },
+    {
+      label: 'Archive restore policy',
+      value: attachArchivePolicyBindingLine(channel),
+      tone: policyTone,
+    },
+    { label: 'Target artifact', value: binding?.artifactLabel || '—', tone: 'neutral' },
+    { label: 'Anchor digest (SHA3-512)', value: binding?.digestSummary || '—', tone: 'neutral' },
+    {
+      label: 'Shard rewrite scope',
+      value: describeAttachShardRewrite(plan, shardsLikelyInvalid),
+      tone: plan.warning ? 'warn' : 'neutral',
+    },
+    { label: 'Lifecycle update', value: plan.modeLabel, tone: mergeTargetTone },
+    {
+      label: 'Evidence loaded',
+      value: `${classified.signatures.length} detached signature(s), ${classified.pqPublicKeyFileBytesList.length} signer pin(s), ${classified.timestamps.length} OTS proof(s)`,
+      tone: 'neutral',
+    },
+    {
+      label: 'Transition record',
+      value: classified.transitionRecordBytes instanceof Uint8Array ? 'Loaded' : 'Not loaded',
+      tone: 'neutral',
+    },
+    {
+      label: 'Source evidence JSON',
+      value: classified.sourceEvidenceBytes instanceof Uint8Array ? 'Loaded' : 'Not loaded',
+      tone: 'neutral',
+    },
+  ];
+
+  if (!canAttach) {
+    rows.push({
+      label: 'Merge readiness',
+      value: `Blocked until you ${requirements.missingLabel}.`,
+      tone: 'fail',
+    });
+  }
+
+  return {
+    title: 'Attach plan',
+    tone,
+    primaryOutcome: summary,
+    lede,
+    rows,
+  };
+}
+
 function attachSignatureFamilyDescription(channel) {
   if (channel === 'maintenance') return 'maintenance — detached signatures over canonical transition-record JSON';
   if (channel === 'source-evidence') return 'source-evidence — detached signatures over canonical source-evidence JSON';
@@ -908,7 +1039,7 @@ function attachOtsRuleLine() {
 
 async function formatAttachTargetBindingPreview({ channel, classified, shards, plan, error }) {
   const lines = [];
-  lines.push('Attach target binding (expected)');
+  lines.push('Attach target binding (technical)');
   const channelConfig = attachChannelConfig(channel);
   lines.push(`Evidence channel: ${channelConfig.label}`);
   const requirements = classified
@@ -1073,25 +1204,21 @@ async function updateAttachStatus() {
     setPartialRewriteAcknowledgementRequired(partialRewriteRequiresAck);
     const lede = hint.textContent;
     if (planPanel) {
-      const planTone = stateClass === 'invalid' ? 'fail' : stateClass === 'insufficient' ? 'warn' : 'ok';
+      const planModel = await buildAttachPlanDecisionModel({
+        channel,
+        channelConfig,
+        classified,
+        shards,
+        plan,
+        requirements,
+        canAttach,
+        stateClass,
+        summary,
+        lede,
+      });
       renderDecisionCard(
         planPanel,
-        {
-          title: 'Attach plan',
-          tone: planTone,
-          primaryOutcome: summary,
-          lede,
-          detailsId: 'attachTargetBindingPreview',
-          rows: [
-            { label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' },
-            { label: 'Lifecycle target', value: plan.modeLabel, tone: plan.warning ? 'warn' : 'neutral' },
-            { label: 'Detached signatures', value: String(classified.signatures.length), tone: 'neutral' },
-            { label: 'Signer pins', value: String(classified.pqPublicKeyFileBytesList.length), tone: 'neutral' },
-            { label: 'OTS proofs', value: String(classified.timestamps.length), tone: 'neutral' },
-            { label: 'Transition record loaded', value: classified.transitionRecordBytes instanceof Uint8Array ? 'yes' : 'no', tone: 'neutral' },
-            { label: 'Source evidence loaded', value: classified.sourceEvidenceBytes instanceof Uint8Array ? 'yes' : 'no', tone: 'neutral' },
-          ],
-        },
+        planModel,
         {
           rootDataTestId: 'attach-plan-decision',
           ariaLive: 'polite',
@@ -1130,21 +1257,29 @@ async function updateAttachStatus() {
     text.textContent = summary;
     hint.textContent = `${count} file(s) loaded. ${message}`;
     status.setAttribute('aria-label', summary);
+    const previewCtx = await safeAttachPreviewPlan(classified);
+    if (requestId !== attachStatusSeq) return;
+    const errRequirements = classified
+      ? deriveAttachRequirements(channel, classified)
+      : { canAttach: false, missingLabel: 'load attach inputs' };
     if (planPanel) {
+      const planModel = await buildAttachPlanDecisionModel({
+        channel,
+        channelConfig,
+        classified,
+        shards: previewCtx.shards,
+        plan: previewCtx.plan,
+        requirements: errRequirements,
+        canAttach: errRequirements.canAttach,
+        stateClass: 'invalid',
+        summary,
+        lede: `${count} file(s) loaded. ${message}`,
+        errorMode: true,
+        errorMessage: message,
+      });
       renderDecisionCard(
         planPanel,
-        {
-          title: 'Attach plan',
-          tone: 'fail',
-          primaryOutcome: summary,
-          lede: `${count} file(s) loaded. ${message}`,
-          rows: classified
-            ? [
-                { label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' },
-                { label: 'Details', value: message, tone: 'fail' },
-              ]
-            : [{ label: 'Details', value: message, tone: 'fail' }],
-        },
+        planModel,
         {
           rootDataTestId: 'attach-plan-decision',
           ariaLive: 'polite',
@@ -1161,8 +1296,6 @@ async function updateAttachStatus() {
       label: `${channelConfig.label} artifact intake`,
       error,
     });
-    if (requestId !== attachStatusSeq) return;
-    const previewCtx = await safeAttachPreviewPlan(classified);
     if (requestId !== attachStatusSeq) return;
     await refreshAttachTargetBindingPreview({
       channel,
