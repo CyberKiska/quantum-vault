@@ -657,6 +657,7 @@ function renderGroupedArtifactRow(tbody, memberRows) {
 
 function renderRows(host, rows, label) {
   host.replaceChildren();
+  host.classList.add('artifact-list', 'artifact-intake-panel', 'artifact-table');
   host.classList.remove('initially-hidden');
   host.style.display = 'block';
   host.setAttribute('aria-live', 'polite');

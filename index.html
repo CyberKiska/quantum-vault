@@ -123,7 +123,7 @@
           </div>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <div class="dropzone-area" id="liteDropzone">
                 <h3>Select files to protect</h3>
                 <p id="liteFilesHelp" class="muted-copy">Drag files here or use the file picker to select plaintext inputs for local encryption.</p>
@@ -197,7 +197,7 @@
                 <ul id="liteExportChecklistItems" class="lite-export-checklist-items"></ul>
               </div>
 
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Successor Shards</button>
               </div>
             </div>
@@ -229,7 +229,7 @@
           </div>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <div class="dropzone-area" id="liteShardsDropzone">
                 <h3>Select Shards to Restore</h3>
                 <p id="liteShardsHelp" class="muted-copy">Load successor <code>.qcont</code> shards and any detached signatures, signer keys, or timestamp proofs you want checked.</p>
@@ -245,7 +245,7 @@
                 <div class="archive-review-hub__body">
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Artifacts</h4>
-                    <div id="liteRestoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
+                    <div id="liteRestoreArtifactIntake" class="artifact-list artifact-intake-panel artifact-table initially-hidden" data-testid="lite-restore-artifact-intake"></div>
                   </section>
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Lifecycle</h4>
@@ -290,7 +290,7 @@
                   </section>
                 </div>
               </details>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="liteRestoreBtn" class="button primary" disabled type="button">♻️ Restore Selected Archive</button>
               </div>
               <div id="liteRestoreInlineError" class="inline-error-panel initially-hidden" data-testid="lite-restore-inline-error"></div>
@@ -333,10 +333,10 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card">
+            <div class="workflow-card">
               <h3>Key Generation</h3>
               <p class="muted-copy">Generate a new keypair in memory. Overwrites existing session.</p>
-              <div class="button-group">
+              <div class="action-row button-group">
                  <button id="genKeyBtn" class="button primary" type="button">Generate Keypair</button>
                  <button id="advancedEntropyBtn" class="button secondary" type="button" data-testid="advanced-entropy-btn">Collect supplemental entropy (optional)</button>
               </div>
@@ -351,7 +351,7 @@
               </div>
             </div>
 
-            <div class="card">
+            <div class="workflow-card">
               <h3>Active Session</h3>
               <div class="form-group">
                 <label for="privKeyInput">Private Key (.qkey) <span class="info" title="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span></label>
@@ -375,7 +375,7 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>File Operations</h3>
               <div class="form-group">
                 <label for="dataFileInput">Input Files</label>
@@ -397,7 +397,7 @@
               <div id="proEncryptionWarning" class="operation-warning">
                 <small>Load keys in Key Management: public key for encryption and private key for decryption.</small>
               </div>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="encBtn" class="button primary" type="button">Encrypt (.qenc)</button>
                 <button id="decBtn" class="button secondary" type="button">Decrypt</button>
               </div>
@@ -413,7 +413,7 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Split Configuration</h3>
               <p class="muted-copy operation-hint">Load the encrypted container and matching private key, then choose shard geometry and restore policy.</p>
               <div class="operation-input-panel input-group">
@@ -499,7 +499,7 @@
 
               <div id="proSplitReadiness" class="operation-readiness split-readiness" data-testid="split-readiness" aria-live="polite"></div>
 
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="buildQcontBtn" class="button primary" disabled type="button">Build Successor Shards</button>
               </div>
               <div id="proSplitInlineError" class="inline-error-panel initially-hidden" data-testid="split-inline-error"></div>
@@ -514,7 +514,7 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Artifact Intake</h3>
               <div class="operation-input-panel input-group">
                 <div class="form-group">
@@ -531,7 +531,7 @@
                 <div class="archive-review-hub__body">
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Artifacts</h4>
-                    <div id="reviewArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="review-artifact-intake"></div>
+                    <div id="reviewArtifactIntake" class="artifact-list artifact-intake-panel artifact-table initially-hidden" data-testid="review-artifact-intake"></div>
                   </section>
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Lifecycle</h4>
@@ -556,7 +556,7 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Merge Lifecycle Evidence</h3>
               <div class="operation-input-panel input-group">
                 <div class="form-group">
@@ -593,7 +593,7 @@
                   <div class="form-group">
                     <label>Source digests</label>
                     <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
-                    <div class="button-group">
+                    <div class="action-row button-group">
                       <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
                     </div>
                     <small class="muted-copy">Provide one or more canonical digests for the reviewed source object.</small>
@@ -615,7 +615,7 @@
                   </div>
                   <div id="sourceEvidenceExportPreview" class="mono-box source-evidence-export-preview initially-hidden" data-testid="source-evidence-export-preview" aria-live="polite"></div>
                   <div id="sourceEvidenceExportError" class="inline-error-panel initially-hidden" data-testid="source-evidence-export-error" role="alert"></div>
-                  <div class="button-group">
+                  <div class="action-row button-group">
                     <button id="exportSourceEvidenceBtn" class="button secondary" type="button" data-testid="source-evidence-export">Export Canonical Source-Evidence JSON</button>
                   </div>
                   <small id="sourceEvidenceExportHint" class="muted-copy">Export the canonical JSON here, sign it with an external tool, then re-import that <code>.json</code> plus the detached signature through this Attach surface.</small>
@@ -639,7 +639,7 @@
                   <div class="archive-review-hub__body">
                     <section class="archive-review-hub__section">
                       <h4 class="archive-review-hub__heading">Artifacts</h4>
-                <div id="attachArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="attach-artifact-intake"></div>
+                <div id="attachArtifactIntake" class="artifact-list artifact-intake-panel artifact-table initially-hidden" data-testid="attach-artifact-intake"></div>
                     </section>
                     <section class="archive-review-hub__section">
                       <h4 class="archive-review-hub__heading">Lifecycle</h4>
@@ -671,7 +671,7 @@
                   </div>
                 </details>
               </div>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Selected Evidence</button>
                 <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Archive-State Descriptor</button>
                 <button id="exportAttachedArtifactsBtn" class="button secondary" type="button" disabled>Export Attached Bundle Files</button>
@@ -689,7 +689,7 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Emit a New Successor Cohort</h3>
               <div class="operation-input-panel input-group">
                 <div class="form-group">
@@ -707,7 +707,7 @@
                 <div class="archive-review-hub__body">
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Artifacts</h4>
-              <div id="reshareArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="reshare-artifact-intake"></div>
+              <div id="reshareArtifactIntake" class="artifact-list artifact-intake-panel artifact-table initially-hidden" data-testid="reshare-artifact-intake"></div>
                   </section>
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Lifecycle</h4>
@@ -811,10 +811,10 @@
                   </div>
                 </div>
               </div>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="reshareQcontBtn" class="button primary" disabled type="button" data-testid="reshare-button">Emit Successor Cohort</button>
               </div>
-              <div id="reshareExportActions" class="button-group initially-hidden">
+              <div id="reshareExportActions" class="action-row button-group initially-hidden">
                 <button id="exportReshareTransitionRecordBtn" class="button secondary" type="button" data-testid="reshare-export-transition-record">Export Transition Record</button>
                 <button id="exportReshareLifecycleBundleBtn" class="button secondary" type="button">Export Lifecycle Bundle</button>
               </div>
@@ -831,7 +831,7 @@
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Restore Archive</h3>
               <div class="operation-input-panel input-group">
                 <div class="form-group">
@@ -849,7 +849,7 @@
                 <div class="archive-review-hub__body">
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Artifacts</h4>
-                    <div id="restoreArtifactIntake" class="artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
+                    <div id="restoreArtifactIntake" class="artifact-list artifact-intake-panel artifact-table initially-hidden" data-testid="restore-artifact-intake"></div>
                   </section>
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Lifecycle</h4>
@@ -894,7 +894,7 @@
                   </section>
                 </div>
               </details>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Evaluate Restore Inputs</button>
                 <button id="releaseRestoredFilesBtn" class="button secondary initially-hidden" disabled type="button" data-testid="release-button">Release Recovered Files</button>
               </div>

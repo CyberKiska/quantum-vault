@@ -3,13 +3,16 @@
 /*
  * Design-system primitives (internal guardrails; keep new UI aligned with these)
  * -----------------------------------------------------------------------------
- * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); restore/split/attach/reshare reuse it.
- * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); operation-warning pairs for spacing.
+ * workflow-panel     — Page-level workflow surface; unframed, never nested.
+ * workflow-surface   — Unframed content flow inside a workflow; replaces section-as-card wrappers.
+ * workflow-card      — Framed repeated item only, not a page section.
+ * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); primary security decisions only.
+ * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); warnings/info near an action.
  * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact; optional .qv-disclosure wrapper
- * artifact-table     — File intake grid: .artifact-intake-panel, .artifact-intake-table, consecutive accepted rows grouped (.artifact-row-group)
- * disclosure         — Shared <details>: .qv-disclosure (+ __summary, __badge, __body); initDisclosureShells() for static markup
+ * artifact-list      — File intake grid: .artifact-list/.artifact-intake-panel, .artifact-intake-table, grouped rows.
+ * review-hub         — One disclosure grouping Artifacts, Lifecycle, Evidence, Technical.
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
- * action-bar         — Primary + secondary actions: .button-group (prefer flex-wrap for narrow viewports)
+ * action-row         — Primary + secondary actions: .action-row/.button-group; flex-wrap for narrow viewports.
  * restore-result     — Post-operation summary: .restore-result-panel (+ .ok|.warn|.fail)
  * inline-error       — Blocking errors near actions: .inline-error-panel
  * policy-consequence — Policy choice explainer: .policy-consequence-panel (+ .warning|.informational|.strict)
@@ -314,19 +317,20 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.65rem;
   margin-bottom: 1.25rem;
-  padding: 0.85rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
-  box-shadow: var(--shadow-sm);
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
 }
 
 .workflow-status-item {
   min-width: 0;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: var(--radius-sm);
-  background: var(--bg-app);
+  padding: 0.1rem 0.75rem;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.workflow-status-item:first-child {
+  border-left: 0;
+  padding-left: 0;
 }
 
 .workflow-status-label,
@@ -367,13 +371,13 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
 }
 .full-width { grid-column: 1 / -1; }
 
+.workflow-card,
 .card {
   min-width: 0;
-  background: var(--bg-app);
+  background: rgba(15, 23, 42, 0.35);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: 1.25rem;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
 }
 
 .workflow-panel .panel-grid {
@@ -381,37 +385,51 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   margin-top: 0.9rem;
 }
 
+.workflow-surface,
 .workflow-panel .panel-grid > .card.full-width {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+  min-width: 0;
   padding: 0;
 }
 
+.workflow-panel .panel-grid > .card.full-width {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.workflow-surface > h3,
 .workflow-panel .panel-grid > .card.full-width > h3 {
   margin: 0;
   font-size: 1rem;
   color: var(--text-main);
 }
 
+.workflow-surface > .muted-copy,
+.workflow-surface > .operation-hint,
 .workflow-panel .panel-grid > .card.full-width > .muted-copy,
 .workflow-panel .panel-grid > .card.full-width > .operation-hint {
   margin-bottom: 0;
 }
 
+.workflow-surface > .button-group,
+.workflow-surface > #reshareExportActions,
 .workflow-panel .panel-grid > .card.full-width > .button-group,
 .workflow-panel .panel-grid > .card.full-width > #reshareExportActions {
   order: 50;
 }
 
+.workflow-surface > .inline-error-panel,
+.workflow-surface > .restore-result-panel,
 .workflow-panel .panel-grid > .card.full-width > .inline-error-panel,
 .workflow-panel .panel-grid > .card.full-width > .restore-result-panel {
   order: 60;
 }
 
+.workflow-surface > .technical-details,
+.workflow-surface > details.verification-section,
 .workflow-panel .panel-grid > .card.full-width > .technical-details,
 .workflow-panel .panel-grid > .card.full-width > details.verification-section {
   order: 80;
@@ -500,6 +518,7 @@ summary:focus-visible,
 .muted-copy { color: var(--text-muted); font-size: 0.9rem; margin-top: 0; }
 
 /* Buttons */
+.action-row,
 .button-group { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
 button.button {
   padding: 0.6rem 1rem; border-radius: var(--radius-sm);
@@ -1011,6 +1030,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   overflow-wrap: anywhere;
 }
 
+.artifact-list,
 .artifact-intake-panel {
   min-width: 0;
   margin: 0.85rem 0 1rem;
@@ -1020,6 +1040,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   background: var(--bg-app);
 }
 
+.artifact-list h4,
 .artifact-intake-panel h4 {
   margin: 0 0 0.65rem;
   font-size: 0.9rem;
@@ -2067,13 +2088,14 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   }
 
   .module-panel,
-  .card,
+  .workflow-card,
   .operation-input-panel,
   .policy-consequence-panel,
   .verification-section,
   .technical-context,
   .shard-geometry-panel,
   .digest-details-panel,
+  .artifact-list,
   .artifact-intake-panel,
   .restore-preflight-card,
   .qv-decision-card,
@@ -2125,6 +2147,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
     gap: 0.5rem;
   }
 
+  .action-row .button,
   .button-group .button {
     width: 100%;
   }
@@ -2214,13 +2237,14 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   }
 
   .module-panel,
-  .card,
+  .workflow-card,
   .operation-input-panel,
   .policy-consequence-panel,
   .verification-section,
   .technical-context,
   .shard-geometry-panel,
   .digest-details-panel,
+  .artifact-list,
   .artifact-intake-panel,
   .restore-preflight-card,
   .qv-decision-card,
