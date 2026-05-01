@@ -554,6 +554,17 @@ test('restore reports incomplete OTS evidence separately from archive policy', a
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
 
+test('unambiguous restore hides successor selection and states lifecycle path on decision card', async ({ page }) => {
+  await openProTab(page, 'tab-restore');
+  await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+
+  await expect(page.getByTestId('restore-button')).toBeEnabled();
+  await expect(page.getByTestId('restore-selection')).toBeHidden();
+  const preflight = page.getByTestId('restore-preflight');
+  await expect(preflight).toContainText('Lifecycle path');
+  await expect(preflight).toContainText('Selected automatically, no ambiguity');
+});
+
 test('ambiguous same-state cohorts stay blocked until explicit operator choice', async ({ page }) => {
   await openProTab(page, 'tab-restore');
   await page.getByTestId('restore-input').setInputFiles(fixtures.ambiguousCohortFiles);

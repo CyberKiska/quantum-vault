@@ -71,7 +71,7 @@ function pickShardForBundle(parsedShards, cohortId, bundleDigestHex) {
 
 function collectForkWarnings(model, selection, selectedCohort) {
   const warnings = [];
-  if (model?.hasAmbiguity) {
+  if (model?.hasAmbiguity && selection?.successorSelectionUiMode !== 'single') {
     warnings.push('Multiple archive states, same-state cohorts, or embedded lifecycle bundle variants are present. Quantum Vault will not auto-select a path; resolve ambiguity in the selectors before relying on a single timeline.');
   }
   if (selection?.selectionRequired && selection?.selectionComplete === false) {

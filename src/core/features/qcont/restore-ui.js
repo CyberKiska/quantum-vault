@@ -12,6 +12,10 @@ import {
   logWarning,
 } from '../ui/logging.js';
 import { renderDecisionCard } from '../ui/decision-card.js';
+import {
+  buildLifecyclePathDecisionRow,
+  buildSuccessorSelectionUiMode,
+} from './successor-selection-view-model.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import {
@@ -174,8 +178,13 @@ function renderRestorePreflightCard(containerId, decision, options = {}) {
   const rows = [
     { label: policyLabel, value: decision.policy || 'unknown', tone: decision.policyTone || 'neutral' },
     { label: archiveLabel, value: decision.selection || 'Pending selection', tone: decision.selectionTone || 'neutral' },
-    { label: thresholdLabel, value: decision.thresholdReadiness || 'Not evaluated', tone: decision.thresholdTone || 'neutral' },
   ];
+  if (decision.lifecyclePathRow) {
+    rows.push(decision.lifecyclePathRow);
+  }
+  rows.push(
+    { label: thresholdLabel, value: decision.thresholdReadiness || 'Not evaluated', tone: decision.thresholdTone || 'neutral' },
+  );
   if (shouldShowPreflightAlertRow(decision)) {
     rows.push({
       label: preflightAlertLabel(decision.blockingTone, compact),
@@ -518,6 +527,7 @@ function renderSelectionInfoUi(prefix, actionButton, nextState, summaryText, hel
     mode,
     selectionRequired: true,
     selectionComplete: false,
+    successorSelectionUiMode: 'blocked',
   });
   setRestoreActionAvailability(prefix, actionButton);
   return successorSelectionState.get(prefix);
@@ -542,6 +552,7 @@ function clearSuccessorSelectionUi(prefix, actionButton) {
     files: [],
     selectionRequired: false,
     selectionComplete: true,
+    successorSelectionUiMode: 'none',
     selectedArchiveId: null,
     selectedStateId: null,
     selectedCohortId: null,
@@ -624,6 +635,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     mode: 'none',
     selectionRequired: false,
     selectionComplete: true,
+    successorSelectionUiMode: 'none',
     selectedArchiveId: null,
     selectedStateId: null,
     selectedCohortId: null,
@@ -672,9 +684,6 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
         'unsupported'
       );
     }
-
-    elements.container.style.display = 'block';
-    elements.container.className = 'verification-section successor-selection';
 
     const model = buildSuccessorSelectionModel(successorShards);
     const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
@@ -738,6 +747,17 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       (!bundleChoiceRequired || Boolean(selectedLifecycleBundleDigestHex))
     );
 
+    const successorSelectionUiMode = buildSuccessorSelectionUiMode(true, selectionRequired);
+    if (successorSelectionUiMode === 'single') {
+      elements.container.style.display = 'none';
+      elements.container.classList.add('initially-hidden');
+      clearSelectionDetails(prefix);
+    } else {
+      elements.container.style.display = 'block';
+      elements.container.classList.remove('initially-hidden');
+      elements.container.className = 'verification-section successor-selection';
+    }
+
     populateSelectionOptions(
       elements.stateSelect,
       model.states.map((state) => ({ value: state.key, label: describeStateOption(state) })),
@@ -791,15 +811,17 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     } else {
       elements.help.textContent = 'One successor restore path is available from the selected shard set.';
     }
-    renderSuccessorDigestDetails(prefix, {
-      elements,
-      model,
-      selectedState,
-      selectedCohort,
-      selectedLifecycleBundleDigestHex,
-      selectionRequired,
-      helpText: elements.help.textContent,
-    });
+    if (successorSelectionUiMode === 'ambiguous') {
+      renderSuccessorDigestDetails(prefix, {
+        elements,
+        model,
+        selectedState,
+        selectedCohort,
+        selectedLifecycleBundleDigestHex,
+        selectionRequired,
+        helpText: elements.help.textContent,
+      });
+    }
 
     const stateForRestore = stateChoiceRequired && selectedState
       ? { selectedArchiveId: selectedState.archiveId, selectedStateId: selectedState.stateId }
@@ -816,6 +838,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       selectedLifecycleBundleDigestHex: bundleChoiceRequired ? selectedLifecycleBundleDigestHex : null,
       selectionRequired,
       selectionComplete,
+      successorSelectionUiMode,
     });
   } catch (error) {
     renderSelectionInfoUi(
@@ -926,6 +949,7 @@ function buildPreflightBlockedDecision({
   reason,
   tone = 'fail',
   compact = false,
+  lifecyclePathRow = null,
 }) {
   const thresholdReady = assessment?.ready === true;
   return {
@@ -950,6 +974,7 @@ function buildPreflightBlockedDecision({
     blockingReason: reason,
     blockingTone: 'fail',
     canEvaluate: false,
+    lifecyclePathRow,
   };
 }
 
@@ -991,6 +1016,7 @@ export function buildRestoreDecisionViewModel({
 
   const selected = successorSelection;
   const model = selected.model || { states: [] };
+  const lifecyclePathRow = buildLifecyclePathDecisionRow(selected, classified);
   const { selectedState, selectedCohort, selectedLifecycleBundleDigestHex } = getSelectedPreflightPath(model, selected);
   const providedCounts = countProvidedLifecycleEvidence(parsedProvidedBundle);
   const policyLevel = String(
@@ -1010,6 +1036,7 @@ export function buildRestoreDecisionViewModel({
       policyLevel,
       reason: 'No successor QVqcont-7 shard files were detected.',
       compact,
+      lifecyclePathRow,
     });
   }
   if (assessment?.ready !== true) {
@@ -1021,6 +1048,7 @@ export function buildRestoreDecisionViewModel({
       policyLevel,
       reason: assessment?.message || 'Selected shards do not meet the recovery threshold.',
       compact,
+      lifecyclePathRow,
     });
   }
   if (selected.selectionComplete === false) {
@@ -1032,6 +1060,7 @@ export function buildRestoreDecisionViewModel({
       policyLevel,
       reason: 'Resolve archive/state/cohort/lifecycle-bundle selection before restore evaluation.',
       compact,
+      lifecyclePathRow,
     });
   }
 
@@ -1059,6 +1088,7 @@ export function buildRestoreDecisionViewModel({
     bundleTone: lifecycleBundleDigest ? 'ok' : 'neutral',
     policy: policyLevel,
     policyTone: policyLevel === 'integrity-only' ? 'warn' : 'neutral',
+    lifecyclePathRow,
   };
 
   if (policyLevel === 'integrity-only') {
