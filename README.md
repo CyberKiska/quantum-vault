@@ -71,6 +71,7 @@ Deferred roadmap:
 - **Restore** from successor shards plus optional authenticity material, with recovery gated by archive policy.
 - **Verify** detached signatures while keeping integrity, signer pinning, maintenance evidence, source evidence, and policy satisfaction as separate outcomes.
 - **Keep cryptographic operations local** to the client browser during normal operation.
+- **Lite Create** shows non-blocking custody guidance (independent shard storage, retaining archive-state and lifecycle JSON, optional ML-KEM key backup) and a short export checklist after each successful create.
 
 ## Workflow At A Glance
 

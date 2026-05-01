@@ -1050,6 +1050,89 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   color: var(--accent-danger);
 }
 
+.lite-custody-panel .lite-custody-lede {
+  margin: 0 0 0.5rem;
+  line-height: 1.45;
+}
+
+.lite-custody-panel .lite-custody-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.lite-custody-panel .lite-custody-list li {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.lite-export-checklist {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.lite-export-checklist-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-family: var(--font-ui);
+  color: var(--text-main);
+}
+
+.lite-export-checklist-lede {
+  margin: 0 0 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.lite-export-checklist-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.lite-checklist-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.lite-checklist-row--ok {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.lite-checklist-row--neutral {
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.lite-checklist-title {
+  font-weight: 600;
+  color: var(--text-main);
+  min-width: min(100%, 12rem);
+}
+
+.lite-checklist-detail {
+  flex: 1 1 12rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .operation-input-panel {
   min-width: 0;
   background: var(--bg-app);
@@ -1444,6 +1527,8 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .artifact-intake-panel,
   .restore-preflight-card,
   .inline-error-panel,
+  .lite-export-checklist,
+  .lite-custody-panel,
   .dropzone-area {
     padding: 0.85rem;
   }
@@ -1465,6 +1550,10 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .restore-matrix-row,
   .inline-error-fields {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lite-checklist-detail {
+    text-align: left;
   }
 
   .digest-detail-row-head {
@@ -1579,6 +1668,8 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .artifact-intake-panel,
   .restore-preflight-card,
   .inline-error-panel,
+  .lite-export-checklist,
+  .lite-custody-panel,
   .dropzone-area {
     padding: 0.7rem;
   }

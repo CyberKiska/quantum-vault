@@ -186,6 +186,55 @@ test('policy consequence previews update in Lite Create and Pro Split', async ({
   await expect.poll(async () => proPreview.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(200);
 });
 
+test('lite custody guidance appears when ready and export checklist updates after create and optional key backup', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Keys ready', { timeout: 30000 });
+
+  const custody = page.getByTestId('lite-custody-guidance');
+  await expect(custody).toBeVisible();
+  await expect(custody).toContainText('independent shard custody');
+  await expect(custody).toContainText('Retain the archive-state descriptor');
+  await expect(custody).toContainText('Pro Attach');
+  await expect(custody).toContainText('Backup Keys');
+  await expect(custody).toContainText('optional');
+
+  const createBtn = page.locator('#liteCreateShardsBtn');
+  await expect(createBtn).toBeDisabled();
+
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'custody-export-check.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('custody-export-check'),
+  });
+
+  await expect(createBtn).toBeEnabled();
+
+  const shardDownloads = 5;
+  const bundleDownloads = 2;
+  const downloadWaiters = [];
+  for (let i = 0; i < shardDownloads + bundleDownloads; i++) {
+    downloadWaiters.push(page.waitForEvent('download'));
+  }
+
+  await createBtn.click();
+  await Promise.all(downloadWaiters);
+
+  const checklist = page.getByTestId('lite-export-checklist');
+  await expect(checklist).toBeVisible();
+  await expect(checklist).toContainText('QVqcont-7 shards exported');
+  await expect(checklist).toContainText('Archive-state descriptor exported');
+  await expect(checklist).toContainText('Lifecycle bundle exported');
+  await expect(checklist).toContainText('Optional key backup not exported');
+
+  const keyBackupWaiters = [page.waitForEvent('download'), page.waitForEvent('download')];
+  await page.locator('#liteDownloadKeysBtn').click();
+  await Promise.all(keyBackupWaiters);
+
+  await expect(checklist).toContainText('Optional key backup exported');
+});
+
 test('narrow layouts do not horizontally overflow with long filenames and digest details', async ({ page }) => {
   const viewportWidths = [320, 375, 768, 1280];
   const longName = `${'quarterly-custody-rotation-restore-artifact-'.repeat(5)}.plaintext`;

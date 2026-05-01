@@ -52,6 +52,91 @@ let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
 const LITE_RESTORE_INLINE_ERROR_ID = 'liteRestoreInlineError';
 
+/** After each successful Lite create, key backup row tracks Backup Keys clicks until the next create. */
+let liteKeyBackupAfterLastCreate = false;
+let liteLastCreateShardCount = 0;
+
+function isLiteShardConfigurationValid() {
+    const nInput = document.getElementById('liteN');
+    const thresholdInput = document.getElementById('liteThreshold');
+    if (!nInput || !thresholdInput) return false;
+    const n = parseInt(nInput.value, 10);
+    const thresholdPercent = parseInt(thresholdInput.value, 10);
+    if (isNaN(n) || isNaN(thresholdPercent) || n < 5) return false;
+    const params = calculateParametersFromThreshold(n, thresholdPercent);
+    return !params.error;
+}
+
+function refreshLiteCustodyGuidanceVisibility() {
+    const panel = document.getElementById('liteCustodyGuidance');
+    if (!panel) return;
+    const show = liteKeys !== null && isLiteShardConfigurationValid();
+    panel.classList.toggle('initially-hidden', !show);
+}
+
+function hideLiteExportChecklist() {
+    document.getElementById('liteExportChecklist')?.classList.add('initially-hidden');
+}
+
+function renderLiteExportChecklistBody(shardCount) {
+    const ul = document.getElementById('liteExportChecklistItems');
+    if (!ul) return;
+
+    ul.replaceChildren();
+
+    const addRow = (title, detail, tone) => {
+        const li = document.createElement('li');
+        li.className = `lite-checklist-row lite-checklist-row--${tone}`;
+        const titleEl = document.createElement('span');
+        titleEl.className = 'lite-checklist-title';
+        titleEl.textContent = title;
+        const detailEl = document.createElement('span');
+        detailEl.className = 'lite-checklist-detail';
+        detailEl.textContent = detail;
+        li.append(titleEl, detailEl);
+        ul.appendChild(li);
+    };
+
+    addRow(
+        'QVqcont-7 shards exported',
+        `${shardCount} files — confirm your browser saved every shard`,
+        'ok',
+    );
+    addRow(
+        'Archive-state descriptor exported',
+        'Confirm .archive-state.json is retained with your custody records',
+        'ok',
+    );
+    addRow(
+        'Lifecycle bundle exported',
+        'Confirm .lifecycle-bundle.json is retained for attach and restore workflows',
+        'ok',
+    );
+
+    const keyExported = liteKeyBackupAfterLastCreate;
+    addRow(
+        keyExported ? 'Optional key backup exported' : 'Optional key backup not exported',
+        keyExported
+            ? 'ML-KEM .qkey downloads were triggered from Backup Keys'
+            : 'Skipped — optional; threshold recovery normally uses shards. Omit if retaining keys violates policy.',
+        keyExported ? 'ok' : 'neutral',
+    );
+}
+
+function renderLiteExportChecklistAfterCreate(shardCount) {
+    liteLastCreateShardCount = shardCount;
+    liteKeyBackupAfterLastCreate = false;
+    const root = document.getElementById('liteExportChecklist');
+    if (!root) return;
+    renderLiteExportChecklistBody(shardCount);
+    root.classList.remove('initially-hidden');
+}
+
+function refreshLiteExportChecklistAfterKeyBackup() {
+    if (liteLastCreateShardCount <= 0) return;
+    renderLiteExportChecklistBody(liteLastCreateShardCount);
+}
+
 function liteRestoreRecoveryAction(error) {
     const message = String(error?.message || error || '').toLowerCase();
     if (message.includes('archive policy') || message.includes('archive-approval')) {
@@ -83,6 +168,10 @@ function wipeLiteKeys() {
 function wipeLiteModeSessionSecrets() {
     wipeLiteKeys();
     originalFileNames.clear();
+    liteKeyBackupAfterLastCreate = false;
+    liteLastCreateShardCount = 0;
+    hideLiteExportChecklist();
+    refreshLiteCustodyGuidanceVisibility();
 }
 
 // Compute RS/SSS params from desired threshold percent
@@ -249,6 +338,8 @@ async function generateLiteKeys() {
         const keyStatus = document.getElementById('keyStatus');
         const statusText = keyStatus?.querySelector('.status-text');
         const statusIcon = keyStatus?.querySelector('.status-icon');
+
+        document.getElementById('liteCustodyGuidance')?.classList.add('initially-hidden');
         
         if (statusText) statusText.textContent = 'Generating keys...';
         if (statusIcon) statusIcon.textContent = '🔄';
@@ -279,6 +370,7 @@ async function generateLiteKeys() {
         if (downloadBtn) downloadBtn.style.display = 'inline-flex';
         
         updateCreateShardsButton();
+        refreshLiteCustodyGuidanceVisibility();
         
     } catch (error) {
         logError(`Failed to generate keys: ${error.message}`, { isLiteMode: true });
@@ -286,6 +378,7 @@ async function generateLiteKeys() {
         const statusIcon = document.getElementById('keyStatus')?.querySelector('.status-icon');
         if (statusText) statusText.textContent = 'Key generation failed ✗';
         if (statusIcon) statusIcon.textContent = '❌';
+        refreshLiteCustodyGuidanceVisibility();
     }
 }
 
@@ -383,6 +476,8 @@ function updateCreateShardsButton() {
     }
     
     btn.disabled = !hasKeys || !hasFiles || !validConfig;
+
+    refreshLiteCustodyGuidanceVisibility();
 }
 
 // Download keys backup
@@ -402,6 +497,8 @@ function downloadLiteKeys() {
     }, 500);
     
     log('✅ Backup keys downloaded', { isLiteMode: true });
+    liteKeyBackupAfterLastCreate = true;
+    refreshLiteExportChecklistAfterKeyBackup();
 }
 
 // Pipeline Visualization Helper
@@ -445,6 +542,8 @@ async function createLiteShards() {
         return;
     }
     
+    hideLiteExportChecklist();
+
     setButtonsDisabled(true);
     updateLitePipeline('liteViewProtect', 'step-lock'); // Start: Encrypting
     
@@ -522,6 +621,8 @@ async function createLiteShards() {
         log(`Saved ${lifecycleBundleName}. This mutable lifecycle bundle carries detached evidence separately from the signable archive-state descriptor.`, { isLiteMode: true });
         log('Same-state resharing later is maintenance, not archive re-approval, because the archive-state descriptor stays unchanged while a new cohort and transition record are emitted.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
+
+        renderLiteExportChecklistAfterCreate(qconts.length);
         
     } catch (error) {
         logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
