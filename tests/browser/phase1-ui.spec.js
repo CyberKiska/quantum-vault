@@ -1,8 +1,12 @@
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { getBrowserFixtureSet } from './support/fixture-factory.mjs';
 import { buildQsigFixture } from '../../src/core/crypto/selftest.js';
 import { lastToast, openProTab } from './support/ui-helpers.mjs';
+
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 let fixtures;
 
@@ -35,6 +39,31 @@ async function openProMode(page) {
     await expect(modeToggle).toBeChecked();
   }
 }
+
+test('advanced entropy collection shows heuristic progress and success copy without bit estimates', async ({ page }) => {
+  await openProMode(page);
+  await page.locator('#proTabIdentity').click();
+
+  await page.getByTestId('advanced-entropy-btn').click();
+
+  const entropyPanel = page.getByTestId('entropy-status');
+  await expect(entropyPanel).toBeVisible();
+
+  const heuristicNote = page.getByTestId('entropy-heuristic-note');
+  await expect(heuristicNote).toBeVisible();
+  await expect(heuristicNote).toContainText('This is not a measured cryptographic guarantee.');
+
+  const entropyText = page.getByTestId('entropy-text');
+  await expect(entropyText).not.toContainText('bits');
+
+  for (let i = 0; i < 130; i += 1) {
+    await page.mouse.move(90 + (i % 50), 70 + (i % 30));
+  }
+
+  await expect(entropyText).toContainText('Supplemental entropy collected and mixed into next key generation.', { timeout: 35000 });
+  await expect(entropyText).not.toContainText('64-byte');
+  await expect(entropyText).not.toContainText('Est.');
+});
 
 function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;

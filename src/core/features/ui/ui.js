@@ -282,23 +282,25 @@ export function initUI() {
     async function collectAdvancedEntropy() {
         if (entropyCollector) return;
 
+        const entropyHeuristicNote = el('entropyHeuristicNote');
+        let progressInterval = null;
+
         try {
             entropyStatus.style.display = 'block';
-            entropyText.textContent = 'Move mouse, type, resize window... Collecting entropy...';
+            entropyText.textContent = 'Move mouse, type, or resize the window — collecting supplemental entropy (optional).';
             advancedEntropyBtn.disabled = true;
-            advancedEntropyBtn.textContent = '🎲 Collecting...';
+            advancedEntropyBtn.textContent = '🎲 Collecting…';
+            entropyHeuristicNote?.classList.remove('initially-hidden');
 
             entropyCollector = new BrowserEntropyCollector();
 
-            // Update progress with enhanced information including entropy estimation
-            const progressInterval = setInterval(() => {
+            progressInterval = setInterval(() => {
                 if (!entropyCollector) {
-                    clearInterval(progressInterval);
                     return;
                 }
                 const progress = entropyCollector.getProgress();
                 entropyBar.style.width = `${progress.percentage}%`;
-                entropyText.textContent = `Events: ${progress.collected}/${progress.required} (${progress.percentage}%) | Queue: ${progress.queueSize} | Est. Entropy: ${Math.round(progress.estimatedEntropyBits)} bits`;
+                entropyText.textContent = `Heuristic collection progress: ${progress.percentage}% · Events ${progress.collected}/${progress.required} · Queue ${progress.queueSize}`;
             }, 200);
 
             const collectedSeed = await entropyCollector.startCollection();
@@ -308,26 +310,30 @@ export function initUI() {
             wipeCollectedUserEntropy();
             collectedUserEntropy = collectedSeed;
 
-            clearInterval(progressInterval);
             if (entropyCollector && typeof entropyCollector.wipeSensitiveState === 'function') {
                 entropyCollector.wipeSensitiveState();
             }
             entropyCollector = null;
 
-            entropyText.textContent = '✅ Advanced entropy collected successfully! 64-byte seed ready.';
+            entropyText.textContent = '✅ Supplemental entropy collected and mixed into next key generation.';
             entropyBar.style.width = '100%';
-            advancedEntropyBtn.textContent = '✅ Entropy Collected';
+            advancedEntropyBtn.textContent = '✅ Supplemental entropy ready';
             advancedEntropyBtn.style.backgroundColor = '#28a745';
 
         } catch (error) {
             log(`Entropy collection failed: ${error.message}`);
-            entropyText.textContent = '❌ Entropy collection failed - will use secure random only';
+            entropyText.textContent = '❌ Supplemental collection failed. Next key generation will use the browser CSPRNG only.';
             advancedEntropyBtn.disabled = false;
-            advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+            advancedEntropyBtn.textContent = 'Collect supplemental entropy (optional)';
+            entropyHeuristicNote?.classList.remove('initially-hidden');
             if (entropyCollector && typeof entropyCollector.dispose === 'function') {
                 entropyCollector.dispose();
             }
             entropyCollector = null;
+        } finally {
+            if (progressInterval !== null) {
+                clearInterval(progressInterval);
+            }
         }
     }
 
@@ -394,9 +400,9 @@ export function initUI() {
             
             const hasCollectedEntropy = collectedUserEntropy instanceof Uint8Array && collectedUserEntropy.length > 0;
             if (hasCollectedEntropy) {
-                log('Using crypto.getRandomValues() + collected user entropy for enhanced security');
+                log('Mixing crypto.getRandomValues() output with supplemental collected entropy for the next key generation.');
             } else {
-                log('Using crypto.getRandomValues() with 64-byte seed (secure default)');
+                log('Using crypto.getRandomValues() only for key generation (browser CSPRNG baseline).');
             }
             
             // Generate keys with collected entropy if available
@@ -408,7 +414,7 @@ export function initUI() {
             const skHash = await hashBytes(privateKey);
             const pkHash = await hashBytes(publicKey);
             
-            log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (enhanced with user entropy)' : ''}`);
+            log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (supplemental user-event mixing applied)' : ''}`);
             log(`Private Key: privateKey.qkey (${privateKey.length} B) SHA3-512=${skHash}`);
             log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
             
@@ -424,13 +430,14 @@ export function initUI() {
             
             // Reset entropy collection UI state
             if (advancedEntropyBtn) {
-                advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+                advancedEntropyBtn.textContent = 'Collect supplemental entropy (optional)';
                 advancedEntropyBtn.style.backgroundColor = '';
                 advancedEntropyBtn.disabled = false;
             }
             if (entropyStatus) {
                 entropyStatus.style.display = 'none';
             }
+            el('entropyHeuristicNote')?.classList.add('initially-hidden');
             
         } catch (e) { logError(e); } finally {
             setButtonsDisabled(false);

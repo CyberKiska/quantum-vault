@@ -1488,6 +1488,11 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-top: var(--space-md);
 }
 
+.entropy-heuristic-note {
+  display: block;
+  margin-top: 0.45rem;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;

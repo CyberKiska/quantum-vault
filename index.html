@@ -303,13 +303,16 @@
               <p class="muted-copy">Generate a new keypair in memory. Overwrites existing session.</p>
               <div class="button-group">
                  <button id="genKeyBtn" class="button primary" type="button">Generate Keypair</button>
-                 <button id="advancedEntropyBtn" class="button secondary" type="button">Collect Advanced Entropy</button>
+                 <button id="advancedEntropyBtn" class="button secondary" type="button" data-testid="advanced-entropy-btn">Collect supplemental entropy (optional)</button>
               </div>
               
-              <div id="entropyStatus" class="entropy-status initially-hidden">
-                <span id="entropyText">Collecting entropy...</span>
+              <div id="entropyStatus" class="entropy-status initially-hidden" data-testid="entropy-status" aria-live="polite">
+                <span id="entropyText" data-testid="entropy-text">Collecting entropy...</span>
                 <div class="progress-bar-bg"><div id="entropyBar" class="progress-bar-fill"></div></div>
-                <small class="muted-copy">Privacy-preserving collection: mouse/keyboard timing, window resizing. Local processing only.</small>
+                <small id="entropyHeuristicNote" class="muted-copy entropy-heuristic-note initially-hidden" data-testid="entropy-heuristic-note">
+                  Heuristic collection progress only. This is not a measured cryptographic guarantee. The browser CSPRNG remains the baseline for key generation.
+                </small>
+                <small class="muted-copy">Privacy-preserving, local-only capture of mouse/keyboard timing and window changes. Optional supplemental mixing — not required for secure keys.</small>
               </div>
             </div>
 
