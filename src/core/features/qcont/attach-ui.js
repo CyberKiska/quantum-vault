@@ -24,235 +24,29 @@ import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-in
 import { renderDecisionCard } from '../ui/decision-card.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 import { deriveArchiveBaseName } from './archive-name.js';
+import {
+  ATTACH_CHANNELS,
+  attachChannelConfig,
+  buildAttachPlanDecisionModel,
+  deriveAttachRequirements,
+} from './attach-plan-view-model.js';
+import {
+  clearAttachTargetBindingPreview,
+  refreshAttachTargetBindingPreview,
+} from './attach-target-preview-ui.js';
+import {
+  clearSourceEvidenceExportError,
+  collectSourceEvidenceBuilderParams,
+  createSourceEvidenceDigestRow,
+  ensureSourceEvidenceDigestRows,
+  refreshSourceEvidenceBuilderUi,
+  showSourceEvidenceExportError,
+  updateSourceEvidenceOptInUi,
+} from './source-evidence-builder-ui.js';
 
 const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
 let lastAttachIntakeError = null;
 let attachStatusSeq = 0;
-
-const ATTACH_CHANNELS = Object.freeze({
-  'archive-approval': Object.freeze({
-    label: 'Archive approval',
-    buttonLabel: 'Attach Archive-Approval Evidence',
-    channelHelp: 'Archive approval attaches detached signatures over the canonical archive-state descriptor. Maintenance and source-evidence remain separate evidence channels and never satisfy archive policy on their own.',
-    inputHint: 'Load one archive cohort plus any archive-approval .qsig/.sig, .pqpk signer pins, and optional .ots proofs you want to merge.',
-    emptySelectionText: 'Select archive-approval attach inputs to see the attach plan.',
-    attachSummary: 'Archive-approval evidence merged',
-  }),
-  maintenance: Object.freeze({
-    label: 'Maintenance signature',
-    buttonLabel: 'Attach Maintenance Evidence',
-    channelHelp: 'Maintenance signatures target a canonical transition-record already present in the selected lifecycle bundle. This evidence stays separate from archive approval and does not satisfy archive policy.',
-    inputHint: 'Load one archive cohort or lifecycle bundle, the matching canonical transition-record.json, one or more maintenance .qsig/.sig files, any .pqpk signer pins, and optional .ots proofs.',
-    emptySelectionText: 'Select maintenance attach inputs to see the attach plan.',
-    attachSummary: 'Maintenance evidence merged',
-  }),
-  'source-evidence': Object.freeze({
-    label: 'Source evidence',
-    buttonLabel: 'Attach Source-Evidence Signatures',
-    channelHelp: 'Source-evidence signatures target canonical source-evidence JSON, not archive-state approval bytes. This channel is provenance only and never satisfies archive policy.',
-    inputHint: 'Load one archive cohort or lifecycle bundle, the canonical source-evidence.json artifact, one or more detached signatures over that exact JSON, any .pqpk signer pins, and optional .ots proofs.',
-    emptySelectionText: 'Select source-evidence attach inputs to see the attach plan.',
-    attachSummary: 'Source-evidence signatures merged',
-  }),
-});
-const SOURCE_DIGEST_ALGORITHMS = Object.freeze(['SHA3-512', 'SHA3-256', 'SHA-256']);
-const SOURCE_DIGEST_HEX_LENGTH = Object.freeze({
-  'SHA3-512': 128,
-  'SHA3-256': 64,
-  'SHA-256': 64,
-});
-const SOURCE_EVIDENCE_DIGEST_DEFAULT = Object.freeze({
-  alg: 'SHA3-512',
-  value: '',
-});
-
-function expectedSourceDigestHexLength(alg) {
-  return SOURCE_DIGEST_HEX_LENGTH[alg] ?? null;
-}
-
-function normalizeSourceDigestValue(alg, rawValue, rowIndex) {
-  const expectedLen = expectedSourceDigestHexLength(alg);
-  const label = `Digest row ${rowIndex + 1}`;
-  if (expectedLen == null) {
-    return { ok: false, normalized: '', error: `${label}: unsupported digest algorithm.` };
-  }
-  const trimmed = String(rawValue || '').trim().toLowerCase();
-  if (!trimmed) {
-    return {
-      ok: false,
-      normalized: '',
-      error: `${label}: enter a ${expectedLen}-character lowercase hex digest for ${alg}.`,
-    };
-  }
-  if (!/^[0-9a-f]+$/.test(trimmed)) {
-    return {
-      ok: false,
-      normalized: trimmed,
-      error: `${label}: digest must contain only hexadecimal characters (0–9, a–f).`,
-    };
-  }
-  if (trimmed.length !== expectedLen) {
-    return {
-      ok: false,
-      normalized: trimmed,
-      error: `${label}: ${alg} requires exactly ${expectedLen} hex characters (got ${trimmed.length}).`,
-    };
-  }
-  return { ok: true, normalized: trimmed, error: null };
-}
-
-function readSourceEvidenceDigestRowsFromDom() {
-  const rows = [...document.querySelectorAll('#sourceEvidenceDigestRows .source-evidence-digest-row')];
-  return rows.map((row, index) => {
-    const alg = String(row.querySelector('.source-evidence-digest-alg')?.value || '').trim();
-    const rawValue = String(row.querySelector('.source-evidence-digest-value')?.value || '');
-    const hintEl = row.querySelector('.source-evidence-digest-hint');
-    return { row, index, alg, rawValue, hintEl };
-  });
-}
-
-function findDuplicateDigestAlgorithmsFromRows(rowStates) {
-  const seen = new Set();
-  for (let i = 0; i < rowStates.length; i++) {
-    const alg = rowStates[i].alg;
-    if (!expectedSourceDigestHexLength(alg)) continue;
-    if (seen.has(alg)) {
-      return `Digest row ${i + 1}: duplicate algorithm ${alg}. Each digest row must use a distinct algorithm.`;
-    }
-    seen.add(alg);
-  }
-  return null;
-}
-
-function clearSourceEvidenceExportError() {
-  const el = document.getElementById('sourceEvidenceExportError');
-  if (!el) return;
-  el.textContent = '';
-  el.classList.add('initially-hidden');
-}
-
-function showSourceEvidenceExportError(message) {
-  const el = document.getElementById('sourceEvidenceExportError');
-  if (!el) return;
-  el.textContent = String(message || '');
-  el.classList.remove('initially-hidden');
-}
-
-function refreshSourceEvidenceBuilderUi() {
-  const exportBtn = document.getElementById('exportSourceEvidenceBtn');
-  const previewEl = document.getElementById('sourceEvidenceExportPreview');
-  const exportErrEl = document.getElementById('sourceEvidenceExportError');
-  const channel = activeAttachChannel();
-
-  const resetRowHints = () => {
-    for (const hint of document.querySelectorAll('.source-evidence-digest-hint')) {
-      hint.textContent = '';
-      hint.classList.remove('source-evidence-digest-hint--error');
-    }
-  };
-
-  if (channel !== 'source-evidence') {
-    if (exportBtn) exportBtn.disabled = true;
-    if (previewEl) {
-      previewEl.textContent = '';
-      previewEl.classList.add('initially-hidden');
-    }
-    if (exportErrEl) {
-      exportErrEl.textContent = '';
-      exportErrEl.classList.add('initially-hidden');
-    }
-    resetRowHints();
-    return;
-  }
-
-  if (previewEl) previewEl.classList.remove('initially-hidden');
-
-  const relationType = String(document.getElementById('sourceEvidenceRelationType')?.value || '').trim();
-  const sourceObjectType = String(document.getElementById('sourceEvidenceObjectType')?.value || '').trim();
-  const externalRefsText = String(document.getElementById('sourceEvidenceExternalRefs')?.value || '').trim();
-  const mediaTypeOptIn = document.getElementById('sourceEvidenceMediaTypeOptIn')?.checked === true;
-  const mediaType = String(document.getElementById('sourceEvidenceMediaType')?.value || '').trim();
-
-  const rowStates = readSourceEvidenceDigestRowsFromDom();
-  const dupErr = findDuplicateDigestAlgorithmsFromRows(rowStates);
-  const normalizedResults = rowStates.map((rs) => normalizeSourceDigestValue(rs.alg, rs.rawValue, rs.index));
-
-  const algCounts = {};
-  for (const rs of rowStates) {
-    algCounts[rs.alg] = (algCounts[rs.alg] || 0) + 1;
-  }
-
-  for (let i = 0; i < rowStates.length; i++) {
-    const { alg, hintEl } = rowStates[i];
-    const res = normalizedResults[i];
-    if (!hintEl) continue;
-    hintEl.classList.remove('source-evidence-digest-hint--error');
-    const expectedLen = expectedSourceDigestHexLength(alg);
-    const dupRow = expectedLen != null && (algCounts[alg] || 0) > 1;
-    if (dupRow) {
-      hintEl.textContent = 'Duplicate algorithm — keep one row per algorithm.';
-      hintEl.classList.add('source-evidence-digest-hint--error');
-      continue;
-    }
-    if (!res.ok) {
-      hintEl.textContent = String(res.error || '').replace(/^Digest row \d+: /, '');
-      hintEl.classList.add('source-evidence-digest-hint--error');
-    } else {
-      hintEl.textContent = `${res.normalized.length} hex characters (matches ${alg})`;
-    }
-  }
-
-  const digestOk = !dupErr && normalizedResults.every((r) => r.ok);
-  const formOk = Boolean(relationType && sourceObjectType && rowStates.length > 0 && digestOk);
-  if (exportBtn) exportBtn.disabled = !formOk;
-
-  const refsList = externalRefsText
-    ? externalRefsText
-        .split(/\r?\n|,/)
-        .map((value) => value.trim())
-        .filter(Boolean)
-    : [];
-
-  const lines = [
-    'Export preview',
-    `Relation type: ${relationType || '(required)'}`,
-    `Source object type: ${sourceObjectType || '(required)'}`,
-    `Digests (${rowStates.length}):`,
-  ];
-  for (let i = 0; i < rowStates.length; i++) {
-    const rs = rowStates[i];
-    const res = normalizedResults[i];
-    const expectedLen = expectedSourceDigestHexLength(rs.alg);
-    const dupRow = expectedLen != null && (algCounts[rs.alg] || 0) > 1;
-    let status;
-    if (dupRow) status = 'duplicate algorithm';
-    else if (!res.ok) status = 'invalid';
-    else status = `${res.normalized.length} hex`;
-    lines.push(`  • ${rs.alg}: ${status}`);
-  }
-  lines.push(`Digest algorithms listed: ${rowStates.map((r) => r.alg).join(', ') || '—'}`);
-  lines.push(`External source-signature refs: ${refsList.length ? refsList.join(', ') : 'none'}`);
-  lines.push(
-    `Optional descriptive fields: ${
-      mediaTypeOptIn ? `media type opted-in${mediaType ? ` (${mediaType})` : ' (empty)'}` : 'none'
-    }`
-  );
-  lines.push('');
-  lines.push(
-    'Policy: Source evidence is provenance-only. It never satisfies archive restore policy by itself — attach archive-approval signatures separately when policy requires them.'
-  );
-  if (!formOk) {
-    lines.push('');
-    lines.push('Fix the issues above before export.');
-  }
-
-  if (previewEl) previewEl.textContent = lines.join('\n');
-
-  if (exportErrEl && formOk) {
-    exportErrEl.textContent = '';
-    exportErrEl.classList.add('initially-hidden');
-  }
-}
 
 function isLegacyAttachFilename(name) {
   return /\.qvmanifest\.json$/i.test(String(name || ''));
@@ -262,10 +56,6 @@ function activeAttachChannel() {
   const select = document.getElementById('attachEvidenceChannel');
   const value = String(select?.value || 'archive-approval');
   return ATTACH_CHANNELS[value] ? value : 'archive-approval';
-}
-
-function attachChannelConfig(channel = activeAttachChannel()) {
-  return ATTACH_CHANNELS[channel] || ATTACH_CHANNELS['archive-approval'];
 }
 
 function ensureSingleCanonicalArtifact(existingBytes, parsedArtifact, duplicateMessage) {
@@ -417,145 +207,7 @@ function setAttachChannelUi(channel = activeAttachChannel()) {
     sourceEvidenceBuilderSection.classList.toggle('initially-hidden', !visible);
     sourceEvidenceBuilderSection.open = visible;
   }
-  refreshSourceEvidenceBuilderUi();
-}
-
-function createSourceEvidenceDigestRow(initial = SOURCE_EVIDENCE_DIGEST_DEFAULT) {
-  const row = document.createElement('div');
-  row.className = 'split-grid source-evidence-digest-row';
-
-  const algGroup = document.createElement('div');
-  algGroup.className = 'form-group';
-  const algLabel = document.createElement('label');
-  algLabel.textContent = 'Digest algorithm';
-  const algSelect = document.createElement('select');
-  algSelect.className = 'source-evidence-digest-alg';
-  for (const alg of SOURCE_DIGEST_ALGORITHMS) {
-    const option = document.createElement('option');
-    option.value = alg;
-    option.textContent = alg;
-    if (alg === initial.alg) option.selected = true;
-    algSelect.appendChild(option);
-  }
-  algGroup.appendChild(algLabel);
-  algGroup.appendChild(algSelect);
-
-  const valueGroup = document.createElement('div');
-  valueGroup.className = 'form-group';
-  const valueLabel = document.createElement('label');
-  valueLabel.textContent = 'Hex digest';
-  const valueInput = document.createElement('input');
-  valueInput.type = 'text';
-  valueInput.className = 'source-evidence-digest-value';
-  valueInput.placeholder = 'Lowercase hex digest';
-  valueInput.value = initial.value || '';
-  valueGroup.appendChild(valueLabel);
-  valueGroup.appendChild(valueInput);
-  const digestHint = document.createElement('small');
-  digestHint.className = 'muted-copy source-evidence-digest-hint';
-  digestHint.setAttribute('aria-live', 'polite');
-  valueGroup.appendChild(digestHint);
-
-  const removeGroup = document.createElement('div');
-  removeGroup.className = 'form-group';
-  const removeLabel = document.createElement('label');
-  removeLabel.textContent = 'Row';
-  const removeButton = document.createElement('button');
-  removeButton.type = 'button';
-  removeButton.className = 'button secondary small';
-  removeButton.textContent = 'Remove';
-  removeButton.addEventListener('click', () => {
-    const rows = [...document.querySelectorAll('#sourceEvidenceDigestRows .source-evidence-digest-row')];
-    if (rows.length <= 1) {
-      showToast('Keep at least one source digest row.', 'warning');
-      return;
-    }
-    row.remove();
-    refreshSourceEvidenceBuilderUi();
-  });
-  removeGroup.appendChild(removeLabel);
-  removeGroup.appendChild(removeButton);
-
-  row.appendChild(algGroup);
-  row.appendChild(valueGroup);
-  row.appendChild(removeGroup);
-  return row;
-}
-
-function ensureSourceEvidenceDigestRows() {
-  const container = document.getElementById('sourceEvidenceDigestRows');
-  if (!container) return;
-  if (container.children.length === 0) {
-    container.appendChild(createSourceEvidenceDigestRow());
-  }
-  refreshSourceEvidenceBuilderUi();
-}
-
-function collectSourceEvidenceBuilderParams() {
-  const relationType = String(document.getElementById('sourceEvidenceRelationType')?.value || '').trim();
-  const sourceObjectType = String(document.getElementById('sourceEvidenceObjectType')?.value || '').trim();
-  if (!relationType) {
-    throw new Error('Source-evidence relationType is required.');
-  }
-  if (!sourceObjectType) {
-    throw new Error('Source-evidence sourceObjectType is required.');
-  }
-
-  const rowStates = readSourceEvidenceDigestRowsFromDom();
-  if (rowStates.length === 0) {
-    throw new Error('Provide at least one source digest.');
-  }
-
-  const dupErr = findDuplicateDigestAlgorithmsFromRows(rowStates);
-  if (dupErr) {
-    throw new Error(dupErr);
-  }
-
-  const sourceDigests = [];
-  for (const { alg, rawValue, index } of rowStates) {
-    const res = normalizeSourceDigestValue(alg, rawValue, index);
-    if (!res.ok) {
-      throw new Error(res.error);
-    }
-    sourceDigests.push({ alg, value: res.normalized });
-  }
-
-  const params = {
-    relationType,
-    sourceObjectType,
-    sourceDigests,
-  };
-
-  const externalRefsText = String(document.getElementById('sourceEvidenceExternalRefs')?.value || '').trim();
-  if (externalRefsText) {
-    const externalSourceSignatureRefs = externalRefsText
-      .split(/\r?\n|,/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (externalSourceSignatureRefs.length > 0) {
-      params.externalSourceSignatureRefs = externalSourceSignatureRefs;
-    }
-  }
-
-  const mediaTypeOptIn = document.getElementById('sourceEvidenceMediaTypeOptIn')?.checked === true;
-  const mediaType = String(document.getElementById('sourceEvidenceMediaType')?.value || '').trim();
-  if (mediaTypeOptIn) {
-    params.descriptiveFieldOptIn = ['mediaType'];
-    if (mediaType) {
-      params.mediaType = mediaType;
-    }
-  }
-
-  return params;
-}
-
-function updateSourceEvidenceOptInUi() {
-  const optInChecked = document.getElementById('sourceEvidenceMediaTypeOptIn')?.checked === true;
-  const group = document.getElementById('sourceEvidenceMediaTypeGroup');
-  if (group) {
-    group.classList.toggle('initially-hidden', !optInChecked);
-  }
-  refreshSourceEvidenceBuilderUi();
+  refreshSourceEvidenceBuilderUi(channel);
 }
 
 function clearAttachResultPanel() {
@@ -735,26 +387,6 @@ function deriveAttachPlan(shards) {
   };
 }
 
-function deriveAttachRequirements(channel, classified) {
-  const hasAttachTarget = classified.shardFiles.length > 0 || classified.lifecycleBundleBytes instanceof Uint8Array;
-  if (channel === 'maintenance') {
-    return {
-      canAttach: hasAttachTarget && classified.transitionRecordBytes instanceof Uint8Array && classified.signatures.length > 0,
-      missingLabel: 'load successor shards or a lifecycle bundle, one canonical transition-record.json, and at least one maintenance signature',
-    };
-  }
-  if (channel === 'source-evidence') {
-    return {
-      canAttach: hasAttachTarget && classified.sourceEvidenceBytes instanceof Uint8Array && classified.signatures.length > 0,
-      missingLabel: 'load successor shards or a lifecycle bundle, one canonical source-evidence.json, and at least one detached signature',
-    };
-  }
-  return {
-    canAttach: hasAttachTarget,
-    missingLabel: 'load successor shards or a lifecycle bundle',
-  };
-}
-
 function shortHexForAttachPreview(value) {
   const s = String(value || '').trim();
   if (!s) return '—';
@@ -861,218 +493,6 @@ async function resolveAttachBindingTarget(classified, channel, shards) {
   };
 }
 
-function describeAttachShardRewrite(plan, shardsParseLikelyFailed) {
-  if (shardsParseLikelyFailed) {
-    return 'Shard rewrite: not evaluated — fix shard or lifecycle bundle inputs first.';
-  }
-  if (!plan.embedIntoShards) {
-    return 'Shard rewrite: bundle-only (no successor shard files loaded).';
-  }
-  if (plan.warning) {
-    return `Shard rewrite: partial cohort (${plan.selectedShardCount}/${plan.expectedShardCount} shards selected).`;
-  }
-  return `Shard rewrite: full cohort (${plan.selectedShardCount}/${plan.expectedShardCount} shards).`;
-}
-
-/**
- * View model for the Attach plan decision card.
- * Keeps an operator-first summary on the card; raw binding dump stays in `refreshAttachTargetBindingPreview`.
- *
- * @param {object} p
- * @param {string} p.channel
- * @param {object} p.channelConfig
- * @param {object|null} p.classified
- * @param {object[]} p.shards
- * @param {ReturnType<typeof deriveAttachPlan>} p.plan
- * @param {ReturnType<typeof deriveAttachRequirements>} p.requirements
- * @param {boolean} p.canAttach
- * @param {'sufficient'|'insufficient'|'invalid'} p.stateClass
- * @param {string} p.summary
- * @param {string} p.lede
- * @param {boolean} [p.errorMode]
- * @param {string} [p.errorMessage]
- * @param {Awaited<ReturnType<typeof resolveAttachBindingTarget>>|null} [p.binding]
- */
-async function buildAttachPlanDecisionModel(p) {
-  const {
-    channel,
-    channelConfig,
-    classified,
-    shards,
-    plan,
-    requirements,
-    canAttach,
-    stateClass,
-    summary,
-    lede,
-    errorMode = false,
-    errorMessage = '',
-    binding: bindingOverride,
-  } = p;
-
-  const tone = errorMode ? 'fail' : stateClass === 'invalid' ? 'fail' : stateClass === 'insufficient' ? 'warn' : 'ok';
-
-  if (errorMode) {
-    const rows = [];
-    if (classified) {
-      rows.push({ label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' });
-      const policyTone = channel === 'archive-approval' ? 'neutral' : 'warn';
-      rows.push({
-        label: 'Archive restore policy',
-        value: attachArchivePolicyBindingLine(channel),
-        tone: policyTone,
-      });
-      const binding = bindingOverride ?? await resolveAttachBindingTarget(classified, channel, shards);
-      rows.push(
-        { label: 'Target artifact', value: binding?.artifactLabel || '—', tone: 'neutral' },
-        { label: 'Anchor digest (SHA3-512)', value: binding?.digestSummary || '—', tone: 'neutral' },
-        { label: 'Shard rewrite scope', value: describeAttachShardRewrite(plan, Boolean(
-          classified.shardFiles.length > 0 && shards.length === 0
-        )), tone: plan.warning ? 'warn' : 'neutral' },
-        { label: 'Lifecycle update', value: plan.modeLabel, tone: plan.warning ? 'warn' : 'neutral' },
-      );
-    }
-    rows.push({
-      label: classified ? 'Blocking detail' : 'Details',
-      value: errorMessage,
-      tone: 'fail',
-    });
-    return {
-      title: 'Attach plan',
-      tone,
-      primaryOutcome: summary,
-      lede,
-      rows,
-    };
-  }
-
-  const shardsLikelyInvalid = Boolean(
-    classified && classified.shardFiles.length > 0 && shards.length === 0
-  );
-  const binding = bindingOverride ?? (classified
-    ? await resolveAttachBindingTarget(classified, channel, shards)
-    : null);
-
-  const policyTone = channel === 'archive-approval' ? 'ok' : 'warn';
-  const mergeTargetTone = !canAttach ? 'fail' : plan.warning ? 'warn' : 'neutral';
-
-  const rows = [
-    { label: 'Evidence channel', value: channelConfig.label, tone: 'neutral' },
-    {
-      label: 'Archive restore policy',
-      value: attachArchivePolicyBindingLine(channel),
-      tone: policyTone,
-    },
-    { label: 'Target artifact', value: binding?.artifactLabel || '—', tone: 'neutral' },
-    { label: 'Anchor digest (SHA3-512)', value: binding?.digestSummary || '—', tone: 'neutral' },
-    {
-      label: 'Shard rewrite scope',
-      value: describeAttachShardRewrite(plan, shardsLikelyInvalid),
-      tone: plan.warning ? 'warn' : 'neutral',
-    },
-    { label: 'Lifecycle update', value: plan.modeLabel, tone: mergeTargetTone },
-    {
-      label: 'Evidence loaded',
-      value: `${classified.signatures.length} detached signature(s), ${classified.pqPublicKeyFileBytesList.length} signer pin(s), ${classified.timestamps.length} OTS proof(s)`,
-      tone: 'neutral',
-    },
-    {
-      label: 'Transition record',
-      value: classified.transitionRecordBytes instanceof Uint8Array ? 'Loaded' : 'Not loaded',
-      tone: 'neutral',
-    },
-    {
-      label: 'Source evidence JSON',
-      value: classified.sourceEvidenceBytes instanceof Uint8Array ? 'Loaded' : 'Not loaded',
-      tone: 'neutral',
-    },
-  ];
-
-  if (!canAttach) {
-    rows.push({
-      label: 'Merge readiness',
-      value: `Blocked until you ${requirements.missingLabel}.`,
-      tone: 'fail',
-    });
-  }
-
-  return {
-    title: 'Attach plan',
-    tone,
-    primaryOutcome: summary,
-    lede,
-    rows,
-  };
-}
-
-function attachSignatureFamilyDescription(channel) {
-  if (channel === 'maintenance') return 'maintenance — detached signatures over canonical transition-record JSON';
-  if (channel === 'source-evidence') return 'source-evidence — detached signatures over canonical source-evidence JSON';
-  return 'archive-approval — detached signatures over canonical archive-state descriptor JSON';
-}
-
-function attachArchivePolicyBindingLine(channel) {
-  if (channel === 'archive-approval') {
-    return 'Archive policy binding: verified signatures on this channel can satisfy archive restore policy when Restore trusts them.';
-  }
-  return 'Archive policy binding: this channel does not satisfy archive restore policy by itself (maintenance or provenance only).';
-}
-
-function attachOtsRuleLine() {
-  return 'OTS rule: each proof must stamp SHA-256(detached signature bytes) for a signature file present in this intake (.qsig / supported .sig).';
-}
-
-async function formatAttachTargetBindingPreview({ channel, classified, shards, plan, error }) {
-  const lines = [];
-  lines.push('Attach target binding (technical)');
-  const channelConfig = attachChannelConfig(channel);
-  lines.push(`Evidence channel: ${channelConfig.label}`);
-  const requirements = classified
-    ? deriveAttachRequirements(channel, classified)
-    : { canAttach: false, missingLabel: 'load attach inputs' };
-  lines.push(
-    `Lifecycle merge target: ${requirements.canAttach ? 'successor shards and/or lifecycle bundle present' : `incomplete — ${requirements.missingLabel}`}`
-  );
-
-  const shardsLikelyInvalid = Boolean(
-    classified && classified.shardFiles.length > 0 && shards.length === 0
-  );
-  lines.push(describeAttachShardRewrite(plan, shardsLikelyInvalid));
-
-  const binding = classified ? await resolveAttachBindingTarget(classified, channel, shards) : null;
-  lines.push(`Target artifact: ${binding?.artifactLabel || '—'}`);
-  lines.push(`Target ref: ${binding?.targetRef || '—'}`);
-  lines.push(`Target digest (hex): ${binding?.digestSummary || '—'}`);
-
-  lines.push(`Signature family: ${attachSignatureFamilyDescription(channel)}`);
-  lines.push(
-    `Signer public-key material: ${classified ? classified.pqPublicKeyFileBytesList.length : 0} pin file(s) (.pqpk / packaged pins)`
-  );
-  lines.push(`Detached signatures loaded: ${classified ? classified.signatures.length : 0}`);
-  lines.push(`OTS proofs loaded: ${classified ? classified.timestamps.length : 0}`);
-  lines.push(attachOtsRuleLine());
-  lines.push(attachArchivePolicyBindingLine(channel));
-  lines.push('Per-file classification and wrong-target hints: see artifact intake table above.');
-  if (error) {
-    lines.push(`Evaluation note: ${String(error.message || error)}`);
-  }
-  return lines.join('\n');
-}
-
-async function refreshAttachTargetBindingPreview({ channel, classified, shards, plan, error }) {
-  const el = document.getElementById('attachTargetBindingPreview');
-  if (!el) return;
-  el.textContent = await formatAttachTargetBindingPreview({ channel, classified, shards, plan, error });
-  el.classList.remove('initially-hidden');
-}
-
-function clearAttachTargetBindingPreview() {
-  const el = document.getElementById('attachTargetBindingPreview');
-  if (!el) return;
-  el.textContent = '';
-  el.classList.add('initially-hidden');
-}
-
 async function resolveAttachSourceBundle(classified) {
   if (classified.lifecycleBundleBytes instanceof Uint8Array) {
     return (await parseLifecycleBundleBytes(classified.lifecycleBundleBytes)).lifecycleBundle;
@@ -1145,6 +565,7 @@ async function updateAttachStatus() {
     if (requestId !== attachStatusSeq) return;
     const plan = deriveAttachPlan(shards);
     const requirements = deriveAttachRequirements(channel, classified);
+    const binding = await resolveAttachBindingTarget(classified, channel, shards);
     const canAttach = requirements.canAttach;
     const partialRewriteRequiresAck = canAttach && plan.embedIntoShards && plan.warning;
     const canExportSignable = (
@@ -1189,7 +610,7 @@ async function updateAttachStatus() {
     setPartialRewriteAcknowledgementRequired(partialRewriteRequiresAck);
     const lede = hint.textContent;
     if (planPanel) {
-      const planModel = await buildAttachPlanDecisionModel({
+      const planModel = buildAttachPlanDecisionModel({
         channel,
         channelConfig,
         classified,
@@ -1200,6 +621,7 @@ async function updateAttachStatus() {
         stateClass,
         summary,
         lede,
+        binding,
       });
       renderDecisionCard(
         planPanel,
@@ -1222,6 +644,7 @@ async function updateAttachStatus() {
       classified,
       shards,
       plan,
+      binding,
       error: lastAttachIntakeError || undefined,
     });
     if (requestId !== attachStatusSeq) return;
@@ -1247,8 +670,11 @@ async function updateAttachStatus() {
     const errRequirements = classified
       ? deriveAttachRequirements(channel, classified)
       : { canAttach: false, missingLabel: 'load attach inputs' };
+    const binding = classified
+      ? await resolveAttachBindingTarget(classified, channel, previewCtx.shards)
+      : null;
     if (planPanel) {
-      const planModel = await buildAttachPlanDecisionModel({
+      const planModel = buildAttachPlanDecisionModel({
         channel,
         channelConfig,
         classified,
@@ -1261,6 +687,7 @@ async function updateAttachStatus() {
         lede: `${count} file(s) loaded. ${message}`,
         errorMode: true,
         errorMessage: message,
+        binding,
       });
       renderDecisionCard(
         planPanel,
@@ -1287,6 +714,7 @@ async function updateAttachStatus() {
       classified,
       shards: previewCtx.shards,
       plan: previewCtx.plan,
+      binding,
       error,
     });
     if (requestId !== attachStatusSeq) return;
@@ -1585,6 +1013,8 @@ export function initQcontAttachUI() {
   const mediaTypeOptIn = document.getElementById('sourceEvidenceMediaTypeOptIn');
   const partialRewriteAck = document.getElementById('attachPartialRewriteAck');
   const sourceEvidenceBuilderSection = document.getElementById('sourceEvidenceBuilderSection');
+  const refreshSourceEvidenceBuilderForActiveChannel = () => refreshSourceEvidenceBuilderUi(activeAttachChannel());
+  const updateSourceEvidenceOptInForActiveChannel = () => updateSourceEvidenceOptInUi(activeAttachChannel());
 
   attachInput?.addEventListener('change', () => {
     lastAttachIntakeError = null;
@@ -1609,14 +1039,16 @@ export function initQcontAttachUI() {
   exportSourceEvidenceBtn?.addEventListener('click', exportSourceEvidenceArtifact);
   addDigestBtn?.addEventListener('click', () => {
     const container = document.getElementById('sourceEvidenceDigestRows');
-    container?.appendChild(createSourceEvidenceDigestRow());
-    refreshSourceEvidenceBuilderUi();
+    container?.appendChild(createSourceEvidenceDigestRow({
+      onChange: refreshSourceEvidenceBuilderForActiveChannel,
+    }));
+    refreshSourceEvidenceBuilderForActiveChannel();
   });
-  sourceEvidenceBuilderSection?.addEventListener('input', refreshSourceEvidenceBuilderUi);
-  sourceEvidenceBuilderSection?.addEventListener('change', refreshSourceEvidenceBuilderUi);
-  mediaTypeOptIn?.addEventListener('change', updateSourceEvidenceOptInUi);
-  ensureSourceEvidenceDigestRows();
-  updateSourceEvidenceOptInUi();
+  sourceEvidenceBuilderSection?.addEventListener('input', refreshSourceEvidenceBuilderForActiveChannel);
+  sourceEvidenceBuilderSection?.addEventListener('change', refreshSourceEvidenceBuilderForActiveChannel);
+  mediaTypeOptIn?.addEventListener('change', updateSourceEvidenceOptInForActiveChannel);
+  ensureSourceEvidenceDigestRows({ onChange: refreshSourceEvidenceBuilderForActiveChannel });
+  updateSourceEvidenceOptInForActiveChannel();
   setAttachChannelUi(activeAttachChannel());
   setAttachActionAvailability();
   void updateAttachStatus();
