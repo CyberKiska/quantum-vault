@@ -37,7 +37,7 @@ import {
 } from './manifest/jcs.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
 import { buildAttachedArtifactExports, classifyAttachFiles } from '../features/qcont/attach-ui.js';
-import { buildSuccessorSelectionModel } from '../features/qcont/restore-ui.js';
+import { buildSuccessorSelectionModel } from '../features/qcont/successor-selection-ui.js';
 import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
 import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
 import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
