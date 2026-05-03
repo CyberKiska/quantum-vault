@@ -18,7 +18,7 @@ import {
   buildRestoreEvidenceMatrixSections,
   buildRestorePolicyFailureEvidenceMatrixSections,
   getRestoreReleaseState,
-  renderEvidenceMatrix,
+  renderSplitRestoreEvidence,
 } from '../ui/evidence-matrix.js';
 import { showToast } from '../ui/toast.js';
 import { buildRestoreRecoveryAction } from './restore-recovery-action.js';
@@ -608,7 +608,7 @@ export function buildRestoreResultSummary(result, resultPanelId, options = {}) {
     : 'No plaintext was released. Review the failed row before retrying restore.';
   panel.appendChild(intro);
 
-  renderEvidenceMatrix(panel, buildRestoreEvidenceMatrixSections(result, options), {
+  renderSplitRestoreEvidence(panel, buildRestoreEvidenceMatrixSections(result, options), {
     compact: options.compact === true,
     disclosureLabel: 'Evidence matrix',
     startExpanded: options.evidenceExpanded === true,
@@ -644,7 +644,7 @@ export function buildRestorePolicyFailureSummary(error, resultPanelId) {
   intro.textContent = 'No plaintext or recovered key was exported because archive policy blocked restore before reconstruction.';
   panel.appendChild(intro);
 
-  renderEvidenceMatrix(panel, buildRestorePolicyFailureEvidenceMatrixSections(error), { compact: true });
+  renderSplitRestoreEvidence(panel, buildRestorePolicyFailureEvidenceMatrixSections(error), { compact: true });
 
   panel.className = 'restore-result-panel fail';
   return true;

@@ -8,7 +8,7 @@
  * workflow-card      — Framed repeated item only, not a page section.
  * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); primary security decisions only.
  * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); warnings/info near an action.
- * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact; optional .qv-disclosure wrapper
+ * evidence-matrix    — .restore-evidence-primary (decision-first) + .evidence-matrix; secondary rows in .evidence-matrix-details
  * artifact-intake    — File intake grid: .artifact-intake-panel, .artifact-intake-table, grouped rows.
  * review-hub         — One disclosure grouping Artifacts, Lifecycle, Evidence, Technical.
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
@@ -1203,12 +1203,20 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   gap: 0.35rem;
 }
 
+.restore-evidence-primary {
+  margin-top: 0.35rem;
+}
+
+.restore-evidence-primary > .evidence-matrix.compact > .restore-result-section:first-child {
+  margin-top: 0;
+}
+
 .evidence-matrix.compact {
   gap: 0.3rem;
 }
 
 .evidence-matrix-details {
-  margin-top: 0.85rem;
+  margin-top: 0.55rem;
   padding: 0.7rem 0.85rem;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: var(--radius-sm);

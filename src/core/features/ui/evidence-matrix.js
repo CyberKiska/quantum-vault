@@ -23,6 +23,11 @@ export function renderEvidenceMatrix(host, sections = [], options = {}) {
   const mode = options.compact ? 'compact' : 'expanded';
   matrix.className = `restore-verification-matrix evidence-matrix ${mode}`;
   if (options.testId) matrix.setAttribute('data-testid', options.testId);
+  if (options.matrixClassName) {
+    for (const cls of String(options.matrixClassName).split(/\s+/).filter(Boolean)) {
+      matrix.classList.add(cls);
+    }
+  }
 
   let rowCount = 0;
   let failCount = 0;
@@ -82,6 +87,63 @@ export function renderEvidenceMatrix(host, sections = [], options = {}) {
   }
 
   return matrix;
+}
+
+export function renderSplitRestoreEvidence(host, split, options = {}) {
+  if (!host || !split) return null;
+
+  const primaryEl = document.createElement('div');
+  primaryEl.className = 'restore-evidence-primary';
+  renderEvidenceMatrix(primaryEl, split.primary || [], {
+    compact: options.compact !== false,
+    disclosureLabel: null,
+    matrixClassName: options.primaryMatrixClassName,
+    testId: options.primaryTestId,
+  });
+  host.appendChild(primaryEl);
+
+  const secondary = split.secondary || [];
+  if (!secondary.length) return primaryEl;
+
+  renderEvidenceMatrix(host, secondary, {
+    compact: options.compact !== false,
+    disclosureLabel: options.disclosureLabel || 'Evidence matrix',
+    startExpanded: options.startExpanded,
+    disclosureTestId: options.disclosureTestId,
+    matrixClassName: options.secondaryMatrixClassName,
+  });
+  return primaryEl;
+}
+
+export function buildRestoreOutcomeDetailRows(result, options = {}) {
+  const { releaseAllowed, policyLevel } = getRestoreReleaseState(result, options);
+  const rows = [];
+  if (!releaseAllowed) {
+    let reason = 'Recovered container or private key failed integrity verification.';
+    const { qencOk, qkeyOk, authenticity } = result;
+    if (qencOk && qkeyOk) {
+      if (options.liteDecrypt) {
+        const { containerOk, decryptOk } = options.liteDecrypt;
+        if (containerOk !== true) {
+          reason = 'Recovered container failed integrity verification.';
+        } else if (decryptOk !== true) {
+          reason = 'Decryption or file integrity check failed.';
+        } else if (authenticity?.status?.policySatisfied !== true) {
+          reason = 'Archive policy is not satisfied by verified archive-approval evidence.';
+        }
+      } else if (authenticity?.status?.policySatisfied !== true) {
+        reason = 'Archive policy is not satisfied by verified archive-approval evidence.';
+      }
+    }
+    rows.push(evidenceRow('Blocking reason', reason, 'fail'));
+  } else if (policyLevel === 'integrity-only') {
+    rows.push(evidenceRow(
+      'Release note',
+      'Integrity-only: external archive approval is not claimed for this recovery.',
+      'warn',
+    ));
+  }
+  return rows;
 }
 
 function countSelfVerifiedSignatures(authenticity) {
@@ -194,12 +256,14 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
     decisionRows.push(evidenceRow('Plaintext release', 'Blocked', 'fail'));
   }
 
-  const verificationRows = [
+  decisionRows.push(...buildRestoreOutcomeDetailRows(result, options));
+
+  const integrityRows = [
     evidencePolarRow('Container integrity', qencOk, 'Container integrity verified', 'Container integrity check failed'),
     evidencePolarRow('Private key recovery', qkeyOk, 'Private key integrity verified', 'Private key integrity check failed'),
   ];
   if (options.liteDecrypt) {
-    verificationRows.push(evidencePolarRow(
+    integrityRows.push(evidencePolarRow(
       'Plaintext integrity',
       options.liteDecrypt.decryptOk,
       'Decryption and file integrity verified',
@@ -207,7 +271,15 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
     ));
   }
 
-  verificationRows.push(
+  const policyRows = [
+    evidencePolarRow(
+      'Archive policy',
+      status.policySatisfied === true,
+      'Archive policy satisfied',
+      'Archive policy not satisfied',
+      'fail',
+      'Archive policy evaluation remains archive-approval-only.'
+    ),
     evidencePolarRow(
       'Archive approval',
       archiveApprovalVerified,
@@ -222,13 +294,17 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
       'Strong PQ archive-approval signature not present',
       archiveApprovalVerified === true && status.strongPqSignatureVerified !== true ? 'warn' : 'neutral',
     ),
-    buildSelfVerifiedSignatureRow(authenticity)
-  );
+    ...integrityRows,
+  ];
+
+  const secondaryRows = [
+    buildSelfVerifiedSignatureRow(authenticity),
+  ];
 
   if (status.transitionRecordPresent !== true) {
-    verificationRows.push(evidenceRow('Maintenance evidence', 'No transition or maintenance evidence present', 'neutral'));
+    secondaryRows.push(evidenceRow('Maintenance evidence', 'No transition or maintenance evidence present', 'neutral'));
   } else {
-    verificationRows.push(
+    secondaryRows.push(
       evidencePolarRow('Transition record', true, 'Transition record present', 'Transition record missing'),
       evidencePolarRow(
         'Transition chain',
@@ -248,9 +324,9 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
   }
 
   if (status.sourceEvidencePresent !== true) {
-    verificationRows.push(evidenceRow('Source evidence', 'No source-evidence objects present', 'neutral'));
+    secondaryRows.push(evidenceRow('Source evidence', 'No source-evidence objects present', 'neutral'));
   } else {
-    verificationRows.push(evidencePolarRow(
+    secondaryRows.push(evidencePolarRow(
       'Source evidence',
       status.sourceEvidenceSignatureVerified === true,
       'Source-evidence signature verified',
@@ -261,15 +337,15 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
   }
 
   if (cohortInspection.forkDetected === true) {
-    verificationRows.push(evidenceRow('Cohort selection', 'Same-state cohort fork remains known for this archive state', 'warn'));
+    secondaryRows.push(evidenceRow('Cohort selection', 'Same-state cohort fork remains known for this archive state', 'warn'));
   }
   if (status.bundleCohortMixed === true) {
-    verificationRows.push(evidenceRow('Lifecycle bundle selection', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', 'warn'));
+    secondaryRows.push(evidenceRow('Lifecycle bundle selection', 'Mixed embedded lifecycle bundle variants were present in the selected cohort', 'warn'));
   } else {
-    verificationRows.push(evidenceRow('Lifecycle bundle selection', 'One lifecycle bundle variant selected for policy evaluation', 'ok'));
+    secondaryRows.push(evidenceRow('Lifecycle bundle selection', 'One lifecycle bundle variant selected for policy evaluation', 'ok'));
   }
 
-  verificationRows.push(...buildSignerPinRows(status, archiveApprovalVerified));
+  secondaryRows.push(...buildSignerPinRows(status, archiveApprovalVerified));
 
   const timestampEvidence = Array.isArray(authenticity?.timestampEvidence) ? authenticity.timestampEvidence : [];
   if (timestampEvidence.length > 0) {
@@ -282,32 +358,29 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
     if (incompleteCount > 0) {
       completionParts.push(`OTS proof incomplete or pending: ${incompleteCount}`);
     }
-    verificationRows.push(evidenceRow(
+    secondaryRows.push(evidenceRow(
       'Timestamp evidence',
       `OTS evidence linked to ${timestampEvidence.length} signature${timestampEvidence.length === 1 ? '' : 's'}`,
       incompleteCount > 0 ? 'warn' : 'ok',
       `${completionParts.join('; ')}. Timestamp evidence does not satisfy archive policy.`
     ));
   } else {
-    verificationRows.push(evidenceRow('Timestamp evidence', 'No OTS evidence linked', 'neutral'));
+    secondaryRows.push(evidenceRow('Timestamp evidence', 'No OTS evidence linked', 'neutral'));
   }
 
-  verificationRows.push(
-    evidencePolarRow(
-      'Archive policy',
-      status.policySatisfied === true,
-      'Archive policy satisfied',
-      'Archive policy not satisfied',
-      'fail',
-      'Archive policy evaluation remains archive-approval-only.'
-    ),
+  secondaryRows.push(
     evidenceNoteRow('Maintenance, source-evidence, and timestamp evidence are reported separately and do not authorize restore.')
   );
 
-  return [
-    evidenceSection('Restore Decision', decisionRows),
-    evidenceSection('Verification Matrix', verificationRows),
-  ];
+  return {
+    primary: [
+      evidenceSection('Restore Decision', decisionRows),
+      evidenceSection('Policy & integrity', policyRows),
+    ],
+    secondary: [
+      evidenceSection('Evidence details', secondaryRows),
+    ],
+  };
 }
 
 export function buildRestorePolicyFailureEvidenceMatrixSections(error) {
@@ -316,30 +389,36 @@ export function buildRestorePolicyFailureEvidenceMatrixSections(error) {
   const status = authenticity?.status || {};
   const archiveApprovalVerified = status.archiveApprovalSignatureVerified === true;
 
-  return [
-    evidenceSection('Restore Decision', [
-      evidenceRow('Plaintext release', 'Blocked', 'fail'),
-      evidenceRow('Archive policy', 'Archive policy not satisfied', 'fail', reason),
-      evidenceRow('Integrity', 'Not evaluated after policy block', 'neutral'),
-      evidenceRow(
-        'Archive approval',
-        archiveApprovalVerified
-          ? 'Archive-approval signature verified but not policy-satisfying'
-          : 'No policy-satisfying archive-approval signature verified',
-        'fail'
-      ),
-      evidencePolarRow(
-        'Strong PQ approval',
-        status.strongPqSignatureVerified === true,
-        'Strong PQ archive-approval signature verified',
-        'Strong PQ archive-approval signature not present',
-        'neutral'
-      ),
-      buildSelfVerifiedSignatureRow(authenticity),
-      ...buildSignerPinRows(status, archiveApprovalVerified),
-      evidenceRow('Evidence channels', 'Maintenance, source-evidence, and timestamp evidence cannot satisfy archive policy', 'neutral'),
-    ]),
-  ];
+  return {
+    primary: [
+      evidenceSection('Restore Decision', [
+        evidenceRow('Plaintext release', 'Blocked', 'fail'),
+        evidenceRow('Archive policy', 'Archive policy not satisfied', 'fail', reason),
+        evidenceRow('Integrity', 'Not evaluated after policy block', 'neutral'),
+        evidenceRow(
+          'Archive approval',
+          archiveApprovalVerified
+            ? 'Archive-approval signature verified but not policy-satisfying'
+            : 'No policy-satisfying archive-approval signature verified',
+          'fail'
+        ),
+        evidencePolarRow(
+          'Strong PQ approval',
+          status.strongPqSignatureVerified === true,
+          'Strong PQ archive-approval signature verified',
+          'Strong PQ archive-approval signature not present',
+          'neutral'
+        ),
+      ]),
+    ],
+    secondary: [
+      evidenceSection('Evidence details', [
+        buildSelfVerifiedSignatureRow(authenticity),
+        ...buildSignerPinRows(status, archiveApprovalVerified),
+        evidenceRow('Evidence channels', 'Maintenance, source-evidence, and timestamp evidence cannot satisfy archive policy', 'neutral'),
+      ]),
+    ],
+  };
 }
 
 export function buildAttachEvidenceMatrixSections({ classified, plan, channelConfig, channel }) {
