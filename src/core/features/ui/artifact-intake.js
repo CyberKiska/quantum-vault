@@ -11,20 +11,14 @@ import {
   parseSourceEvidenceBytes,
   parseTransitionRecordBytes,
 } from '../../crypto/lifecycle/artifacts.js';
-import { showToast } from './toast.js';
 import { createDisclosurePanel } from './disclosure.js';
+import { createDigestDetailList, shortDigestLabel } from './digest-details.js';
 
 const DEFAULT_TABLE_LABEL = 'Selected artifact intake';
 
 /** Default next-action copy from markAccepted; grouped rows replace duplicates with one summary. */
 const DEFAULT_ACCEPTED_NEXT_ACTION = 'No action needed before evaluation.';
 const GROUP_ACCEPTED_NEXT_ACTION = 'No further action on these items before evaluation.';
-
-function shortDigest(value) {
-  const text = String(value || '').trim();
-  if (text.length <= 18) return text || 'Not available';
-  return `${text.slice(0, 8)}...${text.slice(-8)}`;
-}
 
 function inferSignatureClass(workflow, channel) {
   if (workflow === 'attach') {
@@ -156,7 +150,7 @@ async function classifyArtifactFile(file, options) {
       const parsed = await parseLifecycleShard(bytes, { strict: true });
       markAccepted(row, {
         classifiedAs: 'QVqcont-7 shard',
-        target: `Archive ${shortDigest(parsed.archiveState?.archiveId)} / Cohort ${shortDigest(parsed.cohortId)}`,
+        target: `Archive ${shortDigestLabel(parsed.archiveState?.archiveId, { edgeLength: 8 })} / Cohort ${shortDigestLabel(parsed.cohortId, { edgeLength: 8 })}`,
         role: workflow === 'reshare' ? 'Reshare predecessor input' : 'Restore threshold material',
         kind: 'qcont-shard',
       });
@@ -203,7 +197,7 @@ async function classifyArtifactFile(file, options) {
       const parsed = unpackQsig(bytes);
       markAccepted(row, {
         classifiedAs: inferSignatureClass(workflow, channel),
-        target: `Payload digest ${shortDigest(toHex(parsed.payloadDigest))}`,
+        target: `Payload digest ${shortDigestLabel(toHex(parsed.payloadDigest), { edgeLength: 8 })}`,
         role: inferSignatureRole(workflow, channel),
         kind: 'signature',
         nextAction: 'Evaluation will verify target bytes and signer trust before using this signature.',
@@ -228,7 +222,7 @@ async function classifyArtifactFile(file, options) {
       const parsed = parseOpenTimestampProof(bytes, { name });
       markAccepted(row, {
         classifiedAs: 'OTS proof',
-        target: `Stamped SHA-256 ${shortDigest(parsed.stampedDigestHex)}`,
+        target: `Stamped SHA-256 ${shortDigestLabel(parsed.stampedDigestHex, { edgeLength: 8 })}`,
         role: 'Timestamp only',
         kind: 'ots-proof',
         nextAction: 'Evaluation will link this proof to a loaded detached signature.',
@@ -264,7 +258,7 @@ async function classifyArtifactFile(file, options) {
     const parsed = await parseLifecycleBundleBytes(bytes);
     markAccepted(row, {
       classifiedAs: 'lifecycle bundle',
-      target: `Bundle ${shortDigest(parsed.digest.value)}`,
+      target: `Bundle ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
       role: workflow === 'attach' ? 'Evidence merge target' : 'Disambiguation input',
       kind: 'lifecycle-bundle',
     });
@@ -287,7 +281,7 @@ async function classifyArtifactFile(file, options) {
     const parsed = parseArchiveStateDescriptorBytes(bytes);
     markAccepted(row, {
       classifiedAs: 'archive-state descriptor',
-      target: `State ${shortDigest(parsed.digest.value)}`,
+      target: `State ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
       role: workflow === 'attach' ? 'Archive approval target' : 'Disambiguation input',
       kind: 'archive-state',
     });
@@ -310,7 +304,7 @@ async function classifyArtifactFile(file, options) {
     const parsed = parseTransitionRecordBytes(bytes);
     markAccepted(row, {
       classifiedAs: 'transition-record JSON',
-      target: `Transition ${shortDigest(parsed.digest.value)}`,
+      target: `Transition ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
       role: 'Separate evidence only',
       kind: 'transition-record',
     });
@@ -333,7 +327,7 @@ async function classifyArtifactFile(file, options) {
     const parsed = parseSourceEvidenceBytes(bytes);
     markAccepted(row, {
       classifiedAs: 'source-evidence JSON',
-      target: `Source evidence ${shortDigest(parsed.digest.value)}`,
+      target: `Source evidence ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
       role: 'Separate evidence only',
       kind: 'source-evidence',
     });
@@ -459,34 +453,15 @@ function mergeNextActionForGroup(memberRows) {
 }
 
 function buildDetailDl(row) {
-  const list = document.createElement('dl');
-  list.className = 'artifact-detail-list';
-  for (const entry of row.details) {
-    const dt = document.createElement('dt');
-    dt.textContent = entry.label;
-    const dd = document.createElement('dd');
-    const value = document.createElement('span');
-    value.className = 'artifact-detail-value';
-    value.textContent = entry.value;
-    dd.appendChild(value);
-    if (entry.copyValue) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'button secondary small artifact-copy-button';
-      button.textContent = 'Copy';
-      button.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(entry.copyValue);
-          showToast('Copied artifact detail.', 'success');
-        } catch {
-          showToast('Copy failed. Select the expanded value manually.', 'warning');
-        }
-      });
-      dd.appendChild(button);
-    }
-    list.append(dt, dd);
-  }
-  return list;
+  return createDigestDetailList(row.details, {
+    listClassName: 'artifact-detail-list',
+    termKey: 'label',
+    valueKey: 'value',
+    valueWrapperClassName: 'artifact-detail-value',
+    copyButtonClassName: 'button secondary small artifact-copy-button',
+    copySuccessMessage: 'Copied artifact detail.',
+    copyFailureMessage: 'Copy failed. Select the expanded value manually.',
+  });
 }
 
 function countDetailEntries(memberRows) {
