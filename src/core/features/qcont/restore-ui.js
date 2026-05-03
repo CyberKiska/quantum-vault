@@ -62,7 +62,6 @@ function renderRestorePreflightCard(containerId, decision, options = {}) {
 
   if (!decision) {
     renderDecisionCard(panel, null, {
-      extraRootClasses: ['restore-preflight-card', 'decision-card'],
       rootDataTestId: rootTestId,
     });
     return;
@@ -99,7 +98,6 @@ function renderRestorePreflightCard(containerId, decision, options = {}) {
       rows,
     },
     {
-      extraRootClasses: ['restore-preflight-card', 'decision-card'],
       dataAttrs: { 'release-state': decision.releaseState || 'blocked' },
       rootDataTestId: rootTestId,
       ariaLive: 'polite',

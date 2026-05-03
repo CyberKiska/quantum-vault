@@ -147,7 +147,7 @@ function renderInspectorDom(root, {
   root.replaceChildren();
   root.classList.remove('initially-hidden');
   root.style.display = 'block';
-  root.className = 'archive-inspector decision-card';
+  root.className = 'archive-inspector';
   root.setAttribute('role', 'region');
   root.setAttribute('aria-label', 'Archive lifecycle inspector');
 

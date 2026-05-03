@@ -96,7 +96,7 @@ function clearTransientPanels() {
             }
         } else if (element.id === 'restorePreflightDecision' || element.id === 'liteRestorePreflightDecision') {
             element.replaceChildren();
-            element.className = 'qv-decision-card restore-preflight-card decision-card initially-hidden';
+            element.className = 'qv-decision-card initially-hidden';
             element.removeAttribute('data-release-state');
             element.setAttribute('data-testid', element.id === 'liteRestorePreflightDecision' ? 'lite-restore-preflight' : 'restore-preflight');
         } else if (element.id === 'attachPlanDecision' || element.id === 'resharePlanDecision') {

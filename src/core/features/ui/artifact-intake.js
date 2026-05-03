@@ -537,7 +537,7 @@ function createGroupDetails(memberRows) {
     badgeText: String(totalDetails),
     badgeTone,
     defaultOpen: anyProblem,
-    className: 'artifact-row-details artifact-group-details',
+    className: 'artifact-row-details',
     body,
   });
 }
@@ -632,7 +632,7 @@ function renderGroupedArtifactRow(tbody, memberRows) {
 
 function renderRows(host, rows, label) {
   host.replaceChildren();
-  host.classList.add('artifact-list', 'artifact-intake-panel', 'artifact-table');
+  host.classList.add('artifact-intake-panel');
   host.classList.remove('initially-hidden');
   host.style.display = 'block';
   host.setAttribute('aria-live', 'polite');

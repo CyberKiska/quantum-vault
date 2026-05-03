@@ -9,7 +9,7 @@
  * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); primary security decisions only.
  * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); warnings/info near an action.
  * evidence-matrix    — Verification matrix rows: .evidence-matrix, .evidence-matrix.compact; optional .qv-disclosure wrapper
- * artifact-list      — File intake grid: .artifact-list/.artifact-intake-panel, .artifact-intake-table, grouped rows.
+ * artifact-intake    — File intake grid: .artifact-intake-panel, .artifact-intake-table, grouped rows.
  * review-hub         — One disclosure grouping Artifacts, Lifecycle, Evidence, Technical.
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
  * action-row         — Primary + secondary actions: .action-row/.button-group; flex-wrap for narrow viewports.
@@ -379,8 +379,7 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
 }
 .full-width { grid-column: 1 / -1; }
 
-.workflow-card,
-.card {
+.workflow-card {
   min-width: 0;
   background: rgba(15, 23, 42, 0.35);
   border: 1px solid var(--border-subtle);
@@ -393,8 +392,7 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   margin-top: 0.9rem;
 }
 
-.workflow-surface,
-.workflow-panel .panel-grid > .card.full-width {
+.workflow-surface {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
@@ -402,44 +400,29 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   padding: 0;
 }
 
-.workflow-panel .panel-grid > .card.full-width {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-}
-
-.workflow-surface > h3,
-.workflow-panel .panel-grid > .card.full-width > h3 {
+.workflow-surface > h3 {
   margin: 0;
   font-size: 1rem;
   color: var(--text-main);
 }
 
 .workflow-surface > .muted-copy,
-.workflow-surface > .operation-hint,
-.workflow-panel .panel-grid > .card.full-width > .muted-copy,
-.workflow-panel .panel-grid > .card.full-width > .operation-hint {
+.workflow-surface > .operation-hint {
   margin-bottom: 0;
 }
 
 .workflow-surface > .button-group,
-.workflow-surface > #reshareExportActions,
-.workflow-panel .panel-grid > .card.full-width > .button-group,
-.workflow-panel .panel-grid > .card.full-width > #reshareExportActions {
+.workflow-surface > #reshareExportActions {
   order: 50;
 }
 
 .workflow-surface > .inline-error-panel,
-.workflow-surface > .restore-result-panel,
-.workflow-panel .panel-grid > .card.full-width > .inline-error-panel,
-.workflow-panel .panel-grid > .card.full-width > .restore-result-panel {
+.workflow-surface > .restore-result-panel {
   order: 60;
 }
 
 .workflow-surface > .technical-details,
-.workflow-surface > details.verification-section,
-.workflow-panel .panel-grid > .card.full-width > .technical-details,
-.workflow-panel .panel-grid > .card.full-width > details.verification-section {
+.workflow-surface > details.verification-section {
   order: 80;
 }
 
@@ -541,8 +524,6 @@ button.button.primary { background: var(--accent-primary); color: white; }
 button.button.primary:hover:not(:disabled) { background: #2563eb; }
 button.button.secondary { background: var(--bg-input); border-color: var(--border-subtle); color: var(--text-main); }
 button.button.secondary:hover:not(:disabled) { border-color: var(--text-muted); background: #475569; }
-button.button.danger { background: var(--bg-input); border-color: var(--accent-danger); color: var(--accent-danger); }
-button.button.danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.1); }
 button.button.small { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
 button.button:focus-visible {
   outline: 3px solid var(--border-focus);
@@ -835,8 +816,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 }
 
 /* --- Shared decision card (QV primitive) --- */
-.qv-decision-card,
-.restore-preflight-card {
+.qv-decision-card {
   min-width: 0;
   margin: 0.9rem 0 1rem;
   padding: 0.9rem 1rem;
@@ -845,25 +825,21 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   background: var(--bg-app);
 }
 
-.qv-decision-card.split-readiness,
-.operation-readiness > .qv-decision-card.split-readiness {
+.qv-decision-card.split-readiness {
   margin-top: 1rem;
 }
 
-.qv-decision-card--ok,
-.restore-preflight-card.qv-decision-card--ok {
+.qv-decision-card--ok {
   border-color: var(--accent-success);
   background: rgba(16, 185, 129, 0.08);
 }
 
-.qv-decision-card--warn,
-.restore-preflight-card.qv-decision-card--warn {
+.qv-decision-card--warn {
   border-color: var(--accent-warning);
   background: rgba(245, 158, 11, 0.08);
 }
 
-.qv-decision-card--fail,
-.restore-preflight-card.qv-decision-card--fail {
+.qv-decision-card--fail {
   border-color: var(--accent-danger);
   background: rgba(239, 68, 68, 0.08);
 }
@@ -1038,7 +1014,6 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   overflow-wrap: anywhere;
 }
 
-.artifact-list,
 .artifact-intake-panel {
   min-width: 0;
   margin: 0.85rem 0 1rem;
@@ -1048,7 +1023,6 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   background: var(--bg-app);
 }
 
-.artifact-list h4,
 .artifact-intake-panel h4 {
   margin: 0 0 0.65rem;
   font-size: 0.9rem;
@@ -1156,13 +1130,6 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 }
 
 .artifact-row-details .qv-disclosure__summary {
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.artifact-group-details .qv-disclosure__summary {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.75rem;
@@ -1599,48 +1566,6 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   margin-top: 1rem;
 }
 
-.prerequisite-list {
-  display: grid;
-  gap: 0.35rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.prerequisite-list li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.45rem;
-  align-items: start;
-  color: var(--text-muted);
-  font-size: 0.84rem;
-  line-height: 1.4;
-}
-
-.prerequisite-list li::before {
-  content: "•";
-  color: var(--text-muted);
-  font-weight: 700;
-}
-
-.prerequisite-list li.ok {
-  color: var(--accent-success);
-}
-
-.prerequisite-list li.ok::before {
-  content: "✓";
-  color: var(--accent-success);
-}
-
-.prerequisite-list li.fail {
-  color: var(--accent-danger);
-}
-
-.prerequisite-list li.fail::before {
-  content: "✗";
-  color: var(--accent-danger);
-}
-
 .strategy-group {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
@@ -1654,24 +1579,6 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   font-size: 0.8rem;
   color: var(--text-muted);
   margin-bottom: 6px;
-}
-
-.strategy-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-  color: var(--text-main);
-}
-
-.strategy-option:last-child {
-  margin-bottom: 0;
-}
-
-.strategy-option input[type="radio"],
-.strategy-option input[type="checkbox"] {
-  width: auto;
-  margin: 0;
 }
 
 .verification-section {
@@ -2103,9 +2010,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .technical-context,
   .shard-geometry-panel,
   .digest-details-panel,
-  .artifact-list,
   .artifact-intake-panel,
-  .restore-preflight-card,
   .qv-decision-card,
   .inline-error-panel,
   .lite-export-checklist,
@@ -2252,9 +2157,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   .technical-context,
   .shard-geometry-panel,
   .digest-details-panel,
-  .artifact-list,
   .artifact-intake-panel,
-  .restore-preflight-card,
   .qv-decision-card,
   .inline-error-panel,
   .lite-export-checklist,
