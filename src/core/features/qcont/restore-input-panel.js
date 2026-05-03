@@ -6,7 +6,7 @@
  *
  * It runs the same async sequence:
  *   1. updateShardSelectionStatus  (assess threshold readiness)
- *   2. renderArtifactIntakeTable   (per-file classification)
+ *   2. renderArtifactIntakeTable   (artifact-classifier + artifact-table-ui)
  *   3. refreshSelectionAndPreflight (archive/state/cohort/bundle disambiguation)
  *   4. optional renderRestorePreflightForFiles (only when preflightContainerId is set)
  *

@@ -9,7 +9,7 @@
  * decision-card      — Canonical: .qv-decision-card (+ tone modifiers); primary security decisions only.
  * callout            — Canonical: .qv-callout (+ .qv-callout--warning|blocking|info|success); warnings/info near an action.
  * evidence-matrix    — .restore-evidence-primary (decision-first) + .evidence-matrix; secondary rows in .evidence-matrix-details
- * artifact-intake    — File intake grid: .artifact-intake-panel, .artifact-intake-table, grouped rows.
+ * artifact-intake    — Facade: artifact-classifier.js (row model) + artifact-table-ui.js (table DOM)
  * review-hub         — One disclosure grouping Artifacts, Lifecycle, Evidence, Technical.
  * technical-details  — Collapsed long copy / digests: .technical-details, .technical-context, .digest-details-panel
  * action-row         — Primary + secondary actions: .action-row/.button-group; flex-wrap for narrow viewports.
