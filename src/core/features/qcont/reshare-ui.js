@@ -1,11 +1,11 @@
 import { isLifecycleParsedShard, parseLifecycleShard, reshareSameState } from '../../../app/crypto-service.js';
 import { collectRestoreVerificationOptions } from './restore-ui.js';
 import { bindRsParamsUI } from './rs-params-display.js';
+import { createSuccessorShardInputRefreshController } from './successor-workflow-input.js';
 import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
 import { renderDecisionCard } from '../ui/decision-card.js';
-import { refreshRestoreInputPanel } from './restore-input-panel.js';
 import {
   evidenceNoteRow,
   evidenceRow,
@@ -14,7 +14,6 @@ import {
 } from '../ui/evidence-matrix.js';
 import { deriveArchiveBaseName } from './archive-name.js';
 
-let reshareStatusSeq = 0;
 let lastReshareExports = null;
 
 function parsePositiveInteger(input, field) {
@@ -143,31 +142,6 @@ function renderResharePlanDecision(files, assessment) {
   );
 }
 
-async function updateReshareStatus() {
-  const input = document.getElementById('qcontReshareInput');
-  const statusDiv = document.getElementById('proReshareStatus');
-  const statusText = document.getElementById('proReshareStatusText');
-  const actionButton = document.getElementById('reshareQcontBtn');
-  if (!input || !statusDiv || !statusText || !actionButton) return;
-
-  const files = [...(input.files || [])];
-  const requestId = ++reshareStatusSeq;
-  const { assessment } = await refreshRestoreInputPanel({
-    prefix: 'reshare',
-    files,
-    statusDiv,
-    statusText,
-    actionButton,
-    intakeContainerId: 'reshareArtifactIntake',
-    intakeLabel: 'Reshare artifact intake',
-    intakeWorkflow: 'reshare',
-    preflightContainerId: null,
-    isCurrent: () => requestId === reshareStatusSeq,
-  });
-  if (requestId !== reshareStatusSeq) return;
-  renderResharePlanDecision(files, assessment);
-}
-
 export function initQcontReshareUI() {
   const input = document.getElementById('qcontReshareInput');
   const reshareBtn = document.getElementById('reshareQcontBtn');
@@ -178,6 +152,25 @@ export function initQcontReshareUI() {
   const reasonCodeInput = document.getElementById('reshareReasonCode');
   const operatorRoleInput = document.getElementById('reshareOperatorRole');
   const notesInput = document.getElementById('reshareNotes');
+
+  const refreshReshareInput = createSuccessorShardInputRefreshController({
+    prefix: 'reshare',
+    inputId: 'qcontReshareInput',
+    statusDivId: 'proReshareStatus',
+    statusTextId: 'proReshareStatusText',
+    actionButtonId: 'reshareQcontBtn',
+    intakeContainerId: 'reshareArtifactIntake',
+    intakeLabel: 'Reshare artifact intake',
+    intakeWorkflow: 'reshare',
+    preflightContainerId: null,
+    onAfterRefresh(files, assessment) {
+      renderResharePlanDecision(files, assessment);
+    },
+  });
+
+  async function updateReshareStatus() {
+    await refreshReshareInput.refresh();
+  }
 
   bindRsParamsUI({
     nInput,

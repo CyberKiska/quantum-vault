@@ -1,10 +1,14 @@
 /**
  * Shared "shard input panel refresh" helper used by every restore-shaped surface
- * (Lite Restore, Pro Restore, Reshare). It runs the same async sequence:
+ * (Lite Restore, Pro Restore, Reshare). Prefer wiring through
+ * `successor-workflow-input.js` (`createSuccessorShardInputRefreshController`) so
+ * status DOM ids, re-entrancy guards, and preflight options stay DRY.
+ *
+ * It runs the same async sequence:
  *   1. updateShardSelectionStatus  (assess threshold readiness)
  *   2. renderArtifactIntakeTable   (per-file classification)
  *   3. refreshSelectionAndPreflight (archive/state/cohort/bundle disambiguation)
- *   4. optional renderRestorePreflightForFiles (only restore-shaped tabs use it)
+ *   4. optional renderRestorePreflightForFiles (only when preflightContainerId is set)
  *
  * Each step honours the shared `isCurrent()` re-entrancy guard so stale async
  * work does not clobber the latest selection.

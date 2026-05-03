@@ -20,7 +20,7 @@ import {
     logVerificationSummary,
     renderRestorePreflightForFiles,
 } from './qcont/restore-ui.js';
-import { refreshRestoreInputPanel } from './qcont/restore-input-panel.js';
+import { createSuccessorShardInputRefreshController } from './qcont/successor-workflow-input.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
 import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setWorkflowBusy, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
@@ -46,7 +46,18 @@ import { buildRestoreRecoveryAction } from './qcont/restore-recovery-action.js';
 let liteKeys = null;
 let isLiteMode = true; // Default to Lite mode
 let originalFileNames = new Map(); // Track original file names for restoration
-let liteShardsStatusSeq = 0;
+const liteRestoreShardRefresh = createSuccessorShardInputRefreshController({
+  prefix: 'liteRestore',
+  inputId: 'liteShardsInput',
+  statusDivId: 'shardsStatus',
+  statusTextId: 'shardsStatusText',
+  actionButtonId: 'liteRestoreBtn',
+  intakeContainerId: 'liteRestoreArtifactIntake',
+  intakeLabel: 'Lite restore artifact intake',
+  intakeWorkflow: 'lite-restore',
+  preflightContainerId: 'liteRestorePreflightDecision',
+  expectedSignerInputId: 'liteRestoreExpectedEdSigner',
+});
 let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
 const LITE_RESTORE_INLINE_ERROR_ID = 'liteRestoreInlineError';
@@ -404,28 +415,7 @@ function updateFileListDisplay() {
 
 // Update shards status indicator
 async function updateShardsStatus() {
-    const shardsInput = document.getElementById('liteShardsInput');
-    const statusDiv = document.getElementById('shardsStatus');
-    const statusText = document.getElementById('shardsStatusText');
-    const restoreBtn = document.getElementById('liteRestoreBtn');
-
-    if (!shardsInput || !statusDiv || !statusText) return;
-
-    const files = [...(shardsInput.files || [])];
-    const requestId = ++liteShardsStatusSeq;
-    await refreshRestoreInputPanel({
-        prefix: 'liteRestore',
-        files,
-        statusDiv,
-        statusText,
-        actionButton: restoreBtn,
-        intakeContainerId: 'liteRestoreArtifactIntake',
-        intakeLabel: 'Lite restore artifact intake',
-        intakeWorkflow: 'lite-restore',
-        preflightContainerId: 'liteRestorePreflightDecision',
-        expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
-        isCurrent: () => requestId === liteShardsStatusSeq,
-    });
+  await liteRestoreShardRefresh.refresh();
 }
 
 // Update create shards button state

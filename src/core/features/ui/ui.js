@@ -11,13 +11,12 @@ import { syncArchiveReviewHub } from './archive-review-hub.js';
 import { clearArchiveInspector, renderArchiveInspectorPanel } from '../qcont/archive-inspector-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
-import { refreshRestoreInputPanel } from '../qcont/restore-input-panel.js';
+import { createSuccessorShardInputRefreshController } from '../qcont/successor-workflow-input.js';
 import { initRovingTablist } from './tabs.js';
 
 // Pro mode state
 let collectedUserEntropy = null;
 let entropyCollector = null;
-let proShardsStatusSeq = 0;
 let proReviewStatusSeq = 0;
 let unregisterUiSessionWipe = null;
 
@@ -237,28 +236,26 @@ export function initUI() {
         }
         updateProWorkflowStatus();
     }
-    
+
+    const proRestoreShardRefresh = createSuccessorShardInputRefreshController({
+        prefix: 'restore',
+        inputId: 'qcontShardsInput',
+        statusDivId: 'proShardsStatus',
+        statusTextId: 'proShardsStatusText',
+        actionButtonId: 'restoreQcontBtn',
+        intakeContainerId: 'restoreArtifactIntake',
+        intakeLabel: 'Restore artifact intake',
+        intakeWorkflow: 'restore',
+        preflightContainerId: 'restorePreflightDecision',
+        expectedSignerInputId: 'restoreExpectedEdSigner',
+        onAfterRefresh() {
+            updateProWorkflowStatus();
+        },
+    });
+
     // Update Pro shards status
     async function updateProShardsStatus() {
-        const statusDiv = el('proShardsStatus');
-        const statusText = el('proShardsStatusText');
-        if (!statusDiv || !statusText || !qcontShardsInput) return;
-        const files = [...(qcontShardsInput.files || [])];
-        const requestId = ++proShardsStatusSeq;
-        await refreshRestoreInputPanel({
-            prefix: 'restore',
-            files,
-            statusDiv,
-            statusText,
-            actionButton: restoreQcontBtn,
-            intakeContainerId: 'restoreArtifactIntake',
-            intakeLabel: 'Restore artifact intake',
-            intakeWorkflow: 'restore',
-            preflightContainerId: 'restorePreflightDecision',
-            expectedSignerInput: el('restoreExpectedEdSigner'),
-            isCurrent: () => requestId === proShardsStatusSeq,
-        });
-        updateProWorkflowStatus();
+        await proRestoreShardRefresh.refresh();
     }
 
     async function updateProReviewStatus() {
