@@ -588,27 +588,45 @@ async function updateAttachStatus() {
 
     let stateClass = 'sufficient';
     let summary;
+    let statusHint;
     if (!canAttach) {
       stateClass = 'invalid';
       summary = `More input required: ${requirements.missingLabel}`;
+      statusHint = `${count} file(s) loaded. Attach stays blocked until the input includes ${requirements.missingLabel}.`;
     } else if (plan.warning) {
       stateClass = 'insufficient';
     }
 
     if (!summary) {
-      summary = plan.embedIntoShards
-        ? (plan.warning ? `Ready to update selected shards only (${channelConfig.label.toLowerCase()})` : `Ready to embed ${channelConfig.label.toLowerCase()} evidence into selected shards`)
-        : `Ready to update the lifecycle bundle only (${channelConfig.label.toLowerCase()})`;
+      if (plan.embedIntoShards && plan.warning) {
+        summary = partialRewriteAcknowledged()
+          ? `Ready: partial shard rewrite (${channelConfig.label.toLowerCase()})`
+          : `Partial rewrite: acknowledgement required (${channelConfig.label.toLowerCase()})`;
+      } else {
+        summary = plan.embedIntoShards
+          ? `Ready: embed evidence into selected shards (${channelConfig.label.toLowerCase()})`
+          : `Ready: update lifecycle bundle only (${channelConfig.label.toLowerCase()})`;
+      }
     }
 
-    status.className = `shards-status ${stateClass}`;
+    if (!statusHint) {
+      statusHint = `${count} file(s) loaded. ${partialRewriteRequiresAck
+        ? (partialRewriteAcknowledged()
+          ? 'Acknowledgement recorded. The decision card shows the selected shard rewrite scope.'
+          : 'Acknowledge the partial shard rewrite below before attaching.')
+        : channelConfig.channelHelp}`;
+    }
+
+    const showStatusPanel = !partialRewriteRequiresAck;
+    status.style.display = showStatusPanel ? 'block' : 'none';
+    status.className = `shards-status ${stateClass}${showStatusPanel ? '' : ' initially-hidden'}`;
     text.textContent = summary;
-    hint.textContent = `${count} file(s) loaded. ${!canAttach
-      ? `Attach stays blocked until the input includes ${requirements.missingLabel}.`
-      : `${plan.hint} ${partialRewriteRequiresAck && !partialRewriteAcknowledged() ? 'Acknowledge partial shard rewrite before attaching.' : ''} ${channelConfig.channelHelp}`}`;
+    hint.textContent = statusHint;
     status.setAttribute('aria-label', summary);
     setPartialRewriteAcknowledgementRequired(partialRewriteRequiresAck);
-    const lede = hint.textContent;
+    const lede = `${count} file(s) loaded. ${canAttach
+      ? `${plan.hint} ${channelConfig.channelHelp}`
+      : `Attach stays blocked until the input includes ${requirements.missingLabel}.`}`;
     if (planPanel) {
       const planModel = buildAttachPlanDecisionModel({
         channel,

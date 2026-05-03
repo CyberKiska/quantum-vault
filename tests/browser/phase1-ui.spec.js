@@ -319,7 +319,7 @@ test('artifact intake table explains accepted ignored unsupported and wrong-targ
   await expect(reviewInspector).toContainText('Lifecycle timeline');
   await expect(reviewInspector).toContainText('Evidence present in bundle (counts)');
   await expect(page.getByTestId('pro-workflow-active')).toContainText('Review');
-  await expect(page.getByTestId('pro-workflow-evidence')).toContainText('review artifacts selected');
+  await expect(page.getByTestId('pro-workflow-evidence')).toContainText('review files');
 });
 
 test('distribution build exports successor shards and the generated shards restore under integrity-only policy', async ({ page }) => {
@@ -425,14 +425,13 @@ test('pro split readiness blocks invalid shard geometry', async ({ page }) => {
   await expect(page.getByTestId('split-prerequisites')).toContainText('n must be at least 5');
 });
 
-test('strong-PQ restore fails closed without detached archive approval', async ({ page }) => {
+test('strong-PQ restore blocks the CTA without detached archive approval', async ({ page }) => {
   await openProTab(page, 'tab-restore');
   await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicyFailFiles);
 
   const restoreButton = page.getByTestId('restore-button');
-  await expect(restoreButton).toBeEnabled();
-
-  await restoreButton.click();
+  await expect(restoreButton).toBeDisabled();
+  await expect(restoreButton).toHaveText('Add Archive-Approval Evidence');
 
   const preflight = page.getByTestId('restore-preflight');
   await expect(preflight).toContainText('Restore decision');
@@ -445,23 +444,19 @@ test('strong-PQ restore fails closed without detached archive approval', async (
   ).resolves.toBe(true);
   await expect(preflight).toContainText('Plaintext release: blocked');
   await expect(preflight).toContainText('before reconstruction');
-  await expect(lastToast(page)).toContainText('strong PQ archive-approval signature');
-  await expect(page.getByTestId('restore-inline-error')).toBeVisible();
-  await expect(page.getByTestId('restore-inline-error')).toContainText('Cause');
-  await expect(page.getByTestId('restore-inline-error')).toContainText('Affected artifact');
-  await expect(page.getByTestId('restore-inline-error')).toContainText('Next recovery action');
-  await expect(page.getByTestId('restore-inline-error')).toContainText('policy-satisfying archive-approval');
+  await expect(page.getByTestId('restore-inline-error')).toBeHidden();
   await expect(page.getByTestId('restore-result')).toBeHidden();
 });
 
-test('lite restore policy failure is shown as a persistent inline error', async ({ page }) => {
+test('lite restore policy blocker disables the CTA before evaluation', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
   await page.locator('#liteTabRestore').click();
   await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicyFailFiles);
 
   const restoreButton = page.locator('#liteRestoreBtn');
-  await expect(restoreButton).toBeEnabled();
+  await expect(restoreButton).toBeDisabled();
+  await expect(restoreButton).toHaveText('Add Archive-Approval Evidence');
   const litePreflight = page.getByTestId('lite-restore-preflight');
   await expect(litePreflight).toContainText('Restore decision');
   await expect(
@@ -471,15 +466,8 @@ test('lite restore policy failure is shown as a persistent inline error', async 
       return (el.compareDocumentPosition(intake) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     })
   ).resolves.toBe(true);
-  await restoreButton.click();
-
-  const inlineError = page.getByTestId('lite-restore-inline-error');
-  await expect(inlineError).toBeVisible();
-  await expect(inlineError).toContainText('Lite restore blocked');
-  await expect(inlineError).toContainText('Cause');
-  await expect(inlineError).toContainText('Affected artifact');
-  await expect(inlineError).toContainText('Next recovery action');
-  await expect(inlineError).toContainText('policy-satisfying archive-approval');
+  await expect(litePreflight).toContainText('Required archive-approval signature evidence');
+  await expect(page.getByTestId('lite-restore-inline-error')).toBeHidden();
 });
 
 test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async ({ page }) => {
@@ -728,7 +716,7 @@ test('partial shard attach requires explicit acknowledgement before rewriting se
 
   await expect(partialAckPanel).toBeVisible();
   await expect(partialAckPanel).toContainText('only the selected shard files will be rewritten');
-  await expect(page.getByTestId('attach-status-text')).toContainText('Ready to update selected shards only');
+  await expect(page.getByTestId('attach-status-text')).toContainText('Partial rewrite: acknowledgement required');
   await expect(attachButton).toBeDisabled();
 
   await partialAck.check();

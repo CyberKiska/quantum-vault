@@ -46,6 +46,38 @@ function preflightAlertLabel(blockingTone, compact) {
   return compact ? 'Note' : 'Next step';
 }
 
+function restoreDefaultActionLabel(prefix) {
+  return prefix === 'liteRestore' ? 'Restore Selected Archive' : 'Evaluate Restore';
+}
+
+function restoreBlockedActionLabel(decision) {
+  const reason = String(decision?.blockingReason || '').toLowerCase();
+  if (reason.includes('no successor') || reason.includes('no shard')) return 'Load Restore Inputs';
+  if (reason.includes('threshold') || reason.includes('selected shards')) return 'Load More Shards';
+  if (reason.includes('selection') || reason.includes('archive/state') || reason.includes('cohort')) return 'Resolve Archive Selection';
+  if (reason.includes('archive-approval') || reason.includes('signature evidence')) return 'Add Archive-Approval Evidence';
+  return 'Resolve Restore Blocker';
+}
+
+function applyRestorePreflightActionState(actionButton, decision, { prefix = 'restore' } = {}) {
+  if (!actionButton) return;
+  if (!actionButton.dataset.defaultLabel) {
+    actionButton.dataset.defaultLabel = actionButton.textContent || restoreDefaultActionLabel(prefix);
+  }
+  const defaultLabel = actionButton.dataset.defaultLabel || restoreDefaultActionLabel(prefix);
+  const blocked = decision?.canEvaluate === false;
+  actionButton.textContent = blocked ? restoreBlockedActionLabel(decision) : defaultLabel;
+  actionButton.disabled = blocked;
+  if (blocked) {
+    const reason = decision?.blockingReason || 'Resolve the restore preflight blocker before evaluation.';
+    actionButton.title = reason;
+    actionButton.setAttribute('aria-label', `${actionButton.textContent}: ${reason}`);
+  } else {
+    actionButton.removeAttribute('title');
+    actionButton.removeAttribute('aria-label');
+  }
+}
+
 function shouldShowPreflightAlertRow(decision) {
   const reason = String(decision.blockingReason || '').trim();
   if (decision.blockingTone === 'fail' || decision.blockingTone === 'warn') return true;
@@ -350,7 +382,7 @@ export function buildRestoreDecisionViewModel({
       : `Evidence is present (${evidenceParts.join(', ')}). Release remains blocked until cryptographic evaluation succeeds.`,
     blockingReason: compact
       ? 'Run Restore to verify; release stays blocked until integrity and policy checks pass.'
-      : 'Run Evaluate Restore Inputs; release remains blocked until integrity and archive policy checks pass.',
+      : 'Run Evaluate Restore; release remains blocked until integrity and archive policy checks pass.',
     blockingTone: 'neutral',
     canEvaluate: true,
   };
@@ -406,9 +438,11 @@ export async function renderRestorePreflightForFiles({
   containerId = RESTORE_PREFLIGHT_CARD_ID,
   files = [],
   expectedSignerInput = null,
+  actionButton = null,
 }) {
   const decision = await buildRestorePreflightDecisionForFiles({ prefix, files, expectedSignerInput });
   renderRestorePreflightCard(containerId, decision, { compact: prefix === 'liteRestore' });
+  applyRestorePreflightActionState(actionButton, decision, { prefix });
   return decision;
 }
 
@@ -831,6 +865,7 @@ export function initQcontRestoreUI() {
         containerId: RESTORE_PREFLIGHT_CARD_ID,
         files,
         expectedSignerInput: restoreExpectedEdSigner,
+        actionButton: restoreQcontBtn,
       });
     }
   });

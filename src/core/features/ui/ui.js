@@ -136,11 +136,44 @@ export function initUI() {
         return input?.files?.length || 0;
     }
 
+    function selectedArtifactText(count, label) {
+        return `${count} ${label} file${count === 1 ? '' : 's'}`;
+    }
+
+    function compactThresholdStatus(text) {
+        const value = String(text || '').trim();
+        if (!value || value.includes('Params info')) return 'not configured';
+        const match = value.match(/Total:\s*n=(\d+).*?Data:\s*k=(\d+).*?Threshold:\s*t=(\d+)/i);
+        if (match) return `n=${match[1]} / k=${match[2]} / t=${match[3]}`;
+        return value.length > 72 ? `${value.slice(0, 69)}...` : value;
+    }
+
+    function compactEvidenceStatus(text) {
+        const value = String(text || '').trim();
+        if (!value) return '';
+        const artifactSelectionMatch = value.match(/^(\d+)\s+(.+?)\s+artifacts?\s+selected$/i);
+        if (artifactSelectionMatch) {
+            return `${artifactSelectionMatch[1]} ${artifactSelectionMatch[2]} files`;
+        }
+        if (/^Ready:\s*\d+\/\d+/.test(value)) {
+            const shardMatch = value.match(/Ready:\s*(\d+\/\d+)/);
+            const policyMatch = value.match(/Policy:\s*([^.;]+)/i);
+            const parts = [];
+            if (shardMatch) parts.push(`${shardMatch[1]} shards`);
+            if (policyMatch) parts.push(policyMatch[1].trim());
+            if (/selection required/i.test(value)) parts.push('selection needed');
+            else if (/selection complete/i.test(value)) parts.push('selection ready');
+            if (/signature|evidence/i.test(value)) parts.push('evidence loaded');
+            return parts.join(' / ') || value;
+        }
+        return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+    }
+
     function updateProWorkflowStatus(activeTabId = currentProWorkflowTab) {
         currentProWorkflowTab = activeTabId || currentProWorkflowTab;
         const workflowNames = {
             proTabDistribution: 'Create',
-            proTabReview: 'Review',
+            proTabReview: 'Review Artifacts',
             proTabAttach: 'Maintain',
             proTabReshare: 'Evolve',
             proTabRestore: 'Restore',
@@ -158,7 +191,6 @@ export function initUI() {
         const reviewCount = selectedFileCount(proReviewInput);
         const attachCount = selectedFileCount(el('qcontAttachInput'));
         const reshareCount = selectedFileCount(el('qcontReshareInput'));
-        const selectedArtifactText = (count, label) => `${count} ${label} artifact${count === 1 ? '' : 's'} selected`;
         if (archiveEl) {
             if (currentProWorkflowTab === 'proTabReview' && reviewCount > 0) archiveEl.textContent = selectedArtifactText(reviewCount, 'review');
             else if (currentProWorkflowTab === 'proTabAttach' && attachCount > 0) archiveEl.textContent = selectedArtifactText(attachCount, 'maintenance');
@@ -175,17 +207,17 @@ export function initUI() {
         if (policyEl) policyEl.textContent = policyLabel(el('proAuthPolicy')?.value || 'strong-pq-signature');
         if (thresholdEl) {
             const thresholdText = String(rsTextEl?.textContent || '').trim();
-            thresholdEl.textContent = thresholdText && !thresholdText.includes('Params info') ? thresholdText : 'not configured';
+            thresholdEl.textContent = compactThresholdStatus(thresholdText);
         }
         if (evidenceEl) {
             const attachText = String(el('attachStatusText')?.textContent || '').trim();
             const restoreText = String(el('proShardsStatusText')?.textContent || '').trim();
             const reviewText = String(el('proReviewStatusText')?.textContent || '').trim();
             const reshareText = String(el('proReshareStatusText')?.textContent || '').trim();
-            if (currentProWorkflowTab === 'proTabAttach' && attachText) evidenceEl.textContent = attachText;
-            else if (currentProWorkflowTab === 'proTabReview' && reviewText) evidenceEl.textContent = reviewText;
-            else if (currentProWorkflowTab === 'proTabReshare' && reshareText) evidenceEl.textContent = reshareText;
-            else if (restoreText && restoreCount > 0) evidenceEl.textContent = restoreText;
+            if (currentProWorkflowTab === 'proTabAttach' && attachText) evidenceEl.textContent = compactEvidenceStatus(attachText);
+            else if (currentProWorkflowTab === 'proTabReview' && reviewText) evidenceEl.textContent = compactEvidenceStatus(reviewText);
+            else if (currentProWorkflowTab === 'proTabReshare' && reshareText) evidenceEl.textContent = compactEvidenceStatus(reshareText);
+            else if (restoreText && restoreCount > 0) evidenceEl.textContent = compactEvidenceStatus(restoreText);
             else evidenceEl.textContent = 'not loaded';
         }
     }

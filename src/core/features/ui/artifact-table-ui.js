@@ -269,11 +269,18 @@ export function renderArtifactIntakePanel(host, rows, label = DEFAULT_ARTIFACT_I
   host.classList.add('artifact-intake-panel');
   host.classList.remove('initially-hidden');
   host.style.display = 'block';
-  host.setAttribute('aria-live', 'polite');
+  host.setAttribute('role', 'region');
+  host.setAttribute('aria-label', label || DEFAULT_ARTIFACT_INTAKE_TABLE_LABEL);
 
   const heading = document.createElement('h4');
   heading.textContent = label || DEFAULT_ARTIFACT_INTAKE_TABLE_LABEL;
   host.appendChild(heading);
+
+  const liveSummary = document.createElement('p');
+  liveSummary.className = 'visually-hidden';
+  liveSummary.setAttribute('aria-live', 'polite');
+  liveSummary.textContent = `${rows.length} artifact${rows.length === 1 ? '' : 's'} classified.`;
+  host.appendChild(liveSummary);
 
   const wrapper = document.createElement('div');
   wrapper.className = 'artifact-intake-scroll';

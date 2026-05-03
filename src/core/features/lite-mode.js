@@ -934,6 +934,7 @@ export function initLiteMode() {
                 containerId: 'liteRestorePreflightDecision',
                 files,
                 expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+                actionButton: document.getElementById('liteRestoreBtn'),
             });
         }
     });

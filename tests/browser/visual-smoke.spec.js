@@ -45,8 +45,9 @@ test.describe('Visual smoke (layout + screenshots after UI motion)', () => {
     await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
     await page.locator('#liteTabRestore').click();
     await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicyFailFiles);
-    await page.locator('#liteRestoreBtn').click();
-    await expect(page.getByTestId('lite-restore-inline-error')).toBeVisible();
+    await expect(page.locator('#liteRestoreBtn')).toBeDisabled();
+    await expect(page.locator('#liteRestoreBtn')).toHaveText('Add Archive-Approval Evidence');
+    await expect(page.getByTestId('lite-restore-preflight')).toContainText('Required archive-approval signature evidence');
     await waitForUiAnimations(page);
     await expectNoHorizontalOverflow(page);
     await expectCriticalPanelsNotClipped(page);
@@ -72,7 +73,7 @@ test.describe('Visual smoke (layout + screenshots after UI motion)', () => {
     await page.getByTestId('attach-channel').selectOption('archive-approval');
     await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalPartialShardAttachFiles);
     await expect(page.getByTestId('attach-partial-ack-panel')).toBeVisible();
-    await expect(page.getByTestId('attach-status-text')).toContainText('Ready to update selected shards only');
+    await expect(page.getByTestId('attach-status-text')).toContainText('Partial rewrite: acknowledgement required');
     await waitForUiAnimations(page);
     await expectNoHorizontalOverflow(page);
     await expectCriticalPanelsNotClipped(page);

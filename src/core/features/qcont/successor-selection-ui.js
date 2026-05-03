@@ -688,5 +688,6 @@ export async function refreshSelectionAndPreflight({
     containerId: preflightContainerId,
     files,
     expectedSignerInput,
+    actionButton,
   });
 }

@@ -44,7 +44,7 @@
           </label>
           <span class="mode-label">Pro</span>
         </div>
-        <p class="muted-copy mode-switch-hint">Lite encrypts and splits in one step. Pro follows the archive workflow: create, review, maintain, evolve, restore.</p>
+        <p class="muted-copy mode-switch-hint">Lite encrypts and splits in one step. Pro follows the archive workflow: create, review artifacts, maintain evidence, evolve, restore.</p>
 
         <!-- Lite Mode Nav -->
         <nav class="nav-menu" role="tablist" aria-label="Lite workflow tabs" id="liteNav">
@@ -58,7 +58,7 @@
             <p class="nav-group-label">Archive Workflow</p>
             <div class="nav-menu" role="presentation">
               <button id="proTabDistribution" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity proViewEncryption proViewDistribution" tabindex="0" type="button" data-testid="tab-create"><span class="icon">🧩</span> Create</button>
-              <button id="proTabReview" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReview" tabindex="-1" type="button" data-testid="tab-review"><span class="icon">🔎</span> Review</button>
+              <button id="proTabReview" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReview" tabindex="-1" type="button" data-testid="tab-review"><span class="icon">🔎</span> Review Artifacts</button>
               <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Maintain</button>
               <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Evolve</button>
               <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button" data-testid="tab-restore"><span class="icon">♻️</span> Restore</button>
@@ -178,16 +178,20 @@
                 </div>
               </div>
 
+              <div class="action-row button-group lite-primary-action">
+                <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Successor Shards</button>
+              </div>
+
               <div id="liteCustodyGuidance" class="qv-decision-card qv-decision-card--informational lite-custody-panel policy-consequence-panel informational initially-hidden" data-testid="lite-custody-guidance" aria-live="polite">
                 <h4 class="qv-decision-card__title">Custody and archive exports</h4>
                 <p id="liteCustodyGuidanceSummary" class="muted-copy lite-custody-lede">
-                  Recovery normally depends on independent shard custody and the exported JSON descriptors, not on keeping ML-KEM container keys in the browser or on disk.
+                  Recovery depends on independent shard custody and exported JSON descriptors, not on keeping browser keys around.
                 </p>
                 <ul class="lite-custody-list">
-                  <li>Store <code>QVqcont-7</code> shards across separate locations or custodians so one loss does not destroy recovery.</li>
-                  <li>Retain the archive-state descriptor and lifecycle bundle JSON; restore, review, and evidence workflows depend on them.</li>
-                  <li>Archive approval happens outside the browser: sign the canonical archive-state descriptor bytes, then use Pro Attach to bind detached signatures and related evidence to the lifecycle bundle.</li>
-                  <li><strong>Backup Keys</strong> is optional convenience. Some operators or auditors must not retain ML-KEM keys—skip it when your custody policy forbids keeping container keys.</li>
+                  <li>Store <code>QVqcont-7</code> shards across separate locations or custodians.</li>
+                  <li>Retain the archive-state descriptor and lifecycle bundle JSON; Review, Pro Attach, and Restore depend on them.</li>
+                  <li>Archive approval happens outside the browser: sign archive-state bytes, then use Pro Attach for signatures and evidence.</li>
+                  <li><strong>Backup Keys</strong> is optional convenience; skip it when custody policy forbids retaining ML-KEM keys.</li>
                 </ul>
               </div>
 
@@ -195,10 +199,6 @@
                 <h4 class="lite-export-checklist-title">Last create export checklist</h4>
                 <p class="muted-copy lite-export-checklist-lede">The browser started downloads for the primary artifacts. Confirm each file is stored where your policy requires.</p>
                 <ul id="liteExportChecklistItems" class="lite-export-checklist-items"></ul>
-              </div>
-
-              <div class="action-row button-group">
-                <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Successor Shards</button>
               </div>
             </div>
           </div>
@@ -302,7 +302,7 @@
 
       <!-- PRO MODE -->
       <section id="proMode" class="mode-section" style="display: none;">
-        <div id="proWorkflowStatusStrip" class="workflow-status-strip" data-testid="pro-workflow-status" aria-live="polite">
+        <div id="proWorkflowStatusStrip" class="workflow-status-strip" data-testid="pro-workflow-status">
           <div class="workflow-status-item">
             <span class="workflow-status-label">Workflow</span>
             <span id="proWorkflowStatusActive" class="workflow-status-value" data-testid="pro-workflow-active">Create</span>
@@ -509,8 +509,8 @@
 
         <div id="proViewReview" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabReview">
           <header class="section-header">
-            <h2>Review Archive State</h2>
-            <p class="muted-copy section-step-hint">Inspect selected archive artifacts before maintenance or restore. This review classifies files locally and does not validate policy by itself.</p>
+            <h2>Review Artifacts</h2>
+            <p class="muted-copy section-step-hint">Classify and inspect selected archive artifacts before maintenance or restore. Restore eligibility is evaluated only in Restore.</p>
           </header>
 
           <div class="panel-grid">
@@ -521,7 +521,7 @@
                   <label for="proReviewInput">Review inputs</label>
                   <input type="file" id="proReviewInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="review-input" aria-describedby="reviewInputHint">
                 </div>
-                <p id="reviewInputHint" class="muted-copy operation-hint">Load successor shards, archive-state descriptors, lifecycle bundles, detached signatures, signer pins, and timestamp evidence to inspect how the UI classifies them.</p>
+                <p id="reviewInputHint" class="muted-copy operation-hint">Load successor shards, archive-state descriptors, lifecycle bundles, detached signatures, signer pins, and timestamp evidence to inspect classification. This does not verify restore eligibility.</p>
               </div>
               <div id="proReviewStatus" class="shards-status initially-hidden" data-testid="review-status" aria-live="polite">
                 <span id="proReviewStatusText" data-testid="review-status-text">0 review files selected</span>
@@ -873,7 +873,7 @@
                   </section>
                   <section class="archive-review-hub__section archive-review-hub__section--muted">
                     <h4 class="archive-review-hub__heading">Evidence</h4>
-                    <p class="muted-copy archive-review-hub__lede">Detached signatures, signer pins, and OTS proofs are classified under Artifacts. The verification matrix appears in Restore result after Evaluate Restore Inputs.</p>
+                    <p class="muted-copy archive-review-hub__lede">Detached signatures, signer pins, and OTS proofs are classified under Artifacts. The verification matrix appears in Restore result after Evaluate Restore.</p>
                   </section>
                   <section class="archive-review-hub__section">
                     <h4 class="archive-review-hub__heading">Technical</h4>
@@ -895,7 +895,7 @@
                 </div>
               </details>
               <div class="action-row button-group">
-                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Evaluate Restore Inputs</button>
+                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Evaluate Restore</button>
                 <button id="releaseRestoredFilesBtn" class="button secondary initially-hidden" disabled type="button" data-testid="release-button">Release Recovered Files</button>
               </div>
               <div id="proRestoreInlineError" class="inline-error-panel initially-hidden" data-testid="restore-inline-error"></div>
