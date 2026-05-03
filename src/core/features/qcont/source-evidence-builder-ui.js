@@ -1,4 +1,5 @@
 import { showToast } from '../ui/toast.js';
+import { hashBlobForSourceDigestAlg } from './source-evidence-file-digest.js';
 
 const SOURCE_DIGEST_ALGORITHMS = Object.freeze(['SHA3-512', 'SHA3-256', 'SHA-256']);
 const SOURCE_DIGEST_HEX_LENGTH = Object.freeze({
@@ -270,6 +271,80 @@ export function ensureSourceEvidenceDigestRows({ onChange = () => {} } = {}) {
     container.appendChild(createSourceEvidenceDigestRow({ onChange }));
   }
   onChange();
+}
+
+// Hash one file with each row’s selected algorithm and write hex into every digest value field.
+
+export async function applySourceEvidenceFileToAllDigestRows(file, { onRefresh } = {}) {
+  const rows = [...document.querySelectorAll('#sourceEvidenceDigestRows .source-evidence-digest-row')];
+  if (rows.length === 0) {
+    showToast('Add at least one source digest row first.', 'warning');
+    return;
+  }
+
+  const rowStatesForDup = rows.map((row, index) => ({
+    row,
+    index,
+    alg: String(row.querySelector('.source-evidence-digest-alg')?.value || '').trim(),
+    rawValue: '',
+    hintEl: null,
+  }));
+  const dupErr = findDuplicateDigestAlgorithmsFromRows(rowStatesForDup);
+  if (dupErr) {
+    showToast('Use a different algorithm on each row before applying one file.', 'warning');
+    return;
+  }
+
+  const digestCache = new Map();
+  try {
+    for (const row of rows) {
+      const alg = String(row.querySelector('.source-evidence-digest-alg')?.value || '').trim();
+      const valueInput = row.querySelector('.source-evidence-digest-value');
+      if (!valueInput || expectedSourceDigestHexLength(alg) == null) {
+        throw new Error(`Unsupported digest algorithm: ${alg || '(empty)'}`);
+      }
+      if (!digestCache.has(alg)) {
+        digestCache.set(alg, hashBlobForSourceDigestAlg(file, alg));
+      }
+      valueInput.value = await digestCache.get(alg);
+    }
+    const sizeLabel = file.size.toLocaleString();
+    showToast(
+      `Source evidence: filled ${rows.length} digest row(s) from one file (${sizeLabel} bytes).`,
+      'success',
+      4200
+    );
+    onRefresh?.();
+  } catch (err) {
+    showToast(String(err?.message || err), 'error');
+  }
+}
+
+let sourceEvidenceApplyFileUiInitialized = false;
+
+export function initSourceEvidenceApplyFileToAllRows(onRefresh) {
+  if (sourceEvidenceApplyFileUiInitialized) return;
+  const btn = document.getElementById('sourceEvidenceApplyFileToDigestsBtn');
+  const input = document.getElementById('sourceEvidenceApplyFileInput');
+  if (!btn || !input) return;
+  sourceEvidenceApplyFileUiInitialized = true;
+
+  btn.addEventListener('click', () => {
+    input.value = '';
+    input.click();
+  });
+
+  input.addEventListener('change', async () => {
+    const picked = input.files?.[0];
+    input.value = '';
+    if (!picked) return;
+    btn.disabled = true;
+    try {
+      await applySourceEvidenceFileToAllDigestRows(picked, { onRefresh });
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 export function collectSourceEvidenceBuilderParams() {

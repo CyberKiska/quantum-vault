@@ -39,6 +39,7 @@ import {
   collectSourceEvidenceBuilderParams,
   createSourceEvidenceDigestRow,
   ensureSourceEvidenceDigestRows,
+  initSourceEvidenceApplyFileToAllRows,
   refreshSourceEvidenceBuilderUi,
   showSourceEvidenceExportError,
   updateSourceEvidenceOptInUi,
@@ -1066,6 +1067,7 @@ export function initQcontAttachUI() {
   sourceEvidenceBuilderSection?.addEventListener('change', refreshSourceEvidenceBuilderForActiveChannel);
   mediaTypeOptIn?.addEventListener('change', updateSourceEvidenceOptInForActiveChannel);
   ensureSourceEvidenceDigestRows({ onChange: refreshSourceEvidenceBuilderForActiveChannel });
+  initSourceEvidenceApplyFileToAllRows(refreshSourceEvidenceBuilderForActiveChannel);
   updateSourceEvidenceOptInForActiveChannel();
   setAttachChannelUi(activeAttachChannel());
   setAttachActionAvailability();

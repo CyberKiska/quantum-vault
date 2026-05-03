@@ -592,11 +592,19 @@
                   </div>
                   <div class="form-group">
                     <label>Source digests</label>
-                    <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
-                    <div class="action-row button-group">
-                      <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
+                    <div class="qv-callout qv-callout--info source-evidence-digests-callout" role="note">
+                      <p class="qv-callout__title">What you are binding</p>
+                      <p class="qv-callout__body muted-copy">
+                        Each digest is a cryptographic fingerprint of the <strong>exact byte contents</strong> of the source object you name in <strong>Source object type</strong> (for example the canonical <code>*.archive-state.json</code> file, not a display name or filesystem path).
+                        Use <strong>Apply one file to all rows</strong> when the same file should be hashed once per row algorithm (typical for one canonical artifact, multiple digest algorithms). You still choose relation type and source object type deliberately. Optional media type is never inferred from filenames.
+                      </p>
                     </div>
-                    <small class="muted-copy">Provide one or more canonical digests for the reviewed source object.</small>
+                    <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
+                    <div class="action-row button-group source-evidence-digest-actions">
+                      <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
+                      <button id="sourceEvidenceApplyFileToDigestsBtn" class="button secondary small" type="button" data-testid="source-evidence-apply-file-all">Apply one file to all rows</button>
+                      <input type="file" id="sourceEvidenceApplyFileInput" class="visually-hidden" tabindex="-1" aria-label="File whose bytes populate every digest row" data-testid="source-evidence-apply-file-input">
+                    </div>
                   </div>
                   <div class="form-group">
                     <label for="sourceEvidenceExternalRefs">External source-signature refs (optional)</label>

@@ -513,6 +513,20 @@ summary:focus-visible,
   color: var(--accent-danger);
 }
 
+.source-evidence-digest-actions {
+  align-items: center;
+}
+
+.source-evidence-digests-callout {
+  margin-top: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
+.source-evidence-digests-callout .muted-copy {
+  color: inherit;
+  opacity: 0.92;
+}
+
 .attach-target-binding-preview {
   margin-top: 0.65rem;
   white-space: pre-wrap;
@@ -559,7 +573,10 @@ button:disabled { opacity: 0.6; cursor: not-allowed; filter: grayscale(0.4); }
   background: var(--bg-panel); color: var(--text-main);
   box-shadow: var(--shadow-md); border-left: 4px solid var(--text-muted);
   font-size: 0.92rem; animation: slideIn 0.25s ease;
-  max-width: 420px; transition: opacity 0.22s ease, transform 0.22s ease;
+  max-width: 420px; min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  transition: opacity 0.22s ease, transform 0.22s ease;
 }
 .toast.fade-out { opacity: 0; transform: translateY(16px); }
 .toast.success { border-left-color: var(--accent-success); }

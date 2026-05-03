@@ -841,6 +841,34 @@ test('source-evidence builder preview states archive policy and blocks export un
   await expect(exportBtn).toBeEnabled();
 });
 
+test('source-evidence apply one file fills every digest row using each row algorithm', async ({ page }) => {
+  await openProTab(page, 'tab-attach');
+  await page.getByTestId('attach-channel').selectOption('source-evidence');
+
+  await page.getByTestId('source-evidence-add-digest').click();
+  await page.locator('#sourceEvidenceDigestRows .source-evidence-digest-alg').nth(1).selectOption('SHA-256');
+
+  const expectedSha3_512 =
+    'b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0';
+
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByTestId('source-evidence-apply-file-all').click(),
+  ]);
+  await fileChooser.setFiles({
+    name: 'probe.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('abc', 'utf8'),
+  });
+
+  await expect(page.locator('#sourceEvidenceDigestRows .source-evidence-digest-value').nth(0)).toHaveValue(expectedSha3_512);
+  await expect(page.locator('#sourceEvidenceDigestRows .source-evidence-digest-value').nth(1)).toHaveValue(
+    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+  );
+
+  await expect(page.getByTestId('toast').last()).toContainText('Source evidence:');
+});
+
 test('attach target-binding preview reflects channel, archive binding, and shard rewrite mode', async ({ page }) => {
   await openProTab(page, 'tab-attach');
 
