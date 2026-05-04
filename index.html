@@ -33,7 +33,7 @@
         <div class="header-group">
           <h1>Quantum Vault</h1>
           <p class="subtitle">PQC encryption & sharding</p>
-          <span class="version-badge">v2.1.0</span>
+          <span class="version-badge">v2.1.1</span>
         </div>
 
         <div class="mode-switch-container">
@@ -44,7 +44,7 @@
           </label>
           <span class="mode-label">Pro</span>
         </div>
-        <p class="muted-copy mode-switch-hint">Lite encrypts and splits in one step. Pro separates keys, encrypt/decrypt, split, restore, plus optional attach and reshare tools.</p>
+        <p class="muted-copy mode-switch-hint">Lite encrypts and splits in one step. Pro follows the archive workflow: create, review artifacts, maintain evidence, evolve, restore.</p>
 
         <!-- Lite Mode Nav -->
         <nav class="nav-menu" role="tablist" aria-label="Lite workflow tabs" id="liteNav">
@@ -55,19 +55,13 @@
         <!-- Pro Mode Nav -->
         <nav class="nav-groups initially-hidden" role="tablist" aria-label="Pro workflow tabs" id="proNav">
           <div class="nav-group" role="presentation">
-            <p class="nav-group-label">Core Workflow</p>
+            <p class="nav-group-label">Archive Workflow</p>
             <div class="nav-menu" role="presentation">
-              <button id="proTabIdentity" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity" tabindex="0" type="button"><span class="icon">🔑</span> Key Management</button>
-              <button id="proTabEncryption" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewEncryption" tabindex="-1" type="button"><span class="icon">🔒</span> Encryption</button>
-              <button id="proTabDistribution" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewDistribution" tabindex="-1" type="button"><span class="icon">🧩</span> Split</button>
+              <button id="proTabDistribution" class="nav-item active" role="tab" aria-selected="true" aria-controls="proViewIdentity proViewEncryption proViewDistribution" tabindex="0" type="button" data-testid="tab-create"><span class="icon">🧩</span> Create</button>
+              <button id="proTabReview" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReview" tabindex="-1" type="button" data-testid="tab-review"><span class="icon">🔎</span> Review Artifacts</button>
+              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Maintain</button>
+              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Evolve</button>
               <button id="proTabRestore" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewRestore" tabindex="-1" type="button" data-testid="tab-restore"><span class="icon">♻️</span> Restore</button>
-            </div>
-          </div>
-          <div class="nav-group" role="presentation">
-            <p class="nav-group-label">Maintenance Tools</p>
-            <div class="nav-menu" role="presentation">
-              <button id="proTabAttach" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewAttach" tabindex="-1" type="button" data-testid="tab-attach"><span class="icon">🪢</span> Attach</button>
-              <button id="proTabReshare" class="nav-item" role="tab" aria-selected="false" aria-controls="proViewReshare" tabindex="-1" type="button" data-testid="tab-reshare"><span class="icon">🔁</span> Reshare</button>
             </div>
           </div>
         </nav>
@@ -77,8 +71,8 @@
         <div class="context-row">
           <span>System Status</span>
           <span class="context-val status-line">
-            <span id="sys-status-dot" class="status-indicator" aria-label="System status: Ready"></span>
-            <span id="sys-status-text">Ready</span>
+            <span id="sys-status-dot" class="status-indicator no-key-loaded" aria-label="System status: No key loaded"></span>
+            <span id="sys-status-text">No key loaded</span>
           </span>
         </div>
         <div class="context-row">
@@ -91,7 +85,7 @@
         </div>
         <button id="sidebar-selftest" class="sidebar-selftest" type="button">Run Self-test</button>
         <div class="sidebar-note">
-          Memory-only session.<br />
+          Browser memory only; wipe is best effort.<br />
           No network calls.<br />
           <a href="https://github.com/CyberKiska/quantum-vault" target="_blank" rel="noopener noreferrer">Source code</a>
         </div>
@@ -105,7 +99,7 @@
       <!-- LITE MODE -->
       <section id="liteMode" class="mode-section active">
         <!-- Lite View: Protect -->
-        <div id="liteViewProtect" class="tab-panel module-panel active" role="tabpanel" aria-labelledby="liteTabProtect">
+        <div id="liteViewProtect" class="tab-panel module-panel workflow-panel active" role="tabpanel" aria-labelledby="liteTabProtect">
           <header class="section-header">
             <h2>Create Archive</h2>
             <p class="muted-copy section-step-hint">Select files once, and Quantum Vault will encrypt them and export successor shards plus archive JSON.</p>
@@ -129,12 +123,12 @@
           </div>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <div class="dropzone-area" id="liteDropzone">
                 <h3>Select files to protect</h3>
-                <p class="muted-copy">Drag & drop or click to select</p>
+                <p id="liteFilesHelp" class="muted-copy">Drag files here or use the file picker to select plaintext inputs for local encryption.</p>
                 <label for="liteFilesInput" class="visually-hidden">Select files to protect</label>
-                <input type="file" id="liteFilesInput" multiple>
+                <input type="file" id="liteFilesInput" multiple aria-describedby="liteFilesHelp">
                 <div id="liteFilesList" class="files-list initially-hidden"></div>
               </div>
               
@@ -144,7 +138,7 @@
                      <span class="status-icon">🔑</span>
                      <span class="status-text">Generating keys...</span>
                    </div>
-                   <button id="liteDownloadKeysBtn" class="button secondary small initially-hidden" type="button">
+                   <button id="liteDownloadKeysBtn" class="button secondary small initially-hidden" type="button" aria-describedby="liteCustodyGuidanceSummary">
                      📥 Backup Keys
                    </button>
                 </div>
@@ -172,7 +166,8 @@
                       <option value="strong-pq-signature">Strong PQ signature required</option>
                   </select>
                   <small class="muted-copy">Choose whether restore should require detached archive approval.</small>
-                  <details class="technical-context mt-2">
+                  <div id="liteAuthPolicyConsequence" class="policy-consequence-panel warning" data-testid="lite-policy-consequence" aria-live="polite"></div>
+                  <details class="technical-context technical-details mt-2">
                     <summary>Technical context</summary>
                     <div class="detail-copy">
                       <small class="muted-copy">Lite creates successor lifecycle archives by default and exports successor <code>.qcont</code> shards, a signable <code>.archive-state.json</code>, and a mutable <code>.lifecycle-bundle.json</code>.</small>
@@ -183,18 +178,37 @@
                 </div>
               </div>
 
-              <div class="button-group">
+              <div class="action-row button-group lite-primary-action">
                 <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Successor Shards</button>
+              </div>
+
+              <div id="liteCustodyGuidance" class="qv-decision-card qv-decision-card--informational lite-custody-panel policy-consequence-panel informational initially-hidden" data-testid="lite-custody-guidance" aria-live="polite">
+                <h4 class="qv-decision-card__title">Custody and archive exports</h4>
+                <p id="liteCustodyGuidanceSummary" class="muted-copy lite-custody-lede">
+                  Recovery depends on independent shard custody and exported JSON descriptors, not on keeping browser keys around.
+                </p>
+                <ul class="lite-custody-list">
+                  <li>Store <code>QVqcont-7</code> shards across separate locations or custodians.</li>
+                  <li>Retain the archive-state descriptor and lifecycle bundle JSON; Review, Pro Attach, and Restore depend on them.</li>
+                  <li>Archive approval happens outside the browser: sign archive-state bytes, then use Pro Attach for signatures and evidence.</li>
+                  <li><strong>Backup Keys</strong> is optional convenience; skip it when custody policy forbids retaining ML-KEM keys.</li>
+                </ul>
+              </div>
+
+              <div id="liteExportChecklist" class="lite-export-checklist initially-hidden" data-testid="lite-export-checklist" aria-live="polite">
+                <h4 class="lite-export-checklist-title">Last create export checklist</h4>
+                <p class="muted-copy lite-export-checklist-lede">The browser started downloads for the primary artifacts. Confirm each file is stored where your policy requires.</p>
+                <ul id="liteExportChecklistItems" class="lite-export-checklist-items"></ul>
               </div>
             </div>
           </div>
         </div>
 
         <!-- Lite View: Restore -->
-        <div id="liteViewRestore" class="tab-panel module-panel" role="tabpanel" aria-labelledby="liteTabRestore">
+        <div id="liteViewRestore" class="tab-panel module-panel workflow-panel" role="tabpanel" aria-labelledby="liteTabRestore">
           <header class="section-header">
             <h2>Restore</h2>
-            <p class="muted-copy section-step-hint">Load shards and detached verification artifacts, then restore the selected archive.</p>
+            <p class="muted-copy section-step-hint">The restore decision updates as you load shards and evidence; details and selection follow below.</p>
           </header>
 
           <div class="visual-pipeline-container">
@@ -215,17 +229,28 @@
           </div>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <div class="dropzone-area" id="liteShardsDropzone">
                 <h3>Select Shards to Restore</h3>
-                <p class="muted-copy">Load successor <code>.qcont</code> shards and any detached signatures, signer keys, or timestamp proofs you want checked.</p>
+                <p id="liteShardsHelp" class="muted-copy">Load successor <code>.qcont</code> shards and any detached signatures, signer keys, or timestamp proofs you want checked.</p>
                 <label for="liteShardsInput" class="visually-hidden">Select shard and verification files</label>
-                <input type="file" id="liteShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple>
+                <input type="file" id="liteShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple aria-describedby="liteShardsHelp">
               </div>
-              <div id="shardsStatus" class="shards-status initially-hidden">
+              <div id="shardsStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="shardsStatusText">0 shards selected</span>
               </div>
-              <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
+              <div id="liteRestorePreflightDecision" class="qv-decision-card initially-hidden" data-testid="lite-restore-preflight"></div>
+              <details id="liteRestoreArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded archive details</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+                    <div id="liteRestoreArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="lite-restore-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                    <div id="liteRestoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="lite-restore-archive-inspector"></div>
+                    <div id="liteRestoreSuccessorSelection" class="verification-section successor-selection initially-hidden">
                 <small id="liteRestoreSuccessorSelectionSummary" class="muted-copy"></small>
                 <small id="liteRestoreSuccessorSelectionHelp" class="muted-copy"></small>
                 <div id="liteRestoreStateSelectionGroup" class="form-group initially-hidden">
@@ -240,8 +265,15 @@
                   <label for="liteRestoreBundleSelection">Lifecycle bundle selection</label>
                   <select id="liteRestoreBundleSelection"></select>
                 </div>
-              </div>
-              <details class="technical-context">
+                    </div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <p class="muted-copy archive-review-hub__lede">Detached signatures, signer pins, and OTS proofs are listed under Artifacts. Verification counts appear in Lite restore output after you run restore.</p>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Technical</h4>
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Load successor <code>.qcont</code> shards plus any optional <code>.archive-state.json</code>, <code>.lifecycle-bundle.json</code>, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs in the main selector above.</small>
@@ -255,9 +287,13 @@
                   <input type="text" id="liteRestoreExpectedEdSigner" placeholder="G...">
                 </div>
               </details>
-              <div class="button-group">
+                  </section>
+                </div>
+              </details>
+              <div class="action-row button-group">
                 <button id="liteRestoreBtn" class="button primary" disabled type="button">♻️ Restore Selected Archive</button>
               </div>
+              <div id="liteRestoreInlineError" class="inline-error-panel initially-hidden" data-testid="lite-restore-inline-error"></div>
               <div id="liteRestoreResult" class="restore-result-panel initially-hidden"></div>
             </div>
           </div>
@@ -266,57 +302,85 @@
 
       <!-- PRO MODE -->
       <section id="proMode" class="mode-section" style="display: none;">
+        <div id="proWorkflowStatusStrip" class="workflow-status-strip" data-testid="pro-workflow-status">
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Workflow</span>
+            <span id="proWorkflowStatusActive" class="workflow-status-value" data-testid="pro-workflow-active">Create</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Archive state</span>
+            <span id="proWorkflowStatusArchive" class="workflow-status-value" data-testid="pro-workflow-archive">No archive selected</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Policy</span>
+            <span id="proWorkflowStatusPolicy" class="workflow-status-value" data-testid="pro-workflow-policy">strong-pq-signature</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Threshold</span>
+            <span id="proWorkflowStatusThreshold" class="workflow-status-value" data-testid="pro-workflow-threshold">not configured</span>
+          </div>
+          <div class="workflow-status-item">
+            <span class="workflow-status-label">Evidence</span>
+            <span id="proWorkflowStatusEvidence" class="workflow-status-value" data-testid="pro-workflow-evidence">not loaded</span>
+          </div>
+        </div>
         
         <!-- Pro View: Identity -->
-        <div id="proViewIdentity" class="tab-panel module-panel module-keys active" role="tabpanel" aria-labelledby="proTabIdentity">
+        <div id="proViewIdentity" class="tab-panel module-panel workflow-panel module-keys active create-workflow-stage" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
-            <h2>Key Management</h2>
-            <p class="muted-copy section-step-hint">Step 1: generate or load keys before encrypt, split, or restore.</p>
+            <h2>Create Archive</h2>
+            <p class="muted-copy section-step-hint">Generate or load keys, encrypt data, then split the encrypted container into successor shards and archive JSON.</p>
           </header>
 
           <div class="panel-grid">
-            <div class="card">
+            <div class="workflow-card">
               <h3>Key Generation</h3>
               <p class="muted-copy">Generate a new keypair in memory. Overwrites existing session.</p>
-              <div class="button-group">
+              <div class="action-row button-group">
                  <button id="genKeyBtn" class="button primary" type="button">Generate Keypair</button>
-                 <button id="advancedEntropyBtn" class="button secondary" type="button">Collect Advanced Entropy</button>
+                 <button id="advancedEntropyBtn" class="button secondary" type="button" data-testid="advanced-entropy-btn">Collect supplemental entropy (optional)</button>
               </div>
               
-              <div id="entropyStatus" class="entropy-status initially-hidden">
-                <span id="entropyText">Collecting entropy...</span>
+              <div id="entropyStatus" class="entropy-status initially-hidden" data-testid="entropy-status" aria-live="polite">
+                <span id="entropyText" data-testid="entropy-text">Collecting entropy...</span>
                 <div class="progress-bar-bg"><div id="entropyBar" class="progress-bar-fill"></div></div>
-                <small class="muted-copy">Privacy-preserving collection: mouse/keyboard timing, window resizing. Local processing only.</small>
+                <small id="entropyHeuristicNote" class="muted-copy entropy-heuristic-note initially-hidden" data-testid="entropy-heuristic-note">
+                  Heuristic collection progress only. This is not a measured cryptographic guarantee. The browser CSPRNG remains the baseline for key generation.
+                </small>
+                <small class="muted-copy">Privacy-preserving, local-only capture of mouse/keyboard timing and window changes. Optional supplemental mixing — not required for secure keys.</small>
               </div>
             </div>
 
-            <div class="card">
+            <div class="workflow-card">
               <h3>Active Session</h3>
               <div class="form-group">
                 <label for="privKeyInput">Private Key (.qkey) <span class="info" title="ML-KEM secret key (3168 bytes), required for decryption and shard splitting.">ℹ</span></label>
-                <input type="file" id="privKeyInput" accept=".qkey">
+                <input type="file" id="privKeyInput" accept=".qkey" aria-describedby="privKeyInputHelp">
+                <small id="privKeyInputHelp" class="muted-copy">Select an ML-KEM private <code>.qkey</code> only for local decryption or split operations.</small>
               </div>
               <div class="form-group">
                 <label for="pubKeyInput">Public Key (.qkey) <span class="info" title="ML-KEM public key (1568 bytes), required for encryption.">ℹ</span></label>
-                <input type="file" id="pubKeyInput" accept=".qkey">
+                <input type="file" id="pubKeyInput" accept=".qkey" aria-describedby="pubKeyInputHelp">
+                <small id="pubKeyInputHelp" class="muted-copy">Select an ML-KEM public <code>.qkey</code> for encryption targets.</small>
               </div>
             </div>
           </div>
         </div>
 
         <!-- Pro View: Encryption -->
-        <div id="proViewEncryption" class="tab-panel module-panel module-sign" role="tabpanel" aria-labelledby="proTabEncryption">
+        <div id="proViewEncryption" class="tab-panel module-panel workflow-panel module-sign create-workflow-stage" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
             <h2>Encryption</h2>
-            <p class="muted-copy section-step-hint">Step 2: encrypt to .qenc with a loaded public key, or decrypt with a loaded private key.</p>
+            <p class="muted-copy section-step-hint">Encrypt to <code>.qenc</code> with a loaded public key, or decrypt locally with a loaded private key.</p>
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>File Operations</h3>
               <div class="form-group">
                 <label for="dataFileInput">Input Files</label>
-                <input type="file" id="dataFileInput" multiple>
+                <input type="file" id="dataFileInput" multiple aria-describedby="dataFileInputHelp">
+                <small id="dataFileInputHelp" class="muted-copy">Select plaintext files to encrypt, or an encrypted container to decrypt when a private key is loaded.</small>
                 <div id="proFilesList" class="files-list initially-hidden"></div>
               </div>
               <div id="proEncStrategyGroup" class="strategy-group initially-hidden">
@@ -330,10 +394,10 @@
                   One container per file
                 </label>
               </div>
-              <div id="proEncryptionWarning" class="operation-warning warning">
+              <div id="proEncryptionWarning" class="operation-warning">
                 <small>Load keys in Key Management: public key for encryption and private key for decryption.</small>
               </div>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="encBtn" class="button primary" type="button">Encrypt (.qenc)</button>
                 <button id="decBtn" class="button secondary" type="button">Decrypt</button>
               </div>
@@ -342,25 +406,27 @@
         </div>
 
         <!-- Pro View: Distribution -->
-        <div id="proViewDistribution" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabDistribution">
+        <div id="proViewDistribution" class="tab-panel module-panel workflow-panel module-verify create-workflow-stage" role="tabpanel" aria-labelledby="proTabDistribution">
           <header class="section-header">
             <h2>Split Into Successor Shards</h2>
-            <p class="muted-copy section-step-hint">Step 3: load a .qenc and matching private key to export successor shards and archive JSON.</p>
+            <p class="muted-copy section-step-hint">Load a <code>.qenc</code> and matching private key to export successor shards and archive JSON.</p>
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Split Configuration</h3>
               <p class="muted-copy operation-hint">Load the encrypted container and matching private key, then choose shard geometry and restore policy.</p>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="split-grid">
                   <div class="form-group">
                     <label for="qencForQcontInput">Encrypted container (.qenc)</label>
-                    <input type="file" id="qencForQcontInput" accept=".qenc">
+                    <input type="file" id="qencForQcontInput" accept=".qenc" aria-describedby="qencForQcontHelp">
+                    <small id="qencForQcontHelp" class="muted-copy">Select the encrypted container that will be converted into successor shards.</small>
                   </div>
                   <div class="form-group">
                     <label for="privKeyForQcontInput">Private Key (.qkey)</label>
-                    <input type="file" id="privKeyForQcontInput" accept=".qkey">
+                    <input type="file" id="privKeyForQcontInput" accept=".qkey" aria-describedby="privKeyForQcontHelp">
+                    <small id="privKeyForQcontHelp" class="muted-copy">Select the 3168 B private <code>.qkey</code> needed to unwrap the encrypted container locally.</small>
                   </div>
                 </div>
               </div>
@@ -420,7 +486,8 @@
                     <option value="strong-pq-signature" selected>Strong PQ signature required</option>
                   </select>
                 <small class="muted-copy">Choose whether restore should require detached archive approval.</small>
-                <details class="technical-context mt-2">
+                <div id="proAuthPolicyConsequence" class="policy-consequence-panel strict" data-testid="pro-policy-consequence" aria-live="polite"></div>
+                <details class="technical-context technical-details mt-2">
                   <summary>Technical context</summary>
                   <div class="detail-copy">
                     <small class="muted-copy">Split exports successor <code>QVqcont-7</code> shards plus <code>.archive-state.json</code>, <code>.cohort-binding.json</code>, and <code>.lifecycle-bundle.json</code>.</small>
@@ -430,23 +497,68 @@
                 </details>
               </div>
 
-              <div class="button-group">
+              <div id="proSplitReadiness" class="operation-readiness split-readiness" data-testid="split-readiness" aria-live="polite"></div>
+
+              <div class="action-row button-group">
                 <button id="buildQcontBtn" class="button primary" disabled type="button">Build Successor Shards</button>
               </div>
+              <div id="proSplitInlineError" class="inline-error-panel initially-hidden" data-testid="split-inline-error"></div>
             </div>
           </div>
         </div>
 
-        <div id="proViewAttach" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
+        <div id="proViewReview" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabReview">
           <header class="section-header">
-            <h2>Attach</h2>
-            <p class="muted-copy section-step-hint">Optional tool: merge archive-approval, maintenance, or source-evidence artifacts into the lifecycle bundle or selected shards without changing archive-state bytes or archive-policy semantics.</p>
+            <h2>Review Artifacts</h2>
+            <p class="muted-copy section-step-hint">Classify and inspect selected archive artifacts before maintenance or restore. Restore eligibility is evaluated only in Restore.</p>
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
+              <h3>Artifact Intake</h3>
+              <div class="operation-input-panel input-group">
+                <div class="form-group">
+                  <label for="proReviewInput">Review inputs</label>
+                  <input type="file" id="proReviewInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="review-input" aria-describedby="reviewInputHint">
+                </div>
+                <p id="reviewInputHint" class="muted-copy operation-hint">Load successor shards, archive-state descriptors, lifecycle bundles, detached signatures, signer pins, and timestamp evidence to inspect classification. This does not verify restore eligibility.</p>
+              </div>
+              <div id="proReviewStatus" class="shards-status initially-hidden" data-testid="review-status" aria-live="polite">
+                <span id="proReviewStatusText" data-testid="review-status-text">0 review files selected</span>
+              </div>
+              <details id="reviewArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded archive details</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+                    <div id="reviewArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="review-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                    <div id="reviewArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="review-archive-inspector"></div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <div class="qv-callout qv-callout--info operation-warning warning-callout">
+                <p class="qv-callout__body"><small>Review is an inspector. Restore remains the policy gate for plaintext release, and Attach remains the evidence merge workflow.</small></p>
+                    </div>
+                  </section>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div id="proViewAttach" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabAttach">
+          <header class="section-header">
+            <h2>Maintain Evidence</h2>
+            <p class="muted-copy section-step-hint">Merge archive approval, maintenance, source evidence, signer pins, or OTS artifacts without changing archive-state bytes or archive-policy semantics.</p>
+          </header>
+
+          <div class="panel-grid">
+            <div class="workflow-surface full-width">
               <h3>Merge Lifecycle Evidence</h3>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="form-group">
                   <label for="attachEvidenceChannel">Evidence channel</label>
                   <select id="attachEvidenceChannel" data-testid="attach-channel">
@@ -458,7 +570,7 @@
                 <p id="attachChannelHelp" class="muted-copy operation-hint" data-testid="attach-channel-help">Archive approval attaches detached signatures over the canonical archive-state descriptor. Maintenance and source-evidence remain separate evidence channels and never satisfy archive policy on their own.</p>
                 <div class="form-group">
                   <label for="qcontAttachInput">Attach inputs</label>
-                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input">
+                  <input type="file" id="qcontAttachInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="attach-input" aria-describedby="attachInputHint">
                 </div>
                 <p id="attachInputHint" class="muted-copy operation-hint">Load one archive cohort plus any detached signatures, signer pins, timestamps, and channel-specific JSON artifacts you want to merge. Signing remains external.</p>
               </div>
@@ -480,11 +592,19 @@
                   </div>
                   <div class="form-group">
                     <label>Source digests</label>
-                    <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
-                    <div class="button-group">
-                      <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
+                    <div class="qv-callout qv-callout--info source-evidence-digests-callout" role="note">
+                      <p class="qv-callout__title">What you are binding</p>
+                      <p class="qv-callout__body muted-copy">
+                        Each digest is a cryptographic fingerprint of the <strong>exact byte contents</strong> of the source object you name in <strong>Source object type</strong> (for example the canonical <code>*.archive-state.json</code> file, not a display name or filesystem path).
+                        Use <strong>Apply one file to all rows</strong> when the same file should be hashed once per row algorithm (typical for one canonical artifact, multiple digest algorithms). You still choose relation type and source object type deliberately. Optional media type is never inferred from filenames.
+                      </p>
                     </div>
-                    <small class="muted-copy">Provide one or more canonical digests for the reviewed source object.</small>
+                    <div id="sourceEvidenceDigestRows" class="verification-fields" data-testid="source-evidence-digests"></div>
+                    <div class="action-row button-group source-evidence-digest-actions">
+                      <button id="addSourceEvidenceDigestBtn" class="button secondary small" type="button" data-testid="source-evidence-add-digest">Add Digest</button>
+                      <button id="sourceEvidenceApplyFileToDigestsBtn" class="button secondary small" type="button" data-testid="source-evidence-apply-file-all">Apply one file to all rows</button>
+                      <input type="file" id="sourceEvidenceApplyFileInput" class="visually-hidden" tabindex="-1" aria-label="File whose bytes populate every digest row" data-testid="source-evidence-apply-file-input">
+                    </div>
                   </div>
                   <div class="form-group">
                     <label for="sourceEvidenceExternalRefs">External source-signature refs (optional)</label>
@@ -501,25 +621,51 @@
                     <label for="sourceEvidenceMediaType">Media type</label>
                     <input type="text" id="sourceEvidenceMediaType" placeholder="application/json" data-testid="source-evidence-media-type">
                   </div>
-                  <div class="button-group">
+                  <div id="sourceEvidenceExportPreview" class="mono-box source-evidence-export-preview initially-hidden" data-testid="source-evidence-export-preview" aria-live="polite"></div>
+                  <div id="sourceEvidenceExportError" class="inline-error-panel initially-hidden" data-testid="source-evidence-export-error" role="alert"></div>
+                  <div class="action-row button-group">
                     <button id="exportSourceEvidenceBtn" class="button secondary" type="button" data-testid="source-evidence-export">Export Canonical Source-Evidence JSON</button>
                   </div>
                   <small id="sourceEvidenceExportHint" class="muted-copy">Export the canonical JSON here, sign it with an external tool, then re-import that <code>.json</code> plus the detached signature through this Attach surface.</small>
                 </div>
               </details>
               <div class="operation-readiness">
-                <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status">
+                <div id="attachPlanDecision" class="initially-hidden" data-testid="attach-plan-decision" aria-live="polite"></div>
+                <div id="attachStatus" class="shards-status initially-hidden" data-testid="attach-status" aria-live="polite">
                   <span id="attachStatusText" data-testid="attach-status-text">0 attach files selected</span>
                   <small id="attachStatusHint" class="muted-copy"></small>
                 </div>
-                <pre id="attachModeSummary" class="mono-box mt-1 initially-hidden" aria-live="polite" data-testid="attach-mode-summary"></pre>
-              </div>
-              <details class="technical-context">
+                <div id="attachPartialRewriteAckPanel" class="qv-callout qv-callout--warning operation-warning warning-callout partial-rewrite-ack initially-hidden" data-testid="attach-partial-ack-panel">
+                  <label class="checkbox-row" for="attachPartialRewriteAck">
+                    <input type="checkbox" id="attachPartialRewriteAck" data-testid="attach-partial-ack">
+                    <span>I understand only the selected shard files will be rewritten.</span>
+                  </label>
+                  <small class="muted-copy">The updated lifecycle bundle will still be exported. Any unselected shards from the same cohort may continue carrying older embedded lifecycle-bundle bytes.</small>
+                </div>
+                <details id="attachArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                  <summary>Review loaded attach evidence</summary>
+                  <div class="archive-review-hub__body">
+                    <section class="archive-review-hub__section">
+                      <h4 class="archive-review-hub__heading">Artifacts</h4>
+                <div id="attachArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="attach-artifact-intake"></div>
+                    </section>
+                    <section class="archive-review-hub__section">
+                      <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                <div id="attachArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="attach-archive-inspector"></div>
+                    </section>
+                    <section class="archive-review-hub__section archive-review-hub__section--muted">
+                      <h4 class="archive-review-hub__heading">Evidence</h4>
+                      <p class="muted-copy archive-review-hub__lede">The Attach plan card states the operational target, policy role, and shard scope. Full binding references and digest lines are under Technical. A verification matrix appears in Attach result after a successful merge.</p>
+                    </section>
+                    <section class="archive-review-hub__section">
+                      <h4 class="archive-review-hub__heading">Technical</h4>
+                <pre id="attachTargetBindingPreview" class="mono-box attach-target-binding-preview initially-hidden" data-testid="attach-target-binding-preview" aria-live="polite"></pre>
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor attach can update only the lifecycle bundle or also re-embed that bundle into the selected shard files, depending on what you load.</small>
                   <small class="muted-copy">Load successor <code>.qcont</code> shards, optional <code>.archive-state.json</code> or <code>.lifecycle-bundle.json</code> files, detached signatures, <code>.pqpk</code> signer pins, <code>.ots</code> proofs, and when needed a canonical <code>.transition-record.json</code> or <code>.source-evidence.json</code> artifact. Attach never changes the signable archive-state bytes.</small>
-                  <small class="muted-copy">All signing remains external in Phase 1. This UI does not generate signing keys and it does not collapse maintenance or source-evidence into archive approval.</small>
+                  <small class="muted-copy">All signing remains external to this browser UI. This UI does not generate signing keys and it does not collapse maintenance or source-evidence into archive approval.</small>
                 </div>
               </details>
               <details class="verification-section">
@@ -529,35 +675,51 @@
                   <input type="text" id="attachExpectedEdSigner" placeholder="G...">
                 </div>
               </details>
-              <div class="button-group">
+                    </section>
+                  </div>
+                </details>
+              </div>
+              <div class="action-row button-group">
                 <button id="attachQcontBtn" class="button primary" type="button" disabled data-testid="attach-button">Attach Selected Evidence</button>
                 <button id="exportSignableArtifactBtn" class="button secondary" type="button" disabled>Export Archive-State Descriptor</button>
                 <button id="exportAttachedArtifactsBtn" class="button secondary" type="button" disabled>Export Attached Bundle Files</button>
               </div>
+              <div id="attachInlineError" class="inline-error-panel initially-hidden" data-testid="attach-inline-error"></div>
               <div id="attachResult" class="restore-result-panel initially-hidden" data-testid="attach-result"></div>
             </div>
           </div>
         </div>
 
-        <div id="proViewReshare" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabReshare">
+        <div id="proViewReshare" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabReshare">
           <header class="section-header">
-            <h2>Same-State Resharing</h2>
-            <p class="muted-copy section-step-hint">Optional tool: rotate a successor cohort while preserving the archive-state approval target.</p>
+            <h2>Evolve Successor Cohort</h2>
+            <p class="muted-copy section-step-hint">Rotate a successor cohort while preserving the archive-state approval target.</p>
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Emit a New Successor Cohort</h3>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="form-group">
                   <label for="qcontReshareInput">Reshare inputs</label>
-                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input">
+                  <input type="file" id="qcontReshareInput" accept=".qcont,.json" multiple data-testid="reshare-input" aria-describedby="reshareInputHint">
                 </div>
-                <p class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
+                <p id="reshareInputHint" class="muted-copy operation-hint">Load one successor cohort and any explicit lifecycle bundle you want to use for disambiguation, then emit a new cohort.</p>
               </div>
-              <div id="proReshareStatus" class="shards-status initially-hidden">
+              <div id="resharePlanDecision" class="initially-hidden" data-testid="reshare-plan-decision" aria-live="polite"></div>
+              <div id="proReshareStatus" class="shards-status initially-hidden" aria-live="polite">
                 <span id="proReshareStatusText">0 shards selected</span>
               </div>
+              <details id="reshareArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded reshare evidence</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+              <div id="reshareArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="reshare-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+              <div id="reshareArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="reshare-archive-inspector"></div>
               <div id="reshareSuccessorSelection" class="verification-section successor-selection initially-hidden">
                 <small id="reshareSuccessorSelectionSummary" class="muted-copy"></small>
                 <small id="reshareSuccessorSelectionHelp" class="muted-copy"></small>
@@ -574,7 +736,14 @@
                   <select id="reshareBundleSelection"></select>
                 </div>
               </div>
-              <details class="technical-context">
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <p class="muted-copy archive-review-hub__lede">The Reshare plan card summarizes counts by channel. Verification details appear after you emit a cohort.</p>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Technical</h4>
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Same-state resharing is maintenance, not archive re-approval. It keeps the archive-state approval target unchanged and emits a new cohort plus a transition record.</small>
@@ -587,6 +756,9 @@
                 <div class="form-group verification-fields">
                   <label for="reshareExpectedEdSigner">Expected Ed25519 signer (optional)</label>
                   <input type="text" id="reshareExpectedEdSigner" placeholder="G...">
+                </div>
+              </details>
+                  </section>
                 </div>
               </details>
 
@@ -647,10 +819,10 @@
                   </div>
                 </div>
               </div>
-              <div class="button-group">
+              <div class="action-row button-group">
                 <button id="reshareQcontBtn" class="button primary" disabled type="button" data-testid="reshare-button">Emit Successor Cohort</button>
               </div>
-              <div id="reshareExportActions" class="button-group initially-hidden">
+              <div id="reshareExportActions" class="action-row button-group initially-hidden">
                 <button id="exportReshareTransitionRecordBtn" class="button secondary" type="button" data-testid="reshare-export-transition-record">Export Transition Record</button>
                 <button id="exportReshareLifecycleBundleBtn" class="button secondary" type="button">Export Lifecycle Bundle</button>
               </div>
@@ -660,26 +832,37 @@
         </div>
 
         <!-- Pro View: Restore -->
-        <div id="proViewRestore" class="tab-panel module-panel module-verify" role="tabpanel" aria-labelledby="proTabRestore">
+        <div id="proViewRestore" class="tab-panel module-panel workflow-panel module-verify" role="tabpanel" aria-labelledby="proTabRestore">
           <header class="section-header">
             <h2>Restore</h2>
-            <p class="muted-copy section-step-hint">Step 4: combine shards and verification artifacts, then recover the archive when policy is satisfied.</p>
+            <p class="muted-copy section-step-hint">Step 4: read the restore decision first, then load shards and evidence; recover when policy is satisfied.</p>
           </header>
 
           <div class="panel-grid">
-            <div class="card full-width">
+            <div class="workflow-surface full-width">
               <h3>Restore Archive</h3>
-              <div class="operation-input-panel">
+              <div class="operation-input-panel input-group">
                 <div class="form-group">
                   <label for="qcontShardsInput">Restore inputs</label>
-                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input">
+                  <input type="file" id="qcontShardsInput" accept=".qcont,.json,.qsig,.sig,.pqpk,.ots" multiple data-testid="restore-input" aria-describedby="restoreInputHint">
                 </div>
-                <p class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
+                <p id="restoreInputHint" class="muted-copy operation-hint">Load shards and any detached verification artifacts you want checked before recovery.</p>
               </div>
-              <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status">
+              <div id="proShardsStatus" class="shards-status initially-hidden" data-testid="restore-status" aria-live="polite">
                 <span id="proShardsStatusText" data-testid="restore-status-text">0 shards selected</span>
               </div>
-              <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
+              <div id="restorePreflightDecision" class="qv-decision-card initially-hidden" data-testid="restore-preflight"></div>
+              <details id="restoreArchiveReviewRoot" class="qv-disclosure archive-review-hub technical-details">
+                <summary>Review loaded archive details</summary>
+                <div class="archive-review-hub__body">
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Artifacts</h4>
+                    <div id="restoreArtifactIntake" class="artifact-intake-panel initially-hidden" data-testid="restore-artifact-intake"></div>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Lifecycle</h4>
+                    <div id="restoreArchiveInspector" class="archive-inspector-host initially-hidden" data-testid="restore-archive-inspector"></div>
+                    <div id="restoreSuccessorSelection" class="verification-section successor-selection initially-hidden" data-testid="restore-selection">
                 <small id="restoreSuccessorSelectionSummary" class="muted-copy" data-testid="restore-selection-summary"></small>
                 <small id="restoreSuccessorSelectionHelp" class="muted-copy" data-testid="restore-selection-help"></small>
                 <div id="restoreStateSelectionGroup" class="form-group initially-hidden" data-testid="restore-state-selection-group">
@@ -694,8 +877,15 @@
                   <label for="restoreBundleSelection">Lifecycle bundle selection</label>
                   <select id="restoreBundleSelection" data-testid="restore-bundle-selection"></select>
                 </div>
-              </div>
-              <details class="technical-context">
+                    </div>
+                  </section>
+                  <section class="archive-review-hub__section archive-review-hub__section--muted">
+                    <h4 class="archive-review-hub__heading">Evidence</h4>
+                    <p class="muted-copy archive-review-hub__lede">Detached signatures, signer pins, and OTS proofs are classified under Artifacts. The verification matrix appears in Restore result after Evaluate Restore.</p>
+                  </section>
+                  <section class="archive-review-hub__section">
+                    <h4 class="archive-review-hub__heading">Technical</h4>
+              <details class="technical-context technical-details">
                 <summary>Technical context</summary>
                 <div class="detail-copy">
                   <small class="muted-copy">Successor restore is the regular-user path. Load successor <code>.qcont</code> shards plus any optional <code>.archive-state.json</code>, <code>.lifecycle-bundle.json</code>, detached signatures, <code>.pqpk</code> signer pins, and <code>.ots</code> proofs in the main selector above.</small>
@@ -709,9 +899,14 @@
                   <input type="text" id="restoreExpectedEdSigner" placeholder="G..." data-testid="restore-expected-ed-signer">
                 </div>
               </details>
-              <div class="button-group">
-                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Restore Selected Archive</button>
+                  </section>
+                </div>
+              </details>
+              <div class="action-row button-group">
+                <button id="restoreQcontBtn" class="button primary" disabled type="button" data-testid="restore-button">Evaluate Restore</button>
+                <button id="releaseRestoredFilesBtn" class="button secondary initially-hidden" disabled type="button" data-testid="release-button">Release Recovered Files</button>
               </div>
+              <div id="proRestoreInlineError" class="inline-error-panel initially-hidden" data-testid="restore-inline-error"></div>
               <div id="proRestoreResult" class="restore-result-panel initially-hidden" data-testid="restore-result"></div>
             </div>
           </div>

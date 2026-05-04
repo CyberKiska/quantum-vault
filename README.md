@@ -41,8 +41,8 @@ Implemented now:
 
 - one shipped successor lifecycle family: `QVqcont-7` shards, `quantum-vault-archive-state-descriptor/v1`, cohort bindings, and `QV-Lifecycle-Bundle` v1
 - Split emits successor `.qcont` shards plus `*.archive-state.json` and `*.lifecycle-bundle.json`; Pro additionally exports `*.cohort-binding.json`, although successor shards always embed cohort-binding bytes even when Lite does not export a standalone cohort-binding file.
-- The shipped browser Attach workflow accepts successor shards or an existing lifecycle bundle plus optional archive-state descriptors, archive-approval detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs.
-- Maintenance-signature and source-evidence workflows exist in the artifact model and are reported at restore when present, but they are not a generic browser Attach import path yet.
+- The shipped browser Attach workflow accepts successor shards or an existing lifecycle bundle plus optional target artifacts, detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs for archive-approval, maintenance, and source-evidence channels.
+- Maintenance and source-evidence signatures can be imported through Attach and are reported at restore when present, but they remain separate evidence channels and never satisfy archive restore policy.
 - Restore evaluates archive approval from canonical archive-state bytes and fails closed when ambiguity remains in `archiveId`, `stateId`, `cohortId`, or embedded lifecycle-bundle digest unless the operator makes an explicit choice; explicit operator selection is a warned override, not an automatic winner selection.
 - Same-state resharing is implemented for successor lifecycle archives and preserves archive-state bytes while emitting a new cohort and required transition record.
 
@@ -67,10 +67,11 @@ Deferred roadmap:
 - **Encrypt** one or more files into a `.qenc` container for long-lived confidentiality.
 - **Decrypt** Quantum Vault `.qenc` containers back into their original payload.
 - **Split** an archive and its ML-KEM private key into threshold successor `.qcont` shards, exporting a signable archive-state descriptor and lifecycle bundle for later approval and maintenance; Pro additionally exports a standalone cohort-binding artifact for operator workflows.
-- **Attach** archive-approval detached signatures, signer pin material, and timestamp evidence into a lifecycle bundle carried by successor shards or supplied explicitly.
+- **Attach** archive-approval, maintenance, or source-evidence detached signatures, signer pin material, and timestamp evidence into a lifecycle bundle carried by successor shards or supplied explicitly.
 - **Restore** from successor shards plus optional authenticity material, with recovery gated by archive policy.
 - **Verify** detached signatures while keeping integrity, signer pinning, maintenance evidence, source evidence, and policy satisfaction as separate outcomes.
 - **Keep cryptographic operations local** to the client browser during normal operation.
+- **Lite Create** shows non-blocking custody guidance (independent shard storage, retaining archive-state and lifecycle JSON, optional ML-KEM key backup) and a short export checklist after each successful create.
 
 ## Workflow At A Glance
 
@@ -79,7 +80,7 @@ Deferred roadmap:
 | Generate | Browser entropy | `privateKey.qkey`, `publicKey.qkey` | ML-KEM key pair generated client-side |
 | Encrypt | File(s), `publicKey.qkey` | `.qenc` | Post-quantum confidentiality and AEAD integrity |
 | Split | `.qenc`, `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
-| Attach | Successor shards or lifecycle bundle, optional archive-state descriptor, archive-approval `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated lifecycle bundle, optional rewritten `.qcont` shards | Imports only archive-approval signatures plus `.pqpk` and `.ots`; archive-state and cohort-binding bytes stay unchanged |
+| Attach | Successor shards or lifecycle bundle, optional channel target artifact, `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated lifecycle bundle, optional rewritten `.qcont` shards | Imports archive-approval, maintenance, or source-evidence signatures through the selected channel; archive-state and cohort-binding bytes stay unchanged |
 | Restore | `.qcont`, optional archive-state descriptor, lifecycle bundle, signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Policy-gated archive reconstruction with explicit selection whenever ambiguity exists |
 | Decrypt | `.qenc`, `privateKey.qkey` | Original file(s) | Payload recovery and file-hash confirmation |
 
@@ -116,15 +117,18 @@ flowchart TB
     subgraph AUTH["Add authenticity"]
         SG["Sign externally"]:::auth
         SIG[".qsig / .sig"]:::artifact
+        AUX["optional transition-record / source-evidence target"]:::optional
         OPT["optional .pqpk / .ots"]:::optional
         AT["Attach"]:::auth
         EM["Updated lifecycle bundle<br/>or rewritten shard set"]:::artifact
 
         AS --> SG
+        AUX -. maintenance/source target .-> SG
         SG --> SIG
         QC -. embedded lifecycle bundle .-> AT
         LB --> AT
         AS -. optional consistency input .-> AT
+        AUX -. maintenance/source target .-> AT
         SIG --> AT
         OPT --> AT
         AT --> EM
@@ -167,8 +171,8 @@ Attach can start from successor shards carrying an embedded lifecycle bundle or 
 | 1. Generate | Create a key pair in-browser | None | `privateKey.qkey`, `publicKey.qkey` | Secrets stay client-side only |
 | 2. Encrypt | Encrypt one file or a local file bundle | File(s), `publicKey.qkey` | `.qenc` | Uses ML-KEM-1024 + KMAC256 + AES-256-GCM |
 | 3. Split | Convert one archive into threshold shards | `.qenc`, matching `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Emits `QVqcont-7` shards and successor lifecycle objects |
-| 4. Sign | Sign the archive-state descriptor in an external signer app | `*.archive-state.json` | `.qsig` or `.sig` | Archive approval signs canonical archive-state bytes |
-| 5. Attach | Merge archive-approval signatures, `.pqpk` pins, and `.ots` proofs into the mutable bundle | Successor shards or lifecycle bundle, optional archive-state descriptor, detached artifacts | Updated `*.lifecycle-bundle.json`, optional rewritten shards | The shipped browser path does not generically import maintenance or source-evidence signatures |
+| 4. Sign | Sign the archive-state descriptor or a maintenance/source-evidence target in an external signer app | `*.archive-state.json`, `transition-record.json`, or `source-evidence.json` | `.qsig` or `.sig` | Archive approval signs canonical archive-state bytes; other channels sign their declared lifecycle target bytes |
+| 5. Attach | Merge archive-approval, maintenance, or source-evidence signatures, `.pqpk` pins, and `.ots` proofs into the mutable bundle | Successor shards or lifecycle bundle, optional channel target artifact, detached artifacts | Updated `*.lifecycle-bundle.json`, optional rewritten shards | The selected channel controls target validation and policy role |
 | 6. Restore | Reconstruct from shards with optional authenticity inputs | `.qcont`, optional archive-state descriptor, lifecycle bundle, signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Recovery is blocked unless policy is satisfied; ambiguity requires explicit operator choice |
 | 7. Decrypt | Decrypt the recovered archive | `.qenc`, recovered `privateKey.qkey` | Original file(s) | The UI confirms `privateMeta.fileHash` before export |
 
@@ -206,7 +210,14 @@ Archive approval, maintenance, and source evidence are different channels:
 - maintenance signatures target transition-record bytes and are reported separately
 - source-evidence signatures target source-evidence bytes and are reported separately
 - timestamp evidence is supplementary and does not satisfy archive policy by itself
-- the shipped browser Attach flow imports archive-approval signatures only; maintenance and source-evidence channels are currently populated by other artifact-generation paths, not by a generic detached-file Attach step
+
+Current browser Attach target rules:
+
+- archive-approval attach validates detached signatures over the selected canonical archive-state descriptor; the target reference is `state:{stateId}`
+- maintenance attach requires the selected lifecycle bundle to already contain the target transition record and requires the matching canonical `transition-record.json`; detached signatures target `transition:sha3-512:{transitionRecordDigest}`
+- source-evidence attach requires canonical `source-evidence.json`, adds that object to the lifecycle bundle if needed, and validates detached signatures against `source-evidence:sha3-512:{sourceEvidenceDigest}`
+- `.pqpk` files provide signer public-key material for bundled or user-supplied pinning; pinning remains separate from policy satisfaction
+- `.ots` files are resolved against known detached signature bytes by `SHA-256(signatureBytes)` and fail closed if the proof matches zero or multiple signatures
 
 Current trust boundary for detached PQ signatures:
 

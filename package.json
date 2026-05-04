@@ -1,6 +1,6 @@
 {
   "name": "QuantumVault",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "type": "module",
   "engines": {
     "node": ">=24.14.0",

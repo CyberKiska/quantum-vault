@@ -1,19 +1,23 @@
 import { BrowserEntropyCollector } from '../../../app/browser-entropy-collector.js';
 import { encryptFile, decryptFile, hashBytes, generateKeyPair, runSelfTest } from '../../../app/crypto-service.js';
 import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
-import { setButtonsDisabled, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
+import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
-import { updateShardSelectionStatus } from './shards-status.js';
+import { renderSuccessCallout, renderWarningCallout } from './callout.js';
 
 import { showToast } from './toast.js';
-import { refreshSuccessorSelectionUi } from '../qcont/restore-ui.js';
+import { syncArchiveReviewHub } from './archive-review-hub.js';
+import { clearArchiveInspector, renderArchiveInspectorPanel } from '../qcont/archive-inspector-ui.js';
 import { bindRsParamsUI } from '../qcont/rs-params-display.js';
+import { clearArtifactIntakeTable, renderArtifactIntakeTable } from './artifact-intake.js';
+import { createSuccessorShardInputRefreshController } from '../qcont/successor-workflow-input.js';
+import { initRovingTablist } from './tabs.js';
 
 // Pro mode state
 let collectedUserEntropy = null;
 let entropyCollector = null;
-let proShardsStatusSeq = 0;
+let proReviewStatusSeq = 0;
 let unregisterUiSessionWipe = null;
 
 function wipeCollectedUserEntropy() {
@@ -70,18 +74,18 @@ export function updateSidebarStatus(pubHash, secHash) {
 
     if (sysDot && sysText) {
         sysDot.className = 'status-indicator';
-        let statusLabel = 'Ready';
+        let statusLabel = 'No key loaded';
         if (hasSec) {
-            sysDot.classList.add('armed');
-            sysText.textContent = 'Armed';
-            statusLabel = 'Armed';
+            sysDot.classList.add('private-key-loaded');
+            sysText.textContent = 'Private key loaded in memory';
+            statusLabel = 'Private key loaded in memory';
         } else if (hasPub) {
-            sysDot.classList.add('verify-ready');
-            sysText.textContent = 'Verify-Ready';
-            statusLabel = 'Verify-Ready';
+            sysDot.classList.add('public-key-loaded');
+            sysText.textContent = 'Public key loaded';
+            statusLabel = 'Public key loaded';
         } else {
-            sysDot.classList.add('ready');
-            sysText.textContent = 'Ready';
+            sysDot.classList.add('no-key-loaded');
+            sysText.textContent = 'No key loaded';
         }
         sysDot.setAttribute('aria-label', `System status: ${statusLabel}`);
     }
@@ -110,8 +114,8 @@ export function initUI() {
     const rsSegData = el('rsSegData');
     const rsSegParity = el('rsSegParity');
     const rsMarker = el('rsMarker');
-    const buildQcontBtn = el('buildQcontBtn');
     const qcontShardsInput = el('qcontShardsInput');
+    const proReviewInput = el('proReviewInput');
     const restoreQcontBtn = el('restoreQcontBtn');
     const genKeyBtn = el('genKeyBtn');
     const encBtn = el('encBtn');
@@ -120,6 +124,116 @@ export function initUI() {
     const proEncStrategyGroup = el('proEncStrategyGroup');
     const proEncStrategyPerFile = el('proEncStrategyPerFile');
     const proEncryptionWarning = el('proEncryptionWarning');
+    let currentProWorkflowTab = 'proTabDistribution';
+
+    function policyLabel(value) {
+        if (value === 'integrity-only') return 'integrity-only';
+        if (value === 'any-signature') return 'any-signature';
+        return 'strong-pq-signature';
+    }
+
+    function selectedFileCount(input) {
+        return input?.files?.length || 0;
+    }
+
+    function selectedArtifactText(count, label) {
+        return `${count} ${label} file${count === 1 ? '' : 's'}`;
+    }
+
+    function compactThresholdStatus(text) {
+        const value = String(text || '').trim();
+        if (!value || value.includes('Params info')) return 'not configured';
+        const match = value.match(/Total:\s*n=(\d+).*?Data:\s*k=(\d+).*?Threshold:\s*t=(\d+)/i);
+        if (match) return `n=${match[1]} / k=${match[2]} / t=${match[3]}`;
+        return value.length > 72 ? `${value.slice(0, 69)}...` : value;
+    }
+
+    function compactEvidenceStatus(text) {
+        const value = String(text || '').trim();
+        if (!value) return '';
+        const artifactSelectionMatch = value.match(/^(\d+)\s+(.+?)\s+artifacts?\s+selected$/i);
+        if (artifactSelectionMatch) {
+            return `${artifactSelectionMatch[1]} ${artifactSelectionMatch[2]} files`;
+        }
+        if (/^Ready:\s*\d+\/\d+/.test(value)) {
+            const shardMatch = value.match(/Ready:\s*(\d+\/\d+)/);
+            const policyMatch = value.match(/Policy:\s*([^.;]+)/i);
+            const parts = [];
+            if (shardMatch) parts.push(`${shardMatch[1]} shards`);
+            if (policyMatch) parts.push(policyMatch[1].trim());
+            if (/selection required/i.test(value)) parts.push('selection needed');
+            else if (/selection complete/i.test(value)) parts.push('selection ready');
+            if (/signature|evidence/i.test(value)) parts.push('evidence loaded');
+            return parts.join(' / ') || value;
+        }
+        return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+    }
+
+    function updateProWorkflowStatus(activeTabId = currentProWorkflowTab) {
+        currentProWorkflowTab = activeTabId || currentProWorkflowTab;
+        const workflowNames = {
+            proTabDistribution: 'Create',
+            proTabReview: 'Review Artifacts',
+            proTabAttach: 'Maintain',
+            proTabReshare: 'Evolve',
+            proTabRestore: 'Restore',
+        };
+        const activeEl = el('proWorkflowStatusActive');
+        const archiveEl = el('proWorkflowStatusArchive');
+        const policyEl = el('proWorkflowStatusPolicy');
+        const thresholdEl = el('proWorkflowStatusThreshold');
+        const evidenceEl = el('proWorkflowStatusEvidence');
+
+        if (activeEl) activeEl.textContent = workflowNames[currentProWorkflowTab] || 'Create';
+
+        const qencCount = selectedFileCount(qencForQcontInput);
+        const restoreCount = selectedFileCount(qcontShardsInput);
+        const reviewCount = selectedFileCount(proReviewInput);
+        const attachCount = selectedFileCount(el('qcontAttachInput'));
+        const reshareCount = selectedFileCount(el('qcontReshareInput'));
+        if (archiveEl) {
+            if (currentProWorkflowTab === 'proTabReview' && reviewCount > 0) archiveEl.textContent = selectedArtifactText(reviewCount, 'review');
+            else if (currentProWorkflowTab === 'proTabAttach' && attachCount > 0) archiveEl.textContent = selectedArtifactText(attachCount, 'maintenance');
+            else if (currentProWorkflowTab === 'proTabReshare' && reshareCount > 0) archiveEl.textContent = selectedArtifactText(reshareCount, 'evolution');
+            else if (currentProWorkflowTab === 'proTabRestore' && restoreCount > 0) archiveEl.textContent = selectedArtifactText(restoreCount, 'restore');
+            else if (restoreCount > 0) archiveEl.textContent = selectedArtifactText(restoreCount, 'restore');
+            else if (reviewCount > 0) archiveEl.textContent = selectedArtifactText(reviewCount, 'review');
+            else if (attachCount > 0) archiveEl.textContent = selectedArtifactText(attachCount, 'maintenance');
+            else if (reshareCount > 0) archiveEl.textContent = selectedArtifactText(reshareCount, 'evolution');
+            else if (qencCount > 0) archiveEl.textContent = 'encrypted container selected';
+            else archiveEl.textContent = 'No archive selected';
+        }
+
+        if (policyEl) policyEl.textContent = policyLabel(el('proAuthPolicy')?.value || 'strong-pq-signature');
+        if (thresholdEl) {
+            const thresholdText = String(rsTextEl?.textContent || '').trim();
+            thresholdEl.textContent = compactThresholdStatus(thresholdText);
+        }
+        if (evidenceEl) {
+            const attachText = String(el('attachStatusText')?.textContent || '').trim();
+            const restoreText = String(el('proShardsStatusText')?.textContent || '').trim();
+            const reviewText = String(el('proReviewStatusText')?.textContent || '').trim();
+            const reshareText = String(el('proReshareStatusText')?.textContent || '').trim();
+            if (currentProWorkflowTab === 'proTabAttach' && attachText) evidenceEl.textContent = compactEvidenceStatus(attachText);
+            else if (currentProWorkflowTab === 'proTabReview' && reviewText) evidenceEl.textContent = compactEvidenceStatus(reviewText);
+            else if (currentProWorkflowTab === 'proTabReshare' && reshareText) evidenceEl.textContent = compactEvidenceStatus(reshareText);
+            else if (restoreText && restoreCount > 0) evidenceEl.textContent = compactEvidenceStatus(restoreText);
+            else evidenceEl.textContent = 'not loaded';
+        }
+    }
+
+    function observeProWorkflowStatusSource(id) {
+        const source = el(id);
+        if (!source || typeof MutationObserver === 'undefined') return;
+        const observer = new MutationObserver(() => updateProWorkflowStatus());
+        observer.observe(source, {
+            attributes: true,
+            childList: true,
+            characterData: true,
+            subtree: true,
+        });
+    }
+
     // Update Pro file list display
     function updateProFilesList() {
         const filesList = el('proFilesList');
@@ -128,6 +242,7 @@ export function initUI() {
         if (!dataFileInput.files || dataFileInput.files.length === 0) {
             filesList.style.display = 'none';
             if (proEncStrategyGroup) proEncStrategyGroup.style.display = 'none';
+            updateProWorkflowStatus();
             return;
         }
         
@@ -151,24 +266,61 @@ export function initUI() {
         if (proEncStrategyGroup) {
             proEncStrategyGroup.style.display = dataFileInput.files.length > 1 ? 'block' : 'none';
         }
+        updateProWorkflowStatus();
     }
-    
+
+    const proRestoreShardRefresh = createSuccessorShardInputRefreshController({
+        prefix: 'restore',
+        inputId: 'qcontShardsInput',
+        statusDivId: 'proShardsStatus',
+        statusTextId: 'proShardsStatusText',
+        actionButtonId: 'restoreQcontBtn',
+        intakeContainerId: 'restoreArtifactIntake',
+        intakeLabel: 'Restore artifact intake',
+        intakeWorkflow: 'restore',
+        preflightContainerId: 'restorePreflightDecision',
+        expectedSignerInputId: 'restoreExpectedEdSigner',
+        onAfterRefresh() {
+            updateProWorkflowStatus();
+        },
+    });
+
     // Update Pro shards status
     async function updateProShardsStatus() {
-        const statusDiv = el('proShardsStatus');
-        const statusText = el('proShardsStatusText');
-        if (!statusDiv || !statusText || !qcontShardsInput) return;
-        const files = [...(qcontShardsInput.files || [])];
-        const requestId = ++proShardsStatusSeq;
-        const assessment = await updateShardSelectionStatus({
+        await proRestoreShardRefresh.refresh();
+    }
+
+    async function updateProReviewStatus() {
+        const statusDiv = el('proReviewStatus');
+        const statusText = el('proReviewStatusText');
+        if (!statusDiv || !statusText || !proReviewInput) return;
+        const files = [...(proReviewInput.files || [])];
+        const requestId = ++proReviewStatusSeq;
+        if (files.length === 0) {
+            clearArtifactIntakeTable('reviewArtifactIntake');
+            clearArchiveInspector('reviewArchiveInspector');
+            statusDiv.className = 'shards-status initially-hidden';
+            statusDiv.style.display = 'none';
+            statusText.textContent = '0 review files selected';
+            updateProWorkflowStatus();
+            syncArchiveReviewHub('review');
+            return;
+        }
+
+        statusDiv.classList.remove('initially-hidden');
+        statusDiv.style.display = 'block';
+        statusDiv.className = 'shards-status unknown';
+        statusText.textContent = `${files.length} review artifact${files.length === 1 ? '' : 's'} selected`;
+        await renderArtifactIntakeTable({
+            containerId: 'reviewArtifactIntake',
             files,
-            statusDiv,
-            statusText,
-            actionButton: restoreQcontBtn,
-            isCurrent: () => requestId === proShardsStatusSeq
+            workflow: 'restore',
+            label: 'Review artifact intake',
         });
-        if (requestId !== proShardsStatusSeq) return;
-        await refreshSuccessorSelectionUi('restore', files, restoreQcontBtn, assessment || { ready: false });
+        if (requestId !== proReviewStatusSeq) return;
+        await renderArchiveInspectorPanel('reviewArchiveInspector', { files });
+        updateProWorkflowStatus();
+        syncArchiveReviewHub('review');
     }
 
     async function updateSidebarFingerprintsFromInputs() {
@@ -202,27 +354,20 @@ export function initUI() {
         if (!proEncryptionWarning) return;
 
         let message;
-        let stateClass;
 
         if (!hasPublicKey && !hasPrivateKey) {
             message = 'Load keys in Key Management: public key for encryption and private key for decryption.';
-            stateClass = 'warning';
+            renderWarningCallout(proEncryptionWarning, { body: message });
         } else if (!hasPublicKey) {
             message = 'Encryption is blocked: load a public key in Key Management.';
-            stateClass = 'warning';
+            renderWarningCallout(proEncryptionWarning, { body: message });
         } else if (!hasPrivateKey) {
             message = 'Decryption is blocked: load a private key in Key Management.';
-            stateClass = 'warning';
+            renderWarningCallout(proEncryptionWarning, { body: message });
         } else {
             message = 'Keys are loaded. Encryption and decryption are available.';
-            stateClass = 'success';
+            renderSuccessCallout(proEncryptionWarning, { body: message });
         }
-
-        proEncryptionWarning.className = `operation-warning ${stateClass}`;
-        proEncryptionWarning.replaceChildren();
-        const warningMessage = document.createElement('small');
-        warningMessage.textContent = message;
-        proEncryptionWarning.appendChild(warningMessage);
     }
 
     function getEncryptionStrategy() {
@@ -233,6 +378,12 @@ export function initUI() {
     // Set up file input event listeners
     dataFileInput?.addEventListener('change', updateProFilesList);
     qcontShardsInput?.addEventListener('change', () => { void updateProShardsStatus(); });
+    proReviewInput?.addEventListener('change', () => { void updateProReviewStatus(); });
+    qencForQcontInput?.addEventListener('change', () => updateProWorkflowStatus());
+    privKeyForQcontInput?.addEventListener('change', () => updateProWorkflowStatus());
+    el('qcontAttachInput')?.addEventListener('change', () => updateProWorkflowStatus());
+    el('qcontReshareInput')?.addEventListener('change', () => updateProWorkflowStatus());
+    el('proAuthPolicy')?.addEventListener('change', () => updateProWorkflowStatus());
     pubKeyInput?.addEventListener('change', updateProEncryptionControls);
     privKeyInput?.addEventListener('change', updateProEncryptionControls);
 
@@ -250,11 +401,19 @@ export function initUI() {
         parityLabel: el('rsParityLabel'),
         markerLabel: el('rsMarkerLabel'),
         ticks: el('rsTicks'),
-        splitPrimaryButton: buildQcontBtn,
     }).update;
     void updateProShardsStatus();
+    void updateProReviewStatus();
     updateProEncryptionControls();
     updateProFilesList();
+    rsNInput?.addEventListener('input', () => updateProWorkflowStatus());
+    rsKInput?.addEventListener('input', () => updateProWorkflowStatus());
+    observeProWorkflowStatusSource('rsText');
+    observeProWorkflowStatusSource('proSplitReadinessText');
+    observeProWorkflowStatusSource('proShardsStatusText');
+    observeProWorkflowStatusSource('proReviewStatusText');
+    observeProWorkflowStatusSource('attachStatusText');
+    observeProWorkflowStatusSource('proReshareStatusText');
 
     // Advanced entropy collection
     const advancedEntropyBtn = el('advancedEntropyBtn');
@@ -265,23 +424,26 @@ export function initUI() {
     async function collectAdvancedEntropy() {
         if (entropyCollector) return;
 
+        const entropyHeuristicNote = el('entropyHeuristicNote');
+        let progressInterval = null;
+        let collectionSucceeded = false;
+
+        setWorkflowBusy('proViewIdentity', true);
         try {
             entropyStatus.style.display = 'block';
-            entropyText.textContent = 'Move mouse, type, resize window... Collecting entropy...';
-            advancedEntropyBtn.disabled = true;
-            advancedEntropyBtn.textContent = '🎲 Collecting...';
+            entropyText.textContent = 'Move mouse, type, or resize the window — collecting supplemental entropy (optional).';
+            advancedEntropyBtn.textContent = '🎲 Collecting…';
+            entropyHeuristicNote?.classList.remove('initially-hidden');
 
             entropyCollector = new BrowserEntropyCollector();
 
-            // Update progress with enhanced information including entropy estimation
-            const progressInterval = setInterval(() => {
+            progressInterval = setInterval(() => {
                 if (!entropyCollector) {
-                    clearInterval(progressInterval);
                     return;
                 }
                 const progress = entropyCollector.getProgress();
                 entropyBar.style.width = `${progress.percentage}%`;
-                entropyText.textContent = `Events: ${progress.collected}/${progress.required} (${progress.percentage}%) | Queue: ${progress.queueSize} | Est. Entropy: ${Math.round(progress.estimatedEntropyBits)} bits`;
+                entropyText.textContent = `Heuristic collection progress: ${progress.percentage}% · Events ${progress.collected}/${progress.required} · Queue ${progress.queueSize}`;
             }, 200);
 
             const collectedSeed = await entropyCollector.startCollection();
@@ -291,26 +453,34 @@ export function initUI() {
             wipeCollectedUserEntropy();
             collectedUserEntropy = collectedSeed;
 
-            clearInterval(progressInterval);
             if (entropyCollector && typeof entropyCollector.wipeSensitiveState === 'function') {
                 entropyCollector.wipeSensitiveState();
             }
             entropyCollector = null;
 
-            entropyText.textContent = '✅ Advanced entropy collected successfully! 64-byte seed ready.';
+            collectionSucceeded = true;
+            entropyText.textContent = '✅ Supplemental entropy collected and mixed into next key generation.';
             entropyBar.style.width = '100%';
-            advancedEntropyBtn.textContent = '✅ Entropy Collected';
+            advancedEntropyBtn.textContent = '✅ Supplemental entropy ready';
             advancedEntropyBtn.style.backgroundColor = '#28a745';
 
         } catch (error) {
             log(`Entropy collection failed: ${error.message}`);
-            entropyText.textContent = '❌ Entropy collection failed - will use secure random only';
-            advancedEntropyBtn.disabled = false;
-            advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+            entropyText.textContent = '❌ Supplemental collection failed. Next key generation will use the browser CSPRNG only.';
+            advancedEntropyBtn.textContent = 'Collect supplemental entropy (optional)';
+            entropyHeuristicNote?.classList.remove('initially-hidden');
             if (entropyCollector && typeof entropyCollector.dispose === 'function') {
                 entropyCollector.dispose();
             }
             entropyCollector = null;
+        } finally {
+            if (progressInterval !== null) {
+                clearInterval(progressInterval);
+            }
+            setWorkflowBusy('proViewIdentity', false);
+            if (collectionSucceeded) {
+                advancedEntropyBtn.disabled = true;
+            }
         }
     }
 
@@ -371,15 +541,15 @@ export function initUI() {
             }
         }
         
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewIdentity', true);
         try {
             log('Generating ML-KEM-1024 keypair...');
             
             const hasCollectedEntropy = collectedUserEntropy instanceof Uint8Array && collectedUserEntropy.length > 0;
             if (hasCollectedEntropy) {
-                log('Using crypto.getRandomValues() + collected user entropy for enhanced security');
+                log('Mixing crypto.getRandomValues() output with supplemental collected entropy for the next key generation.');
             } else {
-                log('Using crypto.getRandomValues() with 64-byte seed (secure default)');
+                log('Using crypto.getRandomValues() only for key generation (browser CSPRNG baseline).');
             }
             
             // Generate keys with collected entropy if available
@@ -391,7 +561,7 @@ export function initUI() {
             const skHash = await hashBytes(privateKey);
             const pkHash = await hashBytes(publicKey);
             
-            log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (enhanced with user entropy)' : ''}`);
+            log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (supplemental user-event mixing applied)' : ''}`);
             log(`Private Key: privateKey.qkey (${privateKey.length} B) SHA3-512=${skHash}`);
             log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
             
@@ -407,16 +577,17 @@ export function initUI() {
             
             // Reset entropy collection UI state
             if (advancedEntropyBtn) {
-                advancedEntropyBtn.textContent = '🎲 Collect Additional Entropy';
+                advancedEntropyBtn.textContent = 'Collect supplemental entropy (optional)';
                 advancedEntropyBtn.style.backgroundColor = '';
                 advancedEntropyBtn.disabled = false;
             }
             if (entropyStatus) {
                 entropyStatus.style.display = 'none';
             }
+            el('entropyHeuristicNote')?.classList.add('initially-hidden');
             
         } catch (e) { logError(e); } finally {
-            setButtonsDisabled(false);
+            setWorkflowBusy('proViewIdentity', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
             void updateProShardsStatus();
@@ -426,7 +597,7 @@ export function initUI() {
     encBtn?.addEventListener('click', async () => {
         if (!pubKeyInput?.files?.[0]) { showToast('Load a public key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to encrypt.', 'warning'); return; }
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewEncryption', true);
         try {
             const publicKey = await readFileAsUint8Array(pubKeyInput.files[0]);
             const selectedFiles = [...dataFileInput.files];
@@ -459,7 +630,7 @@ export function initUI() {
                 }
             }
         } catch (e) { logError(e); } finally {
-            setButtonsDisabled(false);
+            setWorkflowBusy('proViewEncryption', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
             void updateProShardsStatus();
@@ -471,7 +642,7 @@ export function initUI() {
     decBtn?.addEventListener('click', async () => {
         if (!privKeyInput?.files?.[0]) { showToast('Load a private key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to decrypt (.qenc).', 'warning'); return; }
-        setButtonsDisabled(true);
+        setWorkflowBusy('proViewEncryption', true);
         try {
             const privateKey = await readFileAsUint8Array(privKeyInput.files[0]);
             for (const file of dataFileInput.files) {
@@ -510,7 +681,7 @@ export function initUI() {
                 log(`Encrypted on (UTC): ${metadata.timestamp}`);
             }
         } catch (e) { logError(e); } finally {
-            setButtonsDisabled(false);
+            setWorkflowBusy('proViewEncryption', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
             void updateProShardsStatus();
@@ -521,47 +692,28 @@ export function initUI() {
 
     function initProTabs() {
         const tabs = {
-            proTabIdentity: 'proViewIdentity',
-            proTabEncryption: 'proViewEncryption',
-            proTabDistribution: 'proViewDistribution',
-            proTabRestore: 'proViewRestore',
+            proTabDistribution: ['proViewIdentity', 'proViewEncryption', 'proViewDistribution'],
+            proTabReview: 'proViewReview',
             proTabAttach: 'proViewAttach',
             proTabReshare: 'proViewReshare',
+            proTabRestore: 'proViewRestore',
         };
         const tabIds = Object.keys(tabs);
 
-        function activateProTab(tabId, { focus = false } = {}) {
-            tabIds.forEach((currentTabId) => {
-                const tabEl = document.getElementById(currentTabId);
-                const panelEl = document.getElementById(tabs[currentTabId]);
-                const active = currentTabId === tabId;
-                if (tabEl) {
-                    tabEl.classList.toggle('active', active);
-                    tabEl.setAttribute('aria-selected', String(active));
-                    tabEl.tabIndex = active ? 0 : -1;
-                    if (active && focus) tabEl.focus();
+        initRovingTablist({
+            tabIds,
+            panelByTabId: tabs,
+            onActivate: (tabId) => {
+                if (tabId === 'proTabDistribution') {
+                    setTimeout(() => {
+                        rsNInput?.dispatchEvent(new Event('input'));
+                    }, 10);
                 }
-                if (panelEl) {
-                    panelEl.classList.toggle('active', active);
-                    panelEl.style.display = active ? 'block' : 'none';
-                }
-            });
-
-            if (tabId === 'proTabDistribution') {
-                setTimeout(() => {
-                    rsNInput?.dispatchEvent(new Event('input'));
-                }, 10);
-            }
-        }
-
-        tabIds.forEach((tabId) => {
-            const tabEl = document.getElementById(tabId);
-            if (!tabEl) return;
-            tabEl.addEventListener('click', () => {
-                activateProTab(tabId);
-            });
+                updateProWorkflowStatus(tabId);
+            },
         });
     }
 
     initProTabs();
+    updateProWorkflowStatus();
 }

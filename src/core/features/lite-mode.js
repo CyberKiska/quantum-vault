@@ -13,14 +13,16 @@ import {
 } from '../../app/crypto-service.js';
 import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
 import {
+    buildRestorePolicyFailureSummary,
     buildRestoreResultSummary,
     collectRestoreVerificationOptions,
     logRestoreSelectionSummary,
     logVerificationSummary,
-    refreshSuccessorSelectionUi,
+    renderRestorePreflightForFiles,
 } from './qcont/restore-ui.js';
+import { createSuccessorShardInputRefreshController } from './qcont/successor-workflow-input.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
-import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setButtonsDisabled, createFilenameTimestamp, formatFileSize } from '../../utils.js';
+import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, download, setWorkflowBusy, createFilenameTimestamp, formatFileSize } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import {
     log,
@@ -33,18 +35,121 @@ import {
     logRestorationSuccess,
     logWarning,
 } from './ui/logging.js';
-import { updateShardSelectionStatus } from './ui/shards-status.js';
 import { showToast } from './ui/toast.js';
+import { clearInlineError, showInlineError, summarizeFileList } from './ui/inline-error.js';
+import { initRovingTablist } from './ui/tabs.js';
 import { updateSidebarStatus } from './ui/ui.js';
-import { describeAuthPolicyHelp } from './qcont/auth-policy-help.js';
+import { describeAuthPolicyHelp, renderAuthPolicyConsequence } from './qcont/auth-policy-help.js';
+import { buildRestoreRecoveryAction } from './qcont/restore-recovery-action.js';
 
 // Global state for Lite mode
 let liteKeys = null;
 let isLiteMode = true; // Default to Lite mode
 let originalFileNames = new Map(); // Track original file names for restoration
-let liteShardsStatusSeq = 0;
+const liteRestoreShardRefresh = createSuccessorShardInputRefreshController({
+  prefix: 'liteRestore',
+  inputId: 'liteShardsInput',
+  statusDivId: 'shardsStatus',
+  statusTextId: 'shardsStatusText',
+  actionButtonId: 'liteRestoreBtn',
+  intakeContainerId: 'liteRestoreArtifactIntake',
+  intakeLabel: 'Lite restore artifact intake',
+  intakeWorkflow: 'lite-restore',
+  preflightContainerId: 'liteRestorePreflightDecision',
+  expectedSignerInputId: 'liteRestoreExpectedEdSigner',
+});
 let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
+const LITE_RESTORE_INLINE_ERROR_ID = 'liteRestoreInlineError';
+
+/** After each successful Lite create, key backup row tracks Backup Keys clicks until the next create. */
+let liteKeyBackupAfterLastCreate = false;
+let liteLastCreateShardCount = 0;
+
+function isLiteShardConfigurationValid() {
+    const nInput = document.getElementById('liteN');
+    const thresholdInput = document.getElementById('liteThreshold');
+    if (!nInput || !thresholdInput) return false;
+    const n = parseInt(nInput.value, 10);
+    const thresholdPercent = parseInt(thresholdInput.value, 10);
+    if (isNaN(n) || isNaN(thresholdPercent) || n < 5) return false;
+    const params = calculateParametersFromThreshold(n, thresholdPercent);
+    return !params.error;
+}
+
+function refreshLiteCustodyGuidanceVisibility() {
+    const panel = document.getElementById('liteCustodyGuidance');
+    if (!panel) return;
+    const show = liteKeys !== null && isLiteShardConfigurationValid();
+    panel.classList.toggle('initially-hidden', !show);
+}
+
+function hideLiteExportChecklist() {
+    document.getElementById('liteExportChecklist')?.classList.add('initially-hidden');
+}
+
+function renderLiteExportChecklistBody(shardCount) {
+    const ul = document.getElementById('liteExportChecklistItems');
+    if (!ul) return;
+
+    ul.replaceChildren();
+
+    const addRow = (title, detail, tone) => {
+        const li = document.createElement('li');
+        li.className = `lite-checklist-row lite-checklist-row--${tone}`;
+        const titleEl = document.createElement('span');
+        titleEl.className = 'lite-checklist-title';
+        titleEl.textContent = title;
+        const detailEl = document.createElement('span');
+        detailEl.className = 'lite-checklist-detail';
+        detailEl.textContent = detail;
+        li.append(titleEl, detailEl);
+        ul.appendChild(li);
+    };
+
+    addRow(
+        'QVqcont-7 shards exported',
+        `${shardCount} files — confirm your browser saved every shard`,
+        'ok',
+    );
+    addRow(
+        'Archive-state descriptor exported',
+        'Confirm .archive-state.json is retained with your custody records',
+        'ok',
+    );
+    addRow(
+        'Lifecycle bundle exported',
+        'Confirm .lifecycle-bundle.json is retained for attach and restore workflows',
+        'ok',
+    );
+
+    const keyExported = liteKeyBackupAfterLastCreate;
+    addRow(
+        keyExported ? 'Optional key backup exported' : 'Optional key backup not exported',
+        keyExported
+            ? 'ML-KEM .qkey downloads were triggered from Backup Keys'
+            : 'Skipped — optional; threshold recovery normally uses shards. Omit if retaining keys violates policy.',
+        keyExported ? 'ok' : 'neutral',
+    );
+}
+
+function renderLiteExportChecklistAfterCreate(shardCount) {
+    liteLastCreateShardCount = shardCount;
+    liteKeyBackupAfterLastCreate = false;
+    const root = document.getElementById('liteExportChecklist');
+    if (!root) return;
+    renderLiteExportChecklistBody(shardCount);
+    root.classList.remove('initially-hidden');
+}
+
+function refreshLiteExportChecklistAfterKeyBackup() {
+    if (liteLastCreateShardCount <= 0) return;
+    renderLiteExportChecklistBody(liteLastCreateShardCount);
+}
+
+function liteRestoreRecoveryAction(error) {
+    return buildRestoreRecoveryAction(error, { verb: 'Lite Restore' });
+}
 
 function wipeLiteKeyPair(keyPair) {
     if (keyPair?.privateKey instanceof Uint8Array) {
@@ -63,6 +168,10 @@ function wipeLiteKeys() {
 function wipeLiteModeSessionSecrets() {
     wipeLiteKeys();
     originalFileNames.clear();
+    liteKeyBackupAfterLastCreate = false;
+    liteLastCreateShardCount = 0;
+    hideLiteExportChecklist();
+    refreshLiteCustodyGuidanceVisibility();
 }
 
 // Compute RS/SSS params from desired threshold percent
@@ -229,6 +338,8 @@ async function generateLiteKeys() {
         const keyStatus = document.getElementById('keyStatus');
         const statusText = keyStatus?.querySelector('.status-text');
         const statusIcon = keyStatus?.querySelector('.status-icon');
+
+        document.getElementById('liteCustodyGuidance')?.classList.add('initially-hidden');
         
         if (statusText) statusText.textContent = 'Generating keys...';
         if (statusIcon) statusIcon.textContent = '🔄';
@@ -259,6 +370,7 @@ async function generateLiteKeys() {
         if (downloadBtn) downloadBtn.style.display = 'inline-flex';
         
         updateCreateShardsButton();
+        refreshLiteCustodyGuidanceVisibility();
         
     } catch (error) {
         logError(`Failed to generate keys: ${error.message}`, { isLiteMode: true });
@@ -266,6 +378,7 @@ async function generateLiteKeys() {
         const statusIcon = document.getElementById('keyStatus')?.querySelector('.status-icon');
         if (statusText) statusText.textContent = 'Key generation failed ✗';
         if (statusIcon) statusIcon.textContent = '❌';
+        refreshLiteCustodyGuidanceVisibility();
     }
 }
 
@@ -302,24 +415,7 @@ function updateFileListDisplay() {
 
 // Update shards status indicator
 async function updateShardsStatus() {
-    const shardsInput = document.getElementById('liteShardsInput');
-    const statusDiv = document.getElementById('shardsStatus');
-    const statusText = document.getElementById('shardsStatusText');
-    const restoreBtn = document.getElementById('liteRestoreBtn');
-    
-    if (!shardsInput || !statusDiv || !statusText) return;
-    
-    const files = [...(shardsInput.files || [])];
-    const requestId = ++liteShardsStatusSeq;
-    const assessment = await updateShardSelectionStatus({
-        files,
-        statusDiv,
-        statusText,
-        actionButton: restoreBtn,
-        isCurrent: () => requestId === liteShardsStatusSeq
-    });
-    if (requestId !== liteShardsStatusSeq) return;
-    await refreshSuccessorSelectionUi('liteRestore', files, restoreBtn, assessment || { ready: false });
+  await liteRestoreShardRefresh.refresh();
 }
 
 // Update create shards button state
@@ -346,6 +442,8 @@ function updateCreateShardsButton() {
     }
     
     btn.disabled = !hasKeys || !hasFiles || !validConfig;
+
+    refreshLiteCustodyGuidanceVisibility();
 }
 
 // Download keys backup
@@ -365,6 +463,8 @@ function downloadLiteKeys() {
     }, 500);
     
     log('✅ Backup keys downloaded', { isLiteMode: true });
+    liteKeyBackupAfterLastCreate = true;
+    refreshLiteExportChecklistAfterKeyBackup();
 }
 
 // Pipeline Visualization Helper
@@ -408,7 +508,9 @@ async function createLiteShards() {
         return;
     }
     
-    setButtonsDisabled(true);
+    hideLiteExportChecklist();
+
+    setWorkflowBusy('liteViewProtect', true);
     updateLitePipeline('liteViewProtect', 'step-lock'); // Start: Encrypting
     
     try {
@@ -485,11 +587,13 @@ async function createLiteShards() {
         log(`Saved ${lifecycleBundleName}. This mutable lifecycle bundle carries detached evidence separately from the signable archive-state descriptor.`, { isLiteMode: true });
         log('Same-state resharing later is maintenance, not archive re-approval, because the archive-state descriptor stays unchanged while a new cohort and transition record are emitted.', { isLiteMode: true });
         log('Distribute shards across different storage locations for security', { isLiteMode: true });
+
+        renderLiteExportChecklistAfterCreate(qconts.length);
         
     } catch (error) {
         logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
     } finally {
-        setButtonsDisabled(false);
+        setWorkflowBusy('liteViewProtect', false);
         updateCreateShardsButton();
         setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
     }
@@ -499,17 +603,46 @@ async function restoreLiteShards() {
     const shardsInput = document.getElementById('liteShardsInput');
     
     if (!shardsInput?.files?.length) {
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: 'No shard files are selected.',
+            artifact: 'Lite restore input set',
+            action: 'Load successor QVqcont-7 shards and any detached evidence required by the archive policy.',
+        });
         showToast('Please select shard files to restore', 'warning');
         return;
     }
 
     const assessment = await assessShardSelection([...(shardsInput.files || [])]);
     if (!assessment.ready) {
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: assessment.message || 'Selected shards do not meet the recovery threshold.',
+            artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+            action: 'Load enough unique successor shards from one archive/state/cohort, then retry Lite Restore.',
+        });
         showToast(assessment.message || 'Selected shards do not meet the recovery threshold', 'warning');
         return;
     }
+
+    const preflight = await renderRestorePreflightForFiles({
+        prefix: 'liteRestore',
+        containerId: 'liteRestorePreflightDecision',
+        files: [...(shardsInput.files || [])],
+        expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+    });
+    if (preflight?.canEvaluate === false) {
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: preflight.blockingReason || 'Restore preflight blocked evaluation.',
+            artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+            action: 'Load policy-satisfying archive-approval evidence, then retry Lite Restore.',
+        });
+        showToast(preflight.blockingReason || 'Restore preflight blocked evaluation.', 'warning');
+        return;
+    }
     
-    setButtonsDisabled(true);
+    setWorkflowBusy('liteViewRestore', true);
     updateLitePipeline('liteViewRestore', 'step-combine');
 
     const liteResultPanel = document.getElementById('liteRestoreResult');
@@ -519,6 +652,7 @@ async function restoreLiteShards() {
     }
     
     try {
+        clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
         const verificationOptions = await collectRestoreVerificationOptions('liteRestore', [...shardsInput.files]);
         if (!verificationOptions.shardFiles.length) {
             throw new Error('No .qcont shard files were detected in selected input.');
@@ -554,6 +688,12 @@ async function restoreLiteShards() {
         const { qencBytes, privKey, containerHash, qencOk, qkeyOk } = result;
         
         if (!qencOk || !qkeyOk) {
+            showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+                title: 'Lite restore failed',
+                cause: 'Recovered container or private key failed integrity verification.',
+                artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+                action: 'Replace corrupted or wrong-cohort shards, then retry Lite Restore.',
+            });
             logError('Hash verification failed for container', { isLiteMode: true });
             buildRestoreResultSummary(result, 'liteRestoreResult', {
                 liteDecrypt: { containerOk: false, decryptOk: false },
@@ -567,6 +707,12 @@ async function restoreLiteShards() {
         const integrityOk = metadata.fileHash === decHash;
 
         if (!integrityOk) {
+            showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+                title: 'Lite restore failed',
+                cause: 'Decrypted file hash does not match the container metadata.',
+                artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+                action: 'Treat the restore output as invalid; reload the original shard set and retry.',
+            });
             logError('File integrity check failed - hashes do not match', { isLiteMode: true });
             buildRestoreResultSummary(result, 'liteRestoreResult', {
                 liteDecrypt: { containerOk: true, decryptOk: false },
@@ -601,22 +747,28 @@ async function restoreLiteShards() {
         logRestorationSuccess(restoredLabel, decBytes.length, encryptionTime, true, { isLiteMode: true });
         
         logSuccess('Container restored successfully from a policy-satisfying archive cohort', { isLiteMode: true });
+        clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
         buildRestoreResultSummary(result, 'liteRestoreResult', {
             liteDecrypt: { containerOk: true, decryptOk: true },
         });
         
     } catch (error) {
+        buildRestorePolicyFailureSummary(error, 'liteRestoreResult');
+        showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
+            title: 'Lite restore blocked',
+            cause: error,
+            artifact: summarizeFileList([...(shardsInput.files || [])], 'Lite restore input set'),
+            action: liteRestoreRecoveryAction(error),
+        });
         logError(error, { isLiteMode: true });
     } finally {
-        setButtonsDisabled(false);
+        setWorkflowBusy('liteViewRestore', false);
         void updateShardsStatus();
         setTimeout(() => updateLitePipeline('liteViewRestore', null), 2000); // Reset after delay
     }
 }
 
 function initLiteTabs() {
-    const tabProtect = document.getElementById('liteTabProtect');
-    const tabRestore = document.getElementById('liteTabRestore');
     const viewProtect = document.getElementById('liteViewProtect');
     const viewRestore = document.getElementById('liteViewRestore');
     const tabIds = ['liteTabProtect', 'liteTabRestore'];
@@ -625,35 +777,7 @@ function initLiteTabs() {
         liteTabRestore: viewRestore,
     };
 
-    function activateLiteTab(tabId, { focus = false } = {}) {
-        tabIds.forEach((currentTabId) => {
-            const tabEl = document.getElementById(currentTabId);
-            const panelEl = panelByTabId[currentTabId];
-            const active = currentTabId === tabId;
-
-            if (tabEl) {
-                tabEl.classList.toggle('active', active);
-                tabEl.setAttribute('aria-selected', String(active));
-                tabEl.tabIndex = active ? 0 : -1;
-                if (active && focus) tabEl.focus();
-            }
-
-            if (panelEl) {
-                panelEl.style.display = active ? 'block' : 'none';
-                panelEl.classList.toggle('active', active);
-            }
-        });
-    }
-
-    if (tabProtect && tabRestore && viewProtect && viewRestore) {
-        tabProtect.addEventListener('click', () => {
-            activateLiteTab('liteTabProtect');
-        });
-
-        tabRestore.addEventListener('click', () => {
-            activateLiteTab('liteTabRestore');
-        });
-    }
+    if (viewProtect && viewRestore) initRovingTablist({ tabIds, panelByTabId });
 }
 
 function updateOperationsLogVisibility() {
@@ -766,6 +890,7 @@ export function initLiteMode() {
     const liteThreshold = document.getElementById('liteThreshold');
     const liteAuthPolicy = document.getElementById('liteAuthPolicy');
     const liteAuthPolicyHelp = document.getElementById('liteAuthPolicyHelp');
+    const liteAuthPolicyConsequence = document.getElementById('liteAuthPolicyConsequence');
     if (liteN && liteThreshold) {
         liteN.addEventListener('input', updateThresholdDisplay);
         liteThreshold.addEventListener('input', updateThresholdDisplay);
@@ -773,7 +898,9 @@ export function initLiteMode() {
     }
     if (liteAuthPolicy && liteAuthPolicyHelp) {
         const syncLiteAuthPolicyHelp = () => {
-            liteAuthPolicyHelp.textContent = describeAuthPolicyHelp(String(liteAuthPolicy.value || LITE_DEFAULT_AUTH_POLICY_LEVEL));
+            const policyLevel = String(liteAuthPolicy.value || LITE_DEFAULT_AUTH_POLICY_LEVEL);
+            liteAuthPolicyHelp.textContent = describeAuthPolicyHelp(policyLevel);
+            renderAuthPolicyConsequence(liteAuthPolicyConsequence, policyLevel);
         };
         liteAuthPolicy.addEventListener('change', syncLiteAuthPolicyHelp);
         syncLiteAuthPolicyHelp();
@@ -792,9 +919,25 @@ export function initLiteMode() {
     // Set up shard input monitoring
     const liteShardsInput = document.getElementById('liteShardsInput');
     if (liteShardsInput) {
-        liteShardsInput.addEventListener('change', () => { void updateShardsStatus(); });
+        liteShardsInput.addEventListener('change', () => {
+            clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
+            void updateShardsStatus();
+        });
         void updateShardsStatus();
     }
+    document.getElementById('liteRestoreExpectedEdSigner')?.addEventListener('input', () => {
+        clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
+        const files = [...(liteShardsInput?.files || [])];
+        if (files.length) {
+            void renderRestorePreflightForFiles({
+                prefix: 'liteRestore',
+                containerId: 'liteRestorePreflightDecision',
+                files,
+                expectedSignerInput: document.getElementById('liteRestoreExpectedEdSigner'),
+                actionButton: document.getElementById('liteRestoreBtn'),
+            });
+        }
+    });
     
     // Set up button handlers
     const liteDownloadKeysBtn = document.getElementById('liteDownloadKeysBtn');

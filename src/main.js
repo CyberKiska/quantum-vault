@@ -7,18 +7,37 @@ import { initQcontAttachUI } from './core/features/qcont/attach-ui.js';
 import { initQcontReshareUI } from './core/features/qcont/reshare-ui.js';
 import { initQcontRestoreUI } from './core/features/qcont/restore-ui.js';
 import { initLiteMode } from './core/features/lite-mode.js';
+import { initDisclosureShells } from './core/features/ui/disclosure.js';
+import { initArchiveReviewHubRoots } from './core/features/ui/archive-review-hub.js';
 import { installSessionWipeGuards } from './app/session-wipe.js';
 
 const TRANSIENT_PANEL_IDS = [
     'attachResult',
     'liteRestoreResult',
+    'liteRestoreInlineError',
     'proReshareResult',
     'proRestoreResult',
+    'proRestoreInlineError',
+    'restorePreflightDecision',
+    'liteRestorePreflightDecision',
+    'proSplitInlineError',
     'attachStatus',
-    'attachModeSummary',
-    'proReshareStatus',
+    'attachArtifactIntake',
+    'attachPlanDecision',
+    'attachInlineError',
+    'proReviewStatus',
+    'reviewArtifactIntake',
+    'resharePlanDecision',
+    'reshareArtifactIntake',
     'proShardsStatus',
+    'restoreArtifactIntake',
     'shardsStatus',
+    'liteRestoreArtifactIntake',
+    'restoreArchiveInspector',
+    'reviewArchiveInspector',
+    'attachArchiveInspector',
+    'reshareArchiveInspector',
+    'liteRestoreArchiveInspector',
     'reshareSuccessorSelection',
     'restoreSuccessorSelection',
     'liteRestoreSuccessorSelection',
@@ -65,8 +84,25 @@ function clearTransientPanels() {
         const element = document.getElementById(id);
         if (!element) continue;
         element.style.display = 'none';
-        if (element.classList.contains('restore-result-panel')) {
+        if (
+            element.classList.contains('restore-result-panel') ||
+            element.classList.contains('inline-error-panel') ||
+            element.classList.contains('artifact-intake-panel') ||
+            element.id.endsWith('ArchiveInspector')
+        ) {
             element.replaceChildren();
+            if (element.id.endsWith('ArchiveInspector')) {
+                element.className = 'archive-inspector-host initially-hidden';
+            }
+        } else if (element.id === 'restorePreflightDecision' || element.id === 'liteRestorePreflightDecision') {
+            element.replaceChildren();
+            element.className = 'qv-decision-card initially-hidden';
+            element.removeAttribute('data-release-state');
+            element.setAttribute('data-testid', element.id === 'liteRestorePreflightDecision' ? 'lite-restore-preflight' : 'restore-preflight');
+        } else if (element.id === 'attachPlanDecision' || element.id === 'resharePlanDecision') {
+            element.replaceChildren();
+            element.className = 'initially-hidden';
+            element.setAttribute('data-testid', element.id === 'attachPlanDecision' ? 'attach-plan-decision' : 'reshare-plan-decision');
         } else if (element.tagName === 'PRE') {
             element.textContent = '';
         }
@@ -107,6 +143,8 @@ export function initializeApplication() {
     initQcontReshareUI();
     initQcontRestoreUI();
     initLiteMode();
+    initDisclosureShells();
+    initArchiveReviewHubRoots();
 
     console.log('Quantum Vault application initialized successfully');
 }

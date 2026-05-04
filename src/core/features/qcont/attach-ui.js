@@ -14,41 +14,40 @@ import {
   parseTransitionRecordBytes,
 } from '../../crypto/lifecycle/artifacts.js';
 import { startsWithAscii } from '../../crypto/byte-prefix.js';
+import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
+import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
+import { buildAttachEvidenceMatrixSections, renderEvidenceMatrix } from '../ui/evidence-matrix.js';
 import { log, logError, logSuccess, logWarning } from '../ui/logging.js';
 import { showToast } from '../ui/toast.js';
-import { download, readFileAsUint8Array, setButtonsDisabled } from '../../../utils.js';
+import { download, readFileAsUint8Array, setWorkflowBusy } from '../../../utils.js';
+import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-inspector-ui.js';
+import { renderDecisionCard } from '../ui/decision-card.js';
+import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
+import { deriveArchiveBaseName } from './archive-name.js';
+import {
+  ATTACH_CHANNELS,
+  attachChannelConfig,
+  buildAttachPlanDecisionModel,
+  deriveAttachRequirements,
+} from './attach-plan-view-model.js';
+import {
+  clearAttachTargetBindingPreview,
+  refreshAttachTargetBindingPreview,
+} from './attach-target-preview-ui.js';
+import {
+  clearSourceEvidenceExportError,
+  collectSourceEvidenceBuilderParams,
+  createSourceEvidenceDigestRow,
+  ensureSourceEvidenceDigestRows,
+  initSourceEvidenceApplyFileToAllRows,
+  refreshSourceEvidenceBuilderUi,
+  showSourceEvidenceExportError,
+  updateSourceEvidenceOptInUi,
+} from './source-evidence-builder-ui.js';
 
-const ATTACH_CHANNELS = Object.freeze({
-  'archive-approval': Object.freeze({
-    label: 'Archive approval',
-    buttonLabel: 'Attach Archive-Approval Evidence',
-    channelHelp: 'Archive approval attaches detached signatures over the canonical archive-state descriptor. Maintenance and source-evidence remain separate evidence channels and never satisfy archive policy on their own.',
-    inputHint: 'Load one archive cohort plus any archive-approval .qsig/.sig, .pqpk signer pins, and optional .ots proofs you want to merge.',
-    emptySelectionText: 'Select archive-approval attach inputs to see the attach plan.',
-    attachSummary: 'Archive-approval evidence merged',
-  }),
-  maintenance: Object.freeze({
-    label: 'Maintenance signature',
-    buttonLabel: 'Attach Maintenance Evidence',
-    channelHelp: 'Maintenance signatures target a canonical transition-record already present in the selected lifecycle bundle. This evidence stays separate from archive approval and does not satisfy archive policy.',
-    inputHint: 'Load one archive cohort or lifecycle bundle, the matching canonical transition-record.json, one or more maintenance .qsig/.sig files, any .pqpk signer pins, and optional .ots proofs.',
-    emptySelectionText: 'Select maintenance attach inputs to see the attach plan.',
-    attachSummary: 'Maintenance evidence merged',
-  }),
-  'source-evidence': Object.freeze({
-    label: 'Source evidence',
-    buttonLabel: 'Attach Source-Evidence Signatures',
-    channelHelp: 'Source-evidence signatures target canonical source-evidence JSON, not archive-state approval bytes. This channel is provenance only and never satisfies archive policy.',
-    inputHint: 'Load one archive cohort or lifecycle bundle, the canonical source-evidence.json artifact, one or more detached signatures over that exact JSON, any .pqpk signer pins, and optional .ots proofs.',
-    emptySelectionText: 'Select source-evidence attach inputs to see the attach plan.',
-    attachSummary: 'Source-evidence signatures merged',
-  }),
-});
-const SOURCE_DIGEST_ALGORITHMS = Object.freeze(['SHA3-512', 'SHA3-256', 'SHA-256']);
-const SOURCE_EVIDENCE_DIGEST_DEFAULT = Object.freeze({
-  alg: 'SHA3-512',
-  value: '',
-});
+const ATTACH_INLINE_ERROR_ID = 'attachInlineError';
+let lastAttachIntakeError = null;
+let attachStatusSeq = 0;
 
 function isLegacyAttachFilename(name) {
   return /\.qvmanifest\.json$/i.test(String(name || ''));
@@ -58,10 +57,6 @@ function activeAttachChannel() {
   const select = document.getElementById('attachEvidenceChannel');
   const value = String(select?.value || 'archive-approval');
   return ATTACH_CHANNELS[value] ? value : 'archive-approval';
-}
-
-function attachChannelConfig(channel = activeAttachChannel()) {
-  return ATTACH_CHANNELS[channel] || ATTACH_CHANNELS['archive-approval'];
 }
 
 function ensureSingleCanonicalArtifact(existingBytes, parsedArtifact, duplicateMessage) {
@@ -187,22 +182,6 @@ export async function classifyAttachFiles(files) {
   };
 }
 
-function stripArchiveVariantSuffix(name) {
-  return String(name || 'archive')
-    .replace(/\.archive-state\.json$/i, '')
-    .replace(/\.cohort-binding\.json$/i, '')
-    .replace(/\.transition-record\.json$/i, '')
-    .replace(/\.lifecycle-bundle\.json$/i, '');
-}
-
-function deriveArchiveBaseName(sourceFiles) {
-  const explicit = sourceFiles.find((file) => /\.(archive-state\.json|lifecycle-bundle\.json)$/i.test(String(file?.name || '')));
-  if (explicit) return stripArchiveVariantSuffix(explicit.name);
-  const shard = sourceFiles.find((file) => String(file?.name || '').toLowerCase().endsWith('.qcont'));
-  if (!shard) return 'archive';
-  return stripArchiveVariantSuffix(shard.name.replace(/\.part\d+-of-\d+\.qcont$/i, ''));
-}
-
 function deriveSignableFilename(sourceFiles) {
   return `${deriveArchiveBaseName(sourceFiles)}.archive-state.json`;
 }
@@ -229,130 +208,7 @@ function setAttachChannelUi(channel = activeAttachChannel()) {
     sourceEvidenceBuilderSection.classList.toggle('initially-hidden', !visible);
     sourceEvidenceBuilderSection.open = visible;
   }
-}
-
-function createSourceEvidenceDigestRow(initial = SOURCE_EVIDENCE_DIGEST_DEFAULT) {
-  const row = document.createElement('div');
-  row.className = 'split-grid source-evidence-digest-row';
-
-  const algGroup = document.createElement('div');
-  algGroup.className = 'form-group';
-  const algLabel = document.createElement('label');
-  algLabel.textContent = 'Digest algorithm';
-  const algSelect = document.createElement('select');
-  algSelect.className = 'source-evidence-digest-alg';
-  for (const alg of SOURCE_DIGEST_ALGORITHMS) {
-    const option = document.createElement('option');
-    option.value = alg;
-    option.textContent = alg;
-    if (alg === initial.alg) option.selected = true;
-    algSelect.appendChild(option);
-  }
-  algGroup.appendChild(algLabel);
-  algGroup.appendChild(algSelect);
-
-  const valueGroup = document.createElement('div');
-  valueGroup.className = 'form-group';
-  const valueLabel = document.createElement('label');
-  valueLabel.textContent = 'Hex digest';
-  const valueInput = document.createElement('input');
-  valueInput.type = 'text';
-  valueInput.className = 'source-evidence-digest-value';
-  valueInput.placeholder = 'Lowercase hex digest';
-  valueInput.value = initial.value || '';
-  valueGroup.appendChild(valueLabel);
-  valueGroup.appendChild(valueInput);
-
-  const removeGroup = document.createElement('div');
-  removeGroup.className = 'form-group';
-  const removeLabel = document.createElement('label');
-  removeLabel.textContent = 'Row';
-  const removeButton = document.createElement('button');
-  removeButton.type = 'button';
-  removeButton.className = 'button secondary small';
-  removeButton.textContent = 'Remove';
-  removeButton.addEventListener('click', () => {
-    const rows = [...document.querySelectorAll('#sourceEvidenceDigestRows .source-evidence-digest-row')];
-    if (rows.length <= 1) {
-      showToast('Keep at least one source digest row.', 'warning');
-      return;
-    }
-    row.remove();
-  });
-  removeGroup.appendChild(removeLabel);
-  removeGroup.appendChild(removeButton);
-
-  row.appendChild(algGroup);
-  row.appendChild(valueGroup);
-  row.appendChild(removeGroup);
-  return row;
-}
-
-function ensureSourceEvidenceDigestRows() {
-  const container = document.getElementById('sourceEvidenceDigestRows');
-  if (!container) return;
-  if (container.children.length === 0) {
-    container.appendChild(createSourceEvidenceDigestRow());
-  }
-}
-
-function collectSourceEvidenceBuilderParams() {
-  const relationType = String(document.getElementById('sourceEvidenceRelationType')?.value || '').trim();
-  const sourceObjectType = String(document.getElementById('sourceEvidenceObjectType')?.value || '').trim();
-  const rows = [...document.querySelectorAll('#sourceEvidenceDigestRows .source-evidence-digest-row')];
-  const sourceDigests = rows.map((row, index) => {
-    const alg = String(row.querySelector('.source-evidence-digest-alg')?.value || '').trim();
-    const value = String(row.querySelector('.source-evidence-digest-value')?.value || '').trim().toLowerCase();
-    if (!alg || !value) {
-      throw new Error(`Source digest row ${index + 1} is incomplete.`);
-    }
-    return { alg, value };
-  });
-  if (!relationType) {
-    throw new Error('Source-evidence relationType is required.');
-  }
-  if (!sourceObjectType) {
-    throw new Error('Source-evidence sourceObjectType is required.');
-  }
-  if (sourceDigests.length === 0) {
-    throw new Error('Provide at least one source digest.');
-  }
-
-  const params = {
-    relationType,
-    sourceObjectType,
-    sourceDigests,
-  };
-
-  const externalRefsText = String(document.getElementById('sourceEvidenceExternalRefs')?.value || '').trim();
-  if (externalRefsText) {
-    const externalSourceSignatureRefs = externalRefsText
-      .split(/\r?\n|,/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (externalSourceSignatureRefs.length > 0) {
-      params.externalSourceSignatureRefs = externalSourceSignatureRefs;
-    }
-  }
-
-  const mediaTypeOptIn = document.getElementById('sourceEvidenceMediaTypeOptIn')?.checked === true;
-  const mediaType = String(document.getElementById('sourceEvidenceMediaType')?.value || '').trim();
-  if (mediaTypeOptIn) {
-    params.descriptiveFieldOptIn = ['mediaType'];
-    if (mediaType) {
-      params.mediaType = mediaType;
-    }
-  }
-
-  return params;
-}
-
-function updateSourceEvidenceOptInUi() {
-  const optInChecked = document.getElementById('sourceEvidenceMediaTypeOptIn')?.checked === true;
-  const group = document.getElementById('sourceEvidenceMediaTypeGroup');
-  if (group) {
-    group.classList.toggle('initially-hidden', !optInChecked);
-  }
+  refreshSourceEvidenceBuilderUi(channel);
 }
 
 function clearAttachResultPanel() {
@@ -362,15 +218,51 @@ function clearAttachResultPanel() {
   panel.replaceChildren();
 }
 
+function attachRecoveryAction(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  if (message.includes('manifest-side') || message.includes('unsupported attach input')) {
+    return 'Remove legacy manifest-side files and load successor shards, archive-state descriptors, lifecycle bundles, or detached evidence artifacts.';
+  }
+  if (message.includes('ots')) {
+    return 'Check that each OTS proof targets a loaded detached signature by SHA-256(signatureBytes), then retry Attach.';
+  }
+  if (message.includes('transition-record')) {
+    return 'Load the canonical transition-record.json for this lifecycle bundle plus matching maintenance signatures, then retry Attach.';
+  }
+  if (message.includes('source-evidence')) {
+    return 'Load the canonical source-evidence.json plus detached signatures over that exact JSON, then retry Attach.';
+  }
+  return 'Remove conflicting or unsupported attach inputs, keep one archive/state/cohort set, then retry Attach.';
+}
+
+function setPartialRewriteAcknowledgementRequired(required) {
+  const panel = document.getElementById('attachPartialRewriteAckPanel');
+  const checkbox = document.getElementById('attachPartialRewriteAck');
+  if (panel) {
+    panel.classList.toggle('initially-hidden', !required);
+  }
+  if (checkbox) {
+    checkbox.required = required;
+    checkbox.disabled = !required;
+    if (!required) checkbox.checked = false;
+  }
+}
+
+function partialRewriteAcknowledged() {
+  return document.getElementById('attachPartialRewriteAck')?.checked === true;
+}
+
 function setAttachActionAvailability({
   canAttach = false,
   canExportSignable = false,
   canExportArtifacts = false,
+  partialRewriteRequiresAck = false,
 } = {}) {
   const attachBtn = document.getElementById('attachQcontBtn');
   const exportBtn = document.getElementById('exportSignableArtifactBtn');
   const exportArtifactsBtn = document.getElementById('exportAttachedArtifactsBtn');
-  if (attachBtn) attachBtn.disabled = !canAttach;
+  const partialBlocked = partialRewriteRequiresAck && !partialRewriteAcknowledged();
+  if (attachBtn) attachBtn.disabled = !canAttach || partialBlocked;
   if (exportBtn) exportBtn.disabled = !canExportSignable;
   if (exportArtifactsBtn) exportArtifactsBtn.disabled = !canExportArtifacts;
 }
@@ -454,6 +346,8 @@ function deriveAttachPlan(shards) {
       embedIntoShards: false,
       modeLabel: 'Lifecycle-bundle only',
       hint: 'No shard files are loaded. Attach will update only the standalone lifecycle bundle.',
+      selectedShardCount: 0,
+      expectedShardCount: 0,
       warning: false,
     };
   }
@@ -478,6 +372,8 @@ function deriveAttachPlan(shards) {
       embedIntoShards: true,
       modeLabel: 'Embed into selected successor shards',
       hint: `Full successor shard cohort detected (${uniqueIndices.size}/${expectedShardCount}). Attach will rewrite the selected shard files and update the lifecycle bundle.`,
+      selectedShardCount: uniqueIndices.size,
+      expectedShardCount,
       warning: false,
     };
   }
@@ -485,28 +381,116 @@ function deriveAttachPlan(shards) {
   return {
     embedIntoShards: true,
     modeLabel: 'Partial successor shard rewrite',
-    hint: `Only ${uniqueIndices.size}/${expectedShardCount} successor shard files are loaded. Attach will rewrite only the selected shard files; other shards may continue carrying a different embedded lifecycle-bundle digest within the same cohort.`,
+    hint: `Only ${uniqueIndices.size}/${expectedShardCount} successor shard files are loaded. Attach will rewrite only the selected shard files; other shards from the same cohort may still carry older embedded lifecycle-bundle bytes.`,
+    selectedShardCount: uniqueIndices.size,
+    expectedShardCount,
     warning: true,
   };
 }
 
-function deriveAttachRequirements(channel, classified) {
-  const hasAttachTarget = classified.shardFiles.length > 0 || classified.lifecycleBundleBytes instanceof Uint8Array;
+function shortHexForAttachPreview(value) {
+  const s = String(value || '').trim();
+  if (!s) return '—';
+  if (s.length <= 40) return s;
+  return `${s.slice(0, 18)}…${s.slice(-12)}`;
+}
+
+async function safeAttachPreviewPlan(classified) {
+  if (!classified) {
+    return { shards: [], plan: deriveAttachPlan([]) };
+  }
+  try {
+    const shards = await parseAttachShards(classified);
+    return { shards, plan: deriveAttachPlan(shards) };
+  } catch {
+    return { shards: [], plan: deriveAttachPlan([]) };
+  }
+}
+
+async function resolveAttachBindingTarget(classified, channel, shards) {
   if (channel === 'maintenance') {
+    if (classified.transitionRecordBytes instanceof Uint8Array) {
+      try {
+        const parsed = parseTransitionRecordBytes(classified.transitionRecordBytes);
+        return {
+          artifactLabel: 'transition-record (canonical JSON)',
+          targetRef: `transition:sha3-512:${parsed.digest.value}`,
+          digestSummary: shortHexForAttachPreview(parsed.digest.value),
+        };
+      } catch {
+        return {
+          artifactLabel: 'transition-record',
+          targetRef: '(unreadable transition-record.json)',
+          digestSummary: '—',
+        };
+      }
+    }
     return {
-      canAttach: hasAttachTarget && classified.transitionRecordBytes instanceof Uint8Array && classified.signatures.length > 0,
-      missingLabel: 'load successor shards or a lifecycle bundle, one canonical transition-record.json, and at least one maintenance signature',
+      artifactLabel: 'transition-record',
+      targetRef: '(load canonical transition-record.json)',
+      digestSummary: '—',
     };
   }
   if (channel === 'source-evidence') {
+    if (classified.sourceEvidenceBytes instanceof Uint8Array) {
+      try {
+        const parsed = parseSourceEvidenceBytes(classified.sourceEvidenceBytes);
+        return {
+          artifactLabel: 'source-evidence (canonical JSON)',
+          targetRef: `source-evidence:sha3-512:${parsed.digest.value}`,
+          digestSummary: shortHexForAttachPreview(parsed.digest.value),
+        };
+      } catch {
+        return {
+          artifactLabel: 'source-evidence',
+          targetRef: '(unreadable source-evidence.json)',
+          digestSummary: '—',
+        };
+      }
+    }
     return {
-      canAttach: hasAttachTarget && classified.sourceEvidenceBytes instanceof Uint8Array && classified.signatures.length > 0,
-      missingLabel: 'load successor shards or a lifecycle bundle, one canonical source-evidence.json, and at least one detached signature',
+      artifactLabel: 'source-evidence',
+      targetRef: '(load canonical source-evidence.json)',
+      digestSummary: '—',
+    };
+  }
+  try {
+    if (Array.isArray(shards) && shards.length > 0 && shards[0]?.archiveStateBytes instanceof Uint8Array) {
+      const embedded = parseArchiveStateDescriptorBytes(shards[0].archiveStateBytes);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${embedded.stateId}`,
+        digestSummary: shortHexForAttachPreview(embedded.digest.value),
+      };
+    }
+    if (classified.lifecycleBundleBytes instanceof Uint8Array) {
+      const parsed = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+      const canon = canonicalizeArchiveStateDescriptor(parsed.lifecycleBundle.archiveState);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${canon.stateId}`,
+        digestSummary: shortHexForAttachPreview(canon.digest.value),
+      };
+    }
+    if (classified.archiveStateBytes instanceof Uint8Array) {
+      const parsed = parseArchiveStateDescriptorBytes(classified.archiveStateBytes);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${parsed.stateId}`,
+        digestSummary: shortHexForAttachPreview(parsed.digest.value),
+      };
+    }
+  } catch {
+    return {
+      artifactLabel: 'archive-state descriptor',
+      targetRef: '(could not resolve)',
+      digestSummary: '—',
     };
   }
   return {
-    canAttach: hasAttachTarget,
-    missingLabel: 'load successor shards or a lifecycle bundle',
+    artifactLabel: 'archive-state descriptor',
+    targetRef: '(load successor shards or a lifecycle bundle)',
+    digestSummary: '—',
   };
 }
 
@@ -526,11 +510,12 @@ async function resolveAttachSourceBundle(classified) {
 }
 
 async function updateAttachStatus() {
+  const requestId = ++attachStatusSeq;
   const input = document.getElementById('qcontAttachInput');
   const status = document.getElementById('attachStatus');
   const text = document.getElementById('attachStatusText');
   const hint = document.getElementById('attachStatusHint');
-  const modeSummary = document.getElementById('attachModeSummary');
+  const planPanel = document.getElementById('attachPlanDecision');
   const channel = activeAttachChannel();
   const channelConfig = attachChannelConfig(channel);
   setAttachChannelUi(channel);
@@ -541,12 +526,20 @@ async function updateAttachStatus() {
     status.className = 'shards-status initially-hidden';
     text.textContent = channelConfig.emptySelectionText;
     hint.textContent = '';
-    if (modeSummary) {
-      modeSummary.textContent = '';
-      modeSummary.classList.add('initially-hidden');
+    lastAttachIntakeError = null;
+    clearArtifactIntakeTable('attachArtifactIntake');
+    clearArchiveInspector('attachArchiveInspector');
+    setPartialRewriteAcknowledgementRequired(false);
+    if (planPanel) {
+      renderDecisionCard(planPanel, null, {
+        rootDataTestId: 'attach-plan-decision',
+      });
     }
     setAttachActionAvailability();
     clearAttachResultPanel();
+    clearAttachTargetBindingPreview();
+    if (requestId !== attachStatusSeq) return;
+    syncArchiveReviewHub('attach');
     return;
   }
 
@@ -555,13 +548,27 @@ async function updateAttachStatus() {
   text.textContent = 'Analyzing attach inputs...';
   hint.textContent = `${count} file(s) loaded.`;
   status.setAttribute('aria-label', text.textContent);
+  let classified = null;
   try {
     const files = [...(input.files || [])];
-    const classified = await classifyAttachFiles(files);
+    classified = await classifyAttachFiles(files);
+    if (requestId !== attachStatusSeq) return;
+    await renderArtifactIntakeTable({
+      containerId: 'attachArtifactIntake',
+      files,
+      workflow: 'attach',
+      channel,
+      label: `${channelConfig.label} artifact intake`,
+      error: lastAttachIntakeError,
+    });
+    if (requestId !== attachStatusSeq) return;
     const shards = await parseAttachShards(classified);
+    if (requestId !== attachStatusSeq) return;
     const plan = deriveAttachPlan(shards);
     const requirements = deriveAttachRequirements(channel, classified);
+    const binding = await resolveAttachBindingTarget(classified, channel, shards);
     const canAttach = requirements.canAttach;
+    const partialRewriteRequiresAck = canAttach && plan.embedIntoShards && plan.warning;
     const canExportSignable = (
       classified.archiveStateBytes instanceof Uint8Array ||
       classified.lifecycleBundleBytes instanceof Uint8Array ||
@@ -578,43 +585,95 @@ async function updateAttachStatus() {
       canExportArtifacts = false;
     }
 
+    if (requestId !== attachStatusSeq) return;
+
     let stateClass = 'sufficient';
     let summary;
+    let statusHint;
     if (!canAttach) {
       stateClass = 'invalid';
       summary = `More input required: ${requirements.missingLabel}`;
+      statusHint = `${count} file(s) loaded. Attach stays blocked until the input includes ${requirements.missingLabel}.`;
     } else if (plan.warning) {
       stateClass = 'insufficient';
     }
 
     if (!summary) {
-      summary = plan.embedIntoShards
-        ? (plan.warning ? `Ready to update selected shards only (${channelConfig.label.toLowerCase()})` : `Ready to embed ${channelConfig.label.toLowerCase()} evidence into selected shards`)
-        : `Ready to update the lifecycle bundle only (${channelConfig.label.toLowerCase()})`;
+      if (plan.embedIntoShards && plan.warning) {
+        summary = partialRewriteAcknowledged()
+          ? `Ready: partial shard rewrite (${channelConfig.label.toLowerCase()})`
+          : `Partial rewrite: acknowledgement required (${channelConfig.label.toLowerCase()})`;
+      } else {
+        summary = plan.embedIntoShards
+          ? `Ready: embed evidence into selected shards (${channelConfig.label.toLowerCase()})`
+          : `Ready: update lifecycle bundle only (${channelConfig.label.toLowerCase()})`;
+      }
     }
 
-    status.className = `shards-status ${stateClass}`;
+    if (!statusHint) {
+      statusHint = `${count} file(s) loaded. ${partialRewriteRequiresAck
+        ? (partialRewriteAcknowledged()
+          ? 'Acknowledgement recorded. The decision card shows the selected shard rewrite scope.'
+          : 'Acknowledge the partial shard rewrite below before attaching.')
+        : channelConfig.channelHelp}`;
+    }
+
+    const showStatusPanel = !partialRewriteRequiresAck;
+    status.style.display = showStatusPanel ? 'block' : 'none';
+    status.className = `shards-status ${stateClass}${showStatusPanel ? '' : ' initially-hidden'}`;
     text.textContent = summary;
-    hint.textContent = `${count} file(s) loaded. ${!canAttach
-      ? `Attach stays blocked until the input includes ${requirements.missingLabel}.`
-      : `${plan.hint} ${channelConfig.channelHelp}`}`;
+    hint.textContent = statusHint;
     status.setAttribute('aria-label', summary);
-    if (modeSummary) {
-      const artifactSummary = [
-        `Signatures: ${classified.signatures.length}`,
-        `Pins: ${classified.pqPublicKeyFileBytesList.length}`,
-        `OTS proofs: ${classified.timestamps.length}`,
-        `Transition record: ${classified.transitionRecordBytes instanceof Uint8Array ? 'yes' : 'no'}`,
-        `Source evidence: ${classified.sourceEvidenceBytes instanceof Uint8Array ? 'yes' : 'no'}`,
-      ].join('\n');
-      modeSummary.textContent = `${summary}\n${plan.modeLabel}\n${artifactSummary}`;
-      modeSummary.classList.remove('initially-hidden');
+    setPartialRewriteAcknowledgementRequired(partialRewriteRequiresAck);
+    const lede = `${count} file(s) loaded. ${canAttach
+      ? `${plan.hint} ${channelConfig.channelHelp}`
+      : `Attach stays blocked until the input includes ${requirements.missingLabel}.`}`;
+    if (planPanel) {
+      const planModel = buildAttachPlanDecisionModel({
+        channel,
+        channelConfig,
+        classified,
+        shards,
+        plan,
+        requirements,
+        canAttach,
+        stateClass,
+        summary,
+        lede,
+        binding,
+      });
+      renderDecisionCard(
+        planPanel,
+        planModel,
+        {
+          rootDataTestId: 'attach-plan-decision',
+          ariaLive: 'polite',
+          testIds: { primary: 'attach-mode-summary' },
+        }
+      );
     }
     setAttachActionAvailability({
       canAttach,
       canExportSignable,
       canExportArtifacts,
+      partialRewriteRequiresAck,
     });
+    await refreshAttachTargetBindingPreview({
+      channel,
+      classified,
+      shards,
+      plan,
+      binding,
+      error: lastAttachIntakeError || undefined,
+    });
+    if (requestId !== attachStatusSeq) return;
+    if (shards.length > 0) {
+      void renderArchiveInspectorPanel('attachArchiveInspector', { attachShards: shards });
+    } else {
+      void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
+    }
+    if (requestId !== attachStatusSeq) return;
+    syncArchiveReviewHub('attach');
   } catch (error) {
     const message = error?.message || String(error);
     const summary = message.startsWith('Unsupported attach input:')
@@ -625,11 +684,70 @@ async function updateAttachStatus() {
     text.textContent = summary;
     hint.textContent = `${count} file(s) loaded. ${message}`;
     status.setAttribute('aria-label', summary);
-    if (modeSummary) {
-      modeSummary.textContent = summary;
-      modeSummary.classList.remove('initially-hidden');
+    const previewCtx = await safeAttachPreviewPlan(classified);
+    if (requestId !== attachStatusSeq) return;
+    const errRequirements = classified
+      ? deriveAttachRequirements(channel, classified)
+      : { canAttach: false, missingLabel: 'load attach inputs' };
+    const binding = classified
+      ? await resolveAttachBindingTarget(classified, channel, previewCtx.shards)
+      : null;
+    if (planPanel) {
+      const planModel = buildAttachPlanDecisionModel({
+        channel,
+        channelConfig,
+        classified,
+        shards: previewCtx.shards,
+        plan: previewCtx.plan,
+        requirements: errRequirements,
+        canAttach: errRequirements.canAttach,
+        stateClass: 'invalid',
+        summary,
+        lede: `${count} file(s) loaded. ${message}`,
+        errorMode: true,
+        errorMessage: message,
+        binding,
+      });
+      renderDecisionCard(
+        planPanel,
+        planModel,
+        {
+          rootDataTestId: 'attach-plan-decision',
+          ariaLive: 'polite',
+          testIds: { primary: 'attach-mode-summary' },
+        }
+      );
     }
+    lastAttachIntakeError = error;
+    await renderArtifactIntakeTable({
+      containerId: 'attachArtifactIntake',
+      files: [...(input.files || [])],
+      workflow: 'attach',
+      channel,
+      label: `${channelConfig.label} artifact intake`,
+      error,
+    });
+    if (requestId !== attachStatusSeq) return;
+    await refreshAttachTargetBindingPreview({
+      channel,
+      classified,
+      shards: previewCtx.shards,
+      plan: previewCtx.plan,
+      binding,
+      error,
+    });
+    if (requestId !== attachStatusSeq) return;
+    void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
+    setPartialRewriteAcknowledgementRequired(false);
     setAttachActionAvailability();
+    showInlineError(ATTACH_INLINE_ERROR_ID, {
+      title: 'Attach inputs blocked',
+      cause: message,
+      artifact: summarizeFileList([...(input.files || [])], 'Attach input set'),
+      action: attachRecoveryAction(error),
+    });
+    if (requestId !== attachStatusSeq) return;
+    syncArchiveReviewHub('attach');
   }
 }
 
@@ -645,79 +763,13 @@ function buildAttachResultSummary({ plan, classified, channel }) {
   header.textContent = 'Attach Result';
   panel.appendChild(header);
 
-  const addSection = (title) => {
-    const section = document.createElement('div');
-    section.className = 'restore-result-section';
-    section.textContent = title;
-    panel.appendChild(section);
-  };
+  renderEvidenceMatrix(
+    panel,
+    buildAttachEvidenceMatrixSections({ classified, plan, channelConfig, channel }),
+    { compact: true }
+  );
 
-  const addPolar = (ok, okText, failText, warnOnFail = false) => {
-    const item = document.createElement('div');
-    const useWarn = !ok && warnOnFail;
-    item.className = `restore-result-item ${useWarn ? 'warn' : (ok ? 'ok' : 'fail')}`;
-    item.textContent = `${ok ? '✓' : (useWarn ? '⚠' : '✗')} ${ok ? okText : failText}`;
-    panel.appendChild(item);
-  };
-
-  const addNeutral = (textValue) => {
-    const item = document.createElement('div');
-    item.className = 'restore-result-item neutral';
-    item.textContent = `· ${textValue}`;
-    panel.appendChild(item);
-  };
-
-  const signatureCount = classified.signatures.length;
-  const timestampCount = classified.timestamps.length;
-  const publicKeyCount = classified.pqPublicKeyFileBytesList.length;
-
-  addSection('Result');
-  addPolar(true, 'Lifecycle bundle updated', '');
-  if (plan.embedIntoShards) {
-    addPolar(true, 'Selected shard files updated', '');
-  } else {
-    addNeutral('Shard files were not rewritten.');
-  }
-  addPolar(true, 'Signable archive-state bytes remained unchanged', '');
-
-  addSection('Evidence Channel');
-  addNeutral(`${channelConfig.label} selected for this attach run.`);
-  if (channel === 'maintenance') {
-    addPolar(true, 'Transition-record target stayed separate from archive approval', '');
-  } else if (channel === 'source-evidence') {
-    addPolar(true, 'Source-evidence signatures stayed separate from archive approval', '');
-  } else {
-    addPolar(true, 'Archive-approval signatures stayed on archive-state bytes', '');
-  }
-
-  addSection('Imported Files');
-  if (signatureCount > 0) {
-    const label = channel === 'archive-approval'
-      ? 'Archive-approval signatures merged'
-      : channel === 'maintenance'
-        ? 'Maintenance signatures merged'
-        : 'Source-evidence signatures merged';
-    addPolar(true, `${label} (${signatureCount})`, '');
-  } else {
-    addNeutral(`No ${channelConfig.label.toLowerCase()} .qsig/.sig files were supplied.`);
-  }
-  if (channel === 'maintenance') {
-    if (classified.transitionRecordBytes instanceof Uint8Array) addPolar(true, 'Canonical transition-record target loaded', '');
-    else addNeutral('No transition-record.json target was supplied.');
-  }
-  if (channel === 'source-evidence') {
-    if (classified.sourceEvidenceBytes instanceof Uint8Array) addPolar(true, 'Canonical source-evidence artifact loaded', '');
-    else addNeutral('No source-evidence.json artifact was supplied.');
-  }
-  if (publicKeyCount > 0) addPolar(true, `.pqpk signer pins merged (${publicKeyCount})`, '');
-  else addNeutral('No .pqpk signer pins were supplied.');
-  if (timestampCount > 0) addPolar(true, `.ots proofs merged (${timestampCount})`, '');
-  else addNeutral('No .ots proofs were supplied.');
-
-  addSection('Next Actions');
-  addNeutral('Continue to Restore to inspect archive approval, maintenance, and source-evidence channels separately.');
-
-  panel.className = 'restore-result-panel ok';
+  panel.className = `restore-result-panel ${plan.warning ? 'warn' : 'ok'}`;
 }
 
 async function exportSignableArtifact() {
@@ -728,7 +780,7 @@ async function exportSignableArtifact() {
     return;
   }
 
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
     const classified = await classifyAttachFiles(files);
 
@@ -752,7 +804,7 @@ async function exportSignableArtifact() {
   } catch (error) {
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
@@ -765,7 +817,7 @@ async function exportAttachedArtifacts() {
     return;
   }
 
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
     const classified = await classifyAttachFiles(files);
     const bundle = await resolveAttachSourceBundle(classified);
@@ -788,28 +840,42 @@ async function exportAttachedArtifacts() {
   } catch (error) {
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
 
 async function exportSourceEvidenceArtifact() {
-  setButtonsDisabled(true);
+  clearSourceEvidenceExportError();
+  setWorkflowBusy('proViewAttach', true);
   try {
+    let params;
+    try {
+      params = collectSourceEvidenceBuilderParams();
+    } catch (err) {
+      const msg = String(err?.message || err);
+      showToast(msg, 'warning');
+      showSourceEvidenceExportError(msg);
+      return;
+    }
     const input = document.getElementById('qcontAttachInput');
     const files = [...(input?.files || [])];
     const exported = exportSourceEvidenceForSigning({
-      sourceEvidence: collectSourceEvidenceBuilderParams(),
+      sourceEvidence: params,
     });
     const filename = deriveSourceEvidenceFilename(files);
     download(new Blob([exported.sourceEvidenceBytes], { type: 'application/json' }), filename);
+    clearSourceEvidenceExportError();
     logSuccess(`Exported canonical source-evidence JSON for external signing: ${filename}`);
     log(`Source-evidence digest: ${exported.sourceEvidenceDigestHex}`);
     log('This export is the signing target. Sign it externally, then re-import the same .source-evidence.json plus the detached signature through Attach > Source evidence.');
   } catch (error) {
+    const msg = String(error?.message || error);
     logError(error);
+    showToast(msg, 'warning');
+    showSourceEvidenceExportError(msg);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
@@ -821,12 +887,19 @@ async function attachFilesToShards() {
   const channel = activeAttachChannel();
   const channelConfig = attachChannelConfig(channel);
   if (!files.length) {
+    showInlineError(ATTACH_INLINE_ERROR_ID, {
+      title: 'Attach blocked',
+      cause: 'No attach input files are selected.',
+      artifact: 'Attach input set',
+      action: 'Load successor shards or a lifecycle bundle plus the detached evidence artifacts for the selected channel.',
+    });
     showToast('Select attach files first.', 'warning');
     return;
   }
 
-  setButtonsDisabled(true);
+  setWorkflowBusy('proViewAttach', true);
   try {
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     const classified = await classifyAttachFiles(files);
     const shards = await parseAttachShards(classified);
     if (!classified.shardFiles.length && !(classified.lifecycleBundleBytes instanceof Uint8Array)) {
@@ -834,6 +907,16 @@ async function attachFilesToShards() {
     }
 
     const plan = deriveAttachPlan(shards);
+    if (plan.embedIntoShards && plan.warning && !partialRewriteAcknowledged()) {
+      showInlineError(ATTACH_INLINE_ERROR_ID, {
+        title: 'Attach blocked',
+        cause: 'Partial shard rewrite requires explicit acknowledgement.',
+        artifact: summarizeFileList(files, 'Attach input set'),
+        action: 'Check the partial rewrite acknowledgement or load the full shard cohort before attaching.',
+      });
+      showToast('Acknowledge partial shard rewrite before attaching.', 'warning');
+      return;
+    }
     if (plan.warning) {
       logWarning(plan.hint);
     } else {
@@ -912,11 +995,28 @@ async function attachFilesToShards() {
     }
     log('All signing remains external in this workflow. Quantum Vault imports detached artifacts and reports each channel separately at Restore.');
     log('Next actions: export the updated archive-state descriptor, lifecycle bundle, or shard set, or continue to Restore with the merged evidence.');
+    lastAttachIntakeError = null;
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     buildAttachResultSummary({ plan, classified, channel });
   } catch (error) {
+    lastAttachIntakeError = error;
+    await renderArtifactIntakeTable({
+      containerId: 'attachArtifactIntake',
+      files,
+      workflow: 'attach',
+      channel,
+      label: `${channelConfig.label} artifact intake`,
+      error,
+    });
+    showInlineError(ATTACH_INLINE_ERROR_ID, {
+      title: 'Attach failed',
+      cause: error,
+      artifact: summarizeFileList(files, 'Attach input set'),
+      action: attachRecoveryAction(error),
+    });
     logError(error);
   } finally {
-    setButtonsDisabled(false);
+    setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
 }
@@ -930,14 +1030,26 @@ export function initQcontAttachUI() {
   const exportSourceEvidenceBtn = document.getElementById('exportSourceEvidenceBtn');
   const addDigestBtn = document.getElementById('addSourceEvidenceDigestBtn');
   const mediaTypeOptIn = document.getElementById('sourceEvidenceMediaTypeOptIn');
+  const partialRewriteAck = document.getElementById('attachPartialRewriteAck');
+  const sourceEvidenceBuilderSection = document.getElementById('sourceEvidenceBuilderSection');
+  const refreshSourceEvidenceBuilderForActiveChannel = () => refreshSourceEvidenceBuilderUi(activeAttachChannel());
+  const updateSourceEvidenceOptInForActiveChannel = () => updateSourceEvidenceOptInUi(activeAttachChannel());
 
   attachInput?.addEventListener('change', () => {
+    lastAttachIntakeError = null;
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     clearAttachResultPanel();
     void updateAttachStatus();
   });
   attachChannel?.addEventListener('change', () => {
+    lastAttachIntakeError = null;
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     clearAttachResultPanel();
     setAttachChannelUi(activeAttachChannel());
+    void updateAttachStatus();
+  });
+  partialRewriteAck?.addEventListener('change', () => {
+    clearInlineError(ATTACH_INLINE_ERROR_ID);
     void updateAttachStatus();
   });
   attachBtn?.addEventListener('click', attachFilesToShards);
@@ -946,11 +1058,17 @@ export function initQcontAttachUI() {
   exportSourceEvidenceBtn?.addEventListener('click', exportSourceEvidenceArtifact);
   addDigestBtn?.addEventListener('click', () => {
     const container = document.getElementById('sourceEvidenceDigestRows');
-    container?.appendChild(createSourceEvidenceDigestRow());
+    container?.appendChild(createSourceEvidenceDigestRow({
+      onChange: refreshSourceEvidenceBuilderForActiveChannel,
+    }));
+    refreshSourceEvidenceBuilderForActiveChannel();
   });
-  mediaTypeOptIn?.addEventListener('change', updateSourceEvidenceOptInUi);
-  ensureSourceEvidenceDigestRows();
-  updateSourceEvidenceOptInUi();
+  sourceEvidenceBuilderSection?.addEventListener('input', refreshSourceEvidenceBuilderForActiveChannel);
+  sourceEvidenceBuilderSection?.addEventListener('change', refreshSourceEvidenceBuilderForActiveChannel);
+  mediaTypeOptIn?.addEventListener('change', updateSourceEvidenceOptInForActiveChannel);
+  ensureSourceEvidenceDigestRows({ onChange: refreshSourceEvidenceBuilderForActiveChannel });
+  initSourceEvidenceApplyFileToAllRows(refreshSourceEvidenceBuilderForActiveChannel);
+  updateSourceEvidenceOptInForActiveChannel();
   setAttachChannelUi(activeAttachChannel());
   setAttachActionAvailability();
   void updateAttachStatus();

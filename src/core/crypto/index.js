@@ -1,7 +1,7 @@
 // --- Main Crypto Module - High-level encryption/decryption ---
 
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { generateKeyPair as generateMLKEMKeyPair, encapsulate, decapsulate } from './mlkem.js';
+import { generateKeyPair as generateMLKEMKeyPair, encapsulate, decapsulate, ML_KEM_1024_ENCAPSULATED_KEY_SIZE } from './mlkem.js';
 import { deriveKeyWithKmac, clearKeys, computeKeyCommitment, verifyKeyCommitment } from './kdf.js';
 import {
     buildChunkAAD, 
@@ -251,8 +251,8 @@ export async function decryptFile(containerBytes, privateKey) {
         storedKeyCommitment
     } = parseQencHeader(containerBytes);
     
-    if (encapsulatedKey.length !== 1568) {
-        throw new Error(`Invalid encapsulated key length ${encapsulatedKey.length}. Expected 1568 for ML-KEM-1024.`);
+    if (encapsulatedKey.length !== ML_KEM_1024_ENCAPSULATED_KEY_SIZE) {
+        throw new Error(`Invalid encapsulated key length ${encapsulatedKey.length}. Expected ${ML_KEM_1024_ENCAPSULATED_KEY_SIZE} for ML-KEM-1024.`);
     }
     
     const encryptedData = containerBytes.subarray(offset);

@@ -312,7 +312,7 @@ Current lifecycle-bundle rules:
 - `archiveStateDigest` MUST equal `SHA3-512` over the canonical embedded archive-state bytes
 - `currentCohortBindingDigest` MUST equal `SHA3-512` over the canonical embedded cohort-binding bytes
 - lifecycle-bundle mutation MUST NOT mutate canonical archive-state or cohort-binding bytes
-- the shipped browser Attach workflow imports only archive-approval detached signatures, `.pqpk` signer pins, and `.ots` proofs; generic browser import of maintenance or source-evidence detached signatures is not implemented in the current UI flow
+- the shipped browser Attach workflow imports archive-approval, maintenance, and source-evidence detached signatures through an explicit channel selector; `.pqpk` signer pins and `.ots` proofs can be imported with those channels
 
 ### 4.4 Detached-signature target mappings
 
@@ -542,23 +542,28 @@ Current accepted external authenticity artifacts are:
 
 | Artifact | Current acceptance rule |
 | --- | --- |
-| `.qsig` | Quantum Signer detached signature, major version 2, context `quantum-signer/v2` |
-| `.sig` | Stellar detached signature JSON with schema `stellar-signature/v2` |
+| `.qsig` | Quantum Signer detached signature, major version 2, context `quantum-signer/v2`; accepted for archive-approval, maintenance, or source-evidence channels when the selected target bytes match |
+| `.sig` | Stellar detached signature JSON with schema `stellar-signature/v2`; same channel and target-family rules as `.qsig` |
 | `.pqpk` | Detached PQ public key used for bundled or user-supplied pinning |
 | `.ots` | OpenTimestamps proof linked to detached signature bytes |
 
 Current acceptance boundaries:
 
 - `.qsig` and `.sig` are integration contracts; this specification does not restate their full upstream format definitions
-- the shipped browser Attach workflow imports `.qsig` / `.sig` only as archive-approval signatures over canonical archive-state bytes
+- the shipped browser Attach workflow imports `.qsig` / `.sig` through the selected evidence channel: archive approval, maintenance, or source evidence
 - external signatures used at restore are archive-approval signatures over canonical archive-state bytes
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
 - `.pqpk` material may be used for bundled or user-supplied PQ pinning
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
-- the shipped browser Attach workflow does not provide a generic detached-file import path for maintenance or source-evidence signatures
+- `.ots` timestamps are timestamp evidence only and do not satisfy archive policy
+- archive-approval attach binds signatures to `targetType = archive-state`, `targetRef = state:{stateId}`, and the SHA3-512 digest of the canonical archive-state descriptor
+- maintenance attach requires a canonical transition-record target already present in the selected lifecycle bundle and binds signatures to `targetType = transition-record`, `targetRef = transition:sha3-512:{transitionRecordDigest}`, and that transition-record digest
+- source-evidence attach requires canonical source-evidence JSON, stores that object in `sourceEvidence[]` if needed, and binds signatures to `targetType = source-evidence`, `targetRef = source-evidence:sha3-512:{sourceEvidenceDigest}`, and that source-evidence digest
+- only archive-approval signatures count toward archive policy; maintenance and source-evidence signatures are reported separately
 - OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 - `apparentlyComplete` / `completeProof` are derived by the current implementation from proof-name keywords first (`initial`, `pending`, `incomplete` => incomplete; `complete`, `completed`, `confirmed`, `upgraded` => complete), with proof size `>= 1024` bytes used only as a fallback when no keyword matches
 - the current implementation does not treat `apparentlyComplete` / `completeProof` as validation of a Bitcoin attestation chain
+- user-facing restore summaries should label complete-looking proofs as `OTS proof appears complete (heuristic)` and should state that timestamp evidence does not satisfy archive policy
 
 Detailed linkage, pinning, and ambiguity rules are defined in [appendices/external-artifacts.md](appendices/external-artifacts.md).
 

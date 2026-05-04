@@ -49,6 +49,9 @@ async function buildBrowserFixtureSet() {
     minValidSignatures: 1,
   });
   const strongPolicySignature = buildQsigFixture(strongPolicySample.split.archiveStateBytes);
+  const strongPolicySecondSelfSignedSignature = buildQsigFixture(strongPolicySample.split.archiveStateBytes);
+  const strongPolicyCompleteOts = await buildOtsFixture(strongPolicySignature.qsigBytes, { completeProof: true });
+  const strongPolicyIncompleteOts = await buildOtsFixture(strongPolicySignature.qsigBytes, { completeProof: false });
 
   const buildFlowSample = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('browser-qa-build-flow'),
@@ -140,6 +143,7 @@ async function buildBrowserFixtureSet() {
     minValidSignatures: 1,
   });
   const archiveApprovalAttachSignature = buildQsigFixture(archiveApprovalAttachSample.split.archiveStateBytes);
+  const archiveApprovalAttachOts = await buildOtsFixture(archiveApprovalAttachSignature.qsigBytes, { completeProof: true });
 
   const lifecycleMismatchA = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('browser-qa-lifecycle-mismatch-a'),
@@ -160,6 +164,24 @@ async function buildBrowserFixtureSet() {
       ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq')),
       filePayload('strong-pq-archive.qsig', strongPolicySignature.qsigBytes),
       filePayload('strong-pq-archive.pqpk', strongPolicySignature.pqpkBytes),
+    ],
+    strongPolicyPinnedPlusSelfSignedFiles: [
+      ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq-pinned-plus-self')),
+      filePayload('strong-pq-archive.qsig', strongPolicySignature.qsigBytes),
+      filePayload('strong-pq-archive.pqpk', strongPolicySignature.pqpkBytes),
+      filePayload('ordinary-pq-self-verified.qsig', strongPolicySecondSelfSignedSignature.qsigBytes),
+    ],
+    strongPolicySatisfiedCompleteOtsFiles: [
+      ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq-complete-ots')),
+      filePayload('strong-pq-complete-archive.qsig', strongPolicySignature.qsigBytes),
+      filePayload('strong-pq-complete-archive.pqpk', strongPolicySignature.pqpkBytes),
+      filePayload('strong-pq-complete.ots', strongPolicyCompleteOts),
+    ],
+    strongPolicySatisfiedIncompleteOtsFiles: [
+      ...(await shardPayloads(strongPolicySample.split.shards, 'strong-pq-incomplete-ots')),
+      filePayload('strong-pq-incomplete-archive.qsig', strongPolicySignature.qsigBytes),
+      filePayload('strong-pq-incomplete-archive.pqpk', strongPolicySignature.pqpkBytes),
+      filePayload('strong-pq-incomplete.ots', strongPolicyIncompleteOts),
     ],
     selfSignedFiles: [
       ...(await shardPayloads(selfSignedSample.split.shards, 'self-signed')),
@@ -186,6 +208,12 @@ async function buildBrowserFixtureSet() {
     ],
     archiveApprovalAttachBaseFiles: [
       filePayload('archive-approval-base.lifecycle-bundle.json', archiveApprovalAttachSample.split.lifecycleBundleBytes, 'application/json'),
+      filePayload('archive-approval.qsig', archiveApprovalAttachSignature.qsigBytes),
+      filePayload('archive-approval.pqpk', archiveApprovalAttachSignature.pqpkBytes),
+      filePayload('archive-approval.ots', archiveApprovalAttachOts),
+    ],
+    archiveApprovalPartialShardAttachFiles: [
+      ...(await shardPayloads(archiveApprovalAttachSample.split.shards.slice(0, 2), 'archive-approval-partial')),
       filePayload('archive-approval.qsig', archiveApprovalAttachSignature.qsigBytes),
       filePayload('archive-approval.pqpk', archiveApprovalAttachSignature.pqpkBytes),
     ],

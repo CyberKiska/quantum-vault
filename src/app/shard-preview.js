@@ -102,6 +102,7 @@ export async function parseQcontShardPreviewFile(file) {
   }
 
   return {
+    sourceFileName: String(file?.name || ''),
     containerId: metaJSON.containerId,
     archiveId,
     stateId,
@@ -236,5 +237,17 @@ export async function assessShardSelection(files) {
     ready,
     message,
     threshold: base.t,
+    preflightDigests: parsed.map((item) => ({
+      sourceFileName: item.sourceFileName,
+      artifactType: 'QVqcont-7 successor shard',
+      policy: item.authPolicyLevel,
+      archiveId: item.archiveId,
+      stateId: item.stateId,
+      cohortId: item.cohortId,
+      lifecycleBundleDigestHex: item.lifecycleBundleDigestHex,
+      n: item.n,
+      t: item.t,
+      shardIndex: item.shardIndex,
+    })),
   };
 }
