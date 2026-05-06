@@ -1,6 +1,6 @@
 # Quantum Vault CLI
 
-Quantum Vault ships a Node.js CLI with key generation, encryption, successor shard creation, lifecycle attachment, same-state resharing, and read-only lifecycle inspection and restore assessment:
+Quantum Vault ships a Node.js CLI with key generation, encryption, successor shard creation, lifecycle attachment, same-state resharing, write-mode restore, and lifecycle inspection and verification:
 
 - `qv keygen`
 - `qv encrypt`
@@ -11,9 +11,8 @@ Quantum Vault ships a Node.js CLI with key generation, encryption, successor sha
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
+- `qv restore`
 - `qv restore --dry-run`
-
-Write-mode restore is still being added.
 
 ## Install / Run
 
@@ -604,9 +603,9 @@ Bundleless verification behavior:
 - `policy.level` is `"unresolved"`.
 - exit status is `1`.
 
-### `qv restore --shards <glob-or-file> [options] --dry-run [--json]`
+### `qv restore --shards <glob-or-file> [options] [--dry-run] [--json]`
 
-Evaluates whether restore would succeed without writing plaintext, `.qkey`, or any output file.
+Restores from a selected QVqcont-7 quorum. Without `--dry-run`, restore writes recovered `.qenc`, private-key, archive-state, and lifecycle-bundle artifacts. With `--dry-run`, it only evaluates whether restore would succeed and writes nothing.
 
 Verification options match `qv verify` and add explicit selection flags:
 
@@ -621,12 +620,26 @@ Verification options match `qv verify` and add explicit selection flags:
 - `--cohort-id <hex>`
 - `--bundle-digest <hex>`
 
+Write options:
+
+- `--out <dir>` defaults to `./restored`
+- `--out-qenc <file>` overrides `<out>/recovered.qenc`
+- `--out-key <file>` overrides `<out>/recovered.privateKey.qkey`
+- `--decrypt` also decrypts the recovered `.qenc` in memory
+- `--out-plaintext <file>` overrides `<out>/recovered.plaintext` and requires `--decrypt`
+- `--accept-policy-warnings` is accepted for automation, but does not override `policy.satisfied === false`
+- `--force` allows overwriting output files
+
 Exit status:
 
-- `0` when the selected restore would succeed
-- `1` otherwise
+- `0` when selected restore succeeds and, for write mode, artifacts were written
+- `1` when authenticity policy prevents write-mode restore or restore would not succeed
+- `2` for usage errors or refused overwrite
+- `7` for quorum/RS/Shamir failure
+- `9` for ambiguous archive/state/cohort or lifecycle-bundle selection
+- `11` for restored `.qenc`, private-key, or plaintext integrity failure
 
-`--json` output shape:
+`--dry-run --json` output shape remains:
 
 ```json
 {
@@ -653,12 +666,58 @@ Exit status:
 }
 ```
 
+Write-mode `--json` output includes the same fields with `dryRun: false` and an `outputs` block:
+
+```json
+{
+  "command": "restore",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "dryRun": false,
+  "wouldSucceed": true,
+  "archiveId": "hex",
+  "stateId": "hex",
+  "cohortId": "hex",
+  "archiveStateDigestHex": "hex",
+  "cohortBindingDigestHex": "hex",
+  "lifecycleBundleDigestHex": "hex",
+  "selectionSource": "string",
+  "lifecycleBundleSource": "string",
+  "embeddedLifecycleBundleDigestsUsed": [],
+  "qencOk": true,
+  "qkeyOk": true,
+  "privateKeyHashMatchesMetadata": true,
+  "rejectedShardIndices": [],
+  "lifecycleVerification": {},
+  "authenticity": {},
+  "outputs": {
+    "qencPath": "string",
+    "keyPath": "string",
+    "archiveStatePath": "string",
+    "lifecycleBundlePath": "string",
+    "plaintextPath": "string|null"
+  },
+  "plaintext": {
+    "outputPath": "string",
+    "plaintextLength": 123,
+    "fileHashHex": "hex",
+    "originalFilename": "string|null"
+  }
+}
+```
+
 Dry-run guarantees:
 
 - no plaintext file is written
 - no recovered key file is written
-- no write-mode restore path exists in Phase 1
 - temporary recovered `qencBytes` and `privKey` buffers are zeroized before the CLI returns
+
+Write-mode security notes:
+
+- Core `restoreFromShards` enforces restore authenticity policy before reconstructing material. Policy failure writes no artifacts.
+- The CLI writes recovered `.qenc` first, then recovered private key with mode `0600` best-effort, then sidecars, then optional plaintext with mode `0600`.
+- Recovered `qencBytes`, `privKey`, optional plaintext bytes, and parsed shard share buffers are zeroized best-effort in `finally` blocks. Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
+- `--decrypt` decrypts with the recovered key still in memory and verifies the authenticated private metadata plaintext hash before writing plaintext.
 
 ## JSON Error Shape
 
@@ -683,5 +742,7 @@ npm run cli -- canonicalize docs/schema/fixtures/qv-archive-state-descriptor-v1.
 npm run cli -- attach --shards '/path/to/shards/**/*.qcont' --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --out-bundle /path/to/attached.lifecycle-bundle.json --out-shards /path/to/attached-shards --json
 npm run cli -- reshare --shards '/path/to/shards/**/*.qcont' --n 5 --k 3 --out /path/to/reshared-shards --performed-at 2026-03-25T12:34:56.000Z --json
 npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --json
+npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --out /path/to/recovered --json
+npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --out /path/to/recovered --decrypt --out-plaintext /path/to/plaintext.bin --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json
 ```

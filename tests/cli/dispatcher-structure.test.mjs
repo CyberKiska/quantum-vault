@@ -19,8 +19,8 @@ const commandContracts = Object.freeze([
     exports: ['parseVerifyArgs', 'renderVerifySummary', 'runVerifyCommand', 'verifyArchiveInputs'],
   },
   {
-    modulePath: '../../src/core/cli/commands/restore-dry-run.js',
-    exports: ['parseRestoreArgs', 'renderRestoreSummary', 'restoreDryRunFromInputs', 'runRestoreDryRunCommand'],
+    modulePath: '../../src/core/cli/commands/restore.js',
+    exports: ['parseRestoreArgs', 'renderRestoreSummary', 'restoreDryRunFromInputs', 'runRestoreCommand', 'runRestoreDryRunCommand'],
   },
   {
     modulePath: '../../src/core/cli/commands/split.js',
@@ -81,6 +81,7 @@ test('top-level CLI module preserves public Phase 1 exports', async () => {
     'runInspectCommand',
     'runQvCli',
     'runReshareCommand',
+    'runRestoreCommand',
     'runRestoreDryRunCommand',
     'runSplitCommand',
     'runVerifyCommand',

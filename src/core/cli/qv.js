@@ -27,8 +27,9 @@ import {
   parseRestoreArgs,
   renderRestoreSummary,
   restoreDryRunFromInputs,
+  runRestoreCommand,
   runRestoreDryRunCommand,
-} from './commands/restore-dry-run.js';
+} from './commands/restore.js';
 import {
   parseSplitArgs,
   renderSplitSummary,
@@ -68,6 +69,7 @@ export {
   runKeygenCommand,
   runAttachCommand,
   runReshareCommand,
+  runRestoreCommand,
   runRestoreDryRunCommand,
   runSplitCommand,
   runVerifyCommand,
@@ -89,7 +91,7 @@ function helpText() {
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
-    '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] --dry-run [--json]',
+    '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
     '',
     'Current write scope:',
     '  keygen writes ML-KEM-1024 .qkey files',
@@ -98,8 +100,7 @@ function helpText() {
     '  split writes QVqcont-7 shards plus archive-state, cohort-binding, and lifecycle-bundle JSON',
     '  attach writes updated lifecycle-bundle JSON and can rewrite successor shards with the bundle embedded',
     '  reshare writes a same-state successor cohort plus transition and lifecycle-bundle JSON',
-    '  restore is read-only and requires --dry-run',
-    '  write-mode restore is not yet available',
+    '  restore writes recovered .qenc/.qkey artifacts unless --dry-run is supplied',
     '',
   ].join('\n');
 }
@@ -237,7 +238,7 @@ export async function runQvCli(argv, {
 
     if (command === 'restore') {
       const options = parseRestoreArgs(args);
-      const summary = await runRestoreDryRunCommand(options, { cwd });
+      const summary = await runRestoreCommand(options, { cwd });
       if (options.json) {
         writeJson(stdout, withCliJsonEnvelope(summary, {
           ok: summary.wouldSucceed === true,
