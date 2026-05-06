@@ -7,6 +7,10 @@ const commandContracts = Object.freeze([
     exports: ['parseInspectArgs', 'renderInspectSummary', 'runInspectCommand'],
   },
   {
+    modulePath: '../../src/core/cli/commands/keygen.js',
+    exports: ['parseKeygenArgs', 'renderKeygenSummary', 'runKeygenCommand'],
+  },
+  {
     modulePath: '../../src/core/cli/commands/canonicalize.js',
     exports: ['createCanonicalizeJsonReport', 'parseCanonicalizeArgs', 'runCanonicalizeCommand'],
   },

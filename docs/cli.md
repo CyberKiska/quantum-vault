@@ -1,13 +1,14 @@
 # Quantum Vault CLI
 
-Nowadays QV ships a read-only Node.js CLI:
+Quantum Vault ships a Node.js CLI with key generation plus read-only lifecycle inspection and restore assessment:
 
+- `qv keygen`
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
 - `qv restore --dry-run`
 
-Write-mode `restore` and `attach` are out of scope in Phase 1.
+Encryption, decryption, split, attach, reshare, and write-mode restore are still being added.
 
 ## Install / Run
 
@@ -20,6 +21,54 @@ npm run cli -- --help
 The package also exposes `qv` via the `bin` field when installed as a package.
 
 ## Commands
+
+### `qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]`
+
+Generates an ML-KEM-1024 keypair and writes raw `.qkey` files:
+
+- `<out>/publicKey.qkey` or `<out>/<prefix>publicKey.qkey`
+- `<out>/privateKey.qkey` or `<out>/<prefix>privateKey.qkey`
+
+Options:
+
+- `--out <dir>` required; creates that directory if it does not exist and its parent exists
+- `--name <prefix>` optional filename prefix; path separators are rejected
+- `--force` allows overwriting existing key files
+- `--print-public` emits the public key as base64; the private key is never printed
+- `--json` emits one JSON document on stdout
+
+Exit status:
+
+- `0` when keys were written
+- `2` for usage errors, including missing `--out` or refused overwrite
+- `3` for entropy/RNG health-check failure
+- `1` for other failures
+
+`--json` output shape:
+
+```json
+{
+  "command": "keygen",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "alg": { "KEM": "ML-KEM-1024" },
+  "publicKeyPath": "string",
+  "privateKeyPath": "string",
+  "publicKeyDigestHex": "hex",
+  "privateKeyDigestHex": "hex",
+  "publicKeyLength": 1568,
+  "privateKeyLength": 3168,
+  "seed": { "source": "secure-random" }
+}
+```
+
+When `--json --print-public` are used together, `publicKeyBase64` is included in the same JSON document. The private key is never included in stdout.
+
+Security notes:
+
+- `privateKey.qkey` is written with mode `0600` best-effort.
+- `publicKey.qkey` is written with mode `0644` best-effort.
+- The CLI zeroizes private-key buffers in a `finally` block, but Node.js memory zeroization is best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
 
 ### `qv inspect <artifact-file> [--json]`
 
@@ -42,6 +91,8 @@ Supported Phase 1 artifact families:
 ```json
 {
   "command": "inspect",
+  "ok": true,
+  "cliSchemaVersion": 1,
   "file": "string",
   "artifactType": "string",
   "artifactVersion": "string",
@@ -72,6 +123,8 @@ Without `--json`, stdout is the canonical byte stream.
 ```json
 {
   "command": "canonicalize",
+  "ok": true,
+  "cliSchemaVersion": 1,
   "file": "string",
   "artifactType": "string",
   "artifactVersion": "string",
@@ -105,6 +158,9 @@ Stable top-level fields:
 
 ```json
 {
+  "command": "verify",
+  "ok": true,
+  "cliSchemaVersion": 1,
   "verification": {
     "provided": true,
     "results": [],
@@ -180,6 +236,8 @@ Exit status:
 ```json
 {
   "command": "restore",
+  "ok": true,
+  "cliSchemaVersion": 1,
   "dryRun": true,
   "wouldSucceed": true,
   "archiveId": "hex",
@@ -213,9 +271,11 @@ All commands emit this shape on failure when `--json` is passed:
 
 ```json
 {
-  "command": "inspect|canonicalize|verify|restore",
+  "command": "keygen|inspect|canonicalize|verify|restore",
   "ok": false,
-  "error": "message"
+  "cliSchemaVersion": 1,
+  "error": "message",
+  "qvCode": "USAGE|UNEXPECTED|..."
 }
 ```
 
@@ -223,6 +283,7 @@ All commands emit this shape on failure when `--json` is passed:
 
 ```bash
 npm run cli -- inspect docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json --json
+npm run cli -- keygen --out ./keys --json
 npm run cli -- canonicalize docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json
 npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json

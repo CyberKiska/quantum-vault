@@ -9,6 +9,11 @@ import {
   runInspectCommand,
 } from './commands/inspect.js';
 import {
+  parseKeygenArgs,
+  renderKeygenSummary,
+  runKeygenCommand,
+} from './commands/keygen.js';
+import {
   parseRestoreArgs,
   renderRestoreSummary,
   restoreDryRunFromInputs,
@@ -33,6 +38,7 @@ export {
   restoreDryRunFromInputs,
   runCanonicalizeCommand,
   runInspectCommand,
+  runKeygenCommand,
   runRestoreDryRunCommand,
   runVerifyCommand,
   verifyArchiveInputs,
@@ -43,14 +49,16 @@ function helpText() {
     'Quantum Vault CLI',
     '',
     'Commands:',
+    '  qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
     '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] --dry-run [--json]',
     '',
-    'Phase 1 scope:',
+    'Current write scope:',
+    '  keygen writes ML-KEM-1024 .qkey files',
     '  restore is read-only and requires --dry-run',
-    '  attach and write-mode restore are out of scope',
+    '  encrypt, decrypt, split, attach, and write-mode restore are not yet available',
     '',
   ].join('\n');
 }
@@ -76,6 +84,22 @@ export async function runQvCli(argv, {
   const json = parseGlobalJsonFlag(args);
 
   try {
+    if (command === 'keygen') {
+      const options = parseKeygenArgs(args);
+      const { report, publicKeyBase64 } = await runKeygenCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(options.printPublic
+          ? { ...report, publicKeyBase64 }
+          : report));
+      } else {
+        writeText(stdout, renderKeygenSummary(report));
+        if (options.printPublic) {
+          writeText(stdout, `${publicKeyBase64}\n`);
+        }
+      }
+      return EXIT.OK;
+    }
+
     if (command === 'inspect') {
       const { filePath } = parseInspectArgs(args);
       const report = await runInspectCommand(filePath);
