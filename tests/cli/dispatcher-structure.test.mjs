@@ -26,6 +26,14 @@ const commandContracts = Object.freeze([
     modulePath: '../../src/core/cli/lib/json.js',
     exports: ['createJsonError', 'withCliJsonEnvelope', 'writeJson'],
   },
+  {
+    modulePath: '../../src/core/cli/lib/io.js',
+    exports: ['readBytes', 'writeBytesAtomic', 'writeJsonAtomic'],
+  },
+  {
+    modulePath: '../../src/core/cli/lib/secrets.js',
+    exports: ['readSecretBytes'],
+  },
 ]);
 
 test('CLI command modules expose dispatcher contracts', async () => {
