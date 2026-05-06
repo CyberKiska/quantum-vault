@@ -14,11 +14,12 @@
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "cli": "node bin/qv.mjs",
+    "test:cli": "node --test tests/cli/*.test.mjs",
     "selftest": "node scripts/selftest.mjs",
     "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
-    "check": "npm run selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
+    "check": "npm run test:cli && npm run selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
     "release:check": "npm run check && npm run test:browser",
     "deploy": "npm run build"
   },
