@@ -35,6 +35,11 @@ import {
   runSplitCommand,
 } from './commands/split.js';
 import {
+  parseAttachArgs,
+  renderAttachSummary,
+  runAttachCommand,
+} from './commands/attach.js';
+import {
   parseVerifyArgs,
   renderVerifySummary,
   runVerifyCommand,
@@ -56,6 +61,7 @@ export {
   runEncryptCommand,
   runInspectCommand,
   runKeygenCommand,
+  runAttachCommand,
   runRestoreDryRunCommand,
   runSplitCommand,
   runVerifyCommand,
@@ -72,6 +78,7 @@ function helpText() {
     '  qv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
     '  qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
     '  qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
+    '  qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
@@ -82,8 +89,9 @@ function helpText() {
     '  encrypt writes .qenc containers and can pre-pack multiple files as .qvpack payloads',
     '  decrypt writes plaintext files and can explicitly extract authenticated .qvpack payloads',
     '  split writes QVqcont-7 shards plus archive-state, cohort-binding, and lifecycle-bundle JSON',
+    '  attach writes updated lifecycle-bundle JSON and can rewrite successor shards with the bundle embedded',
     '  restore is read-only and requires --dry-run',
-    '  attach and write-mode restore are not yet available',
+    '  write-mode restore is not yet available',
     '',
   ].join('\n');
 }
@@ -156,6 +164,17 @@ export async function runQvCli(argv, {
         writeJson(stdout, withCliJsonEnvelope(report));
       } else {
         writeText(stdout, renderSplitSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'attach') {
+      const options = parseAttachArgs(args);
+      const report = await runAttachCommand(options, { cwd });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderAttachSummary(report));
       }
       return EXIT.OK;
     }

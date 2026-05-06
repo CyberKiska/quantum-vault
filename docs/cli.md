@@ -1,17 +1,18 @@
 # Quantum Vault CLI
 
-Quantum Vault ships a Node.js CLI with key generation, encryption, and read-only lifecycle inspection and restore assessment:
+Quantum Vault ships a Node.js CLI with key generation, encryption, successor shard creation, lifecycle attachment, and read-only lifecycle inspection and restore assessment:
 
 - `qv keygen`
 - `qv encrypt`
 - `qv decrypt`
 - `qv split`
+- `qv attach`
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
 - `qv restore --dry-run`
 
-Attach, reshare, and write-mode restore are still being added.
+Reshare and write-mode restore are still being added.
 
 ## Install / Run
 
@@ -292,6 +293,89 @@ Security notes:
 - Output paths are preflighted before any artifact write unless `--force` is supplied.
 - The loaded private key, input container buffer, and emitted shard byte buffers are zeroized best-effort after write/report construction. Node.js memory zeroization remains best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
 
+### `qv attach [--shards <glob-or-file> ...] [--bundle <file>] [options]`
+
+Attaches detached lifecycle artifacts to a QV-Lifecycle-Bundle v1 and optionally rewrites QVqcont-7 shards with the updated lifecycle bundle embedded. Attach uses `src/core/crypto/qcont/lifecycle-attach.js#attachLifecycleBundleToShards`; it does not implement separate CLI-only signature, timestamp, or lifecycle-binding logic.
+
+Inputs:
+
+- `--shards <glob-or-file>` repeatable; selects successor QVqcont-7 shards from one archive/state/cohort set
+- `--archive-state <file>` optional explicit archive-state descriptor; must byte-match selected shards or bundle
+- `--bundle <file>` optional lifecycle bundle; required to disambiguate shard sets with mixed embedded lifecycle-bundle digests
+- `--sig <file>` repeatable archive-approval detached signature import
+- `--sig-import <json>` repeatable typed signature import descriptor with explicit `signatureFamily`, optional `targetType`, `targetRef`, and `targetDigest`
+- `--pqpk <file>` repeatable pinned PQ public key material for `.qsig` verification
+- `--ots <file>` repeatable OpenTimestamps proof import linked to imported lifecycle signatures
+- `--source-evidence <json-file>` or `--source-evidence-bytes <file>` source-evidence material for `signatureFamily:"source-evidence"` imports
+- `--ed25519-signer <address>` optional signer pin for supported Stellar `.sig` imports
+
+Typed `--sig-import` descriptor example:
+
+```json
+{
+  "file": "source-review.qsig",
+  "signatureFamily": "source-evidence",
+  "targetType": "source-evidence",
+  "targetRef": "source-evidence:sha3-512:<digest>",
+  "targetDigest": "<digest>"
+}
+```
+
+Output:
+
+- `--out-bundle <file>` defaults to `./lifecycle-bundle.json`; written with mode `0600` best-effort
+- `--out-shards <dir>` defaults to `./attached-shards`; used when shards are selected and embedding is enabled
+- `--no-embed-into-shards` writes only the updated lifecycle bundle
+- `--force` allows overwriting output files
+- `--json` emits one JSON document on stdout
+
+Exit status:
+
+- `0` when the updated lifecycle bundle was written
+- `2` for usage errors or refused overwrite
+- `8` for signature, timestamp, typed import, or pinned-key verification failure
+- `9` for ambiguous shard/bundle lifecycle inputs
+- `1` for other failures
+
+`--json` output shape:
+
+```json
+{
+  "command": "attach",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "archiveId": "hex",
+  "stateId": "hex",
+  "cohortId": "hex",
+  "lifecycleBundlePath": "string",
+  "lifecycleBundleDigestHex": "hex",
+  "lifecycleBundleDigestAlg": "SHA3-512",
+  "embeddedIntoShards": true,
+  "shardsRewritten": [
+    { "index": 0, "path": "string" }
+  ],
+  "addedAttachments": {
+    "publicKeys": [],
+    "archiveApprovalSignatures": [],
+    "maintenanceSignatures": [],
+    "sourceEvidenceSignatures": [],
+    "timestamps": [],
+    "sourceEvidence": []
+  },
+  "embeddedLifecycleBundleDigests": [],
+  "mixedEmbeddedLifecycleBundleDigests": false,
+  "archiveStateDigestHex": "hex",
+  "cohortBindingDigestHex": "hex"
+}
+```
+
+Security notes:
+
+- Attach remains fail-closed on archiveId, stateId, cohortId derivation, canonical archive-state bytes, cohort-binding bytes, and lifecycle-bundle ambiguity.
+- Archive approval signatures are bound to canonical archive-state descriptor bytes; lifecycle bundles remain mutable containers for detached signatures, public keys, timestamp evidence, transition records, and source-evidence objects.
+- `--sig-import` does not infer target semantics from filenames or lengths. Maintenance imports require an explicit transition `targetRef`; source-evidence imports bind to canonical source-evidence bytes or validated builder JSON.
+- Detached artifacts and shard shares are handled in memory. The CLI zeroizes rewritten shard buffers and parsed shard shares best-effort after use, but Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
+
 ### `qv inspect <artifact-file> [--json]`
 
 Classifies an artifact, reports its version, and prints canonical JSON plus a SHA3-512 digest.
@@ -493,7 +577,7 @@ All commands emit this shape on failure when `--json` is passed:
 
 ```json
 {
-  "command": "keygen|inspect|canonicalize|verify|restore",
+  "command": "keygen|encrypt|decrypt|split|attach|inspect|canonicalize|verify|restore",
   "ok": false,
   "cliSchemaVersion": 1,
   "error": "message",
@@ -507,6 +591,7 @@ All commands emit this shape on failure when `--json` is passed:
 npm run cli -- inspect docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json --json
 npm run cli -- keygen --out ./keys --json
 npm run cli -- canonicalize docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json
+npm run cli -- attach --shards '/path/to/shards/**/*.qcont' --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --out-bundle /path/to/attached.lifecycle-bundle.json --out-shards /path/to/attached-shards --json
 npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json
 ```

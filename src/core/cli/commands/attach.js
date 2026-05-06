@@ -1,0 +1,514 @@
+import { mkdir, stat } from 'node:fs/promises';
+import path from 'node:path';
+import {
+  attachLifecycleBundleToShards,
+  exportSourceEvidenceForSigning,
+} from '../../crypto/qcont/lifecycle-attach.js';
+import {
+  deriveCohortId,
+  parseLifecycleBundleBytes,
+  parseSourceEvidenceBytes,
+} from '../../crypto/lifecycle/artifacts.js';
+import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
+import { parseJsonBytesStrict } from '../../crypto/manifest/strict-json.js';
+import { takeValue } from '../lib/args.js';
+import { QV_CODE, makeQvError } from '../lib/exit.js';
+import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
+import {
+  makeExternalArtifactRecord,
+  readBytesFromFile,
+  readOptionalBytes,
+  writeBytesAtomic,
+} from '../lib/io.js';
+import { ensureRuntimeCrypto } from '../lib/runtime.js';
+
+const SIG_IMPORT_KEYS = new Set([
+  'file',
+  'name',
+  'signatureFamily',
+  'targetType',
+  'targetRef',
+  'targetDigest',
+]);
+
+function usage(message) {
+  return makeQvError(message, QV_CODE.USAGE);
+}
+
+function ambiguity(message, cause) {
+  return makeQvError(message, QV_CODE.AMBIGUOUS_INPUTS, { cause });
+}
+
+function signatureImportFailed(message, cause) {
+  return makeQvError(message, QV_CODE.SIGNATURE_IMPORT_FAILED, { cause });
+}
+
+async function blobToBytes(blob) {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function pathExists(filePath) {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function ensureInputFile(filePath, label) {
+  try {
+    const stats = await stat(filePath);
+    if (!stats.isFile()) {
+      throw usage(`${label} is not a file: ${filePath}`);
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw usage(`${label} does not exist: ${filePath}`);
+    }
+    throw error;
+  }
+}
+
+async function ensureOutputDirectory(dirPath, label) {
+  const resolved = path.resolve(dirPath);
+  try {
+    const stats = await stat(resolved);
+    if (!stats.isDirectory()) {
+      throw usage(`${label} must be a directory: ${resolved}`);
+    }
+    return resolved;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const parent = path.dirname(resolved);
+  try {
+    const parentStats = await stat(parent);
+    if (!parentStats.isDirectory()) {
+      throw usage(`${label} parent is not a directory: ${parent}`);
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      throw usage(`${label} parent directory does not exist: ${parent}`);
+    }
+    throw error;
+  }
+  await mkdir(resolved);
+  return resolved;
+}
+
+async function ensureOutputParentExists(filePath, label) {
+  await ensureOutputDirectory(path.dirname(path.resolve(filePath)), `${label} parent`);
+}
+
+function parseAttachArgs(args) {
+  const options = {
+    shardPatterns: [],
+    archiveStatePath: '',
+    bundlePath: '',
+    signaturePaths: [],
+    signatureImportSpecs: [],
+    pqpkPaths: [],
+    otsPaths: [],
+    sourceEvidencePath: '',
+    sourceEvidenceBytesPath: '',
+    expectedEd25519Signer: '',
+    outBundlePath: 'lifecycle-bundle.json',
+    outShardsDir: 'attached-shards',
+    noEmbedIntoShards: false,
+    force: false,
+    json: false,
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    switch (arg) {
+      case '--shards':
+        options.shardPatterns.push(takeValue(args, index, arg));
+        index += 1;
+        break;
+      case '--archive-state':
+        options.archiveStatePath = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--bundle':
+        options.bundlePath = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--sig':
+        options.signaturePaths.push(takeValue(args, index, arg));
+        index += 1;
+        break;
+      case '--sig-import':
+        options.signatureImportSpecs.push(takeValue(args, index, arg));
+        index += 1;
+        break;
+      case '--pqpk':
+        options.pqpkPaths.push(takeValue(args, index, arg));
+        index += 1;
+        break;
+      case '--ots':
+        options.otsPaths.push(takeValue(args, index, arg));
+        index += 1;
+        break;
+      case '--source-evidence':
+        options.sourceEvidencePath = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--source-evidence-bytes':
+        options.sourceEvidenceBytesPath = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--ed25519-signer':
+        options.expectedEd25519Signer = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--out-bundle':
+        options.outBundlePath = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--out-shards':
+        options.outShardsDir = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case '--no-embed-into-shards':
+        options.noEmbedIntoShards = true;
+        break;
+      case '--force':
+        options.force = true;
+        break;
+      case '--json':
+        options.json = true;
+        break;
+      default:
+        throw usage(`Unknown attach option: ${arg}`);
+    }
+  }
+
+  if (options.sourceEvidencePath && options.sourceEvidenceBytesPath) {
+    throw usage('attach accepts --source-evidence or --source-evidence-bytes, not both');
+  }
+  if (options.shardPatterns.length === 0 && !options.bundlePath) {
+    throw usage('attach requires --shards or --bundle');
+  }
+  if (options.outBundlePath.includes('\0') || options.outShardsDir.includes('\0')) {
+    throw usage('attach output path contains an invalid NUL byte');
+  }
+  return options;
+}
+
+export { parseAttachArgs };
+
+function parseSigImportSpec(spec) {
+  let parsed;
+  try {
+    parsed = JSON.parse(spec);
+  } catch (error) {
+    throw usage(`Invalid --sig-import JSON: ${error?.message || error}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw usage('--sig-import must be a JSON object');
+  }
+  for (const key of Object.keys(parsed)) {
+    if (!SIG_IMPORT_KEYS.has(key)) {
+      throw usage(`Unknown --sig-import field: ${key}`);
+    }
+  }
+  if (typeof parsed.file !== 'string' || parsed.file.length === 0) {
+    throw usage('--sig-import requires "file"');
+  }
+  if (typeof parsed.signatureFamily !== 'string' || parsed.signatureFamily.length === 0) {
+    throw usage('--sig-import requires "signatureFamily"');
+  }
+  return parsed;
+}
+
+async function readSignatureImport(spec, sourceEvidence = {}) {
+  const parsed = parseSigImportSpec(spec);
+  const bytes = await readBytesFromFile(parsed.file);
+  const out = {
+    name: parsed.name || path.basename(parsed.file),
+    bytes,
+    signatureFamily: parsed.signatureFamily,
+  };
+  for (const key of ['targetType', 'targetRef', 'targetDigest']) {
+    if (Object.prototype.hasOwnProperty.call(parsed, key)) {
+      out[key] = parsed[key];
+    }
+  }
+  if (out.signatureFamily === 'source-evidence') {
+    if (sourceEvidence.sourceEvidenceBytes instanceof Uint8Array) {
+      out.sourceEvidenceBytes = sourceEvidence.sourceEvidenceBytes;
+    } else if (sourceEvidence.sourceEvidence) {
+      out.sourceEvidence = sourceEvidence.sourceEvidence;
+    }
+  }
+  return out;
+}
+
+async function readSourceEvidence(options) {
+  if (options.sourceEvidenceBytesPath) {
+    return {
+      sourceEvidenceBytes: await readBytesFromFile(options.sourceEvidenceBytesPath),
+    };
+  }
+  if (options.sourceEvidencePath) {
+    const bytes = await readBytesFromFile(options.sourceEvidencePath);
+    try {
+      const parsed = parseSourceEvidenceBytes(bytes);
+      return { sourceEvidenceBytes: parsed.bytes };
+    } catch {
+      // Permit source-evidence builder JSON, but still let core canonicalize and validate it.
+    }
+    return {
+      sourceEvidence: parseJsonBytesStrict(bytes),
+    };
+  }
+  return {};
+}
+
+async function readShardInputs(patterns, cwd) {
+  const shardPaths = [];
+  for (const pattern of patterns) {
+    shardPaths.push(...await expandFilePattern(pattern, cwd));
+  }
+  const resolvedShardPaths = dedupeSorted(shardPaths);
+  const parsedShards = [];
+  for (const filePath of resolvedShardPaths) {
+    const bytes = await readBytesFromFile(filePath);
+    try {
+      parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
+    } catch (error) {
+      throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+    }
+  }
+  return { shardPaths: resolvedShardPaths, parsedShards };
+}
+
+async function readAttachInputs(options, cwd) {
+  if (options.archiveStatePath) await ensureInputFile(options.archiveStatePath, '--archive-state');
+  if (options.bundlePath) await ensureInputFile(options.bundlePath, '--bundle');
+  for (const filePath of [
+    ...options.signaturePaths,
+    ...options.pqpkPaths,
+    ...options.otsPaths,
+  ]) {
+    await ensureInputFile(filePath, 'Attach input file');
+  }
+  if (options.sourceEvidencePath) await ensureInputFile(options.sourceEvidencePath, '--source-evidence');
+  if (options.sourceEvidenceBytesPath) await ensureInputFile(options.sourceEvidenceBytesPath, '--source-evidence-bytes');
+
+  const { shardPaths, parsedShards } = await readShardInputs(options.shardPatterns, cwd);
+  const sourceEvidence = await readSourceEvidence(options);
+  const signatureImports = await Promise.all(options.signatureImportSpecs.map((spec) => (
+    readSignatureImport(spec, sourceEvidence)
+  )));
+
+  return {
+    shardPaths,
+    parsedShards,
+    archiveStateBytes: await readOptionalBytes(options.archiveStatePath),
+    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath),
+    signatures: await Promise.all(options.signaturePaths.map(async (filePath) => (
+      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+    ))),
+    signatureImports,
+    timestamps: await Promise.all(options.otsPaths.map(async (filePath) => (
+      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+    ))),
+    pqPublicKeyFileBytesList: await Promise.all(options.pqpkPaths.map(readBytesFromFile)),
+  };
+}
+
+function classifyAttachError(error) {
+  if (typeof error?.qvCode === 'string') return error;
+  const message = error?.message || String(error);
+  if (/multiple embedded lifecycle-bundle digests|exactly one archive\/state\/cohort|multiple/i.test(message) && /lifecycle-bundle|archive\/state\/cohort|successor shards/i.test(message)) {
+    return ambiguity(message, error);
+  }
+  if (/No successor lifecycle shards or lifecycle bundle|Attach requires --shards|not a supported successor shard|Refusing to overwrite/.test(message)) {
+    return usage(message);
+  }
+  return signatureImportFailed(message, error);
+}
+
+function attachmentIdSets(previous, next) {
+  const attachmentFields = [
+    'publicKeys',
+    'archiveApprovalSignatures',
+    'maintenanceSignatures',
+    'sourceEvidenceSignatures',
+    'timestamps',
+  ];
+  const added = {};
+  for (const field of attachmentFields) {
+    const before = new Set((previous?.attachments?.[field] || []).map((entry) => entry.id));
+    added[field] = (next?.attachments?.[field] || [])
+      .map((entry) => entry.id)
+      .filter((id) => !before.has(id));
+  }
+  const previousSourceEvidenceDigests = new Set((previous?.sourceEvidence || []).map((entry) => (
+    exportSourceEvidenceForSigning({ sourceEvidence: entry }).sourceEvidenceDigestHex
+  )));
+  added.sourceEvidence = (next?.sourceEvidence || [])
+    .map((entry) => exportSourceEvidenceForSigning({ sourceEvidence: entry }).sourceEvidenceDigestHex)
+    .filter((digest) => !previousSourceEvidenceDigests.has(digest))
+    .map((digest) => `sha3-512:${digest}`);
+  return added;
+}
+
+async function resolvePreviousBundleForReport(inputs) {
+  const bundleBytes = inputs.lifecycleBundleBytes
+    || (inputs.parsedShards.length === 1 ? inputs.parsedShards[0].lifecycleBundleBytes : null);
+  if (bundleBytes instanceof Uint8Array) {
+    return (await parseLifecycleBundleBytes(bundleBytes)).lifecycleBundle;
+  }
+
+  const digests = new Map();
+  for (const shard of inputs.parsedShards) {
+    if (!digests.has(shard.lifecycleBundleDigestHex)) {
+      digests.set(shard.lifecycleBundleDigestHex, shard.lifecycleBundleBytes);
+    }
+  }
+  if (digests.size === 1) {
+    const [, bytes] = [...digests.entries()][0];
+    return (await parseLifecycleBundleBytes(bytes)).lifecycleBundle;
+  }
+  return null;
+}
+
+function deriveReportCohortId(result) {
+  return deriveCohortId({
+    archiveId: result.archiveState.archiveId,
+    stateId: result.stateId,
+    cohortBindingDigest: {
+      alg: 'SHA3-512',
+      value: result.cohortBindingDigestHex,
+    },
+  });
+}
+
+function buildShardOutputPlan(shardPaths, result, outShardsDir) {
+  return result.shards.map((item, index) => ({
+    index: item.index ?? index,
+    sourcePath: shardPaths[index] || '',
+    path: path.join(outShardsDir, path.basename(shardPaths[index] || `shard-${index + 1}.qcont`)),
+  }));
+}
+
+async function preflightOutputs({ outBundlePath, shardPlan, force }) {
+  const paths = [outBundlePath, ...shardPlan.map((item) => item.path)];
+  if (!force) {
+    for (const filePath of paths) {
+      if (await pathExists(filePath)) {
+        throw usage(`Refusing to overwrite existing file: ${filePath}`);
+      }
+    }
+  }
+}
+
+async function writeAttachedArtifacts({ result, outBundlePath, shardPlan, force }) {
+  await ensureOutputParentExists(outBundlePath, '--out-bundle');
+  await writeBytesAtomic(outBundlePath, result.lifecycleBundleBytes, { mode: 0o600, force });
+  for (const shard of shardPlan) {
+    const updated = result.shards.find((item) => (item.index ?? item.shardIndex) === shard.index);
+    if (!updated) {
+      throw new Error(`Missing rewritten shard ${shard.index}`);
+    }
+    const bytes = await blobToBytes(updated.blob);
+    try {
+      await writeBytesAtomic(shard.path, bytes, { mode: 0o600, force });
+    } finally {
+      bytes.fill(0);
+    }
+  }
+}
+
+function buildAttachReport({
+  result,
+  previousBundle,
+  outBundlePath,
+  shardPlan,
+  embeddedIntoShards,
+}) {
+  return {
+    command: 'attach',
+    archiveId: result.archiveState.archiveId,
+    stateId: result.stateId,
+    cohortId: deriveReportCohortId(result),
+    lifecycleBundlePath: outBundlePath,
+    lifecycleBundleDigestHex: result.lifecycleBundleDigestHex,
+    lifecycleBundleDigestAlg: 'SHA3-512',
+    embeddedIntoShards,
+    shardsRewritten: embeddedIntoShards
+      ? shardPlan.map((item) => ({ index: item.index, path: item.path }))
+      : [],
+    addedAttachments: attachmentIdSets(previousBundle, result.lifecycleBundle),
+    embeddedLifecycleBundleDigests: [...(result.embeddedLifecycleBundleDigests || [])],
+    mixedEmbeddedLifecycleBundleDigests: result.mixedEmbeddedLifecycleBundleDigests === true,
+    archiveStateDigestHex: result.archiveStateDigestHex,
+    cohortBindingDigestHex: result.cohortBindingDigestHex,
+  };
+}
+
+export async function runAttachCommand(options, {
+  cwd = process.cwd(),
+} = {}) {
+  await ensureRuntimeCrypto();
+  let inputs = null;
+
+  try {
+    inputs = await readAttachInputs(options, cwd);
+    const embedIntoShards = inputs.parsedShards.length > 0 && !options.noEmbedIntoShards;
+    const result = await attachLifecycleBundleToShards(inputs.parsedShards, {
+      archiveStateBytes: inputs.archiveStateBytes,
+      lifecycleBundleBytes: inputs.lifecycleBundleBytes,
+      signatures: inputs.signatures,
+      signatureImports: inputs.signatureImports,
+      timestamps: inputs.timestamps,
+      pqPublicKeyFileBytesList: inputs.pqPublicKeyFileBytesList,
+      expectedEd25519Signer: options.expectedEd25519Signer,
+      embedIntoShards,
+    });
+    const previousBundle = await resolvePreviousBundleForReport(inputs);
+
+    const outBundlePath = path.resolve(cwd, options.outBundlePath);
+    const shardPlan = embedIntoShards
+      ? buildShardOutputPlan(
+          inputs.shardPaths,
+          result,
+          await ensureOutputDirectory(path.resolve(cwd, options.outShardsDir), '--out-shards')
+        )
+      : [];
+    await preflightOutputs({ outBundlePath, shardPlan, force: options.force });
+    await writeAttachedArtifacts({ result, outBundlePath, shardPlan, force: options.force });
+
+    return buildAttachReport({
+      result,
+      previousBundle,
+      outBundlePath,
+      shardPlan,
+      embeddedIntoShards: embedIntoShards,
+    });
+  } catch (error) {
+    throw classifyAttachError(error);
+  } finally {
+    for (const shard of inputs?.parsedShards || []) {
+      shard.share?.fill?.(0);
+    }
+  }
+}
+
+export function renderAttachSummary(report) {
+  const lines = [
+    `Attached lifecycle bundle: ${report.lifecycleBundlePath}`,
+    `ArchiveId: ${report.archiveId}`,
+    `StateId: ${report.stateId}`,
+    `CohortId: ${report.cohortId || 'unknown'}`,
+    `Lifecycle bundle digest: ${report.lifecycleBundleDigestHex}`,
+    `Embedded into shards: ${report.embeddedIntoShards ? 'yes' : 'no'}`,
+  ];
+  lines.push('');
+  return `${lines.join('\n')}`;
+}

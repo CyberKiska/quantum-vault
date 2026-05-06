@@ -27,6 +27,10 @@ const commandContracts = Object.freeze([
     exports: ['parseSplitArgs', 'renderSplitSummary', 'runSplitCommand'],
   },
   {
+    modulePath: '../../src/core/cli/commands/attach.js',
+    exports: ['parseAttachArgs', 'renderAttachSummary', 'runAttachCommand'],
+  },
+  {
     modulePath: '../../src/core/cli/lib/exit.js',
     exports: ['getErrorQvCode', 'makeQvError', 'mapErrorToExitCode'],
   },
@@ -68,6 +72,7 @@ test('top-level CLI module preserves public Phase 1 exports', async () => {
   const moduleExports = await import('../../src/core/cli/qv.js');
   for (const exportName of [
     'restoreDryRunFromInputs',
+    'runAttachCommand',
     'runCanonicalizeCommand',
     'runInspectCommand',
     'runQvCli',
