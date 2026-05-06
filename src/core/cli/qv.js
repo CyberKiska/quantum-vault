@@ -23,9 +23,11 @@ import {
 import {
   createJsonError,
   parseGlobalJsonFlag,
+  withCliJsonEnvelope,
   writeJson,
   writeText,
 } from './lib/json.js';
+import { EXIT, mapErrorToExitCode } from './lib/exit.js';
 
 export {
   restoreDryRunFromInputs,
@@ -53,6 +55,11 @@ function helpText() {
   ].join('\n');
 }
 
+function formatCliError(command, error) {
+  const label = command || 'qv';
+  return `qv: ${label}: ${error?.message || error}\n`;
+}
+
 export async function runQvCli(argv, {
   cwd = process.cwd(),
   stdout = process.stdout,
@@ -63,7 +70,7 @@ export async function runQvCli(argv, {
 
   if (!command || command === '--help' || command === '-h' || command === 'help') {
     writeText(stdout, `${helpText()}\n`);
-    return 0;
+    return EXIT.OK;
   }
 
   const json = parseGlobalJsonFlag(args);
@@ -73,44 +80,50 @@ export async function runQvCli(argv, {
       const { filePath } = parseInspectArgs(args);
       const report = await runInspectCommand(filePath);
       if (json) {
-        writeJson(stdout, report);
+        writeJson(stdout, withCliJsonEnvelope(report));
       } else {
         writeText(stdout, renderInspectSummary(report));
       }
-      return 0;
+      return EXIT.OK;
     }
 
     if (command === 'canonicalize') {
       const { filePath } = parseCanonicalizeArgs(args);
       const report = await runCanonicalizeCommand(filePath);
       if (json) {
-        writeJson(stdout, createCanonicalizeJsonReport(report));
+        writeJson(stdout, withCliJsonEnvelope(createCanonicalizeJsonReport(report)));
       } else {
         stdout.write(Buffer.from(report.canonicalBytes));
       }
-      return 0;
+      return EXIT.OK;
     }
 
     if (command === 'verify') {
       const options = parseVerifyArgs(args);
       const authenticity = await runVerifyCommand(options);
+      const policySatisfied = authenticity?.policy?.satisfied === true;
       if (options.json) {
-        writeJson(stdout, authenticity);
+        writeJson(stdout, withCliJsonEnvelope(authenticity, {
+          command: 'verify',
+          ok: policySatisfied,
+        }));
       } else {
         writeText(stdout, renderVerifySummary(authenticity));
       }
-      return authenticity?.policy?.satisfied === true ? 0 : 1;
+      return policySatisfied ? EXIT.OK : EXIT.ERROR;
     }
 
     if (command === 'restore') {
       const options = parseRestoreArgs(args);
       const summary = await runRestoreDryRunCommand(options, { cwd });
       if (options.json) {
-        writeJson(stdout, summary);
+        writeJson(stdout, withCliJsonEnvelope(summary, {
+          ok: summary.wouldSucceed === true,
+        }));
       } else {
         writeText(stdout, renderRestoreSummary(summary));
       }
-      return summary.wouldSucceed === true ? 0 : 1;
+      return summary.wouldSucceed === true ? EXIT.OK : EXIT.ERROR;
     }
 
     throw new Error(`Unknown command: ${command}`);
@@ -118,8 +131,8 @@ export async function runQvCli(argv, {
     if (json) {
       writeJson(stdout, createJsonError(command, error));
     } else {
-      writeText(stderr, `${error?.message || error}\n`);
+      writeText(stderr, formatCliError(command, error));
     }
-    return 1;
+    return mapErrorToExitCode(error);
   }
 }

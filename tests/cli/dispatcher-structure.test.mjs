@@ -18,6 +18,14 @@ const commandContracts = Object.freeze([
     modulePath: '../../src/core/cli/commands/restore-dry-run.js',
     exports: ['parseRestoreArgs', 'renderRestoreSummary', 'restoreDryRunFromInputs', 'runRestoreDryRunCommand'],
   },
+  {
+    modulePath: '../../src/core/cli/lib/exit.js',
+    exports: ['getErrorQvCode', 'makeQvError', 'mapErrorToExitCode'],
+  },
+  {
+    modulePath: '../../src/core/cli/lib/json.js',
+    exports: ['createJsonError', 'withCliJsonEnvelope', 'writeJson'],
+  },
 ]);
 
 test('CLI command modules expose dispatcher contracts', async () => {
@@ -31,6 +39,13 @@ test('CLI command modules expose dispatcher contracts', async () => {
       );
     }
   }
+});
+
+test('CLI exit registry maps explicit qvCode values', async () => {
+  const { EXIT, QV_CODE, makeQvError, mapErrorToExitCode } = await import('../../src/core/cli/lib/exit.js');
+  assert.equal(mapErrorToExitCode(makeQvError('bad args', QV_CODE.USAGE)), EXIT.USAGE);
+  assert.equal(mapErrorToExitCode(makeQvError('ambiguous cohort', QV_CODE.AMBIGUOUS_INPUTS)), EXIT.AMBIGUITY);
+  assert.equal(mapErrorToExitCode(new Error('plain error')), EXIT.ERROR);
 });
 
 test('top-level CLI module preserves public Phase 1 exports', async () => {
