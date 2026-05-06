@@ -1,18 +1,19 @@
 # Quantum Vault CLI
 
-Quantum Vault ships a Node.js CLI with key generation, encryption, successor shard creation, lifecycle attachment, and read-only lifecycle inspection and restore assessment:
+Quantum Vault ships a Node.js CLI with key generation, encryption, successor shard creation, lifecycle attachment, same-state resharing, and read-only lifecycle inspection and restore assessment:
 
 - `qv keygen`
 - `qv encrypt`
 - `qv decrypt`
 - `qv split`
 - `qv attach`
+- `qv reshare`
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
 - `qv restore --dry-run`
 
-Reshare and write-mode restore are still being added.
+Write-mode restore is still being added.
 
 ## Install / Run
 
@@ -376,6 +377,94 @@ Security notes:
 - `--sig-import` does not infer target semantics from filenames or lengths. Maintenance imports require an explicit transition `targetRef`; source-evidence imports bind to canonical source-evidence bytes or validated builder JSON.
 - Detached artifacts and shard shares are handled in memory. The CLI zeroizes rewritten shard buffers and parsed shard shares best-effort after use, but Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
 
+### `qv reshare --shards <glob-or-file> ... --n <int> --k <int> [options]`
+
+Produces a same-state successor cohort from a predecessor QVqcont-7 cohort. Reshare preserves exact canonical archive-state bytes, `archiveId`, and `stateId`; rotates the cohort binding and `cohortId`; appends a transition record to the lifecycle bundle; and embeds the updated bundle into every successor shard. The CLI wraps `src/core/crypto/qcont/lifecycle-shard.js#reshareSameState`.
+
+Options:
+
+- `--shards <glob-or-file>` repeatable; selects predecessor successor-lifecycle shards
+- `--n <int>` and `--k <int>` required successor Reed-Solomon geometry
+- `--bundle <file>` optional explicit predecessor lifecycle bundle; required when embedded predecessor bundle digests are ambiguous
+- `--archive-id <hex>`, `--state-id <hex>`, `--cohort-id <hex>`, `--bundle-digest <hex>` explicit predecessor selection pins
+- `--reason-code <string>`, `--operator-role <string>`, `--notes <string>`, `--performed-at <iso8601>` transition-record fields
+- `--maintenance-sig <file>`, `--maintenance-pqpk <file>`, `--maintenance-ots <file>` optional same-run maintenance evidence import for the newly emitted transition record
+- `--out <dir>` defaults to `./reshared-shards`
+- `--force` allows overwriting output files
+- `--json` emits one JSON document on stdout
+
+Output:
+
+- successor `.qcont` shards with mode `0600` best-effort
+- `archive-state.json` and `cohort-binding.json` sidecars
+- `lifecycle-bundle.json` with mode `0600` best-effort
+- `transition-record.json`, the maintenance signing target
+
+Exit status:
+
+- `0` when the successor cohort and sidecars were written
+- `2` for usage errors or refused overwrite
+- `7` for unsupported RS/Shamir geometry or unreachable predecessor quorum
+- `8` for same-run maintenance signature, signer-key, or timestamp import failure
+- `9` for ambiguous predecessor cohort or lifecycle-bundle selection
+- `10` for same-state contract violations or forbidden archive-state override attempts
+- `1` for other failures
+
+`--json` output shape:
+
+```json
+{
+  "command": "reshare",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "archiveId": "hex",
+  "stateId": "hex",
+  "predecessorCohortId": "hex",
+  "cohortId": "hex",
+  "predecessorLifecycleBundleDigestHex": "hex",
+  "predecessorLifecycleBundleSource": "embedded-lifecycle-bundle",
+  "archiveStateBytesPath": "string",
+  "archiveStateDigestHex": "hex",
+  "cohortBindingBytesPath": "string",
+  "cohortBindingDigestHex": "hex",
+  "transitionRecordPath": "string",
+  "transitionRecordDigestHex": "hex",
+  "lifecycleBundlePath": "string",
+  "lifecycleBundleDigestHex": "hex",
+  "shards": [
+    { "index": 0, "path": "string", "shardDigestHex": "hex", "shardSize": 12345 }
+  ],
+  "verificationReport": {
+    "invalidShareIndices": [],
+    "corruptedShardIndices": [],
+    "missingShardIndices": [],
+    "privateKeyHashMatchesMetadata": true
+  },
+  "maintenanceSignatureCountAdded": 0,
+  "operationalWarnings": [],
+  "semantics": {
+    "sameStateAvailabilityMaintenance": true,
+    "archiveReapprovalPerformed": false,
+    "plaintextDecrypted": false,
+    "sourceEvidenceCreated": false,
+    "compromiseRepairClaimed": false
+  },
+  "zeroization": {
+    "attempted": true,
+    "privateKeyBytesCleared": true,
+    "shareCopiesCleared": true
+  }
+}
+```
+
+Security notes:
+
+- Reshare reconstructs predecessor `.qenc` and private-key material in memory through core lifecycle code. The CLI surfaces core's `zeroization` report verbatim and zeroizes parsed predecessor share buffers best-effort after use.
+- Same-state resharing is availability maintenance only. It does not reapprove the archive state, does not decrypt plaintext, does not create source evidence, and does not repair a leaked predecessor quorum.
+- The CLI rejects flags that would override archive-state semantics (`--archive-state`, `--qenc-hash`, auth-policy overrides, nonce/KDF overrides, and related fields) with `RESHARE_CONTRACT_VIOLATION`.
+- `--performed-at` is only used when explicitly provided. Otherwise the CLI lets core create the transition timestamp and writes the exact canonical transition record emitted by core.
+- Because successor cohort generation is randomized, operators normally sign the emitted `transition-record.json` after reshare and import that detached maintenance signature later with `qv attach`.
+
 ### `qv inspect <artifact-file> [--json]`
 
 Classifies an artifact, reports its version, and prints canonical JSON plus a SHA3-512 digest.
@@ -577,7 +666,7 @@ All commands emit this shape on failure when `--json` is passed:
 
 ```json
 {
-  "command": "keygen|encrypt|decrypt|split|attach|inspect|canonicalize|verify|restore",
+  "command": "keygen|encrypt|decrypt|split|attach|reshare|inspect|canonicalize|verify|restore",
   "ok": false,
   "cliSchemaVersion": 1,
   "error": "message",
@@ -592,6 +681,7 @@ npm run cli -- inspect docs/schema/fixtures/qv-archive-state-descriptor-v1.valid
 npm run cli -- keygen --out ./keys --json
 npm run cli -- canonicalize docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json
 npm run cli -- attach --shards '/path/to/shards/**/*.qcont' --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --out-bundle /path/to/attached.lifecycle-bundle.json --out-shards /path/to/attached-shards --json
+npm run cli -- reshare --shards '/path/to/shards/**/*.qcont' --n 5 --k 3 --out /path/to/reshared-shards --performed-at 2026-03-25T12:34:56.000Z --json
 npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json
 ```

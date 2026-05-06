@@ -40,6 +40,11 @@ import {
   runAttachCommand,
 } from './commands/attach.js';
 import {
+  parseReshareArgs,
+  renderReshareSummary,
+  runReshareCommand,
+} from './commands/reshare.js';
+import {
   parseVerifyArgs,
   renderVerifySummary,
   runVerifyCommand,
@@ -62,6 +67,7 @@ export {
   runInspectCommand,
   runKeygenCommand,
   runAttachCommand,
+  runReshareCommand,
   runRestoreDryRunCommand,
   runSplitCommand,
   runVerifyCommand,
@@ -79,6 +85,7 @@ function helpText() {
     '  qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
     '  qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
     '  qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
+    '  qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
@@ -90,6 +97,7 @@ function helpText() {
     '  decrypt writes plaintext files and can explicitly extract authenticated .qvpack payloads',
     '  split writes QVqcont-7 shards plus archive-state, cohort-binding, and lifecycle-bundle JSON',
     '  attach writes updated lifecycle-bundle JSON and can rewrite successor shards with the bundle embedded',
+    '  reshare writes a same-state successor cohort plus transition and lifecycle-bundle JSON',
     '  restore is read-only and requires --dry-run',
     '  write-mode restore is not yet available',
     '',
@@ -175,6 +183,17 @@ export async function runQvCli(argv, {
         writeJson(stdout, withCliJsonEnvelope(report));
       } else {
         writeText(stdout, renderAttachSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'reshare') {
+      const options = parseReshareArgs(args);
+      const report = await runReshareCommand(options, { cwd });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderReshareSummary(report));
       }
       return EXIT.OK;
     }

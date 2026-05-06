@@ -31,6 +31,10 @@ const commandContracts = Object.freeze([
     exports: ['parseAttachArgs', 'renderAttachSummary', 'runAttachCommand'],
   },
   {
+    modulePath: '../../src/core/cli/commands/reshare.js',
+    exports: ['parseReshareArgs', 'renderReshareSummary', 'runReshareCommand'],
+  },
+  {
     modulePath: '../../src/core/cli/lib/exit.js',
     exports: ['getErrorQvCode', 'makeQvError', 'mapErrorToExitCode'],
   },
@@ -76,6 +80,7 @@ test('top-level CLI module preserves public Phase 1 exports', async () => {
     'runCanonicalizeCommand',
     'runInspectCommand',
     'runQvCli',
+    'runReshareCommand',
     'runRestoreDryRunCommand',
     'runSplitCommand',
     'runVerifyCommand',
