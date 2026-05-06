@@ -14,6 +14,11 @@ import {
   runKeygenCommand,
 } from './commands/keygen.js';
 import {
+  parseEncryptArgs,
+  renderEncryptSummary,
+  runEncryptCommand,
+} from './commands/encrypt.js';
+import {
   parseRestoreArgs,
   renderRestoreSummary,
   restoreDryRunFromInputs,
@@ -37,6 +42,7 @@ import { EXIT, mapErrorToExitCode } from './lib/exit.js';
 export {
   restoreDryRunFromInputs,
   runCanonicalizeCommand,
+  runEncryptCommand,
   runInspectCommand,
   runKeygenCommand,
   runRestoreDryRunCommand,
@@ -50,6 +56,8 @@ function helpText() {
     '',
     'Commands:',
     '  qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
+    '  qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]',
+    '  qv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
@@ -57,8 +65,9 @@ function helpText() {
     '',
     'Current write scope:',
     '  keygen writes ML-KEM-1024 .qkey files',
+    '  encrypt writes .qenc containers and can pre-pack multiple files as .qvpack payloads',
     '  restore is read-only and requires --dry-run',
-    '  encrypt, decrypt, split, attach, and write-mode restore are not yet available',
+    '  decrypt, split, attach, and write-mode restore are not yet available',
     '',
   ].join('\n');
 }
@@ -96,6 +105,17 @@ export async function runQvCli(argv, {
         if (options.printPublic) {
           writeText(stdout, `${publicKeyBase64}\n`);
         }
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'encrypt') {
+      const options = parseEncryptArgs(args);
+      const report = await runEncryptCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderEncryptSummary(report));
       }
       return EXIT.OK;
     }

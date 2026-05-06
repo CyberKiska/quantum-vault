@@ -1,14 +1,15 @@
 # Quantum Vault CLI
 
-Quantum Vault ships a Node.js CLI with key generation plus read-only lifecycle inspection and restore assessment:
+Quantum Vault ships a Node.js CLI with key generation, encryption, and read-only lifecycle inspection and restore assessment:
 
 - `qv keygen`
+- `qv encrypt`
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
 - `qv restore --dry-run`
 
-Encryption, decryption, split, attach, reshare, and write-mode restore are still being added.
+Decryption, split, attach, reshare, and write-mode restore are still being added.
 
 ## Install / Run
 
@@ -69,6 +70,70 @@ Security notes:
 - `privateKey.qkey` is written with mode `0600` best-effort.
 - `publicKey.qkey` is written with mode `0644` best-effort.
 - The CLI zeroizes private-key buffers in a `finally` block, but Node.js memory zeroization is best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
+
+### `qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]`
+
+Encrypts one plaintext file under an ML-KEM-1024 public key and writes a `.qenc` container using the same `src/core/crypto/index.js#encryptFile` implementation as the browser.
+
+Options:
+
+- `<input-file>` required for single-file encryption
+- `--public-key <publicKey.qkey>` required raw ML-KEM-1024 public key
+- `--out <output.qenc>` required output path; the parent directory must already exist
+- `--filename <name>` optional private metadata filename override; path separators and NUL are rejected
+- `--force` allows overwriting an existing output file
+- `--json` emits one JSON document on stdout
+
+Multi-file payloads:
+
+```bash
+qv encrypt --pack <file-a> <file-b> [...] --public-key publicKey.qkey --out bundle.qenc --filename bundle.qvpack
+```
+
+`--pack` builds a pre-encryption `.qvpack` payload with magic `QVB1`, then encrypts that payload into a normal `.qenc` container. Pack entry names are `basename()` values only, duplicate basenames are rejected, and `--filename` must end with `.qvpack`. An existing `.qvpack` file can also be passed as the single input; the CLI recognizes it by `QVB1` magic for reporting. Restore tooling must detect a decrypted pack by `QVB1` magic, not by filename alone.
+
+Exit status:
+
+- `0` when the container was written
+- `2` for usage errors, including missing flags, duplicate pack entry names, or refused overwrite
+- `4` for format/policy rejection, including payloads above `MAX_FILE_SIZE`
+- `5` for invalid public key material
+- `1` for other failures
+
+`--json` output shape:
+
+```json
+{
+  "command": "encrypt",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "alg": { "KEM": "ML-KEM-1024", "KDF": "KMAC256", "AEAD": "AES-256-GCM" },
+  "inputPath": "string|null",
+  "inputPaths": ["string"],
+  "outputPath": "string",
+  "publicKeyPath": "string",
+  "fmt": "QVv1-5-0",
+  "aeadMode": "single-container-aead",
+  "chunkSize": 4194304,
+  "chunkCount": 1,
+  "payloadLength": 12345,
+  "plaintextLength": 123,
+  "inputLength": 123,
+  "containerHashAlg": "SHA3-512",
+  "containerHashHex": "hex",
+  "containerId": "hex",
+  "fileHashHex": "hex",
+  "originalFilename": "input.bin",
+  "payloadKind": "file|qvpack",
+  "fileCount": 1
+}
+```
+
+Security notes:
+
+- The CLI reads plaintext into memory and calls `encryptFile`; true streaming I/O is not added in this phase.
+- Plaintext buffers are zeroized in `finally` after encryption or failure, but Node.js memory zeroization is best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
+- Container hashes and plaintext hashes use SHA3-512 and are computed over exact bytes.
 
 ### `qv inspect <artifact-file> [--json]`
 
