@@ -5,12 +5,13 @@ Quantum Vault ships a Node.js CLI with key generation, encryption, and read-only
 - `qv keygen`
 - `qv encrypt`
 - `qv decrypt`
+- `qv split`
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
 - `qv restore --dry-run`
 
-Split, attach, reshare, and write-mode restore are still being added.
+Attach, reshare, and write-mode restore are still being added.
 
 ## Install / Run
 
@@ -203,6 +204,93 @@ Security notes:
 - The private key is read through the shared CLI secret reader and zeroized with best-effort `Uint8Array.fill(0)` after use.
 - The plaintext `Blob` is converted to one `Uint8Array`, written, and zeroized before return.
 - Authentication failures use a fixed message and `qvCode: "AEAD_FAILED"` so diagnostics do not reveal key material or decrypted bytes.
+
+### `qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]`
+
+Builds a successor lifecycle cohort of QVqcont-7 shards from a `.qenc` container and the matching ML-KEM-1024 private key. Split uses `src/core/crypto/qcont/lifecycle-shard.js#buildLifecycleQcontShards` and the vendored Reed-Solomon runtime loaded by the CLI; no new dependency or network path is introduced.
+
+Private key sources, exactly one required:
+
+- `--private-key <privateKey.qkey>`
+- `--private-key-stdin`
+
+Required geometry:
+
+- `--n <int>` shard count
+- `--k <int>` Reed-Solomon data threshold
+
+The runtime-supported tuple is validated by core lifecycle code. For the current codec, parity must be even and `t = k + ((n - k) / 2)`.
+
+Output:
+
+- `--out <dir>` output directory; defaults to `./shards` and is created if its parent exists
+- shard names mirror the browser convention: `<input-basename>.partN-of-M.qcont`
+- sidecar JSON names are `<input-basename>.archive-state.json`, `<input-basename>.cohort-binding.json`, and `<input-basename>.lifecycle-bundle.json`
+- `.qcont` shards are written with mode `0600` best-effort
+- sidecar JSON artifacts are canonical bytes from core and are written with mode `0644` best-effort
+
+Archive policy options:
+
+- `--auth-policy-level <integrity-only|any-signature|strong-pq-signature>`
+- `--min-valid-signatures <int>`, default `1`
+
+Internal deterministic fixture options are accepted but intentionally hidden from the short help:
+
+- `--archive-id <64 lowercase hex>`
+- `--archive-id-random <64 hex chars>`
+- `--parent-state-id <128 lowercase hex>`
+- `--state-type <string>`
+
+Exit status:
+
+- `0` when all artifacts were written
+- `2` for usage errors or refused overwrite
+- `4` for malformed `.qenc` format/policy rejection
+- `5` for invalid private key length or private key/container mismatch
+- `7` for unsupported RS/Shamir geometry
+- `1` for other failures
+
+`--json` output shape:
+
+```json
+{
+  "command": "split",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "inputPath": "string",
+  "outDir": "string",
+  "archiveId": "hex",
+  "stateId": "hex",
+  "cohortId": "hex",
+  "n": 5,
+  "k": 3,
+  "m": 2,
+  "t": 4,
+  "rsCodecId": "QV-RS-ErasureCodes-v1",
+  "shamir": { "n": 5, "t": 4 },
+  "authPolicy": { "level": "integrity-only", "minValidSignatures": 1 },
+  "archiveStateBytesPath": "string",
+  "archiveStateDigestHex": "hex",
+  "cohortBindingBytesPath": "string",
+  "cohortBindingDigestHex": "hex",
+  "lifecycleBundleBytesPath": "string",
+  "lifecycleBundleDigestHex": "hex",
+  "shards": [
+    { "index": 0, "path": "string", "shardDigestHex": "hex", "shardSize": 12345 }
+  ],
+  "fmt": "QVqcont-7",
+  "containerHashAlg": "SHA3-512",
+  "containerHashHex": "hex",
+  "containerId": "hex",
+  "privateKeyHashHex": "hex"
+}
+```
+
+Security notes:
+
+- The CLI validates the private key size before split and core verifies the `.qenc` key commitment before shard generation.
+- Output paths are preflighted before any artifact write unless `--force` is supplied.
+- The loaded private key, input container buffer, and emitted shard byte buffers are zeroized best-effort after write/report construction. Node.js memory zeroization remains best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
 
 ### `qv inspect <artifact-file> [--json]`
 

@@ -30,6 +30,11 @@ import {
   runRestoreDryRunCommand,
 } from './commands/restore-dry-run.js';
 import {
+  parseSplitArgs,
+  renderSplitSummary,
+  runSplitCommand,
+} from './commands/split.js';
+import {
   parseVerifyArgs,
   renderVerifySummary,
   runVerifyCommand,
@@ -52,6 +57,7 @@ export {
   runInspectCommand,
   runKeygenCommand,
   runRestoreDryRunCommand,
+  runSplitCommand,
   runVerifyCommand,
   verifyArchiveInputs,
 };
@@ -65,6 +71,7 @@ function helpText() {
     '  qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]',
     '  qv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
     '  qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
+    '  qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
@@ -74,8 +81,9 @@ function helpText() {
     '  keygen writes ML-KEM-1024 .qkey files',
     '  encrypt writes .qenc containers and can pre-pack multiple files as .qvpack payloads',
     '  decrypt writes plaintext files and can explicitly extract authenticated .qvpack payloads',
+    '  split writes QVqcont-7 shards plus archive-state, cohort-binding, and lifecycle-bundle JSON',
     '  restore is read-only and requires --dry-run',
-    '  split, attach, and write-mode restore are not yet available',
+    '  attach and write-mode restore are not yet available',
     '',
   ].join('\n');
 }
@@ -137,6 +145,17 @@ export async function runQvCli(argv, {
         writeJson(stdout, withCliJsonEnvelope(report));
       } else {
         writeText(stdout, renderDecryptSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'split') {
+      const options = parseSplitArgs(args);
+      const report = await runSplitCommand(options, { stdin, cwd });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderSplitSummary(report));
       }
       return EXIT.OK;
     }

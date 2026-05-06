@@ -23,6 +23,10 @@ const commandContracts = Object.freeze([
     exports: ['parseRestoreArgs', 'renderRestoreSummary', 'restoreDryRunFromInputs', 'runRestoreDryRunCommand'],
   },
   {
+    modulePath: '../../src/core/cli/commands/split.js',
+    exports: ['parseSplitArgs', 'renderSplitSummary', 'runSplitCommand'],
+  },
+  {
     modulePath: '../../src/core/cli/lib/exit.js',
     exports: ['getErrorQvCode', 'makeQvError', 'mapErrorToExitCode'],
   },
@@ -68,6 +72,7 @@ test('top-level CLI module preserves public Phase 1 exports', async () => {
     'runInspectCommand',
     'runQvCli',
     'runRestoreDryRunCommand',
+    'runSplitCommand',
     'runVerifyCommand',
     'verifyArchiveInputs',
   ]) {
