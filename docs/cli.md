@@ -4,12 +4,13 @@ Quantum Vault ships a Node.js CLI with key generation, encryption, and read-only
 
 - `qv keygen`
 - `qv encrypt`
+- `qv decrypt`
 - `qv inspect`
 - `qv canonicalize`
 - `qv verify`
 - `qv restore --dry-run`
 
-Decryption, split, attach, reshare, and write-mode restore are still being added.
+Split, attach, reshare, and write-mode restore are still being added.
 
 ## Install / Run
 
@@ -134,6 +135,74 @@ Security notes:
 - The CLI reads plaintext into memory and calls `encryptFile`; true streaming I/O is not added in this phase.
 - Plaintext buffers are zeroized in `finally` after encryption or failure, but Node.js memory zeroization is best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
 - Container hashes and plaintext hashes use SHA3-512 and are computed over exact bytes.
+
+### `qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--force] [--json]`
+
+Decrypts a `.qenc` container with an ML-KEM-1024 private key and writes plaintext with mode `0600` best-effort. Decryption uses the same `src/core/crypto/index.js#decryptFile` implementation as the browser.
+
+Private key sources, exactly one required:
+
+- `--private-key <privateKey.qkey>`
+- `--private-key-stdin`
+- `--private-key-env <ENV_NAME>`, where the environment variable contains a file path, not raw key bytes
+
+Output path selection:
+
+- `--out <file>` writes exactly that file
+- `--out-dir <dir>` writes `<dir>/<originalFilename>` after strict filename sanitization
+- `--use-original-filename` writes the sanitized recovered filename next to the input when `--out-dir` is not supplied
+- no output option writes `<input.qenc>.decrypted`
+
+`.qvpack` payloads:
+
+- By default, a decrypted `.qvpack` payload is written as exact `QVB1` bundle bytes.
+- `--extract-qvpack --out-dir <dir>` requires an authenticated `QVB1` payload and writes each pack entry as a separate `0600` file.
+- Extracted entry names are sanitized again: no path separators, no leading dot, no NUL/control bytes, and no overlong UTF-8 filename.
+
+Exit status:
+
+- `0` when plaintext was written
+- `2` for usage errors, including conflicting output flags, unsafe recovered names, or refused overwrite
+- `4` for format/policy rejection, including malformed containers or malformed `.qvpack` payloads
+- `5` for invalid private key length
+- `6` for AEAD/key-commitment/authentication failure
+- `11` for restored plaintext hash mismatch against authenticated private metadata
+- `1` for other failures
+
+`--json` output shape:
+
+```json
+{
+  "command": "decrypt",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "inputPath": "string",
+  "outputPath": "string|null",
+  "outputPaths": ["string"],
+  "alg": { "KEM": "ML-KEM-1024", "KDF": "KMAC256", "AEAD": "AES-256-GCM" },
+  "fmt": "QVv1-5-0",
+  "aeadMode": "single-container-aead",
+  "chunkSize": 4194304,
+  "chunkCount": 1,
+  "payloadLength": 12345,
+  "plaintextLength": 123,
+  "originalFilename": "input.bin",
+  "fileHashHex": "hex",
+  "containerHashAlg": "SHA3-512",
+  "containerHashHex": "hex",
+  "containerId": "hex",
+  "payloadKind": "file|qvpack",
+  "fileCount": 1,
+  "qvpackExtracted": false,
+  "qvpackEntries": []
+}
+```
+
+Security notes:
+
+- The private key is read through the shared CLI secret reader and zeroized with best-effort `Uint8Array.fill(0)` after use.
+- The plaintext `Blob` is converted to one `Uint8Array`, written, and zeroized before return.
+- Authentication failures use a fixed message and `qvCode: "AEAD_FAILED"` so diagnostics do not reveal key material or decrypted bytes.
 
 ### `qv inspect <artifact-file> [--json]`
 

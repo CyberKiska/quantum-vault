@@ -19,6 +19,11 @@ import {
   runEncryptCommand,
 } from './commands/encrypt.js';
 import {
+  parseDecryptArgs,
+  renderDecryptSummary,
+  runDecryptCommand,
+} from './commands/decrypt.js';
+import {
   parseRestoreArgs,
   renderRestoreSummary,
   restoreDryRunFromInputs,
@@ -42,6 +47,7 @@ import { EXIT, mapErrorToExitCode } from './lib/exit.js';
 export {
   restoreDryRunFromInputs,
   runCanonicalizeCommand,
+  runDecryptCommand,
   runEncryptCommand,
   runInspectCommand,
   runKeygenCommand,
@@ -58,6 +64,7 @@ function helpText() {
     '  qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
     '  qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]',
     '  qv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
+    '  qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
@@ -66,8 +73,9 @@ function helpText() {
     'Current write scope:',
     '  keygen writes ML-KEM-1024 .qkey files',
     '  encrypt writes .qenc containers and can pre-pack multiple files as .qvpack payloads',
+    '  decrypt writes plaintext files and can explicitly extract authenticated .qvpack payloads',
     '  restore is read-only and requires --dry-run',
-    '  decrypt, split, attach, and write-mode restore are not yet available',
+    '  split, attach, and write-mode restore are not yet available',
     '',
   ].join('\n');
 }
@@ -79,8 +87,10 @@ function formatCliError(command, error) {
 
 export async function runQvCli(argv, {
   cwd = process.cwd(),
+  stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
+  env = process.env,
 } = {}) {
   const args = [...argv];
   const command = String(args.shift() || '').trim();
@@ -116,6 +126,17 @@ export async function runQvCli(argv, {
         writeJson(stdout, withCliJsonEnvelope(report));
       } else {
         writeText(stdout, renderEncryptSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'decrypt') {
+      const options = parseDecryptArgs(args);
+      const report = await runDecryptCommand(options, { stdin, env });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderDecryptSummary(report));
       }
       return EXIT.OK;
     }
