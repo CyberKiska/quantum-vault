@@ -542,13 +542,15 @@ Options:
 - `--pqpk <file>` repeatable
 - `--ots <file>` repeatable
 - `--ed25519-signer <address>`
+- `--include-detached-summary` adds a byte-free detached-signature summary for automation
+- `--required-policy-level <integrity-only|any-signature|strong-pq-signature>` fails closed unless the bundle-declared policy is at least that strong and satisfied
 
 Exit status:
 
-- `0` when archive policy is satisfied
+- `0` when archive policy is satisfied and any requested `--required-policy-level` is satisfied
 - `1` otherwise
 
-When `--bundle` is present, `--json` emits the same authenticity object shape produced by browser restore for the same inputs.
+When `--bundle` is present and no extension flags are supplied, `--json` emits the same authenticity object shape produced by browser restore for the same inputs. The extension flags only add fields; they do not remove or weaken existing authenticity data.
 
 Stable top-level fields:
 
@@ -597,6 +599,50 @@ Stable top-level fields:
   }
 }
 ```
+
+When `--required-policy-level` is supplied, `--json` also includes:
+
+```json
+{
+  "requiredPolicy": {
+    "level": "strong-pq-signature",
+    "declaredPolicyLevel": "integrity-only",
+    "declaredPolicySatisfiesRequired": false,
+    "archivePolicySatisfied": true,
+    "satisfied": false,
+    "reason": "Archive policy level integrity-only is weaker than required policy level strong-pq-signature."
+  }
+}
+```
+
+When `--include-detached-summary` is supplied, `--json` also includes a byte-free `detachedSummary` array:
+
+```json
+{
+  "detachedSummary": [
+    {
+      "id": "sig-...",
+      "name": "archive.qsig",
+      "source": "bundle",
+      "family": "archive-approval",
+      "format": "qsig",
+      "ok": true,
+      "targetType": "archive-state",
+      "targetRef": "state:<stateId>",
+      "signatureContentDigestHex": "hex",
+      "proofIdentityDigestHex": "hex|null",
+      "otsStampedDigestHex": "hex|null",
+      "transitionIndex": null,
+      "maintenancePurposeLabels": []
+    }
+  ]
+}
+```
+
+Security notes:
+
+- `--required-policy-level` only tightens verification. It cannot downgrade the bundle-declared policy and cannot turn an unsatisfied archive policy into success.
+- `--include-detached-summary` intentionally omits detached signature bytes; use the original artifacts for byte-level archival.
 
 Bundleless verification behavior:
 
@@ -812,6 +858,7 @@ npm run cli -- canonicalize docs/schema/fixtures/qv-archive-state-descriptor-v1.
 npm run cli -- attach --shards '/path/to/shards/**/*.qcont' --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --out-bundle /path/to/attached.lifecycle-bundle.json --out-shards /path/to/attached-shards --json
 npm run cli -- reshare --shards '/path/to/shards/**/*.qcont' --n 5 --k 3 --out /path/to/reshared-shards --performed-at 2026-03-25T12:34:56.000Z --json
 npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --sig /path/to/archive.qsig --pqpk /path/to/archive.pqpk --ots /path/to/archive.ots --json
+npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bundle.json --required-policy-level strong-pq-signature --include-detached-summary --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --out /path/to/recovered --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --out /path/to/recovered --decrypt --out-plaintext /path/to/plaintext.bin --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json

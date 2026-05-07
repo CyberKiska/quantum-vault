@@ -16,7 +16,7 @@ const commandContracts = Object.freeze([
   },
   {
     modulePath: '../../src/core/cli/commands/verify.js',
-    exports: ['parseVerifyArgs', 'renderVerifySummary', 'runVerifyCommand', 'verifyArchiveInputs'],
+    exports: ['buildVerifyReport', 'parseVerifyArgs', 'renderVerifySummary', 'runVerifyCommand', 'verifyArchiveInputs', 'verifyReportSatisfied'],
   },
   {
     modulePath: '../../src/core/cli/commands/selftest.js',
@@ -95,6 +95,7 @@ test('top-level CLI module preserves public Phase 1 exports', async () => {
     'runSplitCommand',
     'runVersionCommand',
     'runVerifyCommand',
+    'verifyReportSatisfied',
     'verifyArchiveInputs',
   ]) {
     assert.equal(typeof moduleExports[exportName], 'function', `qv.js exports ${exportName}`);

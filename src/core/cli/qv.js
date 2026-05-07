@@ -49,6 +49,7 @@ import {
   parseVerifyArgs,
   renderVerifySummary,
   runVerifyCommand,
+  verifyReportSatisfied,
   verifyArchiveInputs,
 } from './commands/verify.js';
 import {
@@ -85,6 +86,7 @@ export {
   runSplitCommand,
   runVersionCommand,
   runVerifyCommand,
+  verifyReportSatisfied,
   verifyArchiveInputs,
 };
 
@@ -102,7 +104,7 @@ function helpText() {
     '  qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
-    '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
+    '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--include-detached-summary] [--required-policy-level <level>] [--json]',
     '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
     '  qv selftest [--filter <substring>] [--json]',
     '  qv version [--json]',
@@ -240,7 +242,7 @@ export async function runQvCli(argv, {
     if (command === 'verify') {
       const options = parseVerifyArgs(args);
       const authenticity = await runVerifyCommand(options);
-      const policySatisfied = authenticity?.policy?.satisfied === true;
+      const policySatisfied = verifyReportSatisfied(authenticity);
       if (options.json) {
         writeJson(stdout, withCliJsonEnvelope(authenticity, {
           command: 'verify',

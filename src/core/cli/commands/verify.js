@@ -6,6 +6,17 @@ import {
   readOptionalBytes,
 } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
+import { QV_CODE, makeQvError } from '../lib/exit.js';
+
+const POLICY_STRENGTH = Object.freeze({
+  'integrity-only': 0,
+  'any-signature': 1,
+  'strong-pq-signature': 2,
+});
+
+function usage(message) {
+  return makeQvError(message, QV_CODE.USAGE);
+}
 
 function formatVerifyStatusMessage(status = {}) {
   if (status.archiveApprovalSignatureVerified !== true) {
@@ -25,7 +36,7 @@ function formatVerifyStatusMessage(status = {}) {
 
 export function parseVerifyArgs(args) {
   if (args.length === 0) {
-    throw new Error('verify requires <archive-state.json>');
+    throw usage('verify requires <archive-state.json>');
   }
   const archiveStatePath = args[0];
   const options = {
@@ -35,6 +46,8 @@ export function parseVerifyArgs(args) {
     pqpkPaths: [],
     otsPaths: [],
     expectedEd25519Signer: '',
+    includeDetachedSummary: false,
+    requiredPolicyLevel: '',
     json: false,
   };
 
@@ -61,14 +74,29 @@ export function parseVerifyArgs(args) {
         options.expectedEd25519Signer = takeValue(args, index, arg);
         index += 1;
         break;
+      case '--include-detached-summary':
+        options.includeDetachedSummary = true;
+        break;
+      case '--required-policy-level':
+        options.requiredPolicyLevel = normalizePolicyLevel(takeValue(args, index, arg), '--required-policy-level');
+        index += 1;
+        break;
       case '--json':
         options.json = true;
         break;
       default:
-        throw new Error(`Unknown verify option: ${arg}`);
+        throw usage(`Unknown verify option: ${arg}`);
     }
   }
   return options;
+}
+
+function normalizePolicyLevel(value, field) {
+  const text = String(value || '').trim();
+  if (!Object.hasOwn(POLICY_STRENGTH, text)) {
+    throw usage(`${field} must be one of integrity-only, any-signature, strong-pq-signature`);
+  }
+  return text;
 }
 
 export async function readVerificationInputsFromPaths({
@@ -116,7 +144,77 @@ export async function verifyArchiveInputs({
 
 export async function runVerifyCommand(options) {
   const inputs = await readVerificationInputsFromPaths(options);
-  return verifyArchiveInputs(inputs);
+  const authenticity = await verifyArchiveInputs(inputs);
+  return buildVerifyReport(authenticity, options);
+}
+
+function buildDetachedSummary(authenticity) {
+  const artifacts = Array.isArray(authenticity?.verification?.signatureArtifacts)
+    ? authenticity.verification.signatureArtifacts
+    : [];
+  return artifacts.map((artifact) => ({
+    id: artifact.id || null,
+    name: artifact.name || null,
+    source: artifact.source || null,
+    family: artifact.family || null,
+    format: artifact.format || null,
+    ok: artifact.ok === true,
+    targetType: artifact.targetType || null,
+    targetRef: artifact.targetRef || null,
+    signatureContentDigestHex: artifact.signatureContentDigestHex || null,
+    proofIdentityDigestHex: artifact.proofIdentityDigestHex || null,
+    otsStampedDigestHex: artifact.otsStampedDigestHex || null,
+    transitionIndex: Number.isInteger(artifact.transitionIndex) ? artifact.transitionIndex : null,
+    maintenancePurposeLabels: Array.isArray(artifact.maintenancePurposeLabels)
+      ? [...artifact.maintenancePurposeLabels]
+      : [],
+  }));
+}
+
+function evaluateRequiredPolicy(authenticity, requiredPolicyLevel) {
+  if (!requiredPolicyLevel) return null;
+  const declaredLevel = String(authenticity?.policy?.level || '');
+  const declaredStrength = POLICY_STRENGTH[declaredLevel];
+  const requiredStrength = POLICY_STRENGTH[requiredPolicyLevel];
+  const declaredKnown = Number.isInteger(declaredStrength);
+  const declaredAtLeastRequired = declaredKnown && declaredStrength >= requiredStrength;
+  const archivePolicySatisfied = authenticity?.policy?.satisfied === true;
+  const satisfied = archivePolicySatisfied && declaredAtLeastRequired;
+  return {
+    level: requiredPolicyLevel,
+    declaredPolicyLevel: declaredLevel || 'unknown',
+    declaredPolicySatisfiesRequired: declaredAtLeastRequired,
+    archivePolicySatisfied,
+    satisfied,
+    reason: satisfied
+      ? `Archive policy satisfies required policy level ${requiredPolicyLevel}.`
+      : (
+          archivePolicySatisfied
+            ? `Archive policy level ${declaredLevel || 'unknown'} is weaker than required policy level ${requiredPolicyLevel}.`
+            : `Archive policy did not satisfy its declared level ${declaredLevel || 'unknown'}.`
+        ),
+  };
+}
+
+export function buildVerifyReport(authenticity, options = {}) {
+  const requiredPolicy = evaluateRequiredPolicy(authenticity, options.requiredPolicyLevel);
+  const report = {
+    ...authenticity,
+  };
+  if (requiredPolicy) {
+    report.requiredPolicy = requiredPolicy;
+  }
+  if (options.includeDetachedSummary) {
+    report.detachedSummary = buildDetachedSummary(authenticity);
+  }
+  return report;
+}
+
+export function verifyReportSatisfied(report) {
+  return (
+    report?.policy?.satisfied === true &&
+    report?.requiredPolicy?.satisfied !== false
+  );
 }
 
 export function renderVerifySummary(authenticity) {
@@ -129,6 +227,12 @@ export function renderVerifySummary(authenticity) {
     `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}`,
     `Detached totals: valid=${counts.validTotal ?? 0}, maintenance=${counts.validMaintenance ?? 0}, source-evidence=${counts.validSourceEvidence ?? 0}`,
   ];
+  if (authenticity?.requiredPolicy) {
+    lines.push(`Required policy: ${authenticity.requiredPolicy.level} (${authenticity.requiredPolicy.satisfied ? 'satisfied' : 'not satisfied'})`);
+  }
+  if (Array.isArray(authenticity?.detachedSummary)) {
+    lines.push(`Detached summary entries: ${authenticity.detachedSummary.length}`);
+  }
   for (const warning of authenticity?.warnings || []) {
     lines.push(`Warning: ${warning}`);
   }
