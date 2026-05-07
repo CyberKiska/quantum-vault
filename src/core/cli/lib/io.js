@@ -29,6 +29,8 @@ export async function assertNoSymlinkPath(filePath) {
     cursor = path.join(cursor, part);
     const stats = await lstat(cursor);
     if (stats.isSymbolicLink()) {
+      // macOS exposes /tmp as a root-level symlink to /private/tmp. Keep that
+      // platform alias usable while still refusing symlinks below the root.
       if (path.dirname(cursor) === parsed.root) {
         continue;
       }
@@ -44,6 +46,16 @@ export async function readBytesFromFile(filePath, options = {}) {
   } else {
     await lstat(filePath);
   }
+  if (Number.isSafeInteger(options.maxBytes)) {
+    const stats = await stat(filePath);
+    if (stats.size > options.maxBytes) {
+      const label = options.label || 'Input file';
+      throw makeQvError(
+        `${label} exceeds CLI read limit (${stats.size} > ${options.maxBytes} bytes): ${filePath}`,
+        QV_CODE.FORMAT_POLICY_REJECT,
+      );
+    }
+  }
   return new Uint8Array(await readFile(filePath));
 }
 
@@ -56,9 +68,9 @@ export function makeExternalArtifactRecord(filePath, bytes) {
   };
 }
 
-export async function readOptionalBytes(filePath) {
+export async function readOptionalBytes(filePath, options = {}) {
   if (!filePath) return null;
-  return readBytesFromFile(filePath);
+  return readBytesFromFile(filePath, options);
 }
 
 function bytesToBuffer(bytes) {

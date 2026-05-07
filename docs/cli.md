@@ -34,6 +34,11 @@ Global flags:
 - `--quiet` is accepted for forward compatibility with future stderr progress output
 - `--allow-symlink` permits explicit symlink input paths and symlinked path components; without it, symlink reads fail closed
 
+Filesystem notes:
+
+- File modes are requested modes. The operating system umask may make resulting files more restrictive.
+- Small detached and lifecycle artifacts (`.qsig`, `.pqpk`, `.ots`, lifecycle JSON, source-evidence, and key inputs) are capped at 32 MiB before parsing. `.qenc` and `.qcont` are not subject to that small-artifact cap.
+
 ## Commands
 
 ### `qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]`
@@ -333,7 +338,7 @@ Typed `--sig-import` descriptor example:
 
 Output:
 
-- `--out-bundle <file>` defaults to `./lifecycle-bundle.json`; written with mode `0600` best-effort
+- `--out-bundle <file>` defaults to `./lifecycle-bundle.json`; written with mode `0644` best-effort
 - `--out-shards <dir>` defaults to `./attached-shards`; used when shards are selected and embedding is enabled
 - `--no-embed-into-shards` writes only the updated lifecycle bundle
 - `--force` allows overwriting output files
@@ -406,7 +411,7 @@ Output:
 
 - successor `.qcont` shards with mode `0600` best-effort
 - `archive-state.json` and `cohort-binding.json` sidecars
-- `lifecycle-bundle.json` with mode `0600` best-effort
+- `lifecycle-bundle.json` with mode `0644` best-effort
 - `transition-record.json`, the maintenance signing target
 
 Exit status:
@@ -659,6 +664,14 @@ Bundleless verification behavior:
 - `policy.level` is `"unresolved"`.
 - exit status is `1`.
 
+Fail-closed operator checklist:
+
+- Use `--archive-id`, `--state-id`, `--cohort-id`, and `--bundle-digest` when shard custody may contain multiple cohorts or lifecycle-bundle variants; the CLI does not choose a winner by timestamp, file name, or count.
+- Preserve the exact archive-state descriptor bytes that were approved. Archive-approval signatures verify canonical archive-state bytes, not mutable lifecycle-bundle bytes.
+- Treat lifecycle bundles as mutable evidence carriers. A restore may require explicit bundle selection or `--accept-policy-warnings` when a selected cohort carries multiple embedded bundle digests.
+- Keep `.sig`, `.qsig`, `.pqpk`, and `.ots` target relationships intact. Detached signatures and timestamp proofs are only counted when their explicit target references match the archive-state, transition record, source-evidence object, or signature bytes expected by core verification.
+- Cross-check implementation invariants against [`format-spec.md#91-cli-fail-closed-checklist`](format-spec.md#91-cli-fail-closed-checklist) when scripting ceremonies.
+
 ### `qv restore --shards <glob-or-file> [options] [--dry-run] [--json]`
 
 Restores from a selected QVqcont-7 quorum. Without `--dry-run`, restore writes recovered `.qenc`, private-key, archive-state, and lifecycle-bundle artifacts. With `--dry-run`, it only evaluates whether restore would succeed and writes nothing.
@@ -694,6 +707,7 @@ Exit status:
 - `7` for quorum/RS/Shamir failure
 - `9` for ambiguous archive/state/cohort or lifecycle-bundle selection
 - `11` for restored `.qenc`, private-key, or plaintext integrity failure
+- `12` when restore is otherwise policy-satisfied but the selected cohort embeds multiple lifecycle-bundle digests and `--accept-policy-warnings` was not supplied
 
 `--dry-run --json` output shape remains:
 
@@ -772,7 +786,7 @@ Dry-run guarantees:
 Write-mode security notes:
 
 - Core `restoreFromShards` enforces restore authenticity policy before reconstructing material. Policy failure writes no artifacts.
-- The CLI writes recovered `.qenc` first, then recovered private key with mode `0600` best-effort, then sidecars, then optional plaintext with mode `0600`.
+- The CLI writes recovered `.qenc` first with mode `0644` best-effort, then recovered private key with mode `0600` best-effort, then public sidecars with mode `0644`, then optional plaintext with mode `0600`.
 - Recovered `qencBytes`, `privKey`, optional plaintext bytes, and parsed shard share buffers are zeroized best-effort in `finally` blocks. Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
 - `--decrypt` decrypts with the recovered key still in memory and verifies the authenticated private metadata plaintext hash before writing plaintext.
 

@@ -269,6 +269,12 @@ function decodeEd25519PublicKey(address) {
   return raw;
 }
 
+export function validateStellarEd25519PublicAddress(address) {
+  const normalized = String(address || '').trim();
+  decodeEd25519PublicKey(normalized);
+  return normalized;
+}
+
 async function importEd25519PublicKey(publicBytes) {
   try {
     return await crypto.subtle.importKey('raw', publicBytes, { name: 'Ed25519' }, false, ['verify']);

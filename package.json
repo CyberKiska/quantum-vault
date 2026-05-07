@@ -10,6 +10,15 @@
   "bin": {
     "qv": "./bin/qv.mjs"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "public/third-party/",
+    "docs/cli.md",
+    "docs/schema/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",

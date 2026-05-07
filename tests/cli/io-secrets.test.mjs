@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
-import { writeBytesAtomic, writeJsonAtomic } from '../../src/core/cli/lib/io.js';
+import { readBytesFromFile, writeBytesAtomic, writeJsonAtomic } from '../../src/core/cli/lib/io.js';
 import { readSecretBytes } from '../../src/core/cli/lib/secrets.js';
 
 async function makeTempDir() {
@@ -94,6 +94,34 @@ test('readSecretBytes reads raw bytes from stdin stream', async () => {
   } finally {
     secret.dispose();
   }
+});
+
+test('small artifact readers enforce explicit pre-read byte caps', async () => {
+  const dir = await makeTempDir();
+  const filePath = join(dir, 'oversized.json');
+  await writeFile(filePath, Buffer.from([1, 2]));
+
+  await assert.rejects(
+    readBytesFromFile(filePath, { maxBytes: 1, label: 'Detached artifact' }),
+    { qvCode: 'FORMAT_POLICY_REJECT' },
+  );
+  await assert.rejects(
+    readSecretBytes({
+      stdin: Readable.from([Uint8Array.of(1), Buffer.from([2])]),
+      maxBytes: 1,
+      label: 'Private key input',
+    }),
+    { qvCode: 'FORMAT_POLICY_REJECT' },
+  );
+  await assert.rejects(
+    readSecretBytes({
+      envName: 'QV_PRIV_KEY_PATH',
+      env: { QV_PRIV_KEY_PATH: filePath },
+      maxBytes: 1,
+      label: 'Private key input',
+    }),
+    { qvCode: 'FORMAT_POLICY_REJECT' },
+  );
 });
 
 test('readSecretBytes reads env source as a file path only', async () => {

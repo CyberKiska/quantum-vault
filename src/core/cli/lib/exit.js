@@ -11,6 +11,7 @@ export const EXIT = Object.freeze({
   AMBIGUITY: 9,
   RESHARE_CONTRACT: 10,
   RESTORED_INTEGRITY: 11,
+  RESTORE_VARIANT_ACK: 12,
 });
 
 export const QV_CODE = Object.freeze({
@@ -42,7 +43,21 @@ const QV_CODE_TO_EXIT = Object.freeze({
   [QV_CODE.RESHARE_CONTRACT_VIOLATION]: EXIT.RESHARE_CONTRACT,
   [QV_CODE.RESTORED_INTEGRITY_FAILED]: EXIT.RESTORED_INTEGRITY,
   [QV_CODE.POLICY_NOT_SATISFIED]: EXIT.ERROR,
-  [QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED]: EXIT.ERROR,
+  [QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED]: EXIT.RESTORE_VARIANT_ACK,
+});
+
+const ERROR_KIND_TO_QV_CODE = Object.freeze({
+  'policy-not-satisfied': QV_CODE.POLICY_NOT_SATISFIED,
+  'quorum-unreachable': QV_CODE.QUORUM_UNREACHABLE,
+  'ambiguous-inputs': QV_CODE.AMBIGUOUS_INPUTS,
+  'lifecycle-bundle-ambiguous': QV_CODE.AMBIGUOUS_INPUTS,
+  'restore-lifecycle-variant-ack-required': QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED,
+  'restored-integrity-failed': QV_CODE.RESTORED_INTEGRITY_FAILED,
+  'key-rejected': QV_CODE.KEY_REJECTED,
+  'aead-failed': QV_CODE.AEAD_FAILED,
+  'signature-import-failed': QV_CODE.SIGNATURE_IMPORT_FAILED,
+  'format-policy-reject': QV_CODE.FORMAT_POLICY_REJECT,
+  'reshare-contract-violation': QV_CODE.RESHARE_CONTRACT_VIOLATION,
 });
 
 const CORE_ERROR_QV_CODE_RULES = Object.freeze([
@@ -73,6 +88,10 @@ export function makeQvError(message, qvCode = QV_CODE.UNEXPECTED, options = {}) 
 export function getErrorQvCode(error) {
   if (typeof error?.qvCode === 'string' && Object.hasOwn(QV_CODE_TO_EXIT, error.qvCode)) {
     return error.qvCode;
+  }
+  if (typeof error?.kind === 'string') {
+    const kindQvCode = ERROR_KIND_TO_QV_CODE[error.kind];
+    if (kindQvCode) return kindQvCode;
   }
   if (error?.authenticity?.policy && error.authenticity.policy.satisfied === false) {
     return QV_CODE.POLICY_NOT_SATISFIED;

@@ -11,6 +11,7 @@ import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { readBytesFromFile, writeBytesAtomic } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readSecretBytes } from '../lib/secrets.js';
+import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
 
 const MAX_OUTPUT_FILENAME_BYTES = 255;
 
@@ -225,7 +226,7 @@ function classifyDecryptError(error) {
   if (/Invalid file format|File is too small|Unsupported container format|Invalid metadata|Incomplete container|Invalid container|Unsupported AEAD mode|QVPACK/.test(message)) {
     return formatPolicy(message, error);
   }
-  if (/Key commitment verification failed|KEM decapsulation failed|operation-specific|decrypt|ciphertext|Encrypted payload/.test(message)) {
+  if (/Key commitment verification failed|KEM decapsulation failed|operation-specific|ciphertext|Encrypted payload/.test(message)) {
     return aeadFailed(error);
   }
   return error;
@@ -283,7 +284,7 @@ async function writeExtractedQvpack({ entries, outDir, force }) {
 
   for (const { entry, outPath } of planned) {
     await writeBytesAtomic(outPath, entry.bytes, {
-      mode: 0o600,
+      mode: FILE_MODE.SECRET_ARTIFACT,
       force,
     });
   }
@@ -354,16 +355,18 @@ export async function runDecryptCommand(options, {
 
   let secret = null;
   let privateKeyBytes = null;
+  let qencBytes = null;
   let plaintextBytes = null;
 
   try {
-    const qencBytes = await readBytesFromFile(options.inputPath);
+    qencBytes = await readBytesFromFile(options.inputPath);
     const parsedHeader = parseQencHeader(qencBytes);
     secret = await readSecretBytes({
       filePath: options.privateKeyPath || null,
       stdin: options.privateKeyStdin ? stdin : null,
       envName: options.privateKeyEnv || null,
       env,
+      ...smallArtifactReadOptions('Private key input'),
     });
     privateKeyBytes = validateAndClonePrivateKey(secret.bytes);
 
@@ -390,7 +393,7 @@ export async function runDecryptCommand(options, {
       outputPath = resolveOutputPath(options, metadata);
       await ensureOutputParentExists(outputPath);
       await writeBytesAtomic(outputPath, plaintextBytes, {
-        mode: 0o600,
+        mode: FILE_MODE.SECRET_ARTIFACT,
         force: options.force,
       });
       outputPaths = [outputPath];
@@ -413,6 +416,7 @@ export async function runDecryptCommand(options, {
     throw classifyDecryptError(error);
   } finally {
     secret?.dispose();
+    if (qencBytes instanceof Uint8Array) qencBytes.fill(0);
     if (privateKeyBytes instanceof Uint8Array) privateKeyBytes.fill(0);
     if (plaintextBytes instanceof Uint8Array) plaintextBytes.fill(0);
   }

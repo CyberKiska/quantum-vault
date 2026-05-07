@@ -149,7 +149,7 @@ test('reshare --json writes a same-state successor cohort that restores in dry-r
     assert.equal(digestHex(archiveStateBytes), split.archiveStateDigestHex);
     assert.equal(digestHex(transitionRecordBytes), report.transitionRecordDigestHex);
     assert.equal(digestHex(lifecycleBundleBytes), report.lifecycleBundleDigestHex);
-    assert.equal(modeBits(await stat(report.lifecycleBundlePath)), 0o600);
+    assert.equal(modeBits(await stat(report.lifecycleBundlePath)), 0o644);
     assert.equal(modeBits(await stat(report.transitionRecordPath)), 0o644);
     const transitionRecord = JSON.parse(Buffer.from(transitionRecordBytes).toString('utf8'));
     assert.equal(transitionRecord.archiveId, split.archiveId);

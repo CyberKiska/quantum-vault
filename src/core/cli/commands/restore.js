@@ -8,12 +8,17 @@ import {
   restoreFromShards,
 } from '../../crypto/qcont/restore.js';
 import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
-import { takeValue } from '../lib/args.js';
+import {
+  normalizeExpectedEd25519Signer,
+  normalizeLowerHex,
+  takeValue,
+} from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
 import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readVerificationInputsFromPaths } from './verify.js';
+import { FILE_MODE } from '../lib/artifact-policy.js';
 
 function requiresRestoreLifecycleVariantAcknowledgement(result) {
   return result?.lifecycleVerification?.cohorts?.mixedLifecycleBundleVariantsWithinSelectedCohort === true;
@@ -161,23 +166,23 @@ export function parseRestoreArgs(args) {
         index += 1;
         break;
       case '--ed25519-signer':
-        options.expectedEd25519Signer = takeValue(args, index, arg);
+        options.expectedEd25519Signer = normalizeExpectedEd25519Signer(takeValue(args, index, arg), arg);
         index += 1;
         break;
       case '--archive-id':
-        options.selectedArchiveId = takeValue(args, index, arg);
+        options.selectedArchiveId = normalizeLowerHex(takeValue(args, index, arg), arg, 64);
         index += 1;
         break;
       case '--state-id':
-        options.selectedStateId = takeValue(args, index, arg);
+        options.selectedStateId = normalizeLowerHex(takeValue(args, index, arg), arg, 128);
         index += 1;
         break;
       case '--cohort-id':
-        options.selectedCohortId = takeValue(args, index, arg);
+        options.selectedCohortId = normalizeLowerHex(takeValue(args, index, arg), arg, 64);
         index += 1;
         break;
       case '--bundle-digest':
-        options.selectedLifecycleBundleDigestHex = takeValue(args, index, arg);
+        options.selectedLifecycleBundleDigestHex = normalizeLowerHex(takeValue(args, index, arg), arg, 128);
         index += 1;
         break;
       case '--out':
@@ -496,11 +501,11 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
     }
 
     await writeArtifactSetAtomic([
-      { path: plan.qencPath, bytes: result.qencBytes, mode: 0o600 },
-      { path: plan.keyPath, bytes: result.privKey, mode: 0o600 },
-      { path: plan.archiveStatePath, bytes: result.archiveStateBytes, mode: 0o644 },
-      { path: plan.lifecycleBundlePath, bytes: result.lifecycleBundleBytes, mode: 0o600 },
-      ...(plaintextBytes ? [{ path: plan.plaintextPath, bytes: plaintextBytes, mode: 0o600 }] : []),
+      { path: plan.qencPath, bytes: result.qencBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      { path: plan.keyPath, bytes: result.privKey, mode: FILE_MODE.SECRET_ARTIFACT },
+      { path: plan.archiveStatePath, bytes: result.archiveStateBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      { path: plan.lifecycleBundlePath, bytes: result.lifecycleBundleBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      ...(plaintextBytes ? [{ path: plan.plaintextPath, bytes: plaintextBytes, mode: FILE_MODE.SECRET_ARTIFACT }] : []),
     ], { force: options.force });
 
     return buildRestoreWriteSummary({

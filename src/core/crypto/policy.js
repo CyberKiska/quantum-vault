@@ -13,6 +13,7 @@ export const NONCE_POLICY_PER_CHUNK_V3 = 'QV-GCM-KMACPFX64-CTR32-v3';
 export const AAD_POLICY_ID_V1 = 'QV-AAD-HEADER-CHUNK-v1';
 export const NONCE_MODE_RANDOM96 = 'random96';
 export const NONCE_MODE_KMAC_CTR32 = 'kmac-prefix64-ctr32';
+export const VENDORED_ERASURE_JS_SHA3_512 = 'deefaa417ef6be3b5ef9332ada03bd27c6e9c73163017e51dd755dc16b417f7e458d4bdfbb82b784c8ea91706308919f49446feb9a74abac81f6b820f8454641';
 
 export const PROFILE_REGISTRY = Object.freeze({
   [CRYPTO_PROFILE_ID_V2]: Object.freeze({

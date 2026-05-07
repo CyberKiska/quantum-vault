@@ -159,9 +159,9 @@ test('restore write mode recovers qenc, private key, and lifecycle sidecars', as
       new Uint8Array(await readFile(report.outputs.lifecycleBundlePath)),
       new Uint8Array(await readFile(fixture.split.lifecycleBundleBytesPath)),
     );
-    assert.equal(modeBits(await stat(report.outputs.qencPath)), 0o600);
+    assert.equal(modeBits(await stat(report.outputs.qencPath)), 0o644);
     assert.equal(modeBits(await stat(report.outputs.keyPath)), 0o600);
-    assert.equal(modeBits(await stat(report.outputs.lifecycleBundlePath)), 0o600);
+    assert.equal(modeBits(await stat(report.outputs.lifecycleBundlePath)), 0o644);
   } finally {
     process.umask(oldUmask);
   }

@@ -157,7 +157,7 @@ test('attach --json imports archive approval signature, timestamp, and rewrites 
 
     const bundleBytes = new Uint8Array(await readFile(outBundlePath));
     assert.equal(report.lifecycleBundleDigestHex, digestHex(bundleBytes));
-    assert.equal(modeBits(await stat(outBundlePath)), 0o600);
+    assert.equal(modeBits(await stat(outBundlePath)), 0o644);
     const parsedBundle = await parseLifecycleBundleBytes(bundleBytes);
     assert.equal(parsedBundle.lifecycleBundle.attachments.archiveApprovalSignatures.length, 1);
     assert.equal(parsedBundle.lifecycleBundle.attachments.publicKeys.length, 1);

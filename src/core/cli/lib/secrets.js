@@ -40,21 +40,43 @@ function createSecret(bytes, source) {
   };
 }
 
-async function readStreamBytes(stream) {
+async function readStreamBytes(stream, { maxBytes = null, label = 'stdin secret' } = {}) {
   if (stream instanceof Uint8Array) {
+    if (Number.isSafeInteger(maxBytes) && stream.length > maxBytes) {
+      throw makeQvError(
+        `${label} exceeds CLI read limit (${stream.length} > ${maxBytes} bytes)`,
+        QV_CODE.FORMAT_POLICY_REJECT,
+      );
+    }
     return new Uint8Array(stream);
   }
   if (!stream || typeof stream[Symbol.asyncIterator] !== 'function') {
     throw makeQvError('stdin secret source must be an async iterable byte stream', QV_CODE.USAGE);
   }
   const chunks = [];
+  let total = 0;
   for await (const chunk of stream) {
     if (chunk instanceof Uint8Array) {
+      total += chunk.byteLength;
+      if (Number.isSafeInteger(maxBytes) && total > maxBytes) {
+        throw makeQvError(
+          `${label} exceeds CLI read limit (${total} > ${maxBytes} bytes)`,
+          QV_CODE.FORMAT_POLICY_REJECT,
+        );
+      }
       chunks.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
       continue;
     }
     if (typeof chunk === 'string') {
-      chunks.push(Buffer.from(chunk));
+      const buffer = Buffer.from(chunk);
+      total += buffer.byteLength;
+      if (Number.isSafeInteger(maxBytes) && total > maxBytes) {
+        throw makeQvError(
+          `${label} exceeds CLI read limit (${total} > ${maxBytes} bytes)`,
+          QV_CODE.FORMAT_POLICY_REJECT,
+        );
+      }
+      chunks.push(buffer);
       continue;
     }
     throw makeQvError('stdin secret source yielded a non-byte chunk', QV_CODE.USAGE);
@@ -88,23 +110,28 @@ export async function readSecretBytes({
   stdin = null,
   envName = null,
   env = process.env,
+  maxBytes = null,
+  label = 'Secret input',
 } = {}) {
   assertSingleSecretSource({ filePath, stdin, envName });
 
   if (hasSource(filePath)) {
-    return createSecret(await readBytesFromFile(filePath), 'file');
+    return createSecret(await readBytesFromFile(filePath, { maxBytes, label }), 'file');
   }
 
   if (hasSource(stdin)) {
     const stream = stdin === true ? process.stdin : stdin;
-    return createSecret(await readStreamBytes(stream), 'stdin');
+    return createSecret(await readStreamBytes(stream, { maxBytes, label }), 'stdin');
   }
 
   const name = String(envName || '').trim();
   const envFilePath = getEnvFilePath(name, env);
   try {
-    return createSecret(await readBytesFromFile(envFilePath), 'env-file');
+    return createSecret(await readBytesFromFile(envFilePath, { maxBytes, label }), 'env-file');
   } catch (error) {
+    if (error?.qvCode === QV_CODE.FORMAT_POLICY_REJECT) {
+      throw error;
+    }
     throw makeQvError(
       `Secret environment variable ${name} must contain a readable file path, not raw secret bytes`,
       QV_CODE.USAGE,

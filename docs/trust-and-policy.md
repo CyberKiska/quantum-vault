@@ -553,7 +553,7 @@ CLI policy rules:
 - `qv restore --dry-run --json` writes nothing and reports `wouldSucceed`; successful dry-runs include `outputs: null`.
 - `qv restore` write mode exits non-zero and writes no recovered artifacts when `policy.satisfied !== true`.
 - `--accept-policy-warnings` does not override `policy.satisfied === false`; it is only an operator acknowledgement channel for warnings when policy is otherwise satisfied.
-- Policy failure is reported as `qvCode: "POLICY_NOT_SATISFIED"` with exit code `1`; ambiguity remains `AMBIGUOUS_INPUTS` with exit code `9`; quorum failure remains `QUORUM_UNREACHABLE` with exit code `7`; restored material integrity failure remains `RESTORED_INTEGRITY_FAILED` with exit code `11`.
+- Policy failure is reported as `qvCode: "POLICY_NOT_SATISFIED"` with exit code `1`; ambiguity remains `AMBIGUOUS_INPUTS` with exit code `9`; lifecycle-bundle variant acknowledgement failures are reported as `RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED` with exit code `12`; quorum failure remains `QUORUM_UNREACHABLE` with exit code `7`; restored material integrity failure remains `RESTORED_INTEGRITY_FAILED` with exit code `11`.
 
 The CLI therefore treats policy as a gate, not as advisory metadata.
 

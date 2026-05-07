@@ -15,6 +15,7 @@ import { takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { readBytesFromFile, writeBytesAtomic } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
+import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
 
 const LARGE_INPUT_WARNING_THRESHOLD = 256 * 1024 * 1024;
 
@@ -89,7 +90,7 @@ async function statInput(filePath) {
 
 async function readPublicKeyBytes(publicKeyPath) {
   try {
-    return await readBytesFromFile(publicKeyPath);
+    return await readBytesFromFile(publicKeyPath, smallArtifactReadOptions('Public key file'));
   } catch (error) {
     if (error?.code === 'ENOENT') {
       throw usage(`Public key file does not exist: ${publicKeyPath}`);
@@ -302,6 +303,7 @@ export async function runEncryptCommand(options) {
   let payload = null;
   let payloadBytes = null;
   let publicKeyBytes = null;
+  let qencBytes = null;
 
   try {
     publicKeyBytes = validateAndClonePublicKey(await readPublicKeyBytes(options.publicKeyPath));
@@ -314,7 +316,7 @@ export async function runEncryptCommand(options) {
     }
 
     const encryptedBlob = await encryptFile(payloadBytes, publicKeyBytes, payload.originalFilename);
-    const qencBytes = await blobToBytes(encryptedBlob);
+    qencBytes = await blobToBytes(encryptedBlob);
     const report = buildEncryptReport({
       options,
       payload,
@@ -323,7 +325,7 @@ export async function runEncryptCommand(options) {
     });
 
     await writeBytesAtomic(options.outPath, qencBytes, {
-      mode: 0o644,
+      mode: FILE_MODE.PUBLIC_ARTIFACT,
       force: options.force,
     });
 
@@ -338,6 +340,8 @@ export async function runEncryptCommand(options) {
   } catch (error) {
     throw classifyEncryptError(error);
   } finally {
+    if (publicKeyBytes instanceof Uint8Array) publicKeyBytes.fill(0);
+    if (qencBytes instanceof Uint8Array) qencBytes.fill(0);
     if (payloadBytes instanceof Uint8Array) payloadBytes.fill(0);
   }
 }

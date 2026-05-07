@@ -6,11 +6,12 @@ import { parseQencHeader } from '../../crypto/qenc/format.js';
 import { buildLifecycleQcontShards } from '../../crypto/qcont/lifecycle-shard.js';
 import { validatePrivateKey } from '../../crypto/mlkem.js';
 import { REED_SOLOMON_CODEC_ID } from '../../crypto/lifecycle/artifacts.js';
-import { takeValue } from '../lib/args.js';
+import { normalizeFlexibleHex, takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readSecretBytes } from '../lib/secrets.js';
+import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
 
 function usage(message) {
   return makeQvError(message, QV_CODE.USAGE);
@@ -109,11 +110,12 @@ function parseHexBytes(value, field, expectedBytes) {
 }
 
 function normalizeHexOption(value, field, expectedChars) {
-  const text = String(value || '').trim().toLowerCase();
-  if (text.length !== expectedChars || !/^[0-9a-f]+$/.test(text)) {
-    throw usage(`${field} must be ${expectedChars} lowercase hex characters`);
+  try {
+    return normalizeFlexibleHex(value, field, expectedChars);
+  } catch (error) {
+    if (typeof error?.qvCode === 'string') throw error;
+    throw usage(error?.message || String(error));
   }
-  return text;
 }
 
 function validateStateType(value) {
@@ -405,13 +407,13 @@ function buildSplitReport({
 
 async function writeSplitArtifacts({ split, shardBytes, plan, force }) {
   await writeArtifactSetAtomic([
-    { path: plan.archiveStatePath, bytes: split.archiveStateBytes, mode: 0o644 },
-    { path: plan.cohortBindingPath, bytes: split.cohortBindingBytes, mode: 0o644 },
-    { path: plan.lifecycleBundlePath, bytes: split.lifecycleBundleBytes, mode: 0o644 },
+    { path: plan.archiveStatePath, bytes: split.archiveStateBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+    { path: plan.cohortBindingPath, bytes: split.cohortBindingBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+    { path: plan.lifecycleBundlePath, bytes: split.lifecycleBundleBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
     ...shardBytes.map((item) => ({
       path: plan.shards[item.index].path,
       bytes: item.bytes,
-      mode: 0o600,
+      mode: FILE_MODE.SECRET_ARTIFACT,
     })),
   ], { force });
 }
@@ -460,6 +462,7 @@ export async function runSplitCommand(options, {
       stdin: options.privateKeyStdin ? stdin : null,
       envName: options.privateKeyEnv || null,
       env,
+      ...smallArtifactReadOptions('Private key input'),
     });
     privateKeyBytes = validateAndClonePrivateKey(secret.bytes);
 

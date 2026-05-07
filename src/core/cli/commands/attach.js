@@ -11,7 +11,7 @@ import {
 } from '../../crypto/lifecycle/artifacts.js';
 import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
 import { parseJsonBytesStrict, parseJsonTextStrict } from '../../crypto/manifest/strict-json.js';
-import { takeValue } from '../lib/args.js';
+import { normalizeExpectedEd25519Signer, takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
 import {
@@ -21,6 +21,7 @@ import {
   writeArtifactSetAtomic,
 } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
+import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
 
 const SIG_IMPORT_KEYS = new Set([
   'file',
@@ -161,7 +162,7 @@ function parseAttachArgs(args) {
         index += 1;
         break;
       case '--ed25519-signer':
-        options.expectedEd25519Signer = takeValue(args, index, arg);
+        options.expectedEd25519Signer = normalizeExpectedEd25519Signer(takeValue(args, index, arg), arg);
         index += 1;
         break;
       case '--out-bundle':
@@ -226,7 +227,7 @@ function parseSigImportSpec(spec) {
 
 async function readSignatureImport(spec, sourceEvidence = {}) {
   const parsed = parseSigImportSpec(spec);
-  const bytes = await readBytesFromFile(parsed.file);
+  const bytes = await readBytesFromFile(parsed.file, smallArtifactReadOptions('--sig-import file'));
   const out = {
     name: parsed.name || path.basename(parsed.file),
     bytes,
@@ -250,11 +251,14 @@ async function readSignatureImport(spec, sourceEvidence = {}) {
 async function readSourceEvidence(options) {
   if (options.sourceEvidenceBytesPath) {
     return {
-      sourceEvidenceBytes: await readBytesFromFile(options.sourceEvidenceBytesPath),
+      sourceEvidenceBytes: await readBytesFromFile(
+        options.sourceEvidenceBytesPath,
+        smallArtifactReadOptions('--source-evidence-bytes')
+      ),
     };
   }
   if (options.sourceEvidencePath) {
-    const bytes = await readBytesFromFile(options.sourceEvidencePath);
+    const bytes = await readBytesFromFile(options.sourceEvidencePath, smallArtifactReadOptions('--source-evidence'));
     try {
       const parsed = parseSourceEvidenceBytes(bytes);
       return { sourceEvidenceBytes: parsed.bytes };
@@ -308,16 +312,18 @@ async function readAttachInputs(options, cwd) {
   return {
     shardPaths,
     parsedShards,
-    archiveStateBytes: await readOptionalBytes(options.archiveStatePath),
-    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath),
+    archiveStateBytes: await readOptionalBytes(options.archiveStatePath, smallArtifactReadOptions('--archive-state')),
+    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath, smallArtifactReadOptions('--bundle')),
     signatures: await Promise.all(options.signaturePaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--sig')))
     ))),
     signatureImports,
     timestamps: await Promise.all(options.otsPaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--ots')))
     ))),
-    pqPublicKeyFileBytesList: await Promise.all(options.pqpkPaths.map(readBytesFromFile)),
+    pqPublicKeyFileBytesList: await Promise.all(options.pqpkPaths.map((filePath) => (
+      readBytesFromFile(filePath, smallArtifactReadOptions('--pqpk'))
+    ))),
   };
 }
 
@@ -424,11 +430,11 @@ async function writeAttachedArtifacts({ result, outBundlePath, shardPlan, force 
     }
 
     await writeArtifactSetAtomic([
-      { path: outBundlePath, bytes: result.lifecycleBundleBytes, mode: 0o600 },
+      { path: outBundlePath, bytes: result.lifecycleBundleBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
       ...stagedShardBytes.map(({ shard, bytes }) => ({
         path: shard.path,
         bytes,
-        mode: 0o600,
+        mode: FILE_MODE.SECRET_ARTIFACT,
       })),
     ], { force });
   } finally {

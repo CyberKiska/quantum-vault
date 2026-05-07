@@ -7,7 +7,7 @@ import {
   reshareSameState,
 } from '../../crypto/qcont/lifecycle-shard.js';
 import { attachLifecycleBundleToShards } from '../../crypto/qcont/lifecycle-attach.js';
-import { takeValue } from '../lib/args.js';
+import { normalizeLowerHex as normalizeLowerHexArg, takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
 import {
@@ -17,8 +17,8 @@ import {
   writeArtifactSetAtomic,
 } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
+import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
 
-const LOWER_HEX_RE = /^[0-9a-f]+$/;
 const FORBIDDEN_RESHARE_FLAGS = new Set([
   '--archive-state',
   '--archive-state-bytes',
@@ -134,11 +134,12 @@ function parsePositiveInt(value, field) {
 }
 
 function normalizeLowerHex(value, field, expectedChars) {
-  const text = String(value || '').trim();
-  if (text.length !== expectedChars || !LOWER_HEX_RE.test(text)) {
-    throw usage(`${field} must be ${expectedChars} lowercase hex characters`);
+  try {
+    return normalizeLowerHexArg(value, field, expectedChars);
+  } catch (error) {
+    if (typeof error?.qvCode === 'string') throw error;
+    throw usage(error?.message || String(error));
   }
-  return text;
 }
 
 function parseSingleLine(value, field, fallback = '') {
@@ -273,6 +274,9 @@ export function parseReshareArgs(args) {
   if (options.maintenanceOtsPaths.length > 0 && options.maintenanceSignaturePaths.length === 0) {
     throw usage('reshare --maintenance-ots requires at least one --maintenance-sig in the same command');
   }
+  if (options.maintenancePqpkPaths.length > 0 && options.maintenanceSignaturePaths.length === 0) {
+    throw usage('reshare --maintenance-pqpk requires at least one --maintenance-sig in the same command');
+  }
   if (options.outDir.includes('\0')) {
     throw usage('reshare output path contains an invalid NUL byte');
   }
@@ -313,13 +317,15 @@ async function readReshareInputs(options, cwd) {
   return {
     shardPaths,
     parsedShards,
-    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath),
+    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath, smallArtifactReadOptions('--bundle')),
     maintenanceSignatures: await Promise.all(options.maintenanceSignaturePaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-sig')))
     ))),
-    maintenancePqpkBytesList: await Promise.all(options.maintenancePqpkPaths.map(readBytesFromFile)),
+    maintenancePqpkBytesList: await Promise.all(options.maintenancePqpkPaths.map((filePath) => (
+      readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-pqpk'))
+    ))),
     maintenanceTimestamps: await Promise.all(options.maintenanceOtsPaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-ots')))
     ))),
   };
 }
@@ -467,14 +473,14 @@ async function writeReshareOutputs({ result, plan, maintenanceSignatureCountAdde
     }
 
     await writeArtifactSetAtomic([
-      { path: plan.archiveStatePath, bytes: result.archiveStateBytes, mode: 0o644 },
-      { path: plan.cohortBindingPath, bytes: result.cohortBindingBytes, mode: 0o644 },
-      { path: plan.lifecycleBundlePath, bytes: result.lifecycleBundleBytes, mode: 0o600 },
-      { path: plan.transitionRecordPath, bytes: result.transitionRecordBytes, mode: 0o644 },
+      { path: plan.archiveStatePath, bytes: result.archiveStateBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      { path: plan.cohortBindingPath, bytes: result.cohortBindingBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      { path: plan.lifecycleBundlePath, bytes: result.lifecycleBundleBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      { path: plan.transitionRecordPath, bytes: result.transitionRecordBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
       ...stagedShardBytes.map(({ shard, bytes }) => ({
         path: shard.path,
         bytes,
-        mode: 0o600,
+        mode: FILE_MODE.SECRET_ARTIFACT,
       })),
     ], { force });
   } finally {

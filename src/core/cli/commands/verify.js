@@ -1,5 +1,9 @@
 import { verifyArchiveAuthenticity } from '../../crypto/qcont/restore.js';
-import { takeValue } from '../lib/args.js';
+import {
+  normalizeExpectedEd25519Signer,
+  normalizeRequiredPolicyLevel,
+  takeValue,
+} from '../lib/args.js';
 import {
   makeExternalArtifactRecord,
   readBytesFromFile,
@@ -7,12 +11,12 @@ import {
 } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
+import { smallArtifactReadOptions } from '../lib/artifact-policy.js';
+import { AUTH_POLICY_LEVELS } from '../../crypto/manifest/auth-policy.js';
 
-const POLICY_STRENGTH = Object.freeze({
-  'integrity-only': 0,
-  'any-signature': 1,
-  'strong-pq-signature': 2,
-});
+const POLICY_STRENGTH = Object.freeze(Object.fromEntries(
+  AUTH_POLICY_LEVELS.map((level, index) => [level, index])
+));
 
 function usage(message) {
   return makeQvError(message, QV_CODE.USAGE);
@@ -68,14 +72,14 @@ export function parseVerifyArgs(args) {
         index += 1;
         break;
       case '--ed25519-signer':
-        options.expectedEd25519Signer = takeValue(args, index, arg);
+        options.expectedEd25519Signer = normalizeExpectedEd25519Signer(takeValue(args, index, arg), arg);
         index += 1;
         break;
       case '--include-detached-summary':
         options.includeDetachedSummary = true;
         break;
       case '--required-policy-level':
-        options.requiredPolicyLevel = normalizePolicyLevel(takeValue(args, index, arg), '--required-policy-level');
+        options.requiredPolicyLevel = normalizeRequiredPolicyLevel(takeValue(args, index, arg), '--required-policy-level');
         index += 1;
         break;
       case '--json':
@@ -95,14 +99,6 @@ export function parseVerifyArgs(args) {
   return options;
 }
 
-function normalizePolicyLevel(value, field) {
-  const text = String(value || '').trim();
-  if (!Object.hasOwn(POLICY_STRENGTH, text)) {
-    throw usage(`${field} must be one of integrity-only, any-signature, strong-pq-signature`);
-  }
-  return text;
-}
-
 export async function readVerificationInputsFromPaths({
   archiveStatePath = null,
   bundlePath = null,
@@ -111,15 +107,19 @@ export async function readVerificationInputsFromPaths({
   otsPaths = [],
   expectedEd25519Signer = '',
 } = {}) {
-  const archiveStateBytes = archiveStatePath ? await readBytesFromFile(archiveStatePath) : null;
-  const lifecycleBundleBytes = await readOptionalBytes(bundlePath);
+  const archiveStateBytes = archiveStatePath
+    ? await readBytesFromFile(archiveStatePath, smallArtifactReadOptions('--archive-state'))
+    : null;
+  const lifecycleBundleBytes = await readOptionalBytes(bundlePath, smallArtifactReadOptions('--bundle'));
   const signatures = await Promise.all(signaturePaths.map(async (filePath) => (
-    makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+    makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--sig')))
   )));
   const timestamps = await Promise.all(otsPaths.map(async (filePath) => (
-    makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
+    makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--ots')))
   )));
-  const pinnedPqPublicKeyFileBytesList = await Promise.all(pqpkPaths.map(readBytesFromFile));
+  const pinnedPqPublicKeyFileBytesList = await Promise.all(pqpkPaths.map((filePath) => (
+    readBytesFromFile(filePath, smallArtifactReadOptions('--pqpk'))
+  )));
 
   return {
     archiveStateBytes,

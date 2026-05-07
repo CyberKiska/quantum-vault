@@ -107,9 +107,55 @@ test('CLI exit registry maps explicit qvCode values', async () => {
   assert.equal(mapErrorToExitCode(makeQvError('ambiguous cohort', QV_CODE.AMBIGUOUS_INPUTS)), EXIT.AMBIGUITY);
   assert.equal(
     mapErrorToExitCode(makeQvError('ack', QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED)),
-    EXIT.ERROR,
+    EXIT.RESTORE_VARIANT_ACK,
+  );
+  assert.equal(
+    mapErrorToExitCode(Object.assign(new Error('explicit'), {
+      qvCode: QV_CODE.USAGE,
+      kind: 'quorum-unreachable',
+    })),
+    EXIT.USAGE,
+  );
+  assert.equal(
+    mapErrorToExitCode(Object.assign(new Error('structured'), { kind: 'quorum-unreachable' })),
+    EXIT.QUORUM,
   );
   assert.equal(mapErrorToExitCode(new Error('plain error')), EXIT.ERROR);
+});
+
+test('CLI parsers fail closed on ambiguous selector and policy shapes', async () => {
+  const { parseRestoreArgs } = await import('../../src/core/cli/commands/restore.js');
+  const { parseReshareArgs } = await import('../../src/core/cli/commands/reshare.js');
+  const { parseVerifyArgs } = await import('../../src/core/cli/commands/verify.js');
+
+  assert.throws(
+    () => parseRestoreArgs(['--shards', 'cohort/*.qcont', '--archive-id', 'A'.repeat(64)]),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
+    () => parseRestoreArgs(['--shards', 'cohort/*.qcont', '--state-id', '0'.repeat(127)]),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
+    () => parseRestoreArgs(['--shards', 'cohort/*.qcont', '--bundle-digest', 'f'.repeat(127)]),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
+    () => parseRestoreArgs(['--shards', 'cohort/*.qcont', '--ed25519-signer', 'not-a-stellar-address']),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
+    () => parseVerifyArgs(['archive-state.json', '--required-policy-level', 'weaker-than-known']),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
+    () => parseVerifyArgs(['archive-state.json', '--ed25519-signer', 'not-a-stellar-address']),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
+    () => parseReshareArgs(['--shards', 'cohort/*.qcont', '--n', '5', '--k', '3', '--maintenance-pqpk', 'pin.pqpk']),
+    { qvCode: 'USAGE' },
+  );
 });
 
 test('top-level CLI module preserves public Phase 1 exports', async () => {

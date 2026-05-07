@@ -7,6 +7,7 @@ import { toHex } from '../../crypto/bytes.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
+import { FILE_MODE } from '../lib/artifact-policy.js';
 import { takeValue } from '../lib/args.js';
 
 function digestSha3_512Hex(bytes) {
@@ -169,8 +170,8 @@ export async function runKeygenCommand(options) {
     });
 
     await writeArtifactSetAtomic([
-      { path: paths.publicKeyPath, bytes: publicKeyBytes, mode: 0o644 },
-      { path: paths.privateKeyPath, bytes: privateKeyBytes, mode: 0o600 },
+      { path: paths.publicKeyPath, bytes: publicKeyBytes, mode: FILE_MODE.PUBLIC_ARTIFACT },
+      { path: paths.privateKeyPath, bytes: privateKeyBytes, mode: FILE_MODE.SECRET_ARTIFACT },
     ], { force: options.force });
 
     return {
