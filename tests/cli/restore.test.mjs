@@ -129,6 +129,8 @@ test('restore write mode recovers qenc, private key, and lifecycle sidecars', as
     assert.equal(report.cliSchemaVersion, 1);
     assert.equal(report.dryRun, false);
     assert.equal(report.wouldSucceed, true);
+    assert.equal(report.lifecycleBundleVariantAcknowledgementRequired, false);
+    assert.equal(report.policyWarningsAcknowledged, false);
     assert.equal(report.archiveId, fixture.split.archiveId);
     assert.equal(report.stateId, fixture.split.stateId);
     assert.equal(report.cohortId, fixture.split.cohortId);
@@ -215,6 +217,34 @@ test('restore write mode aborts policy-failed archives without writing outputs',
   assert.equal(error.qvCode, 'POLICY_NOT_SATISFIED');
 });
 
+test('buildRestoreDryRunSummary gates wouldSucceed on mixed lifecycle-bundle variants without acknowledgement', async () => {
+  const { buildRestoreDryRunSummary } = await import('../../src/core/cli/commands/restore.js');
+  const baseResult = {
+    qencOk: true,
+    qkeyOk: true,
+    authenticity: { status: { policySatisfied: true }, policy: { satisfied: true } },
+    lifecycleVerification: { cohorts: { mixedLifecycleBundleVariantsWithinSelectedCohort: true } },
+    archiveId: 'x',
+    stateId: 'y',
+    cohortId: 'z',
+    archiveStateDigestHex: '',
+    cohortBindingDigestHex: '',
+    lifecycleBundleDigestHex: '',
+    selectionSource: '',
+    lifecycleBundleSource: '',
+    embeddedLifecycleBundleDigestsUsed: [],
+    privateKeyHashMatchesMetadata: true,
+    rejectedShardIndices: [],
+  };
+  const blocked = buildRestoreDryRunSummary(baseResult, { acceptPolicyWarnings: false });
+  assert.equal(blocked.wouldSucceed, false);
+  assert.equal(blocked.lifecycleBundleVariantAcknowledgementRequired, true);
+  assert.equal(blocked.policyWarningsAcknowledged, false);
+
+  const allowed = buildRestoreDryRunSummary(baseResult, { acceptPolicyWarnings: true });
+  assert.equal(allowed.wouldSucceed, true);
+  assert.equal(allowed.policyWarningsAcknowledged, true);
+});
 test('restore --accept-policy-warnings does not override failed authenticity policy', async () => {
   const baseDir = await makeTempDir();
   const fixture = await makeSplitFixture(baseDir, {

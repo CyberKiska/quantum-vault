@@ -135,6 +135,8 @@ async function main() {
     '--dry-run',
   ]);
   assert(dryRun.wouldSucceed === true, 'restore dry-run did not succeed');
+  assert(dryRun.lifecycleBundleVariantAcknowledgementRequired === false, 'dry-run variant ack mismatch');
+  assert(dryRun.policyWarningsAcknowledged === false, 'dry-run policyWarningsAcknowledged mismatch');
   assert(dryRun.archiveId === split.archiveId, 'restore dry-run archiveId mismatch');
 
   const restore = await runJsonQv([
@@ -152,6 +154,9 @@ async function main() {
 
   const inspect = await runJsonQv(['inspect', split.shards[0].path]);
   assert(inspect.artifactType === 'QVqcont-7', 'inspect shard artifact type mismatch');
+
+  const inspectJsonFirst = await runJsonQv(['inspect', '--json', split.shards[0].path]);
+  assert(inspectJsonFirst.artifactType === 'QVqcont-7', 'inspect --json before path mismatch');
 
   const canonicalize = await runJsonQv(['canonicalize', split.archiveStateBytesPath]);
   assert(canonicalize.digestHex === split.archiveStateDigestHex, 'canonicalize archive-state digest mismatch');

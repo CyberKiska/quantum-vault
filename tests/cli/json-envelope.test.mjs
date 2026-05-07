@@ -53,6 +53,24 @@ test('inspect --json emits stable CLI envelope', async () => {
   assert.equal(result.stdoutText.endsWith('\n'), true);
 });
 
+test('inspect accepts --json before the artifact path', async () => {
+  const result = await runJsonCommand(['inspect', '--json', archiveStateFixture]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stderrText, '');
+  assert.equal(result.json.command, 'inspect');
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.artifactType, 'archive-state-descriptor/v1');
+});
+
+test('canonicalize accepts --json before the artifact path', async () => {
+  const result = await runJsonCommand(['canonicalize', '--json', archiveStateFixture]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stderrText, '');
+  assert.equal(result.json.command, 'canonicalize');
+  assert.equal(result.json.ok, true);
+  assert.equal(typeof result.json.canonicalJsonText, 'string');
+});
+
 test('canonicalize --json emits stable CLI envelope', async () => {
   const result = await runJsonCommand(['canonicalize', archiveStateFixture, '--json']);
   assert.equal(result.exitCode, 0);

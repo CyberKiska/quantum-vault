@@ -35,6 +35,7 @@ async function runCli(args, options = {}) {
     stderr,
     stdin: options.stdin,
     cwd: options.cwd,
+    env: options.env ? { ...process.env, ...options.env } : process.env,
   });
   return {
     exitCode,
@@ -198,6 +199,47 @@ test('split supports private key bytes from stdin', async () => {
 
   assert.equal(result.exitCode, 0);
   assert.equal(JSON.parse(result.stdoutText).shards.length, 5);
+});
+
+test('split supports private key path via --private-key-env', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const { qencPath } = await encryptFixture({
+    baseDir,
+    keys,
+    plaintext: new Uint8Array([9, 8, 7]),
+    filename: 'envsplit.bin',
+  });
+  const outDir = join(baseDir, 'env-cohort');
+  const result = await runCli([
+    'split',
+    qencPath,
+    '--private-key-env',
+    'QV_TEST_SPLIT_PRIVKEY',
+    '--n',
+    '5',
+    '--k',
+    '3',
+    '--out',
+    outDir,
+    '--auth-policy-level',
+    'integrity-only',
+    '--archive-id-random',
+    '22'.repeat(32),
+    '--json',
+  ], { env: { QV_TEST_SPLIT_PRIVKEY: keys.privateKeyPath } });
+
+  assert.equal(result.exitCode, 0);
+  const report = JSON.parse(result.stdoutText);
+  assert.equal(report.shards.length, 5);
+  assert.equal(report.archiveId, '22'.repeat(32));
+});
+
+test('split --help-internal prints deterministic fixture flags', async () => {
+  const result = await runCli(['split', '--help-internal']);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stderrText, '');
+  assert.match(result.stdoutText, /--archive-id/);
 });
 
 test('split maps unsupported RS/Shamir geometry to QUORUM_UNREACHABLE', async () => {

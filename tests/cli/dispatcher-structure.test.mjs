@@ -34,7 +34,7 @@ const commandContracts = Object.freeze([
   },
   {
     modulePath: '../../src/core/cli/commands/split.js',
-    exports: ['parseSplitArgs', 'renderSplitSummary', 'runSplitCommand'],
+    exports: ['parseSplitArgs', 'renderSplitInternalHelp', 'renderSplitSummary', 'runSplitCommand'],
   },
   {
     modulePath: '../../src/core/cli/commands/attach.js',
@@ -105,6 +105,10 @@ test('CLI exit registry maps explicit qvCode values', async () => {
   const { EXIT, QV_CODE, makeQvError, mapErrorToExitCode } = await import('../../src/core/cli/lib/exit.js');
   assert.equal(mapErrorToExitCode(makeQvError('bad args', QV_CODE.USAGE)), EXIT.USAGE);
   assert.equal(mapErrorToExitCode(makeQvError('ambiguous cohort', QV_CODE.AMBIGUOUS_INPUTS)), EXIT.AMBIGUITY);
+  assert.equal(
+    mapErrorToExitCode(makeQvError('ack', QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED)),
+    EXIT.ERROR,
+  );
   assert.equal(mapErrorToExitCode(new Error('plain error')), EXIT.ERROR);
 });
 

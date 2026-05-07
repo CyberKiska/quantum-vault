@@ -131,6 +131,7 @@ function parseSplitInputs(args) {
     inputPath: '',
     privateKeyPath: '',
     privateKeyStdin: false,
+    privateKeyEnv: '',
     n: null,
     k: null,
     outDir: 'shards',
@@ -153,6 +154,10 @@ function parseSplitInputs(args) {
         break;
       case '--private-key-stdin':
         options.privateKeyStdin = true;
+        break;
+      case '--private-key-env':
+        options.privateKeyEnv = takeValue(args, index, arg);
+        index += 1;
         break;
       case '--n':
         options.n = parsePositiveInt(takeValue(args, index, arg), '--n');
@@ -212,9 +217,13 @@ function parseSplitInputs(args) {
 }
 
 function validateSplitOptions(options) {
-  const keySources = [Boolean(options.privateKeyPath), options.privateKeyStdin].filter(Boolean).length;
+  const keySources = [
+    Boolean(options.privateKeyPath),
+    options.privateKeyStdin,
+    Boolean(options.privateKeyEnv),
+  ].filter(Boolean).length;
   if (keySources !== 1) {
-    throw usage('split requires exactly one private key source');
+    throw usage('split requires exactly one private key source (--private-key, --private-key-stdin, or --private-key-env)');
   }
   if (options.n == null) {
     throw usage('split requires --n <int>');
@@ -389,9 +398,28 @@ async function writeSplitArtifacts({ split, shardBytes, plan, force }) {
   }
 }
 
+export function renderSplitInternalHelp() {
+  return [
+    'qv split — internal / deterministic testing flags',
+    '',
+    'These options are for fixtures and CI only; production cohorts should omit them.',
+    '',
+    '  --archive-id <64 lowercase hex chars>     Fixed archiveId (mutually exclusive with --archive-id-random)',
+    '  --archive-id-random <64 lowercase hex>    Fixed 32-byte preimage for archiveId randomness',
+    '  --parent-state-id <256 lowercase hex>     Root parent state id override',
+    '  --state-type <string>                     Short state-type label (<=128 chars)',
+    '',
+    'Private key sources (exactly one required, same semantics as qv decrypt):',
+    '  --private-key <path>',
+    '  --private-key-stdin',
+    '  --private-key-env <NAME>                  Env var whose value is a filesystem path to privateKey.qkey',
+  ].join('\n');
+}
+
 export async function runSplitCommand(options, {
   stdin = process.stdin,
   cwd = process.cwd(),
+  env = process.env,
 } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
@@ -411,6 +439,8 @@ export async function runSplitCommand(options, {
     secret = await readSecretBytes({
       filePath: options.privateKeyPath || null,
       stdin: options.privateKeyStdin ? stdin : null,
+      envName: options.privateKeyEnv || null,
+      env,
     });
     privateKeyBytes = validateAndClonePrivateKey(secret.bytes);
 

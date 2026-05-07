@@ -15,6 +15,19 @@ import { readBytesFromFile, writeBytesAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readVerificationInputsFromPaths } from './verify.js';
 
+function requiresRestoreLifecycleVariantAcknowledgement(result) {
+  return result?.lifecycleVerification?.cohorts?.mixedLifecycleBundleVariantsWithinSelectedCohort === true;
+}
+
+function assertRestoreLifecycleVariantAcknowledged(result, acceptPolicyWarnings) {
+  if (!requiresRestoreLifecycleVariantAcknowledgement(result)) return;
+  if (acceptPolicyWarnings) return;
+  throw makeQvError(
+    'Restore refused: the selected cohort embeds multiple lifecycle-bundle digests in its shards. Review authenticity.warnings and lifecycleVerification, then re-run with --accept-policy-warnings only if the operator accepts residual bundle-variant risk. Archive policy satisfaction alone does not waive this check.',
+    QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED,
+  );
+}
+
 function usage(message) {
   return makeQvError(message, QV_CODE.USAGE);
 }
@@ -224,15 +237,23 @@ export function parseRestoreArgs(args) {
   return options;
 }
 
-export function buildRestoreDryRunSummary(result) {
+export function buildRestoreDryRunSummary(result, {
+  acceptPolicyWarnings = false,
+  dryRun = true,
+} = {}) {
+  const baseSatisfied = (
+    result?.qencOk === true &&
+    result?.qkeyOk === true &&
+    result?.authenticity?.status?.policySatisfied === true
+  );
+  const variantAckRequired = requiresRestoreLifecycleVariantAcknowledgement(result);
+  const variantAckOk = !variantAckRequired || acceptPolicyWarnings === true;
   return {
     command: 'restore',
-    dryRun: true,
-    wouldSucceed: (
-      result?.qencOk === true &&
-      result?.qkeyOk === true &&
-      result?.authenticity?.status?.policySatisfied === true
-    ),
+    dryRun,
+    wouldSucceed: baseSatisfied && variantAckOk,
+    policyWarningsAcknowledged: acceptPolicyWarnings === true,
+    lifecycleBundleVariantAcknowledgementRequired: variantAckRequired,
     archiveId: result.archiveId,
     stateId: result.stateId,
     cohortId: result.cohortId,
@@ -331,6 +352,7 @@ function classifyRestoreError(error) {
 export async function restoreDryRunFromInputs({
   parsedShards,
   verification = {},
+  acceptPolicyWarnings = false,
 } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
@@ -338,7 +360,7 @@ export async function restoreDryRunFromInputs({
   let result = null;
   try {
     result = await assessRestoreFromShards(parsedShards, { verification });
-    return buildRestoreDryRunSummary(result);
+    return buildRestoreDryRunSummary(result, { acceptPolicyWarnings, dryRun: true });
   } finally {
     await zeroizeRestoreMaterial(result);
   }
@@ -351,7 +373,11 @@ export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } =
   const { parsedShards } = await readParsedShards(options, cwd);
   try {
     const verification = await readRestoreVerification(options);
-    return await restoreDryRunFromInputs({ parsedShards, verification });
+    return await restoreDryRunFromInputs({
+      parsedShards,
+      verification,
+      acceptPolicyWarnings: options.acceptPolicyWarnings,
+    });
   } finally {
     for (const shard of parsedShards) {
       shard.share?.fill?.(0);
@@ -420,9 +446,9 @@ async function decryptRestoredPlaintext(result) {
   return { plaintextBytes, metadata, fileHashHex };
 }
 
-function buildRestoreWriteSummary({ result, plan, plaintextReport = null }) {
+function buildRestoreWriteSummary({ result, plan, plaintextReport = null, acceptPolicyWarnings = false }) {
   return {
-    ...buildRestoreDryRunSummary(result),
+    ...buildRestoreDryRunSummary(result, { acceptPolicyWarnings, dryRun: false }),
     dryRun: false,
     wouldSucceed: true,
     outputs: {
@@ -451,6 +477,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
     const verification = await readRestoreVerification(options);
     result = await restoreFromShards(parsedShards, { verification });
     assertRestoredIntegrity(result);
+    assertRestoreLifecycleVariantAcknowledged(result, options.acceptPolicyWarnings);
 
     const outDir = await ensureOutputDirectory(path.resolve(cwd, options.outDir));
     const plan = buildOutputPlan({ ...options, outDir }, cwd);
@@ -476,7 +503,12 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
       await writeBytesAtomic(plan.plaintextPath, plaintextBytes, { mode: 0o600, force: options.force });
     }
 
-    return buildRestoreWriteSummary({ result, plan, plaintextReport });
+    return buildRestoreWriteSummary({
+      result,
+      plan,
+      plaintextReport,
+      acceptPolicyWarnings: options.acceptPolicyWarnings,
+    });
   } catch (error) {
     throw classifyRestoreError(error);
   } finally {

@@ -26,6 +26,7 @@ export const QV_CODE = Object.freeze({
   RESHARE_CONTRACT_VIOLATION: 'RESHARE_CONTRACT_VIOLATION',
   RESTORED_INTEGRITY_FAILED: 'RESTORED_INTEGRITY_FAILED',
   POLICY_NOT_SATISFIED: 'POLICY_NOT_SATISFIED',
+  RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED: 'RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED',
 });
 
 const QV_CODE_TO_EXIT = Object.freeze({
@@ -41,6 +42,7 @@ const QV_CODE_TO_EXIT = Object.freeze({
   [QV_CODE.RESHARE_CONTRACT_VIOLATION]: EXIT.RESHARE_CONTRACT,
   [QV_CODE.RESTORED_INTEGRITY_FAILED]: EXIT.RESTORED_INTEGRITY,
   [QV_CODE.POLICY_NOT_SATISFIED]: EXIT.ERROR,
+  [QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED]: EXIT.ERROR,
 });
 
 const CORE_ERROR_QV_CODE_RULES = Object.freeze([
@@ -71,6 +73,9 @@ export function makeQvError(message, qvCode = QV_CODE.UNEXPECTED, options = {}) 
 export function getErrorQvCode(error) {
   if (typeof error?.qvCode === 'string' && Object.hasOwn(QV_CODE_TO_EXIT, error.qvCode)) {
     return error.qvCode;
+  }
+  if (error?.authenticity?.policy && error.authenticity.policy.satisfied === false) {
+    return QV_CODE.POLICY_NOT_SATISFIED;
   }
   const message = error?.message || String(error);
   for (const rule of CORE_ERROR_QV_CODE_RULES) {

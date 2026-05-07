@@ -32,6 +32,7 @@ import {
 } from './commands/restore.js';
 import {
   parseSplitArgs,
+  renderSplitInternalHelp,
   renderSplitSummary,
   runSplitCommand,
 } from './commands/split.js';
@@ -95,7 +96,7 @@ const COMMAND_HELP = Object.freeze({
   keygen: 'qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
   encrypt: 'qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]\nqv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
   decrypt: 'qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
-  split: 'qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
+  split: 'qv split <input.qenc> (--private-key <path> | --private-key-stdin | --private-key-env <NAME>) --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]\nInternal/testing flags: qv split --help-internal',
   attach: 'qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
   reshare: 'qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
   inspect: 'qv inspect <artifact-file> [--json]',
@@ -121,12 +122,11 @@ function globalHelpText() {
 function commandHelpText(command) {
   const usage = COMMAND_HELP[command];
   if (!usage) return '';
-  return [
-    `Usage: ${usage}`,
-    '',
-    globalHelpText(),
-    '',
-  ].join('\n');
+  const lines = [`Usage: ${usage}`, '', globalHelpText(), ''];
+  if (command === 'split') {
+    lines.splice(2, 0, 'Deterministic test-only flags: `qv split --help-internal`.', '');
+  }
+  return lines.join('\n');
 }
 
 function helpText() {
@@ -138,7 +138,7 @@ function helpText() {
     '  qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]',
     '  qv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
     '  qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
-    '  qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
+    '  qv split <input.qenc> (--private-key <path> | --private-key-stdin | --private-key-env <NAME>) --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
     '  qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
     '  qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
@@ -247,7 +247,17 @@ export async function runQvCli(argv, {
     return EXIT.OK;
   }
 
-  const json = parseGlobalJsonFlag(args);
+  if (command === 'split' && args[0] === '--help-internal') {
+    writeText(stdout, `${renderSplitInternalHelp()}\n`);
+    return EXIT.OK;
+  }
+
+  let json = parseGlobalJsonFlag(args);
+  let inspectCanonicalizeArgs = args;
+  if (command === 'inspect' || command === 'canonicalize') {
+    json = args.includes('--json');
+    inspectCanonicalizeArgs = args.filter((arg) => arg !== '--json');
+  }
 
   try {
     return await runWithIoPolicy({ allowSymlink: globalOptions.allowSymlink }, async () => {
@@ -291,7 +301,7 @@ export async function runQvCli(argv, {
 
     if (command === 'split') {
       const options = parseSplitArgs(args);
-      const report = await runSplitCommand(options, { stdin, cwd });
+      const report = await runSplitCommand(options, { stdin, cwd, env });
       if (options.json) {
         writeJson(stdout, withCliJsonEnvelope(report));
       } else {
@@ -323,7 +333,7 @@ export async function runQvCli(argv, {
     }
 
     if (command === 'inspect') {
-      const { filePath } = parseInspectArgs(args);
+      const { filePath } = parseInspectArgs(inspectCanonicalizeArgs);
       const report = await runInspectCommand(filePath);
       if (json) {
         writeJson(stdout, withCliJsonEnvelope(report));
@@ -334,7 +344,7 @@ export async function runQvCli(argv, {
     }
 
     if (command === 'canonicalize') {
-      const { filePath } = parseCanonicalizeArgs(args);
+      const { filePath } = parseCanonicalizeArgs(inspectCanonicalizeArgs);
       const report = await runCanonicalizeCommand(filePath);
       if (json) {
         writeJson(stdout, withCliJsonEnvelope(createCanonicalizeJsonReport(report)));
