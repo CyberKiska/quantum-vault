@@ -858,6 +858,25 @@ All commands emit this shape on failure when `--json` is passed:
 }
 ```
 
+## Browser-To-CLI Migration
+
+| Browser workflow | CLI command | Notes |
+| --- | --- | --- |
+| Generate keys | `qv keygen --out <dir>` | Writes the same raw ML-KEM-1024 `.qkey` key material. The optional `--name` value is a literal filename prefix. |
+| Encrypt one file | `qv encrypt <file> --public-key <publicKey.qkey> --out <file.qenc>` | Uses the same `.qenc` core encryption path as the browser. |
+| Encrypt a file bundle | `qv encrypt --pack <file> <file> ... --public-key <publicKey.qkey> --out <bundle.qenc> --filename <name.qvpack>` | Creates an authenticated `.qvpack` payload before `.qenc` encryption. |
+| Decrypt | `qv decrypt <file.qenc> --private-key <privateKey.qkey> --out <file>` | `--extract-qvpack --out-dir <dir>` mirrors browser multi-file extraction when the decrypted payload is a `QVB1` pack. |
+| Split / create successor shards | `qv split <file.qenc> --private-key <privateKey.qkey> --n <n> --k <k> --out <dir>` | Emits QVqcont-7 shards plus archive-state, cohort-binding, and lifecycle-bundle sidecars. |
+| Attach archive approval | `qv attach --shards '<dir>/*.qcont' --sig <archive.qsig> --pqpk <signer.pqpk> --out-bundle <bundle.json> --out-shards <dir>` | Archive approval signatures target canonical archive-state bytes. |
+| Attach maintenance evidence | `qv attach --bundle <bundle.json> --sig-import <descriptor.json> --out-bundle <bundle.json>` | Maintenance signatures must target an explicit transition-record already represented in the selected lifecycle bundle. |
+| Attach source evidence | `qv attach --bundle <bundle.json> --source-evidence <source-evidence.json> --sig-import <descriptor.json> --out-bundle <bundle.json>` | Source-evidence signatures remain separate from archive policy satisfaction. |
+| Verify archive policy | `qv verify <archive-state.json> --bundle <bundle.json> [--sig <sig>] [--pqpk <pin>] [--required-policy-level <level>]` | Non-zero means policy is not satisfied or inputs are invalid. `--required-policy-level` only tightens. |
+| Restore dry-run | `qv restore --shards '<dir>/*.qcont' --dry-run --json` | Writes nothing and reports `outputs: null`. |
+| Restore write mode | `qv restore --shards '<dir>/*.qcont' --bundle <bundle.json> --out <dir>` | Writes recovered `.qenc`, recovered private key, and sidecars only when policy is satisfied. |
+| Same-state reshare | `qv reshare --shards '<dir>/*.qcont' --n <n> --k <k> --out <dir>` | Preserves exact archive-state bytes and emits a successor cohort plus transition record. |
+| Inspect artifacts | `qv inspect <artifact> --json` | Supports lifecycle JSON, QVqcont-7 shards, `.qsig`, `.sig`, `.pqpk`, and `.ots`. |
+| Canonicalize lifecycle JSON | `qv canonicalize <artifact.json>` | Emits canonical bytes for supported lifecycle JSON artifacts. |
+
 ## Examples
 
 ```bash

@@ -542,7 +542,22 @@ Current restore MUST NOT fail solely because:
 - OTS evidence is absent
 - a non-satisfying signature is present alongside a satisfying one
 
-## 11. Same-state resharing semantics
+## 11. CLI policy gating
+
+The CLI exposes policy decisions through exit codes and stable JSON fields so automation can fail closed without scraping human text.
+
+CLI policy rules:
+
+- `qv verify` exits `0` only when the effective archive policy is satisfied.
+- `qv verify --required-policy-level <level>` compares the selected policy against a caller-required minimum and exits non-zero when the requested level is stricter than the archive's satisfied policy.
+- `qv restore --dry-run --json` writes nothing and reports `wouldSucceed`; successful dry-runs include `outputs: null`.
+- `qv restore` write mode exits non-zero and writes no recovered artifacts when `policy.satisfied !== true`.
+- `--accept-policy-warnings` does not override `policy.satisfied === false`; it is only an operator acknowledgement channel for warnings when policy is otherwise satisfied.
+- Policy failure is reported as `qvCode: "POLICY_NOT_SATISFIED"` with exit code `1`; ambiguity remains `AMBIGUOUS_INPUTS` with exit code `9`; quorum failure remains `QUORUM_UNREACHABLE` with exit code `7`; restored material integrity failure remains `RESTORED_INTEGRITY_FAILED` with exit code `11`.
+
+The CLI therefore treats policy as a gate, not as advisory metadata.
+
+## 12. Same-state resharing semantics
 
 Same-state resharing reconstructs one predecessor successor cohort, preserves exact archive-state descriptor bytes, and emits a new cohort plus a required transition record.
 It is a maintenance path, not an archive re-approval path.
@@ -554,7 +569,7 @@ Current same-state resharing rules:
 - preserved archive-approval signatures remain archive-approval evidence over the unchanged archive state
 - new maintenance signatures over the transition record remain separate maintenance evidence and do not satisfy archive policy
 
-## 12. Future coverage retained for this document
+## 13. Future coverage retained for this document
 
 This document still needs future expansion in the following areas:
 

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
 
 const commandContracts = Object.freeze([
@@ -52,7 +54,7 @@ const commandContracts = Object.freeze([
   },
   {
     modulePath: '../../src/core/cli/lib/io.js',
-    exports: ['readBytes', 'writeBytesAtomic', 'writeJsonAtomic'],
+    exports: ['readBytes', 'runWithIoPolicy', 'writeBytesAtomic', 'writeJsonAtomic'],
   },
   {
     modulePath: '../../src/core/cli/lib/secrets.js',
@@ -70,6 +72,32 @@ test('CLI command modules expose dispatcher contracts', async () => {
         `${contract.modulePath} exports ${exportName}`,
       );
     }
+  }
+});
+
+async function listSourceFiles(dir) {
+  const out = [];
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...await listSourceFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      out.push(fullPath);
+    }
+  }
+  return out;
+}
+
+test('CLI hardening boundary keeps Node APIs out of core crypto and UI modules out of CLI', async () => {
+  for (const filePath of await listSourceFiles('src/core/crypto')) {
+    const source = await readFile(filePath, 'utf8');
+    assert.equal(/from\s+['"]node:/.test(source), false, `${filePath} imports a node: module`);
+  }
+
+  for (const filePath of await listSourceFiles('src/core/cli')) {
+    const source = await readFile(filePath, 'utf8');
+    assert.equal(/features\/.*-ui\.js/.test(source), false, `${filePath} imports browser UI code`);
   }
 });
 

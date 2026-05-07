@@ -397,7 +397,30 @@ Current long-horizon qualification:
 | Absent OTS evidence | Do not fail solely for absence | Integrity and signature validity may still be known |
 | Malformed or ambiguously linked OTS evidence | Reject the evidence path rather than silently trusting it | Other valid signatures or structural checks may still remain knowable |
 
-## 10. Residual risks
+## 10. CLI operator responsibilities
+
+The Node.js CLI keeps the same cryptographic trust boundaries as the browser core, but it exposes filesystem and shell risks that are outside the artifact format.
+
+Operator responsibilities:
+
+- run the CLI only on hosts where local administrators, debuggers, shell history, tracing tools, crash reporters, and swap behavior are acceptable for the sensitivity of the archive
+- keep private key files, recovered private keys, plaintext, and shard files on storage with appropriate OS permissions and backups
+- prefer explicit file or stdin secret sources; environment variables are accepted only as file-path indirection and should not contain raw secret bytes
+- treat best-effort `Uint8Array.fill(0)` zeroization as cleanup, not as protection against memory forensics
+- understand that `--json` output is safe for automation but may contain file paths, archive identifiers, state identifiers, digests, and policy status
+- avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied
+- preserve archive-state descriptors, cohort-binding sidecars, lifecycle bundles, detached signatures, signer pins, timestamps, and source-evidence objects alongside shards so future restore policy can be evaluated explicitly
+
+CLI network and policy boundaries:
+
+- the CLI performs no hidden network use; timestamp evidence is read from disk and is not fetched or upgraded by the CLI
+- `qv verify` and `qv restore --dry-run` are the preferred automation gates before write-mode restore
+- `qv restore` blocks writes when `policy.satisfied !== true`; `--accept-policy-warnings` can acknowledge warnings but cannot override an unsatisfied policy
+- `qv verify --required-policy-level <level>` only tightens the bundle-declared policy requirement
+
+These responsibilities do not weaken the browser model. They make explicit that the CLI host and filesystem become part of the operator's local security perimeter.
+
+## 11. Residual risks
 
 Current residual risks include:
 
@@ -412,7 +435,7 @@ Current residual risks include:
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
 
-## 11. Future coverage retained for this document
+## 12. Future coverage retained for this document
 
 This document carries the current security baseline, but it still needs future expansion in the following areas:
 

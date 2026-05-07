@@ -21,7 +21,7 @@ Archive approval is over canonical archive-state descriptor bytes. Lifecycle bun
 
 ## What Quantum Vault Is For
 
-Quantum Vault is a browser-based tool for protecting long-lived files with post-quantum encryption, threshold recovery, and detached authenticity proofs.
+Quantum Vault is a client-side tool with browser and Node.js CLI surfaces for protecting long-lived files with post-quantum encryption, threshold recovery, and detached authenticity proofs.
 A normal encrypted file solves confidentiality at one point in time, but long-lived archives often also need durable recovery, signer-verifiable provenance, mutable evidence that can be attached later, and an explicit rule for when restore is allowed.
 Quantum Vault is designed for archives that need to survive both post-quantum transition risk and ordinary operational failure.
 
@@ -63,14 +63,14 @@ Deferred roadmap:
 
 ## Features
 
-- **Generate** a post-quantum ML-KEM key pair directly in the browser.
+- **Generate** a post-quantum ML-KEM key pair directly in the browser or CLI.
 - **Encrypt** one or more files into a `.qenc` container for long-lived confidentiality.
 - **Decrypt** Quantum Vault `.qenc` containers back into their original payload.
 - **Split** an archive and its ML-KEM private key into threshold successor `.qcont` shards, exporting a signable archive-state descriptor and lifecycle bundle for later approval and maintenance; Pro additionally exports a standalone cohort-binding artifact for operator workflows.
 - **Attach** archive-approval, maintenance, or source-evidence detached signatures, signer pin material, and timestamp evidence into a lifecycle bundle carried by successor shards or supplied explicitly.
 - **Restore** from successor shards plus optional authenticity material, with recovery gated by archive policy.
 - **Verify** detached signatures while keeping integrity, signer pinning, maintenance evidence, source evidence, and policy satisfaction as separate outcomes.
-- **Keep cryptographic operations local** to the client browser during normal operation.
+- **Keep cryptographic operations local** to the client browser or CLI host during normal operation.
 - **Lite Create** shows non-blocking custody guidance (independent shard storage, retaining archive-state and lifecycle JSON, optional ML-KEM key backup) and a short export checklist after each successful create.
 
 ## Workflow At A Glance
@@ -240,9 +240,51 @@ Detailed current rules live in:
 - [`docs/format-spec.md`](docs/format-spec.md) for container formats, lifecycle objects, verifier flow, and fail-closed behavior
 - [`docs/trust-and-policy.md`](docs/trust-and-policy.md) for signature meaning, proof counting, pinning, archive policy, and restore authorization semantics
 
+## Quantum Vault CLI
+
+Quantum Vault also ships a pure-ESM Node.js CLI through `bin/qv.mjs` for non-browser workflows. It is an adapter over the same `src/core/crypto/**` modules used by the browser; it does not implement separate CLI-only cryptography and does not perform hidden network access.
+
+Quick start:
+
+```bash
+npm run cli -- keygen --out ./keys --json
+npm run cli -- encrypt ./payload.bin --public-key ./keys/publicKey.qkey --out ./payload.bin.qenc --json
+npm run cli -- split ./payload.bin.qenc --private-key ./keys/privateKey.qkey --n 5 --k 3 --out ./cohort --auth-policy-level integrity-only --json
+npm run cli -- restore --shards './cohort/*.qcont' --dry-run --json
+```
+
+Typical archive-approval flow:
+
+```bash
+npm run cli -- attach --shards './cohort/*.qcont' --sig ./archive.qsig --pqpk ./signer.pqpk --out-bundle ./attached.lifecycle-bundle.json --out-shards ./attached-cohort --json
+npm run cli -- verify ./cohort/payload.bin.archive-state.json --bundle ./attached.lifecycle-bundle.json --pqpk ./signer.pqpk --required-policy-level strong-pq-signature --json
+npm run cli -- restore --shards './attached-cohort/*.qcont' --bundle ./attached.lifecycle-bundle.json --pqpk ./signer.pqpk --out ./recovered --json
+```
+
+Scriptable exit-code pattern:
+
+```bash
+if npm run cli -- verify ./archive-state.json --bundle ./lifecycle-bundle.json --json > verify.json; then
+  npm run cli -- restore --shards './cohort/*.qcont' --bundle ./lifecycle-bundle.json --out ./recovered --json
+else
+  code=$?
+  echo "verification failed with exit code ${code}" >&2
+  exit "${code}"
+fi
+```
+
+CLI security notes:
+
+- `qv restore` and `qv verify` fail closed on archive/state/cohort ambiguity, lifecycle-bundle ambiguity, target mismatch, and unsatisfied archive policy.
+- Secret inputs are explicit file/stdin/env-path sources; private key bytes are never printed.
+- Direct symlink input paths are rejected unless `--allow-symlink` is supplied.
+- Node.js memory zeroization is best-effort only; operators remain responsible for swap, crash dumps, shell history, tracing, filesystem permissions, and local host compromise.
+
+Full command reference and browser-to-CLI migration notes are in [`docs/cli.md`](docs/cli.md).
+
 ## Security Notes
 
-- All cryptographic operations are intended to happen in the client browser; no private archive material should need to leave the user environment.
+- All cryptographic operations are intended to happen locally in the client browser or CLI host; no private archive material should need to leave the user environment.
 - JavaScript cryptography cannot provide strong side-channel guarantees against hostile local environments.
 - ML-KEM gives confidentiality, not sender authentication; detached signatures and policy evaluation provide provenance at the archive layer.
 - Shamir sharing protects confidentiality below threshold, but users still need independent and reliable shard custody.
