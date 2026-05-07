@@ -182,6 +182,7 @@ test('reshare --json writes a same-state successor cohort that restores in dry-r
     assert.equal(restore.exitCode, 0);
     const restoreReport = JSON.parse(restore.stdoutText);
     assert.equal(restoreReport.wouldSucceed, true);
+    assert.equal(restoreReport.outputs, null);
     assert.equal(restoreReport.archiveId, split.archiveId);
     assert.equal(restoreReport.stateId, split.stateId);
     assert.equal(restoreReport.cohortId, report.cohortId);

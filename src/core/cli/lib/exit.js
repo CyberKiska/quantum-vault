@@ -25,6 +25,7 @@ export const QV_CODE = Object.freeze({
   AMBIGUOUS_INPUTS: 'AMBIGUOUS_INPUTS',
   RESHARE_CONTRACT_VIOLATION: 'RESHARE_CONTRACT_VIOLATION',
   RESTORED_INTEGRITY_FAILED: 'RESTORED_INTEGRITY_FAILED',
+  POLICY_NOT_SATISFIED: 'POLICY_NOT_SATISFIED',
 });
 
 const QV_CODE_TO_EXIT = Object.freeze({
@@ -39,10 +40,26 @@ const QV_CODE_TO_EXIT = Object.freeze({
   [QV_CODE.AMBIGUOUS_INPUTS]: EXIT.AMBIGUITY,
   [QV_CODE.RESHARE_CONTRACT_VIOLATION]: EXIT.RESHARE_CONTRACT,
   [QV_CODE.RESTORED_INTEGRITY_FAILED]: EXIT.RESTORED_INTEGRITY,
+  [QV_CODE.POLICY_NOT_SATISFIED]: EXIT.ERROR,
 });
 
 const CORE_ERROR_QV_CODE_RULES = Object.freeze([
-  // Future command commits add audited core-error mappings here.
+  {
+    pattern: /authenticity policy|policy is not satisfied|policy not satisfied|No archive authenticity policy/i,
+    qvCode: QV_CODE.POLICY_NOT_SATISFIED,
+  },
+  {
+    pattern: /Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|RS|erasure|quorum/i,
+    qvCode: QV_CODE.QUORUM_UNREACHABLE,
+  },
+  {
+    pattern: /multiple|fork|ambiguous|exactly one|Selected .* not present|bundle digest/i,
+    qvCode: QV_CODE.AMBIGUOUS_INPUTS,
+  },
+  {
+    pattern: /qkeyOk|qencOk|hash does not match|private key hash|key commitment/i,
+    qvCode: QV_CODE.RESTORED_INTEGRITY_FAILED,
+  },
 ]);
 
 export function makeQvError(message, qvCode = QV_CODE.UNEXPECTED, options = {}) {

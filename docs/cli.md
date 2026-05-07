@@ -26,6 +26,14 @@ npm run cli -- --help
 
 The package also exposes `qv` via the `bin` field when installed as a package.
 
+Global flags:
+
+- `--help` / `-h` prints top-level help, and `qv help <command>` prints the same text as `qv <command> --help`
+- `--no-color` is accepted and is the default; current CLI output is plain text
+- `--color` is accepted as an explicit opt-in only when stderr is a TTY; current CLI output remains plain
+- `--quiet` is accepted for forward compatibility with future stderr progress output
+- `--allow-symlink` permits explicit symlink input paths; without it, direct symlink reads fail closed
+
 ## Commands
 
 ### `qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]`
@@ -710,7 +718,8 @@ Exit status:
   "privateKeyHashMatchesMetadata": true,
   "rejectedShardIndices": [],
   "lifecycleVerification": {},
-  "authenticity": {}
+  "authenticity": {},
+  "outputs": null
 }
 ```
 
@@ -845,7 +854,7 @@ All commands emit this shape on failure when `--json` is passed:
   "ok": false,
   "cliSchemaVersion": 1,
   "error": "message",
-  "qvCode": "USAGE|UNEXPECTED|..."
+  "qvCode": "USAGE|POLICY_NOT_SATISFIED|UNEXPECTED|..."
 }
 ```
 

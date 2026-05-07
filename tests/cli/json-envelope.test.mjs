@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -95,4 +95,58 @@ test('non-JSON errors use the centralized CLI formatter', async () => {
   assert.equal(exitCode, 1);
   assert.equal(stdout.text(), '');
   assert.equal(stderr.text(), 'qv: inspect: inspect requires <artifact-file>\n');
+});
+
+test('command help and global color/quiet flags are accepted without parser errors', async () => {
+  async function runRaw(args) {
+    const stdout = createCaptureStream();
+    const stderr = createCaptureStream();
+    const exitCode = await runQvCli(args, { stdout, stderr });
+    return { exitCode, stdoutText: stdout.text(), stderrText: stderr.text() };
+  }
+
+  for (const command of [
+    'keygen',
+    'encrypt',
+    'decrypt',
+    'split',
+    'attach',
+    'reshare',
+    'inspect',
+    'canonicalize',
+    'verify',
+    'restore',
+    'selftest',
+    'version',
+  ]) {
+    const direct = await runRaw([command, '--help']);
+    assert.equal(direct.exitCode, 0, command);
+    assert.equal(direct.stderrText, '', command);
+    assert.match(direct.stdoutText, new RegExp(`Usage: qv ${command}`), command);
+
+    const viaHelp = await runRaw(['help', command]);
+    assert.equal(viaHelp.exitCode, 0, command);
+    assert.equal(viaHelp.stderrText, '', command);
+    assert.equal(viaHelp.stdoutText, direct.stdoutText, command);
+  }
+
+  const version = await runJsonCommand(['--no-color', '--quiet', 'version', '--color', '--json']);
+  assert.equal(version.exitCode, 0);
+  assert.equal(version.stderrText, '');
+  assert.equal(version.json.command, 'version');
+});
+
+test('direct symlink inputs fail closed unless --allow-symlink is explicit', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'qv-cli-symlink-'));
+  const linkPath = join(dir, 'archive-state.link.json');
+  await symlink(join(process.cwd(), archiveStateFixture), linkPath);
+
+  const refused = await runJsonCommand(['inspect', linkPath, '--json']);
+  assert.equal(refused.exitCode, 2);
+  assert.equal(refused.json.qvCode, 'USAGE');
+  assert.match(refused.json.error, /Refusing to read symlink/);
+
+  const allowed = await runJsonCommand(['inspect', linkPath, '--allow-symlink', '--json']);
+  assert.equal(allowed.exitCode, 0);
+  assert.equal(allowed.json.artifactType, 'archive-state-descriptor/v1');
 });

@@ -31,6 +31,10 @@ function restoredIntegrityFailed(message, cause) {
   return makeQvError(message, QV_CODE.RESTORED_INTEGRITY_FAILED, { cause });
 }
 
+function policyNotSatisfied(message, cause) {
+  return makeQvError(message, QV_CODE.POLICY_NOT_SATISFIED, { cause });
+}
+
 function digestSha3_512Hex(bytes) {
   return toHex(sha3_512(bytes));
 }
@@ -246,6 +250,7 @@ export function buildRestoreDryRunSummary(result) {
     rejectedShardIndices: Array.isArray(result.rejectedShardIndices) ? [...result.rejectedShardIndices] : [],
     lifecycleVerification: result.lifecycleVerification,
     authenticity: result.authenticity,
+    outputs: null,
   };
 }
 
@@ -305,11 +310,17 @@ async function readRestoreVerification(options) {
 function classifyRestoreError(error) {
   if (typeof error?.qvCode === 'string') return error;
   const message = error?.message || String(error);
+  if (error?.authenticity?.policy?.satisfied === false) {
+    return policyNotSatisfied(message, error);
+  }
   if (/Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|RS|erasure|quorum/i.test(message)) {
     return quorumRejected(message, error);
   }
   if (/multiple|fork|ambiguous|exactly one|Selected .* not present|bundle digest/i.test(message)) {
     return ambiguity(message, error);
+  }
+  if (/authenticity policy|policy is not satisfied|policy not satisfied|No archive authenticity policy/i.test(message)) {
+    return policyNotSatisfied(message, error);
   }
   if (/qkeyOk|qencOk|hash does not match|private key hash|key commitment/i.test(message)) {
     return restoredIntegrityFailed(message, error);

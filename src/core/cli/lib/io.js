@@ -1,7 +1,24 @@
-import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { lstat, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { QV_CODE, makeQvError } from './exit.js';
 
-export async function readBytesFromFile(filePath) {
+const ioPolicy = new AsyncLocalStorage();
+
+function currentIoPolicy() {
+  return ioPolicy.getStore() || {};
+}
+
+export async function runWithIoPolicy(policy, fn) {
+  return ioPolicy.run({ ...(policy || {}) }, fn);
+}
+
+export async function readBytesFromFile(filePath, options = {}) {
+  const allowSymlink = options.allowSymlink ?? currentIoPolicy().allowSymlink === true;
+  const stats = await lstat(filePath);
+  if (stats.isSymbolicLink() && !allowSymlink) {
+    throw makeQvError(`Refusing to read symlink without --allow-symlink: ${filePath}`, QV_CODE.USAGE);
+  }
   return new Uint8Array(await readFile(filePath));
 }
 

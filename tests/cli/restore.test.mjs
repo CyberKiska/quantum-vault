@@ -212,7 +212,7 @@ test('restore write mode aborts policy-failed archives without writing outputs',
   const error = JSON.parse(result.stdoutText);
   assert.equal(error.command, 'restore');
   assert.equal(error.ok, false);
-  assert.equal(error.qvCode, 'UNEXPECTED');
+  assert.equal(error.qvCode, 'POLICY_NOT_SATISFIED');
 });
 
 test('restore --accept-policy-warnings does not override failed authenticity policy', async () => {
@@ -236,5 +236,5 @@ test('restore --accept-policy-warnings does not override failed authenticity pol
   assert.equal(result.exitCode, 1);
   assert.equal(await exists(outDir), false);
   const error = JSON.parse(result.stdoutText);
-  assert.equal(error.qvCode, 'UNEXPECTED');
+  assert.equal(error.qvCode, 'POLICY_NOT_SATISFIED');
 });

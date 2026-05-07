@@ -70,6 +70,7 @@ import {
   writeText,
 } from './lib/json.js';
 import { EXIT, mapErrorToExitCode } from './lib/exit.js';
+import { runWithIoPolicy } from './lib/io.js';
 
 export {
   restoreDryRunFromInputs,
@@ -90,6 +91,44 @@ export {
   verifyArchiveInputs,
 };
 
+const COMMAND_HELP = Object.freeze({
+  keygen: 'qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
+  encrypt: 'qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]\nqv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
+  decrypt: 'qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
+  split: 'qv split <input.qenc> --private-key <privateKey.qkey> --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
+  attach: 'qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
+  reshare: 'qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
+  inspect: 'qv inspect <artifact-file> [--json]',
+  canonicalize: 'qv canonicalize <artifact-file> [--json]',
+  verify: 'qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--include-detached-summary] [--required-policy-level <level>] [--json]',
+  restore: 'qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
+  selftest: 'qv selftest [--filter <substring>] [--json]',
+  version: 'qv version [--json]',
+});
+
+function globalHelpText() {
+  return [
+    'Global flags:',
+    '  --json             Emit a single stable JSON document on stdout.',
+    '  --no-color         Disable ANSI color. This is the default.',
+    '  --color            Opt in to color only when stderr is a TTY. Current output remains plain.',
+    '  --quiet            Suppress future human progress messages on stderr.',
+    '  --allow-symlink    Permit explicit symlink input paths. Default is fail-closed.',
+    '  --help, -h         Show help.',
+  ].join('\n');
+}
+
+function commandHelpText(command) {
+  const usage = COMMAND_HELP[command];
+  if (!usage) return '';
+  return [
+    `Usage: ${usage}`,
+    '',
+    globalHelpText(),
+    '',
+  ].join('\n');
+}
+
 function helpText() {
   return [
     'Quantum Vault CLI',
@@ -109,6 +148,10 @@ function helpText() {
     '  qv selftest [--filter <substring>] [--json]',
     '  qv version [--json]',
     '',
+    'Run `qv help <command>` or `qv <command> --help` for command-specific help.',
+    '',
+    globalHelpText(),
+    '',
     'Current write scope:',
     '  keygen writes ML-KEM-1024 .qkey files',
     '  encrypt writes .qenc containers and can pre-pack multiple files as .qvpack payloads',
@@ -123,6 +166,41 @@ function helpText() {
   ].join('\n');
 }
 
+function parseGlobalFlags(rawArgs, stderr) {
+  const args = [];
+  const options = {
+    help: false,
+    quiet: false,
+    color: false,
+    allowSymlink: false,
+  };
+
+  for (const arg of rawArgs) {
+    if (arg === '--help' || arg === '-h') {
+      options.help = true;
+      continue;
+    }
+    if (arg === '--quiet') {
+      options.quiet = true;
+      continue;
+    }
+    if (arg === '--no-color') {
+      options.color = false;
+      continue;
+    }
+    if (arg === '--color') {
+      options.color = stderr?.isTTY === true;
+      continue;
+    }
+    if (arg === '--allow-symlink') {
+      options.allowSymlink = true;
+      continue;
+    }
+    args.push(arg);
+  }
+  return { ...options, args };
+}
+
 function formatCliError(command, error) {
   const label = command || 'qv';
   return `qv: ${label}: ${error?.message || error}\n`;
@@ -135,17 +213,44 @@ export async function runQvCli(argv, {
   stderr = process.stderr,
   env = process.env,
 } = {}) {
-  const args = [...argv];
+  const globalOptions = parseGlobalFlags([...argv], stderr);
+  const args = [...globalOptions.args];
   const command = String(args.shift() || '').trim();
 
-  if (!command || command === '--help' || command === '-h' || command === 'help') {
+  if (!command) {
     writeText(stdout, `${helpText()}\n`);
+    return EXIT.OK;
+  }
+
+  if (command === 'help') {
+    const subject = String(args.shift() || '').trim();
+    if (!subject) {
+      writeText(stdout, `${helpText()}\n`);
+      return EXIT.OK;
+    }
+    const text = commandHelpText(subject);
+    if (!text) {
+      writeText(stderr, `qv: help: Unknown command: ${subject}\n`);
+      return EXIT.USAGE;
+    }
+    writeText(stdout, text);
+    return EXIT.OK;
+  }
+
+  if (globalOptions.help) {
+    const text = commandHelpText(command);
+    if (!text) {
+      writeText(stderr, `qv: ${command}: Unknown command: ${command}\n`);
+      return EXIT.USAGE;
+    }
+    writeText(stdout, text);
     return EXIT.OK;
   }
 
   const json = parseGlobalJsonFlag(args);
 
   try {
+    return await runWithIoPolicy({ allowSymlink: globalOptions.allowSymlink }, async () => {
     if (command === 'keygen') {
       const options = parseKeygenArgs(args);
       const { report, publicKeyBase64 } = await runKeygenCommand(options);
@@ -292,6 +397,7 @@ export async function runQvCli(argv, {
     }
 
     throw new Error(`Unknown command: ${command}`);
+    });
   } catch (error) {
     if (json) {
       writeJson(stdout, createJsonError(command, error));
