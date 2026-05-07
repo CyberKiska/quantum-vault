@@ -5,7 +5,7 @@ import { generateKeyPair } from '../../crypto/index.js';
 import { ML_KEM_1024_PRIVATE_KEY_SIZE, ML_KEM_1024_PUBLIC_KEY_SIZE } from '../../crypto/mlkem.js';
 import { toHex } from '../../crypto/bytes.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
-import { writeBytesAtomic } from '../lib/io.js';
+import { writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
 import { takeValue } from '../lib/args.js';
 
@@ -168,14 +168,10 @@ export async function runKeygenCommand(options) {
       seedInfo: keyPair.seedInfo,
     });
 
-    await writeBytesAtomic(paths.publicKeyPath, publicKeyBytes, {
-      mode: 0o644,
-      force: options.force,
-    });
-    await writeBytesAtomic(paths.privateKeyPath, privateKeyBytes, {
-      mode: 0o600,
-      force: options.force,
-    });
+    await writeArtifactSetAtomic([
+      { path: paths.publicKeyPath, bytes: publicKeyBytes, mode: 0o644 },
+      { path: paths.privateKeyPath, bytes: privateKeyBytes, mode: 0o600 },
+    ], { force: options.force });
 
     return {
       report,

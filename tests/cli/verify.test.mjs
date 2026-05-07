@@ -19,10 +19,14 @@ function createCaptureStream() {
   };
 }
 
-async function runCli(args) {
+async function runCli(args, options = {}) {
   const stdout = createCaptureStream();
   const stderr = createCaptureStream();
-  const exitCode = await runQvCli(args, { stdout, stderr });
+  const exitCode = await runQvCli(args, {
+    stdout,
+    stderr,
+    env: { ...process.env, QV_ALLOW_DETERMINISTIC: '1', ...(options.env || {}) },
+  });
   const stdoutText = stdout.text();
   return {
     exitCode,

@@ -29,6 +29,7 @@ async function runJsonCli(args, options = {}) {
     stdout,
     stderr,
     cwd: options.cwd,
+    env: { ...process.env, QV_ALLOW_DETERMINISTIC: '1', ...(options.env || {}) },
   });
   assert.equal(stderr.text(), '');
   const json = stdout.text() ? JSON.parse(stdout.text()) : null;

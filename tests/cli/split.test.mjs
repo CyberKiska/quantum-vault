@@ -35,7 +35,7 @@ async function runCli(args, options = {}) {
     stderr,
     stdin: options.stdin,
     cwd: options.cwd,
-    env: options.env ? { ...process.env, ...options.env } : process.env,
+    env: { ...process.env, QV_ALLOW_DETERMINISTIC: '1', ...(options.env || {}) },
   });
   return {
     exitCode,
@@ -240,6 +240,37 @@ test('split --help-internal prints deterministic fixture flags', async () => {
   assert.equal(result.exitCode, 0);
   assert.equal(result.stderrText, '');
   assert.match(result.stdoutText, /--archive-id/);
+});
+
+test('split deterministic fixture flags require explicit environment opt-in', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const { qencPath } = await encryptFixture({
+    baseDir,
+    keys,
+    plaintext: new Uint8Array([4, 5, 6]),
+    filename: 'deterministic-gate.bin',
+  });
+  const result = await runCli([
+    'split',
+    qencPath,
+    '--private-key',
+    keys.privateKeyPath,
+    '--n',
+    '5',
+    '--k',
+    '3',
+    '--out',
+    join(baseDir, 'blocked-cohort'),
+    '--archive-id-random',
+    '33'.repeat(32),
+    '--json',
+  ], { env: { QV_ALLOW_DETERMINISTIC: '' } });
+
+  assert.equal(result.exitCode, 2);
+  const error = JSON.parse(result.stdoutText);
+  assert.equal(error.qvCode, 'USAGE');
+  assert.match(error.error, /QV_ALLOW_DETERMINISTIC=1/);
 });
 
 test('split maps unsupported RS/Shamir geometry to QUORUM_UNREACHABLE', async () => {

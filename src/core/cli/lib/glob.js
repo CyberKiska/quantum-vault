@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { assertNoSymlinkPath, symlinksAllowed } from './io.js';
 
 export function normalizePathForMatch(value) {
   return String(value).split(path.sep).join('/');
@@ -14,6 +15,9 @@ async function collectFilesRecursive(dirPath) {
   const files = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
     const fullPath = path.join(dirPath, entry.name);
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
     if (entry.isDirectory()) {
       files.push(...await collectFilesRecursive(fullPath));
       continue;
@@ -47,6 +51,9 @@ export async function expandFilePattern(pattern, cwd) {
   }
 
   const baseDir = resolveGlobBase(pattern, cwd);
+  if (!symlinksAllowed()) {
+    await assertNoSymlinkPath(baseDir);
+  }
   const candidates = await collectFilesRecursive(baseDir);
   const matcher = path.isAbsolute(pattern)
     ? normalizePathForMatch(pattern)

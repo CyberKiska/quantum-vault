@@ -32,7 +32,7 @@ Global flags:
 - `--no-color` is accepted and is the default; current CLI output is plain text
 - `--color` is accepted as an explicit opt-in only when stderr is a TTY; current CLI output remains plain
 - `--quiet` is accepted for forward compatibility with future stderr progress output
-- `--allow-symlink` permits explicit symlink input paths; without it, direct symlink reads fail closed
+- `--allow-symlink` permits explicit symlink input paths and symlinked path components; without it, symlink reads fail closed
 
 ## Commands
 
@@ -245,7 +245,7 @@ Archive policy options:
 - `--auth-policy-level <integrity-only|any-signature|strong-pq-signature>`
 - `--min-valid-signatures <int>`, default `1`
 
-Internal deterministic fixture options are accepted but intentionally hidden from the short help:
+Internal deterministic fixture options are accepted only when `QV_ALLOW_DETERMINISTIC=1` is set and are intentionally hidden from the short help:
 
 - `--archive-id <64 lowercase hex>`
 - `--archive-id-random <64 hex chars>`

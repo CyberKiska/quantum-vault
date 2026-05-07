@@ -14,7 +14,7 @@ import {
   makeExternalArtifactRecord,
   readBytesFromFile,
   readOptionalBytes,
-  writeBytesAtomic,
+  writeArtifactSetAtomic,
 } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 
@@ -448,28 +448,38 @@ async function applyMaintenanceImportsIfRequested(result, inputs) {
 }
 
 async function writeReshareOutputs({ result, plan, maintenanceSignatureCountAdded, force }) {
-  await writeBytesAtomic(plan.archiveStatePath, result.archiveStateBytes, { mode: 0o644, force });
-  await writeBytesAtomic(plan.cohortBindingPath, result.cohortBindingBytes, { mode: 0o644, force });
-  await writeBytesAtomic(plan.lifecycleBundlePath, result.lifecycleBundleBytes, { mode: 0o600, force });
-  await writeBytesAtomic(plan.transitionRecordPath, result.transitionRecordBytes, { mode: 0o644, force });
-
   const shardReports = [];
-  for (const shard of plan.shards) {
-    const item = result.shards.find((candidate) => (candidate.index ?? candidate.shardIndex) === shard.index);
-    if (!item) {
-      throw new Error(`Missing reshared shard ${shard.index}`);
-    }
-    const bytes = await blobToBytes(item.blob);
-    try {
-      await writeBytesAtomic(shard.path, bytes, { mode: 0o600, force });
+  const stagedShardBytes = [];
+  try {
+    for (const shard of plan.shards) {
+      const item = result.shards.find((candidate) => (candidate.index ?? candidate.shardIndex) === shard.index);
+      if (!item) {
+        throw new Error(`Missing reshared shard ${shard.index}`);
+      }
+      const bytes = await blobToBytes(item.blob);
+      stagedShardBytes.push({ shard, bytes });
       shardReports.push({
         index: shard.index,
         path: shard.path,
         shardDigestHex: digestSha3_512Hex(bytes),
         shardSize: bytes.length,
       });
-    } finally {
-      bytes.fill(0);
+    }
+
+    await writeArtifactSetAtomic([
+      { path: plan.archiveStatePath, bytes: result.archiveStateBytes, mode: 0o644 },
+      { path: plan.cohortBindingPath, bytes: result.cohortBindingBytes, mode: 0o644 },
+      { path: plan.lifecycleBundlePath, bytes: result.lifecycleBundleBytes, mode: 0o600 },
+      { path: plan.transitionRecordPath, bytes: result.transitionRecordBytes, mode: 0o644 },
+      ...stagedShardBytes.map(({ shard, bytes }) => ({
+        path: shard.path,
+        bytes,
+        mode: 0o600,
+      })),
+    ], { force });
+  } finally {
+    for (const item of stagedShardBytes) {
+      item.bytes.fill(0);
     }
   }
 

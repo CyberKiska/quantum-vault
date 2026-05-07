@@ -36,6 +36,7 @@ function runQv(args, {
       env: {
         ...process.env,
         NO_COLOR: '1',
+        QV_ALLOW_DETERMINISTIC: '1',
       },
     });
     const stdout = [];

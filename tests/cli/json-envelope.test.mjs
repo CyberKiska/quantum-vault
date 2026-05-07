@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -69,6 +69,17 @@ test('canonicalize accepts --json before the artifact path', async () => {
   assert.equal(result.json.command, 'canonicalize');
   assert.equal(result.json.ok, true);
   assert.equal(typeof result.json.canonicalJsonText, 'string');
+});
+
+test('verify accepts --json before the archive-state path', async () => {
+  const archiveStatePath = await createCanonicalArchiveStateFixture();
+  const result = await runJsonCommand(['verify', '--json', archiveStatePath]);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stderrText, '');
+  assert.equal(result.json.command, 'verify');
+  assert.equal(result.json.ok, false);
+  assert.equal(result.json.cliSchemaVersion, 1);
+  assert.equal(result.json.policy.level, 'unresolved');
 });
 
 test('canonicalize --json emits stable CLI envelope', async () => {
@@ -165,6 +176,26 @@ test('direct symlink inputs fail closed unless --allow-symlink is explicit', asy
   assert.match(refused.json.error, /Refusing to read symlink/);
 
   const allowed = await runJsonCommand(['inspect', linkPath, '--allow-symlink', '--json']);
+  assert.equal(allowed.exitCode, 0);
+  assert.equal(allowed.json.artifactType, 'archive-state-descriptor/v1');
+});
+
+test('symlinked parent path components fail closed unless --allow-symlink is explicit', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'qv-cli-symlink-parent-'));
+  const realDir = join(dir, 'real');
+  const linkDir = join(dir, 'linked');
+  await mkdir(realDir);
+  const archivePath = join(realDir, 'archive-state.json');
+  await writeFile(archivePath, await readFile(archiveStateFixture));
+  await symlink(realDir, linkDir);
+  const linkedArchivePath = join(linkDir, 'archive-state.json');
+
+  const refused = await runJsonCommand(['inspect', linkedArchivePath, '--json']);
+  assert.equal(refused.exitCode, 2);
+  assert.equal(refused.json.qvCode, 'USAGE');
+  assert.match(refused.json.error, /Refusing to read symlink/);
+
+  const allowed = await runJsonCommand(['inspect', linkedArchivePath, '--allow-symlink', '--json']);
   assert.equal(allowed.exitCode, 0);
   assert.equal(allowed.json.artifactType, 'archive-state-descriptor/v1');
 });

@@ -10,7 +10,7 @@ import {
   parseSourceEvidenceBytes,
 } from '../../crypto/lifecycle/artifacts.js';
 import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
-import { parseJsonBytesStrict } from '../../crypto/manifest/strict-json.js';
+import { parseJsonBytesStrict, parseJsonTextStrict } from '../../crypto/manifest/strict-json.js';
 import { takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
@@ -18,7 +18,7 @@ import {
   makeExternalArtifactRecord,
   readBytesFromFile,
   readOptionalBytes,
-  writeBytesAtomic,
+  writeArtifactSetAtomic,
 } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
 
@@ -203,7 +203,7 @@ export { parseAttachArgs };
 function parseSigImportSpec(spec) {
   let parsed;
   try {
-    parsed = JSON.parse(spec);
+    parsed = parseJsonTextStrict(spec);
   } catch (error) {
     throw usage(`Invalid --sig-import JSON: ${error?.message || error}`);
   }
@@ -410,17 +410,30 @@ async function preflightOutputs({ outBundlePath, shardPlan, force }) {
 
 async function writeAttachedArtifacts({ result, outBundlePath, shardPlan, force }) {
   await ensureOutputParentExists(outBundlePath, '--out-bundle');
-  await writeBytesAtomic(outBundlePath, result.lifecycleBundleBytes, { mode: 0o600, force });
-  for (const shard of shardPlan) {
-    const updated = result.shards.find((item) => (item.index ?? item.shardIndex) === shard.index);
-    if (!updated) {
-      throw new Error(`Missing rewritten shard ${shard.index}`);
+  const stagedShardBytes = [];
+  try {
+    for (const shard of shardPlan) {
+      const updated = result.shards.find((item) => (item.index ?? item.shardIndex) === shard.index);
+      if (!updated) {
+        throw new Error(`Missing rewritten shard ${shard.index}`);
+      }
+      stagedShardBytes.push({
+        shard,
+        bytes: await blobToBytes(updated.blob),
+      });
     }
-    const bytes = await blobToBytes(updated.blob);
-    try {
-      await writeBytesAtomic(shard.path, bytes, { mode: 0o600, force });
-    } finally {
-      bytes.fill(0);
+
+    await writeArtifactSetAtomic([
+      { path: outBundlePath, bytes: result.lifecycleBundleBytes, mode: 0o600 },
+      ...stagedShardBytes.map(({ shard, bytes }) => ({
+        path: shard.path,
+        bytes,
+        mode: 0o600,
+      })),
+    ], { force });
+  } finally {
+    for (const item of stagedShardBytes) {
+      item.bytes.fill(0);
     }
   }
 }

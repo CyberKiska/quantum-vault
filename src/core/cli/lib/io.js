@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { lstat, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { QV_CODE, makeQvError } from './exit.js';
@@ -9,15 +10,39 @@ function currentIoPolicy() {
   return ioPolicy.getStore() || {};
 }
 
+export function symlinksAllowed() {
+  return currentIoPolicy().allowSymlink === true;
+}
+
 export async function runWithIoPolicy(policy, fn) {
   return ioPolicy.run({ ...(policy || {}) }, fn);
 }
 
+export async function assertNoSymlinkPath(filePath) {
+  const resolved = path.resolve(filePath);
+  const parsed = path.parse(resolved);
+  const relative = path.relative(parsed.root, resolved);
+  const parts = relative ? relative.split(path.sep).filter(Boolean) : [];
+  let cursor = parsed.root;
+
+  for (const part of parts) {
+    cursor = path.join(cursor, part);
+    const stats = await lstat(cursor);
+    if (stats.isSymbolicLink()) {
+      if (path.dirname(cursor) === parsed.root) {
+        continue;
+      }
+      throw makeQvError(`Refusing to read symlink without --allow-symlink: ${cursor}`, QV_CODE.USAGE);
+    }
+  }
+}
+
 export async function readBytesFromFile(filePath, options = {}) {
   const allowSymlink = options.allowSymlink ?? currentIoPolicy().allowSymlink === true;
-  const stats = await lstat(filePath);
-  if (stats.isSymbolicLink() && !allowSymlink) {
-    throw makeQvError(`Refusing to read symlink without --allow-symlink: ${filePath}`, QV_CODE.USAGE);
+  if (!allowSymlink) {
+    await assertNoSymlinkPath(filePath);
+  } else {
+    await lstat(filePath);
   }
   return new Uint8Array(await readFile(filePath));
 }
@@ -61,7 +86,7 @@ async function unlinkIfExists(filePath) {
   }
 }
 
-async function fsyncDirectory(dirPath) {
+export async function fsyncDirectory(dirPath) {
   let handle = null;
   try {
     handle = await open(dirPath, 'r');
@@ -124,6 +149,84 @@ export async function writeBytesAtomic(filePath, bytes, {
     await handle?.close();
     if (createdTemp) {
       await unlinkIfExists(tempPath);
+    }
+    throw error;
+  }
+}
+
+function uniqueTempPath(destination) {
+  const token = `${process.pid}.${randomUUID()}`;
+  return `${destination}.tmp-${token}`;
+}
+
+async function writeTempFile(tempPath, bytes, mode) {
+  const buffer = bytesToBuffer(bytes);
+  const handle = await open(tempPath, 'wx', mode);
+  try {
+    await writeAll(handle, buffer);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  return buffer.length;
+}
+
+export async function writeArtifactSetAtomic(entries, { force = false } = {}) {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+
+  const normalized = entries.map((entry) => ({
+    path: path.resolve(entry.path),
+    bytes: entry.bytes,
+    mode: entry.mode ?? 0o600,
+  }));
+  const destinationSet = new Set(normalized.map((entry) => entry.path));
+  if (destinationSet.size !== normalized.length) {
+    throw makeQvError('Artifact output paths must be distinct', QV_CODE.USAGE);
+  }
+
+  if (!force) {
+    for (const entry of normalized) {
+      if (await pathExists(entry.path)) {
+        throw makeQvError(`Refusing to overwrite existing file: ${entry.path}`, QV_CODE.USAGE);
+      }
+    }
+  }
+
+  const staged = [];
+  const renamed = [];
+  try {
+    for (const entry of normalized) {
+      const tempPath = uniqueTempPath(entry.path);
+      const bytesWritten = await writeTempFile(tempPath, entry.bytes, entry.mode);
+      staged.push({ ...entry, tempPath, bytesWritten });
+    }
+
+    for (const entry of staged) {
+      if (!force && await pathExists(entry.path)) {
+        throw makeQvError(`Refusing to overwrite existing file: ${entry.path}`, QV_CODE.USAGE);
+      }
+      await rename(entry.tempPath, entry.path);
+      renamed.push(entry);
+    }
+
+    const dirs = new Set(staged.map((entry) => path.dirname(entry.path)));
+    for (const dir of dirs) {
+      await fsyncDirectory(dir);
+    }
+
+    return staged.map((entry) => ({
+      path: entry.path,
+      bytesWritten: entry.bytesWritten,
+      mode: entry.mode,
+    }));
+  } catch (error) {
+    for (const entry of staged) {
+      await unlinkIfExists(entry.tempPath);
+    }
+    if (!force) {
+      for (const entry of renamed.reverse()) {
+        await unlinkIfExists(entry.path);
+      }
     }
     throw error;
   }

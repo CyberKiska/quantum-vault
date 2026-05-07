@@ -26,6 +26,7 @@ async function runCli(args, options = {}) {
     stderr,
     stdin: options.stdin,
     cwd: options.cwd,
+    env: { ...process.env, QV_ALLOW_DETERMINISTIC: '1', ...(options.env || {}) },
   });
   return {
     exitCode,

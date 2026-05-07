@@ -32,6 +32,7 @@ async function runCli(args, options = {}) {
     stderr,
     stdin: options.stdin,
     cwd: options.cwd,
+    env: { ...process.env, QV_ALLOW_DETERMINISTIC: '1', ...(options.env || {}) },
   });
   return {
     exitCode,
@@ -276,6 +277,19 @@ test('attach rejects malformed signature import descriptors as usage errors', as
   assert.equal(error.command, 'attach');
   assert.equal(error.ok, false);
   assert.equal(error.qvCode, 'USAGE');
+
+  const duplicateKey = await runCli([
+    'attach',
+    '--bundle',
+    split.lifecycleBundleBytesPath,
+    '--sig-import',
+    `{"file":"${join(baseDir, 'missing.qsig')}","signatureFamily":"maintenance","signatureFamily":"source-evidence"}`,
+    '--json',
+  ]);
+  assert.equal(duplicateKey.exitCode, 2);
+  const duplicateError = JSON.parse(duplicateKey.stdoutText);
+  assert.equal(duplicateError.qvCode, 'USAGE');
+  assert.match(duplicateError.error, /Duplicate object key/);
 });
 
 test('attach maps signature routing and verification failures to SIGNATURE_IMPORT_FAILED', async () => {

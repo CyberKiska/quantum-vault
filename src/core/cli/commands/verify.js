@@ -35,12 +35,9 @@ function formatVerifyStatusMessage(status = {}) {
 }
 
 export function parseVerifyArgs(args) {
-  if (args.length === 0) {
-    throw usage('verify requires <archive-state.json>');
-  }
-  const archiveStatePath = args[0];
+  const positionals = [];
   const options = {
-    archiveStatePath,
+    archiveStatePath: '',
     bundlePath: null,
     signaturePaths: [],
     pqpkPaths: [],
@@ -51,7 +48,7 @@ export function parseVerifyArgs(args) {
     json: false,
   };
 
-  for (let index = 1; index < args.length; index += 1) {
+  for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
       case '--bundle':
@@ -85,9 +82,16 @@ export function parseVerifyArgs(args) {
         options.json = true;
         break;
       default:
-        throw usage(`Unknown verify option: ${arg}`);
+        if (arg.startsWith('--')) {
+          throw usage(`Unknown verify option: ${arg}`);
+        }
+        positionals.push(arg);
     }
   }
+  if (positionals.length !== 1) {
+    throw usage('verify requires exactly one <archive-state.json>');
+  }
+  options.archiveStatePath = positionals[0];
   return options;
 }
 

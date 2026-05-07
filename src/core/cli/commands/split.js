@@ -8,7 +8,7 @@ import { validatePrivateKey } from '../../crypto/mlkem.js';
 import { REED_SOLOMON_CODEC_ID } from '../../crypto/lifecycle/artifacts.js';
 import { takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
-import { readBytesFromFile, writeBytesAtomic } from '../lib/io.js';
+import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readSecretBytes } from '../lib/secrets.js';
 
@@ -239,6 +239,20 @@ function validateSplitOptions(options) {
   }
 }
 
+function assertDeterministicSplitAllowed(options, env) {
+  const deterministicFlags = [
+    options.archiveId ? '--archive-id' : '',
+    options.archiveIdRandomBytes ? '--archive-id-random' : '',
+    options.parentStateId ? '--parent-state-id' : '',
+    options.stateType ? '--state-type' : '',
+  ].filter(Boolean);
+  if (deterministicFlags.length === 0) return;
+  if (String(env?.QV_ALLOW_DETERMINISTIC || '') === '1') return;
+  throw usage(
+    `split deterministic fixture flags require QV_ALLOW_DETERMINISTIC=1: ${deterministicFlags.join(', ')}`
+  );
+}
+
 export function parseSplitArgs(args) {
   const options = parseSplitInputs(args);
   validateSplitOptions(options);
@@ -390,12 +404,16 @@ function buildSplitReport({
 }
 
 async function writeSplitArtifacts({ split, shardBytes, plan, force }) {
-  await writeBytesAtomic(plan.archiveStatePath, split.archiveStateBytes, { mode: 0o644, force });
-  await writeBytesAtomic(plan.cohortBindingPath, split.cohortBindingBytes, { mode: 0o644, force });
-  await writeBytesAtomic(plan.lifecycleBundlePath, split.lifecycleBundleBytes, { mode: 0o644, force });
-  for (const item of shardBytes) {
-    await writeBytesAtomic(plan.shards[item.index].path, item.bytes, { mode: 0o600, force });
-  }
+  await writeArtifactSetAtomic([
+    { path: plan.archiveStatePath, bytes: split.archiveStateBytes, mode: 0o644 },
+    { path: plan.cohortBindingPath, bytes: split.cohortBindingBytes, mode: 0o644 },
+    { path: plan.lifecycleBundlePath, bytes: split.lifecycleBundleBytes, mode: 0o644 },
+    ...shardBytes.map((item) => ({
+      path: plan.shards[item.index].path,
+      bytes: item.bytes,
+      mode: 0o600,
+    })),
+  ], { force });
 }
 
 export function renderSplitInternalHelp() {
@@ -406,7 +424,7 @@ export function renderSplitInternalHelp() {
     '',
     '  --archive-id <64 lowercase hex chars>     Fixed archiveId (mutually exclusive with --archive-id-random)',
     '  --archive-id-random <64 lowercase hex>    Fixed 32-byte preimage for archiveId randomness',
-    '  --parent-state-id <256 lowercase hex>     Root parent state id override',
+    '  --parent-state-id <128 lowercase hex>     Root parent state id override',
     '  --state-type <string>                     Short state-type label (<=128 chars)',
     '',
     'Private key sources (exactly one required, same semantics as qv decrypt):',
@@ -423,6 +441,7 @@ export async function runSplitCommand(options, {
 } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
+  assertDeterministicSplitAllowed(options, env);
   await ensureInputFile(options.inputPath, 'Input .qenc');
   if (options.privateKeyPath) {
     await ensureInputFile(options.privateKeyPath, 'Private key file');

@@ -11,7 +11,7 @@ import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
 import { takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
-import { readBytesFromFile, writeBytesAtomic } from '../lib/io.js';
+import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readVerificationInputsFromPaths } from './verify.js';
 
@@ -495,13 +495,13 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
       };
     }
 
-    await writeBytesAtomic(plan.qencPath, result.qencBytes, { mode: 0o600, force: options.force });
-    await writeBytesAtomic(plan.keyPath, result.privKey, { mode: 0o600, force: options.force });
-    await writeBytesAtomic(plan.archiveStatePath, result.archiveStateBytes, { mode: 0o644, force: options.force });
-    await writeBytesAtomic(plan.lifecycleBundlePath, result.lifecycleBundleBytes, { mode: 0o600, force: options.force });
-    if (plaintextBytes) {
-      await writeBytesAtomic(plan.plaintextPath, plaintextBytes, { mode: 0o600, force: options.force });
-    }
+    await writeArtifactSetAtomic([
+      { path: plan.qencPath, bytes: result.qencBytes, mode: 0o600 },
+      { path: plan.keyPath, bytes: result.privKey, mode: 0o600 },
+      { path: plan.archiveStatePath, bytes: result.archiveStateBytes, mode: 0o644 },
+      { path: plan.lifecycleBundlePath, bytes: result.lifecycleBundleBytes, mode: 0o600 },
+      ...(plaintextBytes ? [{ path: plan.plaintextPath, bytes: plaintextBytes, mode: 0o600 }] : []),
+    ], { force: options.force });
 
     return buildRestoreWriteSummary({
       result,
