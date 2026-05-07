@@ -19,6 +19,14 @@ const commandContracts = Object.freeze([
     exports: ['parseVerifyArgs', 'renderVerifySummary', 'runVerifyCommand', 'verifyArchiveInputs'],
   },
   {
+    modulePath: '../../src/core/cli/commands/selftest.js',
+    exports: ['parseSelftestArgs', 'renderSelftestSummary', 'runSelftestCommand'],
+  },
+  {
+    modulePath: '../../src/core/cli/commands/version.js',
+    exports: ['parseVersionArgs', 'renderVersionSummary', 'runVersionCommand'],
+  },
+  {
     modulePath: '../../src/core/cli/commands/restore.js',
     exports: ['parseRestoreArgs', 'renderRestoreSummary', 'restoreDryRunFromInputs', 'runRestoreCommand', 'runRestoreDryRunCommand'],
   },
@@ -83,7 +91,9 @@ test('top-level CLI module preserves public Phase 1 exports', async () => {
     'runReshareCommand',
     'runRestoreCommand',
     'runRestoreDryRunCommand',
+    'runSelftestCommand',
     'runSplitCommand',
+    'runVersionCommand',
     'runVerifyCommand',
     'verifyArchiveInputs',
   ]) {

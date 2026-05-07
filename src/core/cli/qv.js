@@ -52,6 +52,16 @@ import {
   verifyArchiveInputs,
 } from './commands/verify.js';
 import {
+  parseSelftestArgs,
+  renderSelftestSummary,
+  runSelftestCommand,
+} from './commands/selftest.js';
+import {
+  parseVersionArgs,
+  renderVersionSummary,
+  runVersionCommand,
+} from './commands/version.js';
+import {
   createJsonError,
   parseGlobalJsonFlag,
   withCliJsonEnvelope,
@@ -71,7 +81,9 @@ export {
   runReshareCommand,
   runRestoreCommand,
   runRestoreDryRunCommand,
+  runSelftestCommand,
   runSplitCommand,
+  runVersionCommand,
   runVerifyCommand,
   verifyArchiveInputs,
 };
@@ -92,6 +104,8 @@ function helpText() {
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
     '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
+    '  qv selftest [--filter <substring>] [--json]',
+    '  qv version [--json]',
     '',
     'Current write scope:',
     '  keygen writes ML-KEM-1024 .qkey files',
@@ -101,6 +115,8 @@ function helpText() {
     '  attach writes updated lifecycle-bundle JSON and can rewrite successor shards with the bundle embedded',
     '  reshare writes a same-state successor cohort plus transition and lifecycle-bundle JSON',
     '  restore writes recovered .qenc/.qkey artifacts unless --dry-run is supplied',
+    '  selftest runs the core cryptographic self-test suite',
+    '  version prints registered format and cryptographic profile identifiers',
     '',
   ].join('\n');
 }
@@ -247,6 +263,30 @@ export async function runQvCli(argv, {
         writeText(stdout, renderRestoreSummary(summary));
       }
       return summary.wouldSucceed === true ? EXIT.OK : EXIT.ERROR;
+    }
+
+    if (command === 'selftest') {
+      const options = parseSelftestArgs(args);
+      const report = await runSelftestCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report, {
+          ok: report.ok === true,
+        }));
+      } else {
+        writeText(stdout, renderSelftestSummary(report));
+      }
+      return report.ok === true ? EXIT.OK : EXIT.ERROR;
+    }
+
+    if (command === 'version') {
+      const options = parseVersionArgs(args);
+      const report = await runVersionCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderVersionSummary(report));
+      }
+      return EXIT.OK;
     }
 
     throw new Error(`Unknown command: ${command}`);

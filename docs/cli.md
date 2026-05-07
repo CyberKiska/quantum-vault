@@ -13,6 +13,8 @@ Quantum Vault ships a Node.js CLI with key generation, encryption, successor sha
 - `qv verify`
 - `qv restore`
 - `qv restore --dry-run`
+- `qv selftest`
+- `qv version`
 
 ## Install / Run
 
@@ -719,13 +721,81 @@ Write-mode security notes:
 - Recovered `qencBytes`, `privKey`, optional plaintext bytes, and parsed shard share buffers are zeroized best-effort in `finally` blocks. Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
 - `--decrypt` decrypts with the recovered key still in memory and verifies the authenticated private metadata plaintext hash before writing plaintext.
 
+### `qv selftest [--filter <substring>] [--json]`
+
+Runs the core cryptographic self-test suite exposed by `src/core/crypto/selftest.js#runSelfTest`.
+
+Options:
+
+- `--filter <substring>` runs only self-test cases whose prefixed name contains the substring
+- `--json` emits one JSON document on stdout
+
+Exit status:
+
+- `0` when all selected self-tests pass
+- `1` when any selected self-test fails
+- `2` for usage errors, including a filter that matches no cases
+
+`--json` output shape:
+
+```json
+{
+  "command": "selftest",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "total": 1,
+  "passed": 1,
+  "failed": 0,
+  "results": [
+    { "name": "CORE: RFC 8785 number serialization reference vectors", "ok": true }
+  ],
+  "filter": "RFC 8785 number serialization reference vectors"
+}
+```
+
+Security notes:
+
+- Self-test initializes the same Node WebCrypto and vendored Reed-Solomon runtime used by CLI split/restore/reshare.
+- `--filter` is a test-selection aid only; release validation should run the full unfiltered suite.
+
+### `qv version [--json]`
+
+Prints package version, registered container/lifecycle format identifiers, and the active cryptographic profile without performing cryptographic operations.
+
+`--json` output shape:
+
+```json
+{
+  "command": "version",
+  "ok": true,
+  "cliSchemaVersion": 1,
+  "version": "2.1.1",
+  "format": {
+    "qenc": "QVv1-5-0",
+    "qcont": "QVqcont-7",
+    "lifecycleBundle": "QV-Lifecycle-Bundle/v1",
+    "archiveState": "quantum-vault-archive-state-descriptor/v1",
+    "cohortBinding": "quantum-vault-cohort-binding/v1",
+    "transitionRecord": "quantum-vault-transition-record/v1",
+    "sourceEvidence": "quantum-vault-source-evidence/v1"
+  },
+  "alg": {
+    "KEM": "ML-KEM-1024",
+    "KDF": "KMAC256",
+    "AEAD": "AES-256-GCM",
+    "digest": ["SHA3-512", "SHA3-256"]
+  },
+  "cryptoProfileId": "QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2"
+}
+```
+
 ## JSON Error Shape
 
 All commands emit this shape on failure when `--json` is passed:
 
 ```json
 {
-  "command": "keygen|encrypt|decrypt|split|attach|reshare|inspect|canonicalize|verify|restore",
+  "command": "keygen|encrypt|decrypt|split|attach|reshare|inspect|canonicalize|verify|restore|selftest|version",
   "ok": false,
   "cliSchemaVersion": 1,
   "error": "message",
@@ -745,4 +815,6 @@ npm run cli -- verify /path/to/archive-state.json --bundle /path/to/lifecycle-bu
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --out /path/to/recovered --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --out /path/to/recovered --decrypt --out-plaintext /path/to/plaintext.bin --json
 npm run cli -- restore --shards '/path/to/shards/**/*.qcont' --bundle /path/to/lifecycle-bundle.json --dry-run --json
+npm run cli -- selftest --json
+npm run cli -- version --json
 ```

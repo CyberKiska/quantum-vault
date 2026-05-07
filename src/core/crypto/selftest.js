@@ -6301,15 +6301,17 @@ function buildCases() {
   ];
 }
 
-export async function runSelfTest({ onProgress } = {}) {
+export async function runSelfTest({ onProgress, filter = '' } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
 
+  const filterText = String(filter || '').trim().toLowerCase();
   const cases = buildCases()
     .map((item) => ({
       ...item,
       name: prefixSelfTestName(item.name),
-    }));
+    }))
+    .filter((item) => !filterText || item.name.toLowerCase().includes(filterText));
   const results = [];
 
   if (typeof onProgress === 'function') {
