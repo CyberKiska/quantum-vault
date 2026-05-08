@@ -37,6 +37,8 @@ export const LIFECYCLE_QCONT_FORMAT_VERSION = 'QVqcont-7';
 export const LIFECYCLE_ARTIFACT_FAMILY = 'successor-lifecycle-v1';
 
 const DIGEST_LEN = 64;
+/** Minimum prefix bytes validated before variable-length artifact bodies (tests flip bits in this range). */
+export const LIFECYCLE_QCONT_MIN_HEADER_BYTES = 4 + 2 + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + 12 + 16 + 2 + 1 + 2 + 2;
 const KEY_COMMITMENT_LEN = 32;
 const MAX_META_LEN = 65535;
 const MAX_ARTIFACT_LEN = 16 * 1024 * 1024;
@@ -832,7 +834,7 @@ async function parseLifecycleShardUnsafe(arr) {
     throw new Error('Shard must be a Uint8Array');
   }
 
-  const minHeader = 4 + 2 + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + 12 + 16 + 2 + 1 + 2 + 2;
+  const minHeader = LIFECYCLE_QCONT_MIN_HEADER_BYTES;
   if (arr.length < minHeader) {
     throw new Error('Shard is too small to contain a valid header');
   }
@@ -1051,6 +1053,12 @@ export async function parseLifecycleShard(arr, options = {}) {
       diagnostics: { errors: [error?.message || String(error)], warnings: [] },
     };
   }
+}
+
+/** Best-effort zeroization of sensitive buffers on a parsed successor shard record (CLI adapters). */
+export function zeroizeParsedLifecycleShard(shard) {
+  if (!shard || typeof shard !== 'object') return;
+  if (shard.share instanceof Uint8Array) shard.share.fill(0);
 }
 
 export async function reshareSameState(predecessorShards, params, options = {}) {

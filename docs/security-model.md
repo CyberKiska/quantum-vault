@@ -409,6 +409,7 @@ Operator responsibilities:
 - treat best-effort `Uint8Array.fill(0)` zeroization as cleanup, not as protection against memory forensics
 - treat CLI file modes as requested modes subject to the operating system and umask: private keys, recovered keys, plaintext, and `.qcont` shards are requested as `0600`; public keys, `.qenc`, archive-state descriptors, cohort bindings, lifecycle bundles, transition records, source-evidence, signatures, signer pins, and timestamp evidence are requested as `0644`
 - keep small detached, lifecycle, source-evidence, and key artifacts below the CLI's 32 MiB pre-read cap; large `.qenc` and `.qcont` artifacts remain on the core in-memory path and are not covered by that small-artifact cap
+- leave `QV_ALLOW_DETERMINISTIC` unset outside reproducible test fixtures; deterministic split flags are non-secret fixture controls, but when used their values are still visible through normal command-line argument inspection
 - understand that `--json` output is safe for automation but may contain file paths, archive identifiers, state identifiers, digests, and policy status
 - avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied
 - preserve archive-state descriptors, cohort-binding sidecars, lifecycle bundles, detached signatures, signer pins, timestamps, and source-evidence objects alongside shards so future restore policy can be evaluated explicitly

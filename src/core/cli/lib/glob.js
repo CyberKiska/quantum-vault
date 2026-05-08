@@ -2,6 +2,15 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { assertNoSymlinkPath, symlinksAllowed } from './io.js';
 
+/** Locale-independent UTF-16 code unit ordering (deterministic across environments). */
+export function compareUtf16(a, b) {
+  const left = String(a);
+  const right = String(b);
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 export function normalizePathForMatch(value) {
   return String(value).split(path.sep).join('/');
 }
@@ -13,7 +22,7 @@ export function hasGlobPattern(value) {
 async function collectFilesRecursive(dirPath) {
   const entries = await readdir(dirPath, { withFileTypes: true });
   const files = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort((left, right) => compareUtf16(left.name, right.name))) {
     const fullPath = path.join(dirPath, entry.name);
     if (entry.isSymbolicLink()) {
       continue;
@@ -62,9 +71,9 @@ export async function expandFilePattern(pattern, cwd) {
   return candidates.filter((candidate) => {
     const normalizedCandidate = normalizePathForMatch(path.isAbsolute(pattern) ? candidate : path.relative(cwd, candidate));
     return path.matchesGlob(normalizedCandidate, matcher);
-  }).sort((left, right) => left.localeCompare(right));
+  }).sort(compareUtf16);
 }
 
 export function dedupeSorted(values) {
-  return [...new Set(values.map((value) => path.resolve(value)))].sort((left, right) => left.localeCompare(right));
+  return [...new Set(values.map((value) => path.resolve(value)))].sort(compareUtf16);
 }

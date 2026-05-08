@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { runCanonicalizeCommand, runQvCli } from '../../src/core/cli/qv.js';
+import { assertNoSymlinkPath } from '../../src/core/cli/lib/io.js';
 
 const archiveStateFixture = 'docs/schema/fixtures/qv-archive-state-descriptor-v1.valid.json';
 
@@ -41,11 +42,19 @@ async function createCanonicalArchiveStateFixture() {
   return filePath;
 }
 
+function assertStableEnvelopePrefix(json, expectedOk) {
+  assert.deepEqual(Object.keys(json).slice(0, 3), ['command', 'ok', 'cliSchemaVersion']);
+  if (typeof expectedOk === 'boolean') {
+    assert.equal(json.ok, expectedOk);
+  }
+}
+
 test('inspect --json emits stable CLI envelope', async () => {
   const result = await runJsonCommand(['inspect', archiveStateFixture, '--json']);
   assert.equal(result.exitCode, 0);
   assert.equal(result.stderrText, '');
   assert.equal(result.json.command, 'inspect');
+  assertStableEnvelopePrefix(result.json, true);
   assert.equal(result.json.ok, true);
   assert.equal(result.json.cliSchemaVersion, 1);
   assert.equal(result.json.artifactType, 'archive-state-descriptor/v1');
@@ -87,6 +96,7 @@ test('canonicalize --json emits stable CLI envelope', async () => {
   assert.equal(result.exitCode, 0);
   assert.equal(result.stderrText, '');
   assert.equal(result.json.command, 'canonicalize');
+  assertStableEnvelopePrefix(result.json, true);
   assert.equal(result.json.ok, true);
   assert.equal(result.json.cliSchemaVersion, 1);
   assert.equal(result.json.artifactType, 'archive-state-descriptor/v1');
@@ -99,6 +109,7 @@ test('verify --json preserves policy exit semantics inside the envelope', async 
   assert.equal(result.exitCode, 1);
   assert.equal(result.stderrText, '');
   assert.equal(result.json.command, 'verify');
+  assertStableEnvelopePrefix(result.json, false);
   assert.equal(result.json.ok, false);
   assert.equal(result.json.cliSchemaVersion, 1);
   assert.equal(result.json.policy?.satisfied, false);
@@ -108,6 +119,7 @@ test('JSON errors include schema version and qvCode', async () => {
   const result = await runJsonCommand(['inspect', '--json']);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stderrText, '');
+  assertStableEnvelopePrefix(result.json, false);
   assert.deepEqual(result.json, {
     command: 'inspect',
     ok: false,
@@ -115,6 +127,19 @@ test('JSON errors include schema version and qvCode', async () => {
     error: 'inspect requires <artifact-file>',
     qvCode: 'UNEXPECTED',
   });
+});
+
+test('root-level symlink path components keep the documented macOS /tmp carve-out narrow', async () => {
+  const tmpStats = await lstat('/tmp');
+  if (!tmpStats.isSymbolicLink()) {
+    return;
+  }
+
+  const dir = await mkdtemp('/tmp/qv-cli-root-symlink-');
+  const archivePath = join(dir, 'archive-state.json');
+  await writeFile(archivePath, await readFile(archiveStateFixture));
+
+  await assert.doesNotReject(assertNoSymlinkPath(archivePath));
 });
 
 test('non-JSON errors use the centralized CLI formatter', async () => {

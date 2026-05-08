@@ -10,16 +10,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../../../..');
 
+/** Serialize concurrent init when programmatic callers invoke CLI commands in parallel. */
+let cryptoInstallPromise = null;
+let erasureInstallPromise = null;
+
 export async function ensureRuntimeCrypto() {
   if (globalThis.crypto?.subtle) return;
-  globalThis.crypto = webcrypto;
+  cryptoInstallPromise ??= Promise.resolve().then(() => {
+    globalThis.crypto = webcrypto;
+  });
+  await cryptoInstallPromise;
 }
 
-export async function ensureErasureRuntime() {
-  if (globalThis.erasure?.split && globalThis.erasure?.recombine) {
-    return;
-  }
-
+async function loadVendoredErasureIntoGlobal() {
   const erasurePath = path.resolve(repoRoot, 'public/third-party/erasure.js');
   const erasureSource = await readFile(erasurePath, 'utf8');
   const erasureBytes = new TextEncoder().encode(erasureSource);
@@ -33,4 +36,12 @@ export async function ensureErasureRuntime() {
   const evaluateErasure = new Function('module', 'exports', erasureSource);
   evaluateErasure(cjsShim, cjsShim.exports);
   globalThis.erasure = cjsShim.exports;
+}
+
+export async function ensureErasureRuntime() {
+  if (globalThis.erasure?.split && globalThis.erasure?.recombine) {
+    return;
+  }
+  erasureInstallPromise ??= loadVendoredErasureIntoGlobal();
+  await erasureInstallPromise;
 }

@@ -9,7 +9,10 @@ import {
   parseLifecycleBundleBytes,
   parseSourceEvidenceBytes,
 } from '../../crypto/lifecycle/artifacts.js';
-import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
+import {
+  parseLifecycleShard,
+  zeroizeParsedLifecycleShard,
+} from '../../crypto/qcont/lifecycle-shard.js';
 import { parseJsonBytesStrict, parseJsonTextStrict } from '../../crypto/manifest/strict-json.js';
 import { normalizeExpectedEd25519Signer, takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
@@ -262,12 +265,16 @@ async function readSourceEvidence(options) {
     try {
       const parsed = parseSourceEvidenceBytes(bytes);
       return { sourceEvidenceBytes: parsed.bytes };
-    } catch {
-      // Permit source-evidence builder JSON, but still let core canonicalize and validate it.
+    } catch (error) {
+      const msg = String(error?.message || error);
+      if (/^Invalid Source evidence JSON:/.test(msg)) {
+        throw usage(msg.replace(/^Invalid Source evidence JSON:/, '--source-evidence: invalid JSON —'));
+      }
+      if (/Source evidence is not .* canonical JSON$/.test(msg)) {
+        return { sourceEvidence: parseJsonBytesStrict(bytes) };
+      }
+      throw error;
     }
-    return {
-      sourceEvidence: parseJsonBytesStrict(bytes),
-    };
   }
   return {};
 }
@@ -444,12 +451,19 @@ async function writeAttachedArtifacts({ result, outBundlePath, shardPlan, force 
   }
 }
 
+function deriveEmbeddedIntoShardsReason(noEmbedIntoShards, shardCount) {
+  if (noEmbedIntoShards) return 'opt-out';
+  if (shardCount === 0) return 'no-shards';
+  return 'embedded';
+}
+
 function buildAttachReport({
   result,
   previousBundle,
   outBundlePath,
   shardPlan,
   embeddedIntoShards,
+  embeddedIntoShardsReason,
 }) {
   return {
     command: 'attach',
@@ -460,6 +474,7 @@ function buildAttachReport({
     lifecycleBundleDigestHex: result.lifecycleBundleDigestHex,
     lifecycleBundleDigestAlg: 'SHA3-512',
     embeddedIntoShards,
+    embeddedIntoShardsReason,
     shardsRewritten: embeddedIntoShards
       ? shardPlan.map((item) => ({ index: item.index, path: item.path }))
       : [],
@@ -509,12 +524,16 @@ export async function runAttachCommand(options, {
       outBundlePath,
       shardPlan,
       embeddedIntoShards: embedIntoShards,
+      embeddedIntoShardsReason: deriveEmbeddedIntoShardsReason(
+        options.noEmbedIntoShards,
+        inputs.parsedShards.length,
+      ),
     });
   } catch (error) {
     throw classifyAttachError(error);
   } finally {
     for (const shard of inputs?.parsedShards || []) {
-      shard.share?.fill?.(0);
+      zeroizeParsedLifecycleShard(shard);
     }
   }
 }
@@ -528,6 +547,9 @@ export function renderAttachSummary(report) {
     `Lifecycle bundle digest: ${report.lifecycleBundleDigestHex}`,
     `Embedded into shards: ${report.embeddedIntoShards ? 'yes' : 'no'}`,
   ];
+  if (report.embeddedIntoShardsReason) {
+    lines.push(`Embed decision: ${report.embeddedIntoShardsReason}`);
+  }
   lines.push('');
   return `${lines.join('\n')}`;
 }

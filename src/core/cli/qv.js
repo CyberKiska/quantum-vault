@@ -300,7 +300,7 @@ export async function runQvCli(argv, {
     }
 
     if (command === 'split') {
-      const options = parseSplitArgs(args);
+      const options = parseSplitArgs(args, { env });
       const report = await runSplitCommand(options, { stdin, cwd, env });
       if (options.json) {
         writeJson(stdout, withCliJsonEnvelope(report));

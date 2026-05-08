@@ -148,6 +148,7 @@ test('attach --json imports archive approval signature, timestamp, and rewrites 
     assert.equal(report.lifecycleBundlePath, outBundlePath);
     assert.equal(report.lifecycleBundleDigestAlg, 'SHA3-512');
     assert.equal(report.embeddedIntoShards, true);
+    assert.equal(report.embeddedIntoShardsReason, 'embedded');
     assert.equal(report.shardsRewritten.length, 5);
     assert.equal(report.addedAttachments.publicKeys.length, 1);
     assert.equal(report.addedAttachments.archiveApprovalSignatures.length, 1);
@@ -202,6 +203,7 @@ test('attach supports bundle-only output without shard embedding', async () => {
   assert.equal(report.stateId, split.stateId);
   assert.equal(report.cohortId, split.cohortId);
   assert.equal(report.embeddedIntoShards, false);
+  assert.equal(report.embeddedIntoShardsReason, 'no-shards');
   assert.deepEqual(report.shardsRewritten, []);
   assert.equal(report.addedAttachments.archiveApprovalSignatures.length, 1);
 });

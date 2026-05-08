@@ -255,9 +255,10 @@ function assertDeterministicSplitAllowed(options, env) {
   );
 }
 
-export function parseSplitArgs(args) {
+export function parseSplitArgs(args, { env = process.env } = {}) {
   const options = parseSplitInputs(args);
   validateSplitOptions(options);
+  assertDeterministicSplitAllowed(options, env);
   return options;
 }
 
@@ -433,6 +434,8 @@ export function renderSplitInternalHelp() {
     '  --private-key <path>',
     '  --private-key-stdin',
     '  --private-key-env <NAME>                  Env var whose value is a filesystem path to privateKey.qkey',
+    '',
+    'Deterministic fixture flags (--archive-id, --archive-id-random, --parent-state-id, --state-type) require environment variable QV_ALLOW_DETERMINISTIC=1 or argument parsing fails closed.',
   ].join('\n');
 }
 

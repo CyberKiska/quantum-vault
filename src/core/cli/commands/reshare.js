@@ -5,6 +5,7 @@ import { toHex } from '../../crypto/bytes.js';
 import {
   parseLifecycleShard,
   reshareSameState,
+  zeroizeParsedLifecycleShard,
 } from '../../crypto/qcont/lifecycle-shard.js';
 import { attachLifecycleBundleToShards } from '../../crypto/qcont/lifecycle-attach.js';
 import { normalizeLowerHex as normalizeLowerHexArg, takeValue } from '../lib/args.js';
@@ -445,7 +446,7 @@ async function applyMaintenanceImportsIfRequested(result, inputs) {
     };
   } finally {
     for (const shard of successorShards) {
-      shard.share?.fill?.(0);
+      zeroizeParsedLifecycleShard(shard);
     }
     for (const bytes of successorShardBytes) {
       bytes.fill(0);
@@ -563,7 +564,7 @@ export async function runReshareCommand(options, {
     throw classifyReshareError(error);
   } finally {
     for (const shard of inputs?.parsedShards || []) {
-      shard.share?.fill?.(0);
+      zeroizeParsedLifecycleShard(shard);
     }
   }
 }

@@ -7,7 +7,7 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../../src/core/crypto/bytes.js';
 import { parseLifecycleShard } from '../../src/core/crypto/qcont/lifecycle-shard.js';
 import { parseQencHeader } from '../../src/core/crypto/qenc/format.js';
-import { restoreDryRunFromInputs } from '../../src/core/cli/commands/restore-dry-run.js';
+import { restoreDryRunFromInputs } from '../../src/core/cli/commands/restore.js';
 import { runQvCli } from '../../src/core/cli/qv.js';
 
 function createCaptureStream() {
@@ -243,34 +243,34 @@ test('split --help-internal prints deterministic fixture flags', async () => {
 });
 
 test('split deterministic fixture flags require explicit environment opt-in', async () => {
-  const baseDir = await makeTempDir();
-  const keys = await makeKeys(baseDir);
-  const { qencPath } = await encryptFixture({
-    baseDir,
-    keys,
-    plaintext: new Uint8Array([4, 5, 6]),
-    filename: 'deterministic-gate.bin',
-  });
-  const result = await runCli([
-    'split',
-    qencPath,
-    '--private-key',
-    keys.privateKeyPath,
-    '--n',
-    '5',
-    '--k',
-    '3',
-    '--out',
-    join(baseDir, 'blocked-cohort'),
-    '--archive-id-random',
-    '33'.repeat(32),
-    '--json',
-  ], { env: { QV_ALLOW_DETERMINISTIC: '' } });
+  const deterministicFlags = [
+    ['--archive-id', '11'.repeat(32)],
+    ['--archive-id-random', '33'.repeat(32)],
+    ['--parent-state-id', '44'.repeat(64)],
+    ['--state-type', 'fixture-state'],
+  ];
 
-  assert.equal(result.exitCode, 2);
-  const error = JSON.parse(result.stdoutText);
-  assert.equal(error.qvCode, 'USAGE');
-  assert.match(error.error, /QV_ALLOW_DETERMINISTIC=1/);
+  for (const [flag, value] of deterministicFlags) {
+    const result = await runCli([
+      'split',
+      'input.qenc',
+      '--private-key',
+      'privateKey.qkey',
+      '--n',
+      '5',
+      '--k',
+      '3',
+      flag,
+      value,
+      '--json',
+    ], { env: { QV_ALLOW_DETERMINISTIC: '' } });
+
+    assert.equal(result.exitCode, 2, flag);
+    const error = JSON.parse(result.stdoutText);
+    assert.equal(error.qvCode, 'USAGE', flag);
+    assert.match(error.error, /QV_ALLOW_DETERMINISTIC=1/, flag);
+    assert.match(error.error, new RegExp(flag), flag);
+  }
 });
 
 test('split maps unsupported RS/Shamir geometry to QUORUM_UNREACHABLE', async () => {

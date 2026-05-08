@@ -39,6 +39,11 @@ Filesystem notes:
 - File modes are requested modes. The operating system umask may make resulting files more restrictive.
 - Small detached and lifecycle artifacts (`.qsig`, `.pqpk`, `.ots`, lifecycle JSON, source-evidence, and key inputs) are capped at 32 MiB before parsing. `.qenc` and `.qcont` are not subject to that small-artifact cap.
 
+`cliSchemaVersion` (currently `1`) labels the stdout JSON contract for automation:
+
+- Schema **v1** may add new object fields. It must not remove or rename fields, and must not change a field's type incompatibly (for example `string` → `number`, widening or narrowing arrays in ways that break parsers). Any incompatible change requires incrementing the schema version.
+- Error JSON from failed commands includes `command`, `ok: false`, `cliSchemaVersion`, `error`, and `qvCode` only (no success-only payload fields).
+
 ## Commands
 
 ### `qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]`
@@ -321,7 +326,7 @@ Inputs:
 - `--sig-import <json>` repeatable typed signature import descriptor with explicit `signatureFamily`, optional `targetType`, `targetRef`, and `targetDigest`
 - `--pqpk <file>` repeatable pinned PQ public key material for `.qsig` verification
 - `--ots <file>` repeatable OpenTimestamps proof import linked to imported lifecycle signatures
-- `--source-evidence <json-file>` or `--source-evidence-bytes <file>` source-evidence material for `signatureFamily:"source-evidence"` imports
+- `--source-evidence <json-file>` or `--source-evidence-bytes <file>` source-evidence material for `signatureFamily:"source-evidence"` imports. With `--source-evidence`, strictly invalid JSON fails closed (it is not silently treated as builder JSON). Valid JSON that is not already RFC 8785-canonical for source-evidence is still accepted as builder JSON and canonicalized by core.
 - `--ed25519-signer <address>` optional signer pin for supported Stellar `.sig` imports
 
 Typed `--sig-import` descriptor example:
@@ -366,6 +371,7 @@ Exit status:
   "lifecycleBundleDigestHex": "hex",
   "lifecycleBundleDigestAlg": "SHA3-512",
   "embeddedIntoShards": true,
+  "embeddedIntoShardsReason": "embedded",
   "shardsRewritten": [
     { "index": 0, "path": "string" }
   ],

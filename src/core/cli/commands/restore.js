@@ -7,7 +7,7 @@ import {
   assessRestoreFromShards,
   restoreFromShards,
 } from '../../crypto/qcont/restore.js';
-import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
+import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
 import {
   normalizeExpectedEd25519Signer,
   normalizeLowerHex,
@@ -385,7 +385,7 @@ export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } =
     });
   } finally {
     for (const shard of parsedShards) {
-      shard.share?.fill?.(0);
+      zeroizeParsedLifecycleShard(shard);
     }
   }
 }
@@ -520,7 +520,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
     await zeroizeRestoreMaterial(result);
     if (plaintextBytes instanceof Uint8Array) plaintextBytes.fill(0);
     for (const shard of parsedShards) {
-      shard.share?.fill?.(0);
+      zeroizeParsedLifecycleShard(shard);
     }
   }
 }
