@@ -72,6 +72,7 @@ import {
   NONCE_MODE_RANDOM96,
   NONCE_POLICY_PER_CHUNK_V3,
   NONCE_POLICY_SINGLE_CONTAINER_V1,
+  VENDORED_ERASURE_JS_SHA3_512,
   validateContainerPolicyMetadata,
 } from './policy.js';
 import { kmac256 } from './kmac.js';
@@ -1324,6 +1325,12 @@ export async function ensureErasureRuntime() {
   const thisFile = fileURLToPath(import.meta.url);
   const erasurePath = resolve(dirname(thisFile), '../../../public/third-party/erasure.js');
   const erasureSource = await readFile(erasurePath, 'utf8');
+  const erasureDigestHex = toHex(sha3_512(new TextEncoder().encode(erasureSource)));
+  if (erasureDigestHex !== VENDORED_ERASURE_JS_SHA3_512) {
+    throw new Error(
+      `Vendored erasure.js integrity check failed: expected ${VENDORED_ERASURE_JS_SHA3_512}, got ${erasureDigestHex}`
+    );
+  }
 
   const cjsShim = { exports: {} };
   const evaluateErasure = new Function('module', 'exports', erasureSource);
@@ -6301,15 +6308,17 @@ function buildCases() {
   ];
 }
 
-export async function runSelfTest({ onProgress } = {}) {
+export async function runSelfTest({ onProgress, filter = '' } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
 
+  const filterText = String(filter || '').trim().toLowerCase();
   const cases = buildCases()
     .map((item) => ({
       ...item,
       name: prefixSelfTestName(item.name),
-    }));
+    }))
+    .filter((item) => !filterText || item.name.toLowerCase().includes(filterText));
   const results = [];
 
   if (typeof onProgress === 'function') {

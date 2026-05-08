@@ -626,6 +626,19 @@ Current non-rejection note for explicit successor disambiguation:
 
 - when the operator explicitly selects a successor cohort or lifecycle bundle for an otherwise ambiguous same-state fork or multi-bundle cohort, restore may proceed, but Quantum Vault MUST warn rather than pretend that the ambiguity was resolved automatically
 
+### 9.1 CLI fail-closed checklist
+
+The Node.js CLI is a non-browser adapter over the same successor lifecycle parsers and restore verifier. A CLI workflow is conforming only when it preserves these fail-closed checks:
+
+- `qv inspect` may structurally summarize supported detached artifacts, but restore and verify policy decisions MUST still use target-specific verification paths.
+- `qv canonicalize` MUST only canonicalize recognized lifecycle JSON artifacts and MUST reject binary artifacts or unsupported JSON.
+- `qv verify` MUST evaluate archive approval over canonical archive-state descriptor bytes; lifecycle-bundle bytes are mutable evidence carriers and are not the archive-approval signing target.
+- `qv restore --dry-run` and write-mode `qv restore` MUST apply the same archiveId, stateId, cohortId, exact archive-state bytes, exact cohort-binding bytes, lifecycle-bundle selection, signature target, and authenticity-policy checks.
+- `qv restore` write mode MUST write no output when archive policy is not satisfied.
+- `qv reshare` MUST preserve exact archive-state bytes and stateId; same-state resharing is not archive re-approval.
+- Direct symlink input paths MUST be rejected unless the operator explicitly supplies `--allow-symlink`.
+- CLI JSON errors MUST preserve a stable `qvCode` so automation can distinguish usage errors, quorum failures, ambiguity, policy failure, and restored-integrity failure without parsing prose.
+
 ## 10. Compatibility and version policy
 
 Changes to the Quantum Vault format family fall into three categories depending on which specification layer they affect:

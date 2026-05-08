@@ -1,755 +1,132 @@
-import { readFile, readdir } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { sha3_512 } from '@noble/hashes/sha3.js';
-import { startsWithAscii } from '../crypto/byte-prefix.js';
-import { bytesEqual, toHex } from '../crypto/bytes.js';
-import { parseOpenTimestampProof } from '../crypto/auth/opentimestamps.js';
-import { unpackPqpk, unpackQsig } from '../crypto/auth/qsig.js';
-import { isSupportedStellarSignatureDocumentBytes } from '../crypto/auth/stellar-sig.js';
 import {
-  canonicalizeArchiveStateDescriptor,
-  canonicalizeCohortBinding,
-  canonicalizeLifecycleBundle,
-  canonicalizeSourceEvidence,
-  canonicalizeTransitionRecord,
-} from '../crypto/lifecycle/artifacts.js';
-import { parseJsonBytesStrict } from '../crypto/manifest/strict-json.js';
-import { canonicalizeJson } from '../crypto/manifest/jcs.js';
+  createCanonicalizeJsonReport,
+  parseCanonicalizeArgs,
+  runCanonicalizeCommand,
+} from './commands/canonicalize.js';
 import {
-  assessRestoreFromShards,
-  verifyArchiveAuthenticity,
-} from '../crypto/qcont/restore.js';
-import { parseLifecycleShard } from '../crypto/qcont/lifecycle-shard.js';
+  parseInspectArgs,
+  renderInspectSummary,
+  runInspectCommand,
+} from './commands/inspect.js';
+import {
+  parseKeygenArgs,
+  renderKeygenSummary,
+  runKeygenCommand,
+} from './commands/keygen.js';
+import {
+  parseEncryptArgs,
+  renderEncryptSummary,
+  runEncryptCommand,
+} from './commands/encrypt.js';
+import {
+  parseDecryptArgs,
+  renderDecryptSummary,
+  runDecryptCommand,
+} from './commands/decrypt.js';
+import {
+  parseRestoreArgs,
+  renderRestoreSummary,
+  restoreDryRunFromInputs,
+  runRestoreCommand,
+  runRestoreDryRunCommand,
+} from './commands/restore.js';
+import {
+  parseSplitArgs,
+  renderSplitInternalHelp,
+  renderSplitSummary,
+  runSplitCommand,
+} from './commands/split.js';
+import {
+  parseAttachArgs,
+  renderAttachSummary,
+  runAttachCommand,
+} from './commands/attach.js';
+import {
+  parseReshareArgs,
+  renderReshareSummary,
+  runReshareCommand,
+} from './commands/reshare.js';
+import {
+  parseVerifyArgs,
+  renderVerifySummary,
+  runVerifyCommand,
+  verifyReportSatisfied,
+  verifyArchiveInputs,
+} from './commands/verify.js';
+import {
+  parseSelftestArgs,
+  renderSelftestSummary,
+  runSelftestCommand,
+} from './commands/selftest.js';
+import {
+  parseVersionArgs,
+  renderVersionSummary,
+  runVersionCommand,
+} from './commands/version.js';
+import {
+  createJsonError,
+  parseGlobalJsonFlag,
+  withCliJsonEnvelope,
+  writeJson,
+  writeText,
+} from './lib/json.js';
+import { EXIT, mapErrorToExitCode } from './lib/exit.js';
+import { runWithIoPolicy } from './lib/io.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '../../..');
+export {
+  restoreDryRunFromInputs,
+  runCanonicalizeCommand,
+  runDecryptCommand,
+  runEncryptCommand,
+  runInspectCommand,
+  runKeygenCommand,
+  runAttachCommand,
+  runReshareCommand,
+  runRestoreCommand,
+  runRestoreDryRunCommand,
+  runSelftestCommand,
+  runSplitCommand,
+  runVersionCommand,
+  runVerifyCommand,
+  verifyReportSatisfied,
+  verifyArchiveInputs,
+};
 
-const JSON_ARTIFACT_DESCRIPTORS = Object.freeze({
-  'quantum-vault-archive-state-descriptor/v1': {
-    artifactType: 'archive-state-descriptor/v1',
-    artifactVersion: 'v1',
-    canonicalize: canonicalizeArchiveStateDescriptor,
-    objectField: 'archiveState',
-  },
-  'quantum-vault-cohort-binding/v1': {
-    artifactType: 'cohort-binding/v1',
-    artifactVersion: 'v1',
-    canonicalize: canonicalizeCohortBinding,
-    objectField: 'cohortBinding',
-  },
-  'quantum-vault-transition-record/v1': {
-    artifactType: 'transition-record/v1',
-    artifactVersion: 'v1',
-    canonicalize: canonicalizeTransitionRecord,
-    objectField: 'transitionRecord',
-  },
-  'quantum-vault-source-evidence/v1': {
-    artifactType: 'source-evidence/v1',
-    artifactVersion: 'v1',
-    canonicalize: canonicalizeSourceEvidence,
-    objectField: 'sourceEvidence',
-  },
+const COMMAND_HELP = Object.freeze({
+  keygen: 'qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
+  encrypt: 'qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]\nqv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
+  decrypt: 'qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
+  split: 'qv split <input.qenc> (--private-key <path> | --private-key-stdin | --private-key-env <NAME>) --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]\nInternal/testing flags: qv split --help-internal',
+  attach: 'qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
+  reshare: 'qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
+  inspect: 'qv inspect <artifact-file> [--json]',
+  canonicalize: 'qv canonicalize <artifact-file> [--json]',
+  verify: 'qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--include-detached-summary] [--required-policy-level <level>] [--json]',
+  restore: 'qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
+  selftest: 'qv selftest [--filter <substring>] [--json]',
+  version: 'qv version [--json]',
 });
 
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
+function globalHelpText() {
+  return [
+    'Global flags:',
+    '  --json             Emit a single stable JSON document on stdout.',
+    '  --no-color         Disable ANSI color. This is the default.',
+    '  --color            Opt in to color only when stderr is a TTY. Current output remains plain.',
+    '  --quiet            Suppress future human progress messages on stderr.',
+    '  --allow-symlink    Permit explicit symlink input paths. Default is fail-closed.',
+    '  --help, -h         Show help.',
+  ].join('\n');
 }
 
-function normalizePathForMatch(value) {
-  return String(value).split(path.sep).join('/');
-}
-
-function hasGlobPattern(value) {
-  return /[*?[\]{}]/.test(String(value || ''));
-}
-
-function formatSuiteLabel(parsed) {
-  if (typeof parsed?.suiteDisplay === 'string' && parsed.suiteDisplay) {
-    return parsed.suiteDisplay;
+function commandHelpText(command) {
+  const usage = COMMAND_HELP[command];
+  if (!usage) return '';
+  const lines = [`Usage: ${usage}`, '', globalHelpText(), ''];
+  if (command === 'split') {
+    lines.splice(2, 0, 'Deterministic test-only flags: `qv split --help-internal`.', '');
   }
-  if (typeof parsed?.suite === 'string' && parsed.suite) {
-    return parsed.suite;
-  }
-  if (Number.isInteger(parsed?.suiteId)) {
-    return `suiteId:${parsed.suiteId}`;
-  }
-  return 'unknown';
-}
-
-function formatVerifyStatusMessage(status = {}) {
-  if (status.archiveApprovalSignatureVerified !== true) {
-    return 'Archive-approval signatures not verified.';
-  }
-  const details = [];
-  if (status.strongPqSignatureVerified === true) details.push('strong PQ present');
-  if (status.bundlePinned === true) details.push('bundle pin active');
-  if (status.userPinned === true) details.push('user pin matched');
-  if (status.signerPinned === true && status.bundlePinned !== true && status.userPinned !== true) {
-    details.push('signer pin active');
-  }
-  return details.length > 0
-    ? `Archive-approval signatures verified (${details.join(', ')}).`
-    : 'Archive-approval signatures verified.';
-}
-
-async function ensureRuntimeCrypto() {
-  if (globalThis.crypto?.subtle) return;
-  const { webcrypto } = await import(['node', 'crypto'].join(':'));
-  globalThis.crypto = webcrypto;
-}
-
-async function ensureErasureRuntime() {
-  if (globalThis.erasure?.split && globalThis.erasure?.recombine) {
-    return;
-  }
-
-  const erasurePath = path.resolve(repoRoot, 'public/third-party/erasure.js');
-  const erasureSource = await readFile(erasurePath, 'utf8');
-  const cjsShim = { exports: {} };
-  const evaluateErasure = new Function('module', 'exports', erasureSource);
-  evaluateErasure(cjsShim, cjsShim.exports);
-  globalThis.erasure = cjsShim.exports;
-}
-
-function classifyJsonArtifactObject(value) {
-  const schema = String(value?.schema || '').trim();
-  if (JSON_ARTIFACT_DESCRIPTORS[schema]) {
-    return JSON_ARTIFACT_DESCRIPTORS[schema];
-  }
-  if (value?.type === 'QV-Lifecycle-Bundle') {
-    return {
-      artifactType: 'lifecycle-bundle/v1',
-      artifactVersion: 'v1',
-      canonicalize: canonicalizeLifecycleBundle,
-      objectField: 'lifecycleBundle',
-    };
-  }
-  return null;
-}
-
-async function inspectJsonArtifact(bytes, filePath) {
-  const rawObject = parseJsonBytesStrict(bytes);
-  const descriptor = classifyJsonArtifactObject(rawObject);
-  if (!descriptor) {
-    throw new Error(`Unsupported JSON artifact for inspect: ${filePath}`);
-  }
-  const canonicalized = await descriptor.canonicalize(rawObject);
-  return {
-    command: 'inspect',
-    file: filePath,
-    artifactType: descriptor.artifactType,
-    artifactVersion: descriptor.artifactVersion,
-    encoding: 'json',
-    digestAlg: 'SHA3-512',
-    digestHex: canonicalized.digest.value,
-    inputDigestHex: digestSha3_512Hex(bytes),
-    canonicalInput: bytesEqual(bytes, canonicalized.bytes),
-    canonicalJson: canonicalized[descriptor.objectField],
-    canonicalJsonText: canonicalized.canonical,
-  };
-}
-
-async function inspectBinaryArtifact(bytes, filePath) {
-  const inputDigestHex = digestSha3_512Hex(bytes);
-
-  if (startsWithAscii(bytes, 'QVC1')) {
-    const parsed = await parseLifecycleShard(bytes, { strict: true });
-    return {
-      command: 'inspect',
-      file: filePath,
-      artifactType: 'QVqcont-7',
-      artifactVersion: 'QVqcont-7',
-      encoding: 'binary',
-      digestAlg: 'SHA3-512',
-      digestHex: inputDigestHex,
-      canonicalJson: parsed.metaJSON,
-      canonicalJsonText: canonicalizeJson(parsed.metaJSON),
-      parsedSummary: {
-        archiveId: parsed.archiveState.archiveId,
-        stateId: parsed.stateId,
-        cohortId: parsed.cohortId,
-        shardIndex: parsed.shardIndex,
-        archiveStateDigestHex: parsed.archiveStateDigestHex,
-        cohortBindingDigestHex: parsed.cohortBindingDigestHex,
-        lifecycleBundleDigestHex: parsed.lifecycleBundleDigestHex,
-      },
-    };
-  }
-
-  if (startsWithAscii(bytes, 'PQSG')) {
-    const parsed = unpackQsig(bytes);
-    return {
-      command: 'inspect',
-      file: filePath,
-      artifactType: '.qsig',
-      artifactVersion: `v${parsed.versionMajor}.${parsed.versionMinor}`,
-      encoding: 'binary',
-      digestAlg: 'SHA3-512',
-      digestHex: inputDigestHex,
-      parsedSummary: {
-        suite: formatSuiteLabel(parsed),
-        suiteId: parsed.suiteId,
-        context: parsed.ctx,
-        payloadDigestAlg: 'SHA3-512',
-        payloadDigestHex: toHex(parsed.payloadDigest),
-        authMetaDigestAlg: 'SHA3-256',
-        authMetaDigestHex: toHex(parsed.authMetaDigest),
-        signatureLength: parsed.signatureLength,
-        signerFingerprintHex: parsed.signerFingerprint ? toHex(parsed.signerFingerprint) : null,
-        embeddedSignerPublicKey: parsed.metadata?.signerPublicKey instanceof Uint8Array,
-      },
-    };
-  }
-
-  if (startsWithAscii(bytes, 'PQPK')) {
-    const parsed = unpackPqpk(bytes);
-    return {
-      command: 'inspect',
-      file: filePath,
-      artifactType: '.pqpk',
-      artifactVersion: `v${parsed.versionMajor}.${parsed.versionMinor}`,
-      encoding: 'binary',
-      digestAlg: 'SHA3-512',
-      digestHex: inputDigestHex,
-      parsedSummary: {
-        suite: formatSuiteLabel(parsed),
-        suiteId: parsed.suiteId,
-        keyLength: parsed.keyBytes.length,
-        crc32Verified: true,
-      },
-    };
-  }
-
-  try {
-    const parsed = parseOpenTimestampProof(bytes, { name: path.basename(filePath) });
-    return {
-      command: 'inspect',
-      file: filePath,
-      artifactType: '.ots',
-      artifactVersion: 'OpenTimestamps-proof-v1',
-      encoding: 'binary',
-      digestAlg: 'SHA3-512',
-      digestHex: inputDigestHex,
-      parsedSummary: {
-        stampedDigestAlg: 'SHA-256',
-        stampedDigestHex: parsed.stampedDigestHex,
-        apparentlyComplete: parsed.appearsComplete === true,
-        completeProof: parsed.completeProof === true,
-      },
-    };
-  } catch {
-    // Continue.
-  }
-
-  if (isSupportedStellarSignatureDocumentBytes(bytes)) {
-    const parsed = parseJsonBytesStrict(bytes);
-    return {
-      command: 'inspect',
-      file: filePath,
-      artifactType: '.sig',
-      artifactVersion: 'stellar-detached-signature-v1',
-      encoding: 'json',
-      digestAlg: 'SHA3-512',
-      digestHex: inputDigestHex,
-      parsedSummary: {
-        signer: typeof parsed?.signer === 'string' ? parsed.signer : null,
-        hasSignedXdr: typeof parsed?.signedXdr === 'string' && parsed.signedXdr.length > 0,
-        hasSep53Signature: typeof parsed?.signatureB64 === 'string' && parsed.signatureB64.length > 0,
-      },
-    };
-  }
-
-  throw new Error(`Unsupported artifact for inspect: ${filePath}`);
-}
-
-async function inspectArtifact(bytes, filePath) {
-  try {
-    return await inspectJsonArtifact(bytes, filePath);
-  } catch (error) {
-    if (!String(error?.message || error).startsWith('Unsupported JSON artifact')) {
-      if (!(error instanceof Error) || !/JSON/.test(error.message)) {
-        throw error;
-      }
-    }
-  }
-  return inspectBinaryArtifact(bytes, filePath);
-}
-
-async function canonicalizeArtifact(bytes, filePath) {
-  const rawObject = parseJsonBytesStrict(bytes);
-  const descriptor = classifyJsonArtifactObject(rawObject);
-  if (!descriptor) {
-    throw new Error(`Artifact is not canonicalizable JSON: ${filePath}`);
-  }
-  const canonicalized = await descriptor.canonicalize(rawObject);
-  return {
-    command: 'canonicalize',
-    file: filePath,
-    artifactType: descriptor.artifactType,
-    artifactVersion: descriptor.artifactVersion,
-    digestAlg: 'SHA3-512',
-    digestHex: canonicalized.digest.value,
-    canonicalBytes: canonicalized.bytes,
-    canonicalJson: canonicalized[descriptor.objectField],
-    canonicalJsonText: canonicalized.canonical,
-  };
-}
-
-async function readBytesFromFile(filePath) {
-  return new Uint8Array(await readFile(filePath));
-}
-
-function makeExternalArtifactRecord(filePath, bytes) {
-  return {
-    name: path.basename(filePath),
-    bytes,
-  };
-}
-
-async function readOptionalBytes(filePath) {
-  if (!filePath) return null;
-  return readBytesFromFile(filePath);
-}
-
-async function readVerificationInputsFromPaths({
-  archiveStatePath = null,
-  bundlePath = null,
-  signaturePaths = [],
-  pqpkPaths = [],
-  otsPaths = [],
-  expectedEd25519Signer = '',
-} = {}) {
-  const archiveStateBytes = archiveStatePath ? await readBytesFromFile(archiveStatePath) : null;
-  const lifecycleBundleBytes = await readOptionalBytes(bundlePath);
-  const signatures = await Promise.all(signaturePaths.map(async (filePath) => (
-    makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
-  )));
-  const timestamps = await Promise.all(otsPaths.map(async (filePath) => (
-    makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath))
-  )));
-  const pinnedPqPublicKeyFileBytesList = await Promise.all(pqpkPaths.map(readBytesFromFile));
-
-  return {
-    archiveStateBytes,
-    lifecycleBundleBytes,
-    verification: {
-      signatures,
-      timestamps,
-      pinnedPqPublicKeyFileBytesList,
-      expectedEd25519Signer: String(expectedEd25519Signer || '').trim(),
-    },
-  };
-}
-
-export async function verifyArchiveInputs({
-  archiveStateBytes,
-  lifecycleBundleBytes = null,
-  verification = {},
-} = {}) {
-  await ensureRuntimeCrypto();
-  return verifyArchiveAuthenticity({
-    archiveStateBytes,
-    lifecycleBundleBytes,
-    verification,
-  });
-}
-
-function buildRestoreDryRunSummary(result) {
-  return {
-    command: 'restore',
-    dryRun: true,
-    wouldSucceed: (
-      result?.qencOk === true &&
-      result?.qkeyOk === true &&
-      result?.authenticity?.status?.policySatisfied === true
-    ),
-    archiveId: result.archiveId,
-    stateId: result.stateId,
-    cohortId: result.cohortId,
-    archiveStateDigestHex: result.archiveStateDigestHex,
-    cohortBindingDigestHex: result.cohortBindingDigestHex,
-    lifecycleBundleDigestHex: result.lifecycleBundleDigestHex,
-    selectionSource: result.selectionSource,
-    lifecycleBundleSource: result.lifecycleBundleSource,
-    embeddedLifecycleBundleDigestsUsed: Array.isArray(result.embeddedLifecycleBundleDigestsUsed)
-      ? [...result.embeddedLifecycleBundleDigestsUsed]
-      : [],
-    qencOk: result.qencOk === true,
-    qkeyOk: result.qkeyOk === true,
-    privateKeyHashMatchesMetadata: result.privateKeyHashMatchesMetadata === true,
-    rejectedShardIndices: Array.isArray(result.rejectedShardIndices) ? [...result.rejectedShardIndices] : [],
-    lifecycleVerification: result.lifecycleVerification,
-    authenticity: result.authenticity,
-  };
-}
-
-async function zeroizeRestoreMaterial(result) {
-  if (result?.qencBytes instanceof Uint8Array) {
-    result.qencBytes.fill(0);
-  }
-  if (result?.privKey instanceof Uint8Array) {
-    result.privKey.fill(0);
-  }
-}
-
-function renderInspectSummary(report) {
-  const lines = [
-    `File: ${report.file}`,
-    `Type: ${report.artifactType}`,
-    `Version: ${report.artifactVersion}`,
-    `SHA3-512: ${report.digestHex}`,
-  ];
-  if (typeof report.canonicalInput === 'boolean') {
-    lines.push(`Canonical input: ${report.canonicalInput ? 'yes' : 'no'}`);
-  }
-  if (report.canonicalJsonText) {
-    lines.push('');
-    lines.push(report.canonicalJsonText);
-  } else if (report.parsedSummary) {
-    lines.push('');
-    lines.push(JSON.stringify(report.parsedSummary, null, 2));
-  }
-  return `${lines.join('\n')}\n`;
-}
-
-function renderVerifySummary(authenticity) {
-  const counts = authenticity?.verification?.counts || {};
-  const policy = authenticity?.policy || {};
-  const lines = [
-    `Policy: ${policy.level || 'unknown'} (${policy.satisfied ? 'satisfied' : 'not satisfied'})`,
-    `Reason: ${policy.reason || 'unknown'}`,
-    formatVerifyStatusMessage(authenticity?.status || authenticity?.verification?.status || {}),
-    `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}`,
-    `Detached totals: valid=${counts.validTotal ?? 0}, maintenance=${counts.validMaintenance ?? 0}, source-evidence=${counts.validSourceEvidence ?? 0}`,
-  ];
-  for (const warning of authenticity?.warnings || []) {
-    lines.push(`Warning: ${warning}`);
-  }
-  return `${lines.join('\n')}\n`;
-}
-
-function renderRestoreSummary(summary) {
-  const lines = [
-    `Restore dry-run: ${summary.wouldSucceed ? 'would succeed' : 'would fail'}`,
-    `ArchiveId: ${summary.archiveId}`,
-    `StateId: ${summary.stateId}`,
-    `CohortId: ${summary.cohortId}`,
-    `Lifecycle bundle digest: ${summary.lifecycleBundleDigestHex}`,
-    `Selection source: ${summary.selectionSource || 'embedded'}`,
-    `Policy: ${summary.authenticity?.policy?.level || 'unknown'} (${summary.authenticity?.policy?.satisfied ? 'satisfied' : 'not satisfied'})`,
-    `qencOk=${summary.qencOk} qkeyOk=${summary.qkeyOk}`,
-  ];
-  for (const warning of summary?.authenticity?.warnings || []) {
-    lines.push(`Warning: ${warning}`);
-  }
-  return `${lines.join('\n')}\n`;
-}
-
-async function collectFilesRecursive(dirPath) {
-  const entries = await readdir(dirPath, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    const fullPath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await collectFilesRecursive(fullPath));
-      continue;
-    }
-    if (entry.isFile()) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
-
-function resolveGlobBase(pattern, cwd) {
-  const normalized = normalizePathForMatch(pattern);
-  const absolute = path.isAbsolute(pattern);
-  const segments = normalized.split('/').filter(Boolean);
-  const baseSegments = [];
-  for (const segment of segments) {
-    if (hasGlobPattern(segment)) break;
-    baseSegments.push(segment);
-  }
-  if (absolute) {
-    return baseSegments.length > 0 ? path.resolve(path.sep, ...baseSegments) : path.sep;
-  }
-  return baseSegments.length > 0 ? path.resolve(cwd, ...baseSegments) : cwd;
-}
-
-async function expandFilePattern(pattern, cwd) {
-  const resolved = path.resolve(cwd, pattern);
-  if (!hasGlobPattern(pattern)) {
-    return [resolved];
-  }
-
-  const baseDir = resolveGlobBase(pattern, cwd);
-  const candidates = await collectFilesRecursive(baseDir);
-  const matcher = path.isAbsolute(pattern)
-    ? normalizePathForMatch(pattern)
-    : normalizePathForMatch(pattern);
-
-  return candidates.filter((candidate) => {
-    const normalizedCandidate = normalizePathForMatch(path.isAbsolute(pattern) ? candidate : path.relative(cwd, candidate));
-    return path.matchesGlob(normalizedCandidate, matcher);
-  }).sort((left, right) => left.localeCompare(right));
-}
-
-function dedupeSorted(values) {
-  return [...new Set(values.map((value) => path.resolve(value)))].sort((left, right) => left.localeCompare(right));
-}
-
-function createJsonError(command, error) {
-  return {
-    command,
-    ok: false,
-    error: error?.message || String(error),
-  };
-}
-
-function writeText(stream, text) {
-  stream.write(text);
-}
-
-function writeJson(stream, value) {
-  stream.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function takeValue(args, index, flag) {
-  if (index + 1 >= args.length) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return args[index + 1];
-}
-
-function parseGlobalJsonFlag(args) {
-  return args.includes('--json');
-}
-
-function parseSingleFileCommandArgs(command, args) {
-  if (args.length === 0 || args[0] === '--json') {
-    throw new Error(`${command} requires <artifact-file>`);
-  }
-  const filePath = args[0];
-  for (let index = 1; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === '--json') {
-      continue;
-    }
-    throw new Error(`Unknown ${command} option: ${arg}`);
-  }
-  return { filePath };
-}
-
-function parseVerifyArgs(args) {
-  if (args.length === 0) {
-    throw new Error('verify requires <archive-state.json>');
-  }
-  const archiveStatePath = args[0];
-  const options = {
-    archiveStatePath,
-    bundlePath: null,
-    signaturePaths: [],
-    pqpkPaths: [],
-    otsPaths: [],
-    expectedEd25519Signer: '',
-    json: false,
-  };
-
-  for (let index = 1; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case '--bundle':
-        options.bundlePath = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--sig':
-        options.signaturePaths.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--pqpk':
-        options.pqpkPaths.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--ots':
-        options.otsPaths.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--ed25519-signer':
-        options.expectedEd25519Signer = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--json':
-        options.json = true;
-        break;
-      default:
-        throw new Error(`Unknown verify option: ${arg}`);
-    }
-  }
-  return options;
-}
-
-function parseRestoreArgs(args) {
-  const options = {
-    shardPatterns: [],
-    archiveStatePath: null,
-    bundlePath: null,
-    signaturePaths: [],
-    pqpkPaths: [],
-    otsPaths: [],
-    expectedEd25519Signer: '',
-    selectedArchiveId: '',
-    selectedStateId: '',
-    selectedCohortId: '',
-    selectedLifecycleBundleDigestHex: '',
-    dryRun: false,
-    json: false,
-  };
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case '--shards':
-        options.shardPatterns.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--archive-state':
-        options.archiveStatePath = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--bundle':
-        options.bundlePath = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--sig':
-        options.signaturePaths.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--pqpk':
-        options.pqpkPaths.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--ots':
-        options.otsPaths.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case '--ed25519-signer':
-        options.expectedEd25519Signer = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--archive-id':
-        options.selectedArchiveId = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--state-id':
-        options.selectedStateId = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--cohort-id':
-        options.selectedCohortId = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--bundle-digest':
-        options.selectedLifecycleBundleDigestHex = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case '--dry-run':
-        options.dryRun = true;
-        break;
-      case '--json':
-        options.json = true;
-        break;
-      default:
-        throw new Error(`Unknown restore option: ${arg}`);
-    }
-  }
-
-  if (!options.dryRun) {
-    throw new Error('restore is read-only in Phase 1; pass --dry-run');
-  }
-  if (options.shardPatterns.length === 0) {
-    throw new Error('restore --dry-run requires at least one --shards pattern or path');
-  }
-  return options;
-}
-
-export async function runInspectCommand(filePath) {
-  await ensureRuntimeCrypto();
-  const bytes = await readBytesFromFile(filePath);
-  return inspectArtifact(bytes, filePath);
-}
-
-export async function runCanonicalizeCommand(filePath) {
-  await ensureRuntimeCrypto();
-  const bytes = await readBytesFromFile(filePath);
-  return canonicalizeArtifact(bytes, filePath);
-}
-
-export async function runVerifyCommand(options) {
-  const inputs = await readVerificationInputsFromPaths(options);
-  return verifyArchiveInputs(inputs);
-}
-
-export async function restoreDryRunFromInputs({
-  parsedShards,
-  verification = {},
-} = {}) {
-  await ensureRuntimeCrypto();
-  await ensureErasureRuntime();
-
-  let result = null;
-  try {
-    result = await assessRestoreFromShards(parsedShards, { verification });
-    return buildRestoreDryRunSummary(result);
-  } finally {
-    await zeroizeRestoreMaterial(result);
-  }
-}
-
-export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } = {}) {
-  await ensureRuntimeCrypto();
-  await ensureErasureRuntime();
-
-  const shardPaths = [];
-  for (const pattern of options.shardPatterns) {
-    shardPaths.push(...await expandFilePattern(pattern, cwd));
-  }
-  const resolvedShardPaths = dedupeSorted(shardPaths);
-  if (resolvedShardPaths.length === 0) {
-    throw new Error('restore --dry-run matched no shard files');
-  }
-
-  const parsedShards = await Promise.all(resolvedShardPaths.map(async (filePath) => {
-    const bytes = await readBytesFromFile(filePath);
-    try {
-      return await parseLifecycleShard(bytes, { strict: true });
-    } catch (error) {
-      throw new Error(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
-    }
-  }));
-
-  const inputs = await readVerificationInputsFromPaths({
-    archiveStatePath: options.archiveStatePath,
-    bundlePath: options.bundlePath,
-    signaturePaths: options.signaturePaths,
-    pqpkPaths: options.pqpkPaths,
-    otsPaths: options.otsPaths,
-    expectedEd25519Signer: options.expectedEd25519Signer,
-  });
-
-  return restoreDryRunFromInputs({
-    parsedShards,
-    verification: {
-      ...inputs.verification,
-      archiveStateBytes: inputs.archiveStateBytes,
-      lifecycleBundleBytes: inputs.lifecycleBundleBytes,
-      selectedArchiveId: options.selectedArchiveId,
-      selectedStateId: options.selectedStateId,
-      selectedCohortId: options.selectedCohortId,
-      selectedLifecycleBundleDigestHex: options.selectedLifecycleBundleDigestHex,
-    },
-  });
+  return lines.join('\n');
 }
 
 function helpText() {
@@ -757,94 +134,286 @@ function helpText() {
     'Quantum Vault CLI',
     '',
     'Commands:',
+    '  qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
+    '  qv encrypt <input-file> --public-key <publicKey.qkey> --out <output.qenc> [--filename <name>] [--force] [--json]',
+    '  qv encrypt --pack <file> <file> [...] --public-key <publicKey.qkey> --out <output.qenc> [--filename <bundle.qvpack>] [--force] [--json]',
+    '  qv decrypt <input.qenc> --private-key <privateKey.qkey> [--out <file>] [--out-dir <dir>] [--use-original-filename] [--extract-qvpack] [--force] [--json]',
+    '  qv split <input.qenc> (--private-key <path> | --private-key-stdin | --private-key-env <NAME>) --n <int> --k <int> [--out <dir>] [--auth-policy-level <level>] [--min-valid-signatures <int>] [--force] [--json]',
+    '  qv attach [--shards <glob-or-file> ...] [--archive-state <file>] [--bundle <file>] [--sig <file> ...] [--sig-import <json> ...] [--pqpk <file> ...] [--ots <file> ...] [--source-evidence <json-file> | --source-evidence-bytes <file>] [--ed25519-signer <address>] [--out-bundle <file>] [--out-shards <dir>] [--no-embed-into-shards] [--force] [--json]',
+    '  qv reshare --shards <glob-or-file> ... --n <int> --k <int> [--bundle <file>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--reason-code <string>] [--operator-role <string>] [--notes <string>] [--performed-at <iso8601>] [--maintenance-sig <file> ...] [--maintenance-pqpk <file> ...] [--maintenance-ots <file> ...] [--out <dir>] [--force] [--json]',
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
-    '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--json]',
-    '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] --dry-run [--json]',
+    '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--include-detached-summary] [--required-policy-level <level>] [--json]',
+    '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
+    '  qv selftest [--filter <substring>] [--json]',
+    '  qv version [--json]',
     '',
-    'Phase 1 scope:',
-    '  restore is read-only and requires --dry-run',
-    '  attach and write-mode restore are out of scope',
+    'Run `qv help <command>` or `qv <command> --help` for command-specific help.',
+    '',
+    globalHelpText(),
+    '',
+    'Current write scope:',
+    '  keygen writes ML-KEM-1024 .qkey files',
+    '  encrypt writes .qenc containers and can pre-pack multiple files as .qvpack payloads',
+    '  decrypt writes plaintext files and can explicitly extract authenticated .qvpack payloads',
+    '  split writes QVqcont-7 shards plus archive-state, cohort-binding, and lifecycle-bundle JSON',
+    '  attach writes updated lifecycle-bundle JSON and can rewrite successor shards with the bundle embedded',
+    '  reshare writes a same-state successor cohort plus transition and lifecycle-bundle JSON',
+    '  restore writes recovered .qenc/.qkey artifacts unless --dry-run is supplied',
+    '  selftest runs the core cryptographic self-test suite',
+    '  version prints registered format and cryptographic profile identifiers',
     '',
   ].join('\n');
 }
 
+function parseGlobalFlags(rawArgs, stderr) {
+  const args = [];
+  const options = {
+    help: false,
+    quiet: false,
+    color: false,
+    allowSymlink: false,
+  };
+
+  for (const arg of rawArgs) {
+    if (arg === '--help' || arg === '-h') {
+      options.help = true;
+      continue;
+    }
+    if (arg === '--quiet') {
+      options.quiet = true;
+      continue;
+    }
+    if (arg === '--no-color') {
+      options.color = false;
+      continue;
+    }
+    if (arg === '--color') {
+      options.color = stderr?.isTTY === true;
+      continue;
+    }
+    if (arg === '--allow-symlink') {
+      options.allowSymlink = true;
+      continue;
+    }
+    args.push(arg);
+  }
+  return { ...options, args };
+}
+
+function formatCliError(command, error) {
+  const label = command || 'qv';
+  return `qv: ${label}: ${error?.message || error}\n`;
+}
+
 export async function runQvCli(argv, {
   cwd = process.cwd(),
+  stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
+  env = process.env,
 } = {}) {
-  const args = [...argv];
+  const globalOptions = parseGlobalFlags([...argv], stderr);
+  const args = [...globalOptions.args];
   const command = String(args.shift() || '').trim();
 
-  if (!command || command === '--help' || command === '-h' || command === 'help') {
+  if (!command) {
     writeText(stdout, `${helpText()}\n`);
-    return 0;
+    return EXIT.OK;
   }
 
-  const json = parseGlobalJsonFlag(args);
+  if (command === 'help') {
+    const subject = String(args.shift() || '').trim();
+    if (!subject) {
+      writeText(stdout, `${helpText()}\n`);
+      return EXIT.OK;
+    }
+    const text = commandHelpText(subject);
+    if (!text) {
+      writeText(stderr, `qv: help: Unknown command: ${subject}\n`);
+      return EXIT.USAGE;
+    }
+    writeText(stdout, text);
+    return EXIT.OK;
+  }
+
+  if (globalOptions.help) {
+    const text = commandHelpText(command);
+    if (!text) {
+      writeText(stderr, `qv: ${command}: Unknown command: ${command}\n`);
+      return EXIT.USAGE;
+    }
+    writeText(stdout, text);
+    return EXIT.OK;
+  }
+
+  if (command === 'split' && args[0] === '--help-internal') {
+    writeText(stdout, `${renderSplitInternalHelp()}\n`);
+    return EXIT.OK;
+  }
+
+  let json = parseGlobalJsonFlag(args);
+  let inspectCanonicalizeArgs = args;
+  if (command === 'inspect' || command === 'canonicalize') {
+    json = args.includes('--json');
+    inspectCanonicalizeArgs = args.filter((arg) => arg !== '--json');
+  }
 
   try {
+    return await runWithIoPolicy({ allowSymlink: globalOptions.allowSymlink }, async () => {
+    if (command === 'keygen') {
+      const options = parseKeygenArgs(args);
+      const { report, publicKeyBase64 } = await runKeygenCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(options.printPublic
+          ? { ...report, publicKeyBase64 }
+          : report));
+      } else {
+        writeText(stdout, renderKeygenSummary(report));
+        if (options.printPublic) {
+          writeText(stdout, `${publicKeyBase64}\n`);
+        }
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'encrypt') {
+      const options = parseEncryptArgs(args);
+      const report = await runEncryptCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderEncryptSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'decrypt') {
+      const options = parseDecryptArgs(args);
+      const report = await runDecryptCommand(options, { stdin, env });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderDecryptSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'split') {
+      const options = parseSplitArgs(args, { env });
+      const report = await runSplitCommand(options, { stdin, cwd, env });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderSplitSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'attach') {
+      const options = parseAttachArgs(args);
+      const report = await runAttachCommand(options, { cwd });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderAttachSummary(report));
+      }
+      return EXIT.OK;
+    }
+
+    if (command === 'reshare') {
+      const options = parseReshareArgs(args);
+      const report = await runReshareCommand(options, { cwd });
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderReshareSummary(report));
+      }
+      return EXIT.OK;
+    }
+
     if (command === 'inspect') {
-      const { filePath } = parseSingleFileCommandArgs('inspect', args);
+      const { filePath } = parseInspectArgs(inspectCanonicalizeArgs);
       const report = await runInspectCommand(filePath);
       if (json) {
-        writeJson(stdout, report);
+        writeJson(stdout, withCliJsonEnvelope(report));
       } else {
         writeText(stdout, renderInspectSummary(report));
       }
-      return 0;
+      return EXIT.OK;
     }
 
     if (command === 'canonicalize') {
-      const { filePath } = parseSingleFileCommandArgs('canonicalize', args);
+      const { filePath } = parseCanonicalizeArgs(inspectCanonicalizeArgs);
       const report = await runCanonicalizeCommand(filePath);
       if (json) {
-        writeJson(stdout, {
-          command: report.command,
-          file: report.file,
-          artifactType: report.artifactType,
-          artifactVersion: report.artifactVersion,
-          digestAlg: report.digestAlg,
-          digestHex: report.digestHex,
-          canonicalJson: report.canonicalJson,
-          canonicalJsonText: report.canonicalJsonText,
-        });
+        writeJson(stdout, withCliJsonEnvelope(createCanonicalizeJsonReport(report)));
       } else {
         stdout.write(Buffer.from(report.canonicalBytes));
       }
-      return 0;
+      return EXIT.OK;
     }
 
     if (command === 'verify') {
       const options = parseVerifyArgs(args);
       const authenticity = await runVerifyCommand(options);
+      const policySatisfied = verifyReportSatisfied(authenticity);
       if (options.json) {
-        writeJson(stdout, authenticity);
+        writeJson(stdout, withCliJsonEnvelope(authenticity, {
+          command: 'verify',
+          ok: policySatisfied,
+        }));
       } else {
         writeText(stdout, renderVerifySummary(authenticity));
       }
-      return authenticity?.policy?.satisfied === true ? 0 : 1;
+      return policySatisfied ? EXIT.OK : EXIT.ERROR;
     }
 
     if (command === 'restore') {
       const options = parseRestoreArgs(args);
-      const summary = await runRestoreDryRunCommand(options, { cwd });
+      const summary = await runRestoreCommand(options, { cwd });
       if (options.json) {
-        writeJson(stdout, summary);
+        writeJson(stdout, withCliJsonEnvelope(summary, {
+          ok: summary.wouldSucceed === true,
+        }));
       } else {
         writeText(stdout, renderRestoreSummary(summary));
       }
-      return summary.wouldSucceed === true ? 0 : 1;
+      return summary.wouldSucceed === true ? EXIT.OK : EXIT.ERROR;
+    }
+
+    if (command === 'selftest') {
+      const options = parseSelftestArgs(args);
+      const report = await runSelftestCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report, {
+          ok: report.ok === true,
+        }));
+      } else {
+        writeText(stdout, renderSelftestSummary(report));
+      }
+      return report.ok === true ? EXIT.OK : EXIT.ERROR;
+    }
+
+    if (command === 'version') {
+      const options = parseVersionArgs(args);
+      const report = await runVersionCommand(options);
+      if (options.json) {
+        writeJson(stdout, withCliJsonEnvelope(report));
+      } else {
+        writeText(stdout, renderVersionSummary(report));
+      }
+      return EXIT.OK;
     }
 
     throw new Error(`Unknown command: ${command}`);
+    });
   } catch (error) {
     if (json) {
       writeJson(stdout, createJsonError(command, error));
     } else {
-      writeText(stderr, `${error?.message || error}\n`);
+      writeText(stderr, formatCliError(command, error));
     }
-    return 1;
+    return mapErrorToExitCode(error);
   }
 }

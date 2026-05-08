@@ -1,8 +1,10 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { runSchemaFixtureCheck } from './schema-fixtures.mjs';
+import { runQvCli } from '../src/core/cli/qv.js';
 import { toHex } from '../src/core/crypto/bytes.js';
 import { unpackPqpk, unpackQsig, verifyQsigAgainstBytes } from '../src/core/crypto/auth/qsig.js';
 import { parseOpenTimestampProof, resolveOpenTimestampTarget } from '../src/core/crypto/auth/opentimestamps.js';
@@ -22,6 +24,36 @@ function assert(value, message) {
   if (!value) {
     throw new Error(message);
   }
+}
+
+function createCaptureStream() {
+  const chunks = [];
+  return {
+    write(chunk) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      return true;
+    },
+    text() {
+      return Buffer.concat(chunks).toString('utf8');
+    },
+  };
+}
+
+async function runCliJson(args) {
+  const stdout = createCaptureStream();
+  const stderr = createCaptureStream();
+  const exitCode = await runQvCli(args, { stdout, stderr });
+  const stdoutText = stdout.text();
+  if (stderr.text() !== '') {
+    throw new Error(`qv ${args.join(' ')} emitted stderr in --json mode`);
+  }
+  let json = null;
+  try {
+    json = stdoutText ? JSON.parse(stdoutText) : null;
+  } catch (error) {
+    throw new Error(`qv ${args.join(' ')} emitted non-JSON stdout: ${error?.message || error}`);
+  }
+  return { exitCode, json };
 }
 
 function decodeCaseBytes(value, field) {
@@ -60,6 +92,59 @@ function ensureExpectedDigest(corpusCase, bytes) {
   const actualDigest = toHex(sha3_512(bytes));
   if (actualDigest !== corpusCase.expectedDigest) {
     throw new Error(`${corpusCase.id}: digest mismatch: expected ${corpusCase.expectedDigest}, got ${actualDigest}`);
+  }
+}
+
+function artifactFileName(corpusCase) {
+  const id = String(corpusCase.id || 'artifact').replace(/[^A-Za-z0-9._-]/g, '_');
+  const extensionByType = {
+    'QVqcont-7': '.qcont',
+    '.qsig': '.qsig',
+    '.pqpk': '.pqpk',
+    '.ots': '.ots',
+  };
+  return `${id}${extensionByType[corpusCase.artifactType] || '.bin'}`;
+}
+
+async function verifyCliJsonEnvelopeForCorpusCase(corpusCase, bytes, tempDir) {
+  const artifactPath = join(tempDir, artifactFileName(corpusCase));
+  await writeFile(artifactPath, bytes);
+
+  const inspected = await runCliJson(['inspect', artifactPath, '--json']);
+  if (corpusCase.valid === true) {
+    assert(inspected.exitCode === 0, `${corpusCase.id}: qv inspect --json exited ${inspected.exitCode}`);
+    assert(inspected.json?.command === 'inspect', `${corpusCase.id}: inspect command mismatch`);
+    assert(inspected.json?.ok === true, `${corpusCase.id}: inspect ok mismatch`);
+    assert(inspected.json?.cliSchemaVersion === 1, `${corpusCase.id}: inspect cliSchemaVersion mismatch`);
+    assert(inspected.json?.artifactType === corpusCase.artifactType, `${corpusCase.id}: inspect artifactType mismatch`);
+    assert(inspected.json?.digestAlg === 'SHA3-512', `${corpusCase.id}: inspect digestAlg mismatch`);
+    assert(inspected.json?.digestHex === corpusCase.expectedDigest, `${corpusCase.id}: inspect digest mismatch`);
+  } else {
+    assert(inspected.json?.command === 'inspect', `${corpusCase.id}: inspect command mismatch`);
+    assert(inspected.json?.cliSchemaVersion === 1, `${corpusCase.id}: inspect cliSchemaVersion mismatch`);
+    if (inspected.exitCode === 0) {
+      assert(inspected.json?.ok === true, `${corpusCase.id}: inspect ok mismatch`);
+      assert(inspected.json?.artifactType === corpusCase.artifactType, `${corpusCase.id}: inspect artifactType mismatch`);
+      assert(inspected.json?.digestAlg === 'SHA3-512', `${corpusCase.id}: inspect digestAlg mismatch`);
+      assert(inspected.json?.digestHex === corpusCase.expectedDigest, `${corpusCase.id}: inspect digest mismatch`);
+    } else {
+      assert(inspected.json?.ok === false, `${corpusCase.id}: inspect error ok mismatch`);
+      assert(typeof inspected.json?.qvCode === 'string', `${corpusCase.id}: inspect error qvCode missing`);
+      assert(typeof inspected.json?.error === 'string', `${corpusCase.id}: inspect error message missing`);
+    }
+  }
+
+  const canonicalized = await runCliJson(['canonicalize', artifactPath, '--json']);
+  assert(canonicalized.json?.command === 'canonicalize', `${corpusCase.id}: canonicalize command mismatch`);
+  assert(canonicalized.json?.cliSchemaVersion === 1, `${corpusCase.id}: canonicalize cliSchemaVersion mismatch`);
+  if (canonicalized.exitCode === 0) {
+    assert(canonicalized.json?.ok === true, `${corpusCase.id}: canonicalize ok mismatch`);
+    assert(canonicalized.json?.digestAlg === 'SHA3-512', `${corpusCase.id}: canonicalize digestAlg mismatch`);
+    assert(typeof canonicalized.json?.canonicalJsonText === 'string', `${corpusCase.id}: canonicalize canonicalJsonText missing`);
+  } else {
+    assert(canonicalized.json?.ok === false, `${corpusCase.id}: canonicalize error ok mismatch`);
+    assert(typeof canonicalized.json?.qvCode === 'string', `${corpusCase.id}: canonicalize error qvCode missing`);
+    assert(typeof canonicalized.json?.error === 'string', `${corpusCase.id}: canonicalize error message missing`);
   }
 }
 
@@ -142,13 +227,14 @@ async function executeRuntimeCheck(corpusCase, bytes) {
   }
 }
 
-async function verifyBinaryCorpusCase(filePath) {
+async function verifyBinaryCorpusCase(filePath, tempDir) {
   const corpusCase = JSON.parse(await readFile(filePath, 'utf8'));
   if (!corpusCase || typeof corpusCase !== 'object') {
     throw new Error(`Invalid corpus case JSON: ${filePath}`);
   }
   const bytes = decodeCaseBytes(corpusCase.bytes, 'bytes');
   ensureExpectedDigest(corpusCase, bytes);
+  await verifyCliJsonEnvelopeForCorpusCase(corpusCase, bytes, tempDir);
 
   if (corpusCase.valid === true) {
     await executeRuntimeCheck(corpusCase, bytes);
@@ -174,11 +260,12 @@ export async function runCorpusVerify() {
   const schemaReport = await runSchemaFixtureCheck();
   const binaryFiles = await listCorpusFiles(corpusDir);
   const binaryResults = [];
+  const tempDir = await mkdtemp(join(tmpdir(), 'qv-corpus-cli-'));
 
   for (const filePath of binaryFiles) {
     const label = filePath.slice(corpusDir.length + 1);
     try {
-      await verifyBinaryCorpusCase(filePath);
+      await verifyBinaryCorpusCase(filePath, tempDir);
       binaryResults.push({ name: label, ok: true });
     } catch (error) {
       binaryResults.push({ name: label, ok: false, error: formatError(error) });

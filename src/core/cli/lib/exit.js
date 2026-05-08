@@ -1,0 +1,110 @@
+export const EXIT = Object.freeze({
+  OK: 0,
+  ERROR: 1,
+  USAGE: 2,
+  ENTROPY: 3,
+  FORMAT_POLICY: 4,
+  KEY: 5,
+  AEAD: 6,
+  QUORUM: 7,
+  SIGNATURE_IMPORT: 8,
+  AMBIGUITY: 9,
+  RESHARE_CONTRACT: 10,
+  RESTORED_INTEGRITY: 11,
+  RESTORE_VARIANT_ACK: 12,
+});
+
+export const QV_CODE = Object.freeze({
+  UNEXPECTED: 'UNEXPECTED',
+  USAGE: 'USAGE',
+  ENTROPY_FAILED: 'ENTROPY_FAILED',
+  FORMAT_POLICY_REJECT: 'FORMAT_POLICY_REJECT',
+  KEY_REJECTED: 'KEY_REJECTED',
+  AEAD_FAILED: 'AEAD_FAILED',
+  QUORUM_UNREACHABLE: 'QUORUM_UNREACHABLE',
+  SIGNATURE_IMPORT_FAILED: 'SIGNATURE_IMPORT_FAILED',
+  AMBIGUOUS_INPUTS: 'AMBIGUOUS_INPUTS',
+  RESHARE_CONTRACT_VIOLATION: 'RESHARE_CONTRACT_VIOLATION',
+  RESTORED_INTEGRITY_FAILED: 'RESTORED_INTEGRITY_FAILED',
+  POLICY_NOT_SATISFIED: 'POLICY_NOT_SATISFIED',
+  RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED: 'RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED',
+});
+
+const QV_CODE_TO_EXIT = Object.freeze({
+  [QV_CODE.UNEXPECTED]: EXIT.ERROR,
+  [QV_CODE.USAGE]: EXIT.USAGE,
+  [QV_CODE.ENTROPY_FAILED]: EXIT.ENTROPY,
+  [QV_CODE.FORMAT_POLICY_REJECT]: EXIT.FORMAT_POLICY,
+  [QV_CODE.KEY_REJECTED]: EXIT.KEY,
+  [QV_CODE.AEAD_FAILED]: EXIT.AEAD,
+  [QV_CODE.QUORUM_UNREACHABLE]: EXIT.QUORUM,
+  [QV_CODE.SIGNATURE_IMPORT_FAILED]: EXIT.SIGNATURE_IMPORT,
+  [QV_CODE.AMBIGUOUS_INPUTS]: EXIT.AMBIGUITY,
+  [QV_CODE.RESHARE_CONTRACT_VIOLATION]: EXIT.RESHARE_CONTRACT,
+  [QV_CODE.RESTORED_INTEGRITY_FAILED]: EXIT.RESTORED_INTEGRITY,
+  [QV_CODE.POLICY_NOT_SATISFIED]: EXIT.ERROR,
+  [QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED]: EXIT.RESTORE_VARIANT_ACK,
+});
+
+const ERROR_KIND_TO_QV_CODE = Object.freeze({
+  'policy-not-satisfied': QV_CODE.POLICY_NOT_SATISFIED,
+  'quorum-unreachable': QV_CODE.QUORUM_UNREACHABLE,
+  'ambiguous-inputs': QV_CODE.AMBIGUOUS_INPUTS,
+  'lifecycle-bundle-ambiguous': QV_CODE.AMBIGUOUS_INPUTS,
+  'restore-lifecycle-variant-ack-required': QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED,
+  'restored-integrity-failed': QV_CODE.RESTORED_INTEGRITY_FAILED,
+  'key-rejected': QV_CODE.KEY_REJECTED,
+  'aead-failed': QV_CODE.AEAD_FAILED,
+  'signature-import-failed': QV_CODE.SIGNATURE_IMPORT_FAILED,
+  'format-policy-reject': QV_CODE.FORMAT_POLICY_REJECT,
+  'reshare-contract-violation': QV_CODE.RESHARE_CONTRACT_VIOLATION,
+});
+
+const CORE_ERROR_QV_CODE_RULES = Object.freeze([
+  {
+    pattern: /authenticity policy|policy is not satisfied|policy not satisfied|No archive authenticity policy/i,
+    qvCode: QV_CODE.POLICY_NOT_SATISFIED,
+  },
+  {
+    pattern: /Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|RS|erasure|quorum/i,
+    qvCode: QV_CODE.QUORUM_UNREACHABLE,
+  },
+  {
+    pattern: /multiple|fork|ambiguous|exactly one|Selected .* not present|bundle digest/i,
+    qvCode: QV_CODE.AMBIGUOUS_INPUTS,
+  },
+  {
+    pattern: /qkeyOk|qencOk|hash does not match|private key hash|key commitment/i,
+    qvCode: QV_CODE.RESTORED_INTEGRITY_FAILED,
+  },
+]);
+
+export function makeQvError(message, qvCode = QV_CODE.UNEXPECTED, options = {}) {
+  const error = new Error(message, options);
+  error.qvCode = qvCode;
+  return error;
+}
+
+export function getErrorQvCode(error) {
+  if (typeof error?.qvCode === 'string' && Object.hasOwn(QV_CODE_TO_EXIT, error.qvCode)) {
+    return error.qvCode;
+  }
+  if (typeof error?.kind === 'string') {
+    const kindQvCode = ERROR_KIND_TO_QV_CODE[error.kind];
+    if (kindQvCode) return kindQvCode;
+  }
+  if (error?.authenticity?.policy && error.authenticity.policy.satisfied === false) {
+    return QV_CODE.POLICY_NOT_SATISFIED;
+  }
+  const message = error?.message || String(error);
+  for (const rule of CORE_ERROR_QV_CODE_RULES) {
+    if (rule.pattern.test(message)) {
+      return rule.qvCode;
+    }
+  }
+  return QV_CODE.UNEXPECTED;
+}
+
+export function mapErrorToExitCode(error) {
+  return QV_CODE_TO_EXIT[getErrorQvCode(error)] ?? EXIT.ERROR;
+}
