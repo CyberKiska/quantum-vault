@@ -564,7 +564,9 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
   let trialSharedSecret;
   try {
     trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
-    const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds);
+    const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
+      includeAesKey: false,
+    });
     const keyMatch = verifyKeyCommitment(Kenc, keyCommitment);
     clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
     if (!keyMatch) {
