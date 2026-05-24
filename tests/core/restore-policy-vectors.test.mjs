@@ -12,9 +12,23 @@ import {
 } from '../../src/core/crypto/selftest.js';
 import { parseLifecycleShard, reshareSameState } from '../../src/core/crypto/qcont/lifecycle-shard.js';
 import { assessRestoreFromShards, restoreFromShards } from '../../src/core/crypto/qcont/restore.js';
+import { canonicalizeLifecycleBundle } from '../../src/core/crypto/lifecycle/artifacts.js';
 
 async function parseShardSet(result) {
   return Promise.all(result.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function withLifecycleBundle(parsedShards, bundle, bundleBytes, digestHex) {
+  return parsedShards.map((shard) => ({
+    ...shard,
+    lifecycleBundle: bundle,
+    lifecycleBundleBytes: bundleBytes,
+    lifecycleBundleDigestHex: digestHex,
+  }));
 }
 
 function wipeRestoreResult(result) {
@@ -62,6 +76,51 @@ test('restore policy vectors keep integrity-only separate from signature-require
   } finally {
     wipeRestoreResult(unsignedAssessment);
     signatureRequired.pair.privateKey.fill(0);
+  }
+});
+
+test('restore policy vectors require strong PQ archive approval for strong-pq-signature policy', async () => {
+  const sample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-policy-strong-pq'),
+    authPolicyLevel: 'strong-pq-signature',
+    minValidSignatures: 1,
+  });
+
+  const unsignedAssessment = await assessRestoreFromShards(sample.parsed, {
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(unsignedAssessment.authenticity.policy.level, 'strong-pq-signature');
+    assert.equal(unsignedAssessment.authenticity.policy.satisfied, false);
+    assert.equal(unsignedAssessment.authenticity.status.strongPqSignatureVerified, false);
+    assert.equal(unsignedAssessment.authenticity.status.policySatisfied, false);
+  } finally {
+    wipeRestoreResult(unsignedAssessment);
+  }
+
+  const signedBundle = await buildSuccessorVerificationBundle(sample.split, {
+    authPolicyLevel: 'strong-pq-signature',
+    minValidSignatures: 1,
+    includeArchiveApproval: true,
+    includeMaintenance: false,
+    includeSourceEvidence: false,
+  });
+  const signedShards = withLifecycleBundle(sample.parsed, signedBundle.bundle, signedBundle.bundleBytes, signedBundle.digestHex);
+  const signedAssessment = await assessRestoreFromShards(signedShards, {
+    verification: { lifecycleBundleBytes: signedBundle.bundleBytes },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(signedAssessment.authenticity.verification.counts.validArchiveApproval, 1);
+    assert.equal(signedAssessment.authenticity.verification.counts.validArchiveApprovalStrongPq, 1);
+    assert.equal(signedAssessment.authenticity.status.strongPqSignatureVerified, true);
+    assert.equal(signedAssessment.authenticity.status.bundlePinned, true);
+    assert.equal(signedAssessment.authenticity.policy.satisfied, true);
+  } finally {
+    wipeRestoreResult(signedAssessment);
+    sample.pair.privateKey.fill(0);
   }
 });
 
@@ -126,6 +185,84 @@ test('restore policy vectors pin signer trust and ignore self-signed PQ approval
   }
 });
 
+test('restore policy vectors ignore maintenance, source-evidence, and unresolved publicKeyRef entries for archive approval', async () => {
+  const evidenceOnly = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-policy-maint-source-only'),
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+  });
+  const evidenceBundle = await buildSuccessorVerificationBundle(evidenceOnly.split, {
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+    includeArchiveApproval: false,
+    includeMaintenance: true,
+    includeSourceEvidence: true,
+    timestampTargetFamily: 'maintenance',
+  });
+  const evidenceOnlyShards = withLifecycleBundle(
+    evidenceOnly.parsed,
+    evidenceBundle.bundle,
+    evidenceBundle.bundleBytes,
+    evidenceBundle.digestHex,
+  );
+  const evidenceAssessment = await assessRestoreFromShards(evidenceOnlyShards, {
+    verification: { lifecycleBundleBytes: evidenceBundle.bundleBytes },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(evidenceAssessment.authenticity.verification.counts.validMaintenance, 1);
+    assert.equal(evidenceAssessment.authenticity.verification.counts.validSourceEvidence, 1);
+    assert.equal(evidenceAssessment.authenticity.verification.counts.validArchiveApproval, 0);
+    assert.equal(evidenceAssessment.authenticity.status.maintenanceSignatureVerified, true);
+    assert.equal(evidenceAssessment.authenticity.status.sourceEvidenceSignatureVerified, true);
+    assert.equal(evidenceAssessment.authenticity.status.otsEvidenceLinked, true);
+    assert.equal(evidenceAssessment.authenticity.policy.satisfied, false);
+  } finally {
+    wipeRestoreResult(evidenceAssessment);
+    evidenceOnly.pair.privateKey.fill(0);
+  }
+
+  const unresolved = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-policy-unresolved-public-key-ref'),
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+  });
+  const signedBundle = await buildSuccessorVerificationBundle(unresolved.split, {
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+    includeArchiveApproval: true,
+    includeMaintenance: false,
+    includeSourceEvidence: false,
+  });
+  const unresolvedBundle = cloneJson(signedBundle.bundle);
+  unresolvedBundle.attachments.publicKeys = [];
+  const canonicalUnresolvedBundle = await canonicalizeLifecycleBundle(unresolvedBundle);
+  const unresolvedShards = withLifecycleBundle(
+    unresolved.parsed,
+    canonicalUnresolvedBundle.lifecycleBundle,
+    canonicalUnresolvedBundle.bytes,
+    canonicalUnresolvedBundle.digest.value,
+  );
+  const unresolvedAssessment = await assessRestoreFromShards(unresolvedShards, {
+    verification: { lifecycleBundleBytes: canonicalUnresolvedBundle.bytes },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(unresolvedAssessment.authenticity.verification.counts.validArchiveApproval, 0);
+    assert.equal(unresolvedAssessment.authenticity.policy.satisfied, false);
+    assert(unresolvedAssessment.authenticity.verification.results.some((result) => (
+      result.ok === false &&
+      result.family === 'archive-approval' &&
+      result.publicKeyRef === 'pk-archive'
+    )));
+  } finally {
+    wipeRestoreResult(unresolvedAssessment);
+    unresolved.pair.privateKey.fill(0);
+  }
+});
+
 test('restore successor selection rejects same-state cohort ambiguity unless explicit', async () => {
   const sample = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('core-policy-successor-ambiguity'),
@@ -160,6 +297,165 @@ test('restore successor selection rejects same-state cohort ambiguity unless exp
   } finally {
     wipeRestoreResult(selected);
     sample.pair.privateKey.fill(0);
+  }
+});
+
+test('restore successor selection rejects multiple archive and state candidates unless narrowed explicitly', async () => {
+  const archiveA = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-selection-archive-a'),
+    authPolicyLevel: 'integrity-only',
+    buildOptions: { archiveIdRandomBytes: new Uint8Array(32).fill(0xa1) },
+  });
+  const archiveB = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-selection-archive-b'),
+    authPolicyLevel: 'integrity-only',
+    buildOptions: { archiveIdRandomBytes: new Uint8Array(32).fill(0xb2) },
+  });
+  const mixedArchives = [...archiveA.parsed.slice(0, 4), ...archiveB.parsed.slice(0, 4)];
+
+  await assert.rejects(
+    async () => restoreFromShards(mixedArchives, { onLog: () => {}, onError: () => {} }),
+    /Multiple successor archive\/state\/cohort candidate sets/,
+  );
+
+  const selectedArchive = await restoreFromShards(mixedArchives, {
+    verification: { selectedArchiveId: archiveB.split.archiveId },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(selectedArchive.archiveId, archiveB.split.archiveId);
+    assert.equal(selectedArchive.selectionSource, 'selected-archive-id');
+    assert.equal(selectedArchive.authenticity.policy.satisfied, true);
+  } finally {
+    wipeRestoreResult(selectedArchive);
+  }
+
+  const stateA = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-selection-state-a'),
+    authPolicyLevel: 'integrity-only',
+    buildOptions: { archiveIdRandomBytes: new Uint8Array(32).fill(0xc3) },
+  });
+  const stateB = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-selection-state-b'),
+    authPolicyLevel: 'integrity-only',
+    buildOptions: { archiveIdRandomBytes: new Uint8Array(32).fill(0xc3) },
+  });
+  const mixedStates = [...stateA.parsed.slice(0, 4), ...stateB.parsed.slice(0, 4)];
+
+  await assert.rejects(
+    async () => restoreFromShards(mixedStates, {
+      verification: { selectedArchiveId: stateA.split.archiveId },
+      onLog: () => {},
+      onError: () => {},
+    }),
+    /multiple shard cohorts/,
+  );
+
+  const selectedState = await restoreFromShards(mixedStates, {
+    verification: { selectedStateId: stateB.split.stateId },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(selectedState.archiveId, stateB.split.archiveId);
+    assert.equal(selectedState.stateId, stateB.split.stateId);
+    assert.equal(selectedState.selectionSource, 'selected-state-id');
+  } finally {
+    wipeRestoreResult(selectedState);
+  }
+
+  const uploadedArchiveState = await restoreFromShards(mixedStates, {
+    verification: { archiveStateBytes: stateA.split.archiveStateBytes },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(uploadedArchiveState.stateId, stateA.split.stateId);
+    assert.equal(uploadedArchiveState.selectionSource, 'uploaded-archive-state');
+  } finally {
+    wipeRestoreResult(uploadedArchiveState);
+    archiveA.pair.privateKey.fill(0);
+    archiveB.pair.privateKey.fill(0);
+    stateA.pair.privateKey.fill(0);
+    stateB.pair.privateKey.fill(0);
+  }
+});
+
+test('restore successor selection handles uploaded lifecycle bundles and mixed embedded bundle digests explicitly', async () => {
+  const forkBase = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-selection-uploaded-bundle'),
+    authPolicyLevel: 'integrity-only',
+  });
+  const successor = await reshareSameState(forkBase.parsed, { n: 5, k: 3 }, {
+    transition: {
+      reasonCode: 'cohort-rotation',
+      operatorRole: 'operator',
+      actorHints: { ceremony: 'core-uploaded-bundle' },
+      performedAt: '2026-05-24T00:00:00.000Z',
+    },
+  });
+  const successorParsed = await parseShardSet(successor);
+  const forkedCandidates = [...forkBase.parsed.slice(0, 4), ...successorParsed.slice(0, 4)];
+
+  const uploadedBundleSelected = await restoreFromShards(forkedCandidates, {
+    verification: { lifecycleBundleBytes: successor.lifecycleBundleBytes },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(uploadedBundleSelected.cohortId, successor.cohortId);
+    assert.equal(uploadedBundleSelected.selectionSource, 'uploaded-lifecycle-bundle');
+    assert.equal(uploadedBundleSelected.lifecycleBundleSource, 'uploaded-lifecycle-bundle');
+    assert.equal(uploadedBundleSelected.lifecycleVerification.cohorts.forkDetected, true);
+  } finally {
+    wipeRestoreResult(uploadedBundleSelected);
+  }
+
+  const mixedBundleBase = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-selection-mixed-bundle-digests'),
+    authPolicyLevel: 'integrity-only',
+  });
+  const alternateBundle = await buildSuccessorVerificationBundle(mixedBundleBase.split, {
+    authPolicyLevel: 'integrity-only',
+    includeArchiveApproval: true,
+    includeMaintenance: false,
+    includeSourceEvidence: false,
+  });
+  const mixedBundleShards = mixedBundleBase.parsed.map((shard, index) => (
+    index < 2
+      ? {
+          ...shard,
+          lifecycleBundle: alternateBundle.bundle,
+          lifecycleBundleBytes: alternateBundle.bundleBytes,
+          lifecycleBundleDigestHex: alternateBundle.digestHex,
+        }
+      : shard
+  ));
+
+  await assert.rejects(
+    async () => restoreFromShards(mixedBundleShards, { onLog: () => {}, onError: () => {} }),
+    /multiple embedded lifecycle-bundle digests/,
+  );
+
+  const selectedDigest = await restoreFromShards(mixedBundleShards, {
+    verification: { selectedLifecycleBundleDigestHex: alternateBundle.digestHex },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(selectedDigest.lifecycleBundleDigestHex, alternateBundle.digestHex);
+    assert.equal(selectedDigest.lifecycleBundleSource, 'embedded-selected-lifecycle-bundle-digest');
+    assert.deepEqual(
+      selectedDigest.lifecycleVerification.cohorts.availableLifecycleBundleDigests,
+      [mixedBundleBase.split.lifecycleBundleDigestHex, alternateBundle.digestHex].sort(),
+    );
+    assert.equal(selectedDigest.lifecycleVerification.cohorts.mixedLifecycleBundleVariantsWithinSelectedCohort, true);
+    assert.equal(selectedDigest.authenticity.policy.satisfied, true);
+  } finally {
+    wipeRestoreResult(selectedDigest);
+    forkBase.pair.privateKey.fill(0);
+    mixedBundleBase.pair.privateKey.fill(0);
   }
 });
 
