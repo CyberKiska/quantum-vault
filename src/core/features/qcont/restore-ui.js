@@ -1,6 +1,7 @@
 import { parseLifecycleShard, restoreFromShards } from '../../../app/crypto-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { download, readFileAsUint8Array, setWorkflowBusy, shortenHash } from '../../../utils.js';
+import { wipeRestoreResult } from '../../crypto/zeroize.js';
 import { parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
 import {
   formatAuthenticityStatusMessage,
@@ -497,9 +498,7 @@ function setReleaseButtonState(enabled) {
 }
 
 function clearProRestoreEvaluation() {
-  if (proRestoreEvaluation?.result?.privKey instanceof Uint8Array) {
-    proRestoreEvaluation.result.privKey.fill(0);
-  }
+  wipeRestoreResult(proRestoreEvaluation?.result);
   proRestoreEvaluation = null;
   setReleaseButtonState(false);
 }
