@@ -1,10 +1,12 @@
-import { startsWithAscii } from '../core/crypto/byte-prefix.js';
 import { bytesEqual } from '../core/crypto/bytes.js';
-import { isSupportedStellarSignatureDocumentBytes } from '../core/crypto/auth/stellar-sig.js';
-import { parseArchiveStateDescriptorBytes, parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
-import { readFileAsUint8Array } from '../utils.js';
+import { classifyArtifactFileBytes } from './artifact-intake-service.js';
 
-const QCONT_MAGIC = 'QVC1';
+function throwClassificationError(classification, fallbackMessage) {
+  if (classification?.error instanceof Error) {
+    throw classification.error;
+  }
+  throw new Error(classification?.errorMessage || fallbackMessage);
+}
 
 export async function classifyRestoreInputFiles(files) {
   const shardFiles = [];
@@ -19,24 +21,19 @@ export async function classifyRestoreInputFiles(files) {
     const name = String(file?.name || 'unnamed');
     const lowerName = name.toLowerCase();
 
-    if (lowerName.endsWith('.qcont')) {
-      shardFiles.push(file);
-      continue;
-    }
-
     if (lowerName.endsWith('.qvmanifest.json')) {
       ignoredFileNames.push(name);
       continue;
     }
 
-    const bytes = await readFileAsUint8Array(file);
+    const { bytes, classification } = await classifyArtifactFileBytes(file);
 
-    if (startsWithAscii(bytes, QCONT_MAGIC)) {
+    if (classification.kind === 'qcont-shard') {
       shardFiles.push(file);
       continue;
     }
 
-    if (startsWithAscii(bytes, 'PQPK') || lowerName.endsWith('.pqpk')) {
+    if (classification.kind === 'pqpk') {
       const alreadyPresent = pinnedPqPublicKeyFileBytesList.some((item) => bytesEqual(item, bytes));
       if (!alreadyPresent) {
         pinnedPqPublicKeyFileBytesList.push(bytes);
@@ -44,44 +41,46 @@ export async function classifyRestoreInputFiles(files) {
       continue;
     }
 
-    if (startsWithAscii(bytes, 'PQSG') || lowerName.endsWith('.qsig')) {
+    if (classification.kind === 'signature') {
       signatures.push({ name, bytes });
       continue;
     }
 
-    if (lowerName.endsWith('.ots')) {
+    if (classification.kind === 'ots-proof') {
       timestamps.push({ name, bytes });
       continue;
     }
-    if (isSupportedStellarSignatureDocumentBytes(bytes)) {
-      signatures.push({ name, bytes });
-      continue;
-    }
 
-    try {
-      const parsedLifecycleBundle = await parseLifecycleBundleBytes(bytes);
-      if (lifecycleBundleBytes && !bytesEqual(lifecycleBundleBytes, parsedLifecycleBundle.bytes)) {
+    if (classification.kind === 'lifecycle-bundle') {
+      if (classification.status !== 'recognized') {
+        if (lowerName.endsWith('.lifecycle-bundle.json')) {
+          throwClassificationError(classification, 'Malformed lifecycle bundle file.');
+        }
+        ignoredFileNames.push(name);
+        continue;
+      }
+      const canonicalBytes = classification.canonicalBytes;
+      if (lifecycleBundleBytes && !bytesEqual(lifecycleBundleBytes, canonicalBytes)) {
         throw new Error('Multiple different lifecycle bundle files were provided. Keep only one.');
       }
-      lifecycleBundleBytes = parsedLifecycleBundle.bytes;
+      lifecycleBundleBytes = canonicalBytes;
       continue;
-    } catch (error) {
-      if (lowerName.endsWith('.lifecycle-bundle.json')) {
-        throw error;
-      }
     }
 
-    try {
-      const parsedArchiveState = parseArchiveStateDescriptorBytes(bytes);
-      if (archiveStateBytes && !bytesEqual(archiveStateBytes, parsedArchiveState.bytes)) {
+    if (classification.kind === 'archive-state') {
+      if (classification.status !== 'recognized') {
+        if (lowerName.endsWith('.archive-state.json')) {
+          throwClassificationError(classification, 'Malformed archive-state descriptor file.');
+        }
+        ignoredFileNames.push(name);
+        continue;
+      }
+      const canonicalBytes = classification.canonicalBytes;
+      if (archiveStateBytes && !bytesEqual(archiveStateBytes, canonicalBytes)) {
         throw new Error('Multiple different archive-state descriptor files were provided. Keep only one.');
       }
-      archiveStateBytes = parsedArchiveState.bytes;
+      archiveStateBytes = canonicalBytes;
       continue;
-    } catch (error) {
-      if (lowerName.endsWith('.archive-state.json')) {
-        throw error;
-      }
     }
 
     ignoredFileNames.push(name);
