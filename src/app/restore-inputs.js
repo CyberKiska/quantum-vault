@@ -1,12 +1,9 @@
-import { bytesEqual } from '../core/crypto/bytes.js';
-import { classifyArtifactFileBytes } from './artifact-intake-service.js';
-
-function throwClassificationError(classification, fallbackMessage) {
-  if (classification?.error instanceof Error) {
-    throw classification.error;
-  }
-  throw new Error(classification?.errorMessage || fallbackMessage);
-}
+import {
+  appendUniqueByteArtifact,
+  classifyArtifactFileBytes,
+  mergeSingleCanonicalArtifactBytes,
+  throwArtifactClassificationError,
+} from './artifact-intake-service.js';
 
 export async function classifyRestoreInputFiles(files) {
   const shardFiles = [];
@@ -34,10 +31,7 @@ export async function classifyRestoreInputFiles(files) {
     }
 
     if (classification.kind === 'pqpk') {
-      const alreadyPresent = pinnedPqPublicKeyFileBytesList.some((item) => bytesEqual(item, bytes));
-      if (!alreadyPresent) {
-        pinnedPqPublicKeyFileBytesList.push(bytes);
-      }
+      appendUniqueByteArtifact(pinnedPqPublicKeyFileBytesList, bytes);
       continue;
     }
 
@@ -54,32 +48,32 @@ export async function classifyRestoreInputFiles(files) {
     if (classification.kind === 'lifecycle-bundle') {
       if (classification.status !== 'recognized') {
         if (lowerName.endsWith('.lifecycle-bundle.json')) {
-          throwClassificationError(classification, 'Malformed lifecycle bundle file.');
+          throwArtifactClassificationError(classification, 'Malformed lifecycle bundle file.');
         }
         ignoredFileNames.push(name);
         continue;
       }
-      const canonicalBytes = classification.canonicalBytes;
-      if (lifecycleBundleBytes && !bytesEqual(lifecycleBundleBytes, canonicalBytes)) {
-        throw new Error('Multiple different lifecycle bundle files were provided. Keep only one.');
-      }
-      lifecycleBundleBytes = canonicalBytes;
+      lifecycleBundleBytes = mergeSingleCanonicalArtifactBytes(
+        lifecycleBundleBytes,
+        classification.canonicalBytes,
+        'Multiple different lifecycle bundle files were provided. Keep only one.'
+      );
       continue;
     }
 
     if (classification.kind === 'archive-state') {
       if (classification.status !== 'recognized') {
         if (lowerName.endsWith('.archive-state.json')) {
-          throwClassificationError(classification, 'Malformed archive-state descriptor file.');
+          throwArtifactClassificationError(classification, 'Malformed archive-state descriptor file.');
         }
         ignoredFileNames.push(name);
         continue;
       }
-      const canonicalBytes = classification.canonicalBytes;
-      if (archiveStateBytes && !bytesEqual(archiveStateBytes, canonicalBytes)) {
-        throw new Error('Multiple different archive-state descriptor files were provided. Keep only one.');
-      }
-      archiveStateBytes = canonicalBytes;
+      archiveStateBytes = mergeSingleCanonicalArtifactBytes(
+        archiveStateBytes,
+        classification.canonicalBytes,
+        'Multiple different archive-state descriptor files were provided. Keep only one.'
+      );
       continue;
     }
 
