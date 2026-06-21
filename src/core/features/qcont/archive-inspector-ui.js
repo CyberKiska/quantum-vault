@@ -1,7 +1,7 @@
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
+import { parseLifecycleBundleViewBytes } from '../../../app/artifact-intake-service.js';
 import { parseLifecycleShard } from '../../../app/crypto-service.js';
 import { readFileAsUint8Array, shortenHash } from '../../../utils.js';
-import { parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
 import { createDisclosurePanel } from '../ui/disclosure.js';
 
 const INSPECTOR_POLICY_NOTE = 'Maintenance signatures and source-evidence objects are separate from archive approval. They do not satisfy archive restore policy on their own. Timestamp (.ots) evidence is timestamp-only and also does not satisfy archive policy.';
@@ -111,8 +111,8 @@ async function buildBundleViewFromFiles(files) {
   const classified = await classifyRestoreInputFiles(files);
   if (classified.lifecycleBundleBytes instanceof Uint8Array) {
     try {
-      const parsed = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
-      return { bundle: parsed.lifecycleBundle, bundleDigest: parsed.digest?.value || null, classified };
+      const parsed = await parseLifecycleBundleViewBytes(classified.lifecycleBundleBytes);
+      return { bundle: parsed.lifecycleBundle, bundleDigest: parsed.digestHex || null, classified };
     } catch {
       return { bundle: null, bundleDigest: null, classified };
     }
