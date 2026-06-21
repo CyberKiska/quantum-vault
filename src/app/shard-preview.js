@@ -1,6 +1,7 @@
 // UI-layer shard preview helpers.
 // Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
+import { classifyArtifactFileBytes } from './artifact-intake-service.js';
 import { parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
 import { parseJsonBytesStrict } from '../core/crypto/manifest/strict-json.js';
 import {
@@ -116,12 +117,15 @@ export async function parseQcontShardPreviewFile(file) {
   };
 }
 
-function classifyNonShardFile(file) {
-  const name = String(file?.name || '').toLowerCase();
-  if (name.endsWith('.qsig')) return 'signature';
-  if (name.endsWith('.pqpk')) return 'pubkey';
-  if (name.endsWith('.sig')) return 'signature';
-  if (name.endsWith('.ots')) return 'timestamp';
+async function classifyNonShardFile(file) {
+  try {
+    const { classification } = await classifyArtifactFileBytes(file);
+    if (classification.kind === 'signature') return 'signature';
+    if (classification.kind === 'pqpk') return 'pubkey';
+    if (classification.kind === 'ots-proof') return 'timestamp';
+  } catch {
+    return 'other';
+  }
   return 'other';
 }
 
@@ -142,7 +146,7 @@ export async function assessShardSelection(files) {
       if (explicitShardName) {
         parseErrors += 1;
       } else {
-        attachments[classifyNonShardFile(file)]++;
+        attachments[await classifyNonShardFile(file)]++;
       }
     }
   }

@@ -5286,11 +5286,14 @@ function buildCases() {
         const payload = createLargeDeterministicPayload(CHUNK_SIZE + 2048);
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-preview-sidecar.bin'));
         const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
+        const detached = buildQsigFixture(split.archiveStateBytes);
         const files = [
           ...await Promise.all(split.shards.map(async (item, index) => (
             fileLike(`phase7-preview-${index + 1}.qcont`, await blobToBytes(item.blob))
           ))),
           fileLike('archive.qvmanifest.json', textBytes('{"schema":"quantum-vault-archive-manifest/v3","version":3}')),
+          fileLike('renamed-signature.bin', detached.qsigBytes),
+          fileLike('renamed-public-key.bin', detached.pqpkBytes),
         ];
 
         const assessment = await assessShardSelectionPreview(files);
@@ -5302,6 +5305,10 @@ function buildCases() {
         assert(
           !assessment.message.includes('manifest'),
           'preview status should not advertise legacy manifest attachments'
+        );
+        assert(
+          assessment.message.includes('Attachments: 1 signature(s), 1 public key(s).'),
+          'preview attachment counts should use core byte classification instead of filename heuristics'
         );
       },
     },
