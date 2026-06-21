@@ -1,7 +1,7 @@
 import { parseLifecycleShard } from '../../../app/crypto-service.js';
+import { parseArchiveStateViewBytes } from '../../../app/artifact-intake-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { readFileAsUint8Array } from '../../../utils.js';
-import { parseArchiveStateDescriptorBytes } from '../../crypto/lifecycle/artifacts.js';
 import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 import {
@@ -476,7 +476,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
 
     const model = buildSuccessorSelectionModel(successorShards);
     const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
-      ? parseArchiveStateDescriptorBytes(classified.archiveStateBytes)
+      ? parseArchiveStateViewBytes(classified.archiveStateBytes)
       : null;
     const lifecycleBundleProvided = classified.lifecycleBundleBytes instanceof Uint8Array;
     const uploadedStateKey = uploadedArchiveState
