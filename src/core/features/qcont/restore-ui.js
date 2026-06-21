@@ -1,8 +1,8 @@
 import { parseLifecycleShard, restoreFromShards } from '../../../app/crypto-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
+import { parseLifecycleBundleViewBytes } from '../../../app/artifact-intake-service.js';
 import { download, readFileAsUint8Array, setWorkflowBusy, shortenHash } from '../../../utils.js';
 import { wipeRestoreResult } from '../../crypto/zeroize.js';
-import { parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
 import {
   formatAuthenticityStatusMessage,
   formatSignatureResultSummary,
@@ -417,7 +417,7 @@ async function buildRestorePreflightDecisionForFiles({
   let parsedProvidedBundle = null;
   if (classified.lifecycleBundleBytes instanceof Uint8Array) {
     try {
-      parsedProvidedBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+      parsedProvidedBundle = await parseLifecycleBundleViewBytes(classified.lifecycleBundleBytes);
     } catch {
       parsedProvidedBundle = null;
     }
