@@ -13,10 +13,19 @@ import {
   textBytes,
 } from '../../src/core/crypto/selftest.js';
 import {
+  classifyArtifactFileBytes,
+  parseArchiveStateViewBytes,
+  parseLifecycleBundleArchiveStateViewBytes,
+  parseLifecycleBundleViewBytes,
+  parseSourceEvidenceViewBytes,
+  parseTransitionRecordViewBytes,
+} from '../../src/app/artifact-intake-service.js';
+import {
   canonicalizeSourceEvidence,
   canonicalizeTransitionRecord,
 } from '../../src/core/crypto/lifecycle/artifacts.js';
 import { classifyRestoreInputFiles } from '../../src/app/restore-inputs.js';
+import { classifyAttachFiles } from '../../src/core/features/qcont/attach-ui.js';
 
 const FORBIDDEN_CLASSIFICATION_FIELDS = new Set(['trusted', 'policySatisfied', 'releaseAllowed']);
 let fixturePromise = null;
@@ -71,6 +80,10 @@ async function fixtures() {
         payloadBytes: textBytes('artifact-classification-regression'),
         authPolicyLevel: 'integrity-only',
       });
+      const otherSample = await buildSuccessorRestoreSample({
+        payloadBytes: textBytes('artifact-classification-regression-other-state'),
+        authPolicyLevel: 'integrity-only',
+      });
       const qsig = buildQsigFixture(sample.split.archiveStateBytes);
       const otsBytes = await buildOtsFixture(qsig.qsigBytes, { completeProof: true });
       const verificationBundle = await buildSuccessorVerificationBundle(sample.split, {
@@ -89,6 +102,7 @@ async function fixtures() {
         otsBytes,
         lifecycleBundleBytes: sample.split.lifecycleBundleBytes,
         archiveStateBytes: sample.split.archiveStateBytes,
+        otherArchiveStateBytes: otherSample.split.archiveStateBytes,
         transitionRecordBytes,
         sourceEvidenceBytes,
       };
@@ -140,6 +154,78 @@ test('classifyArtifactBytes reports unknown and malformed artifacts without trus
   assertNoForbiddenFields(malformed, 'malformed');
 });
 
+test('app lifecycle bundle view helper exposes display data while preserving parser failures', async () => {
+  const fx = await fixtures();
+  const classified = await classifyArtifactFileBytes(
+    fileLike('archive.lifecycle-bundle.json', fx.lifecycleBundleBytes)
+  );
+  const parsed = await parseLifecycleBundleViewBytes(fx.lifecycleBundleBytes);
+  const archiveState = await parseLifecycleBundleArchiveStateViewBytes(fx.lifecycleBundleBytes);
+
+  assert.equal(parsed.lifecycleBundle.type, 'QV-Lifecycle-Bundle');
+  assert.equal(parsed.digestHex, classified.classification.metadata.digestHex);
+  assert.equal(parsed.digest.value, parsed.digestHex);
+  assert.equal(bytesEqual(parsed.canonicalBytes, fx.lifecycleBundleBytes), true);
+
+  assert.equal(archiveState.lifecycleBundleDigestHex, parsed.digestHex);
+  assert.equal(archiveState.digestHex, classified.classification.metadata.archiveStateDigestHex);
+  assert.equal(archiveState.digest.value, archiveState.digestHex);
+  assert.equal(archiveState.stateId, archiveState.digestHex);
+  assert.equal(bytesEqual(archiveState.canonicalBytes, fx.archiveStateBytes), true);
+
+  await assert.rejects(
+    () => parseLifecycleBundleViewBytes(textBytes('{"type":"QV-Lifecycle-Bundle"')),
+    /json|lifecycle/i
+  );
+  await assert.rejects(
+    () => parseLifecycleBundleArchiveStateViewBytes(textBytes('{"type":"QV-Lifecycle-Bundle"')),
+    /json|lifecycle/i
+  );
+});
+
+test('app archive-state view helper exposes display data while preserving parser failures', async () => {
+  const fx = await fixtures();
+  const classified = await classifyArtifactFileBytes(
+    fileLike('archive.archive-state.json', fx.archiveStateBytes)
+  );
+  const parsed = parseArchiveStateViewBytes(fx.archiveStateBytes);
+
+  assert.equal(parsed.archiveState.schema, 'quantum-vault-archive-state-descriptor/v1');
+  assert.equal(parsed.archiveState.stateType, 'archive-state');
+  assert.equal(parsed.digestHex, classified.classification.metadata.stateDigestHex);
+  assert.equal(parsed.digest.value, parsed.digestHex);
+  assert.equal(parsed.stateId, parsed.digestHex);
+  assert.equal(bytesEqual(parsed.canonicalBytes, fx.archiveStateBytes), true);
+
+  assert.throws(
+    () => parseArchiveStateViewBytes(textBytes('{"type":"QV-Archive-State"')),
+    /json|archive-state|archive state/i
+  );
+});
+
+test('app attach-target view helpers expose target refs and preserve parser failures', async () => {
+  const fx = await fixtures();
+  const transition = parseTransitionRecordViewBytes(fx.transitionRecordBytes);
+  const sourceEvidence = parseSourceEvidenceViewBytes(fx.sourceEvidenceBytes);
+
+  assert.equal(transition.targetRef, `transition:sha3-512:${transition.digestHex}`);
+  assert.equal(transition.digest.value, transition.digestHex);
+  assert.equal(bytesEqual(transition.canonicalBytes, fx.transitionRecordBytes), true);
+
+  assert.equal(sourceEvidence.targetRef, `source-evidence:sha3-512:${sourceEvidence.digestHex}`);
+  assert.equal(sourceEvidence.digest.value, sourceEvidence.digestHex);
+  assert.equal(bytesEqual(sourceEvidence.canonicalBytes, fx.sourceEvidenceBytes), true);
+
+  assert.throws(
+    () => parseTransitionRecordViewBytes(textBytes('{"type":"QV-Transition-Record"')),
+    /json|transition/i
+  );
+  assert.throws(
+    () => parseSourceEvidenceViewBytes(textBytes('{"type":"QV-Source-Evidence"')),
+    /json|source-evidence|source evidence/i
+  );
+});
+
 test('classifyRestoreInputFiles keeps restore return shape while using app/core classification', async () => {
   const fx = await fixtures();
   const files = [
@@ -181,4 +267,80 @@ test('classifyRestoreInputFiles keeps restore return shape while using app/core 
     'transition.transition-record.json',
     'notes.txt',
   ]);
+});
+
+test('classifyAttachFiles keeps attach return shape while using app/core classification', async () => {
+  const fx = await fixtures();
+  const files = [
+    fileLike('share-1.qcont', fx.qcontBytes),
+    fileLike('archive.qsig', fx.qsigBytes),
+    fileLike('archive.sig', fx.stellarBytes),
+    fileLike('archive.pqpk', fx.pqpkBytes),
+    fileLike('archive-copy.pqpk', fx.pqpkBytes),
+    fileLike('archive.ots', fx.otsBytes),
+    fileLike('archive.lifecycle-bundle.json', fx.lifecycleBundleBytes),
+    fileLike('archive.archive-state.json', fx.archiveStateBytes),
+    fileLike('source.source-evidence.json', fx.sourceEvidenceBytes),
+    fileLike('transition.transition-record.json', fx.transitionRecordBytes),
+    fileLike('notes.txt', textBytes('ignored')),
+  ];
+
+  const result = await classifyAttachFiles(files);
+
+  assert.deepEqual(Object.keys(result), [
+    'shardFiles',
+    'archiveStateBytes',
+    'lifecycleBundleBytes',
+    'transitionRecordBytes',
+    'sourceEvidenceBytes',
+    'signatures',
+    'timestamps',
+    'pqPublicKeyFileBytesList',
+  ]);
+  assert.deepEqual(result.shardFiles, [files[0]]);
+  assert.deepEqual(result.signatures.map((item) => item.name), ['archive.qsig', 'archive.sig']);
+  assert.equal(result.timestamps.length, 1);
+  assert.equal(result.timestamps[0].name, 'archive.ots');
+  assert.equal(result.pqPublicKeyFileBytesList.length, 1);
+  assert.equal(bytesEqual(result.pqPublicKeyFileBytesList[0], fx.pqpkBytes), true);
+  assert.equal(bytesEqual(result.archiveStateBytes, fx.archiveStateBytes), true);
+  assert.equal(bytesEqual(result.lifecycleBundleBytes, fx.lifecycleBundleBytes), true);
+  assert.equal(bytesEqual(result.sourceEvidenceBytes, fx.sourceEvidenceBytes), true);
+  assert.equal(bytesEqual(result.transitionRecordBytes, fx.transitionRecordBytes), true);
+});
+
+test('classifyAttachFiles fails closed for malformed named JSON and legacy manifest inputs', async () => {
+  await assert.rejects(
+    () => classifyAttachFiles([
+      fileLike('bad.source-evidence.json', textBytes('{"type":"QV-Source-Evidence"')),
+    ]),
+    /json|source-evidence|source evidence/i
+  );
+
+  await assert.rejects(
+    () => classifyAttachFiles([
+      fileLike('old.qvmanifest.json', textBytes('{}')),
+    ]),
+    /manifest-side files are no longer accepted/i
+  );
+});
+
+test('restore and attach intake reject conflicting canonical singleton artifacts', async () => {
+  const fx = await fixtures();
+
+  await assert.rejects(
+    () => classifyRestoreInputFiles([
+      fileLike('archive.archive-state.json', fx.archiveStateBytes),
+      fileLike('other.archive-state.json', fx.otherArchiveStateBytes),
+    ]),
+    /Multiple different archive-state descriptor files were provided/
+  );
+
+  await assert.rejects(
+    () => classifyAttachFiles([
+      fileLike('archive.archive-state.json', fx.archiveStateBytes),
+      fileLike('other.archive-state.json', fx.otherArchiveStateBytes),
+    ]),
+    /Multiple different archive-state descriptor files were provided/
+  );
 });
