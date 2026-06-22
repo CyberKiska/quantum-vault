@@ -31,7 +31,7 @@
     "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
-    "check": "npm run test:cli && npm run test:parity && npm run selftest && npm run cli:selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
+    "check": "npm run test:core && npm run test:cli && npm run test:parity && npm run selftest && npm run cli:selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
     "release:check": "npm run check && npm run test:browser",
     "deploy": "npm run build"
   },

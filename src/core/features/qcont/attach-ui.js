@@ -15,7 +15,7 @@ import {
   throwArtifactClassificationError,
 } from '../../../app/artifact-intake-service.js';
 import { packPqpk } from '../../crypto/auth/qsig.js';
-import { base64ToBytes, bytesEqual } from '../../crypto/bytes.js';
+import { base64ToBytes } from '../../crypto/bytes.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import { buildAttachEvidenceMatrixSections, renderEvidenceMatrix } from '../ui/evidence-matrix.js';

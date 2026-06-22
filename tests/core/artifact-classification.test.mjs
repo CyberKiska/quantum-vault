@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bytesEqual, bytesToBase64 } from '../../src/core/crypto/bytes.js';
-import { classifyArtifactBytes } from '../../src/core/crypto/artifact-classification.js';
+import {
+  classifyArtifactBytes,
+  classifyArtifactPreviewBytes,
+} from '../../src/core/crypto/artifact-classification.js';
 import {
   blobToBytes,
   buildOtsFixture,
@@ -26,6 +29,7 @@ import {
 } from '../../src/core/crypto/lifecycle/artifacts.js';
 import { classifyRestoreInputFiles } from '../../src/app/restore-inputs.js';
 import { classifyAttachFiles } from '../../src/core/features/qcont/attach-ui.js';
+import { assessShardSelection } from '../../src/app/shard-preview.js';
 
 const FORBIDDEN_CLASSIFICATION_FIELDS = new Set(['trusted', 'policySatisfied', 'releaseAllowed']);
 let fixturePromise = null;
@@ -64,8 +68,36 @@ function fileLike(name, bytes) {
   const copy = bytes.slice();
   return {
     name,
+    size: copy.length,
     async arrayBuffer() {
       return copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength);
+    },
+    slice(start = 0, end = copy.length) {
+      const sliced = copy.slice(start, end);
+      return {
+        async arrayBuffer() {
+          return sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength);
+        },
+      };
+    },
+  };
+}
+
+function sliceOnlyFileLike(name, bytes) {
+  const copy = bytes.slice();
+  return {
+    name,
+    size: copy.length,
+    async arrayBuffer() {
+      throw new Error('Full file read is not allowed for this preview fixture');
+    },
+    slice(start = 0, end = copy.length) {
+      const sliced = copy.slice(start, end);
+      return {
+        async arrayBuffer() {
+          return sliced.buffer.slice(sliced.byteOffset, sliced.byteOffset + sliced.byteLength);
+        },
+      };
     },
   };
 }
@@ -152,6 +184,30 @@ test('classifyArtifactBytes reports unknown and malformed artifacts without trus
   assert.equal(malformed.malformed, true);
   assert.match(malformed.errorMessage, /json/i);
   assertNoForbiddenFields(malformed, 'malformed');
+});
+
+test('classifyArtifactPreviewBytes reports only presentation candidates from bounded bytes', async () => {
+  const fx = await fixtures();
+  const qsigPreview = classifyArtifactPreviewBytes(fx.qsigBytes.subarray(0, 8), {
+    name: 'renamed-signature.bin',
+  });
+  const pqpkPreview = classifyArtifactPreviewBytes(fx.pqpkBytes.subarray(0, 8), {
+    name: 'renamed-public-key.bin',
+  });
+  const unknownPreview = classifyArtifactPreviewBytes(textBytes('not an artifact'), {
+    name: 'notes.txt',
+  });
+
+  assert.equal(qsigPreview.kind, 'signature');
+  assert.equal(qsigPreview.format, 'qsig');
+  assert.equal(qsigPreview.status, 'candidate');
+  assert.equal(pqpkPreview.kind, 'pqpk');
+  assert.equal(pqpkPreview.format, 'pqpk');
+  assert.equal(pqpkPreview.status, 'candidate');
+  assert.equal(unknownPreview.kind, 'unsupported');
+  assertNoForbiddenFields(qsigPreview, 'qsigPreview');
+  assertNoForbiddenFields(pqpkPreview, 'pqpkPreview');
+  assertNoForbiddenFields(unknownPreview, 'unknownPreview');
 });
 
 test('app lifecycle bundle view helper exposes display data while preserving parser failures', async () => {
@@ -343,4 +399,18 @@ test('restore and attach intake reject conflicting canonical singleton artifacts
     ]),
     /Multiple different archive-state descriptor files were provided/
   );
+});
+
+test('shard preview attachment counts use bounded core preview classification for large non-shard files', async () => {
+  const fx = await fixtures();
+  const largeSignature = new Uint8Array(512 * 1024);
+  largeSignature.set(fx.qsigBytes.subarray(0, 8), 0);
+
+  const assessment = await assessShardSelection([
+    fileLike('share-1.qcont', fx.qcontBytes),
+    sliceOnlyFileLike('large-renamed-signature.bin', largeSignature),
+  ]);
+
+  assert.equal(assessment.ready, false);
+  assert.match(assessment.message, /Attachments: 1 signature\(s\)\./);
 });

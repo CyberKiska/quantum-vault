@@ -1,13 +1,32 @@
 // UI-layer shard preview helpers.
 // Parse only the header portion of a .qcont shard file without touching decrypt logic.
 
-import { classifyArtifactFileBytes } from './artifact-intake-service.js';
+import {
+  classifyArtifactBytes,
+  classifyArtifactPreviewBytes,
+} from '../core/crypto/artifact-classification.js';
 import { parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
 import { parseJsonBytesStrict } from '../core/crypto/manifest/strict-json.js';
 import {
   LIFECYCLE_ARTIFACT_FAMILY,
   LIFECYCLE_QCONT_FORMAT_VERSION,
 } from '../core/crypto/qcont/lifecycle-shard.js';
+
+const MAX_ATTACHMENT_PREVIEW_CLASSIFY_BYTES = 256 * 1024;
+
+async function readFilePrefixBytes(file, maxBytes) {
+  const size = Number.isFinite(file?.size) && file.size >= 0 ? file.size : null;
+  const end = size == null ? maxBytes : Math.min(size, maxBytes);
+  if (typeof file?.slice === 'function') {
+    return new Uint8Array(await file.slice(0, end).arrayBuffer());
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return bytes.length > maxBytes ? bytes.subarray(0, maxBytes) : bytes;
+}
+
+function isSmallEnoughForFullPreviewClassification(file) {
+  return Number.isFinite(file?.size) && file.size >= 0 && file.size <= MAX_ATTACHMENT_PREVIEW_CLASSIFY_BYTES;
+}
 
 export async function parseQcontShardPreviewFile(file) {
   const decoder = new TextDecoder();
@@ -119,7 +138,14 @@ export async function parseQcontShardPreviewFile(file) {
 
 async function classifyNonShardFile(file) {
   try {
-    const { classification } = await classifyArtifactFileBytes(file);
+    const name = String(file?.name || 'unnamed');
+    const useFullClassification = isSmallEnoughForFullPreviewClassification(file);
+    const bytes = useFullClassification
+      ? new Uint8Array(await file.arrayBuffer())
+      : await readFilePrefixBytes(file, MAX_ATTACHMENT_PREVIEW_CLASSIFY_BYTES);
+    const classification = useFullClassification
+      ? await classifyArtifactBytes(bytes, { name })
+      : classifyArtifactPreviewBytes(bytes, { name });
     if (classification.kind === 'signature') return 'signature';
     if (classification.kind === 'pqpk') return 'pubkey';
     if (classification.kind === 'ots-proof') return 'timestamp';

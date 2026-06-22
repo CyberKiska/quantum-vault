@@ -73,6 +73,67 @@ function unsupported(params) {
 }
 
 /**
+ * Bounded preview classifier for UI counts and preflight hints.
+ *
+ * It intentionally reports only candidate artifact kinds from names or fixed
+ * magic bytes. It does not parse, trust, canonicalize, or satisfy policy.
+ *
+ * @param {Uint8Array} bytes
+ * @param {{ name?: string }} [options]
+ */
+export function classifyArtifactPreviewBytes(bytes, options = {}) {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new TypeError('Artifact preview classifier input must be Uint8Array');
+  }
+
+  const name = String(options.name || 'unnamed');
+  const lowerName = name.toLowerCase();
+  const params = { name, fileSha256Hex: '' };
+
+  if (lowerName.endsWith('.qvmanifest.json')) {
+    return legacyManifest(params);
+  }
+
+  if (lowerName.endsWith('.qcont') || startsWithAscii(bytes, QCONT_MAGIC)) {
+    return baseClassification({
+      ...params,
+      kind: 'qcont-shard',
+      format: 'qcont',
+      status: 'candidate',
+    });
+  }
+
+  if (startsWithAscii(bytes, 'PQPK') || lowerName.endsWith('.pqpk')) {
+    return baseClassification({
+      ...params,
+      kind: 'pqpk',
+      format: 'pqpk',
+      status: 'candidate',
+    });
+  }
+
+  if (startsWithAscii(bytes, 'PQSG') || lowerName.endsWith('.qsig')) {
+    return baseClassification({
+      ...params,
+      kind: 'signature',
+      format: 'qsig',
+      status: 'candidate',
+    });
+  }
+
+  if (lowerName.endsWith('.ots')) {
+    return baseClassification({
+      ...params,
+      kind: 'ots-proof',
+      format: 'ots',
+      status: 'candidate',
+    });
+  }
+
+  return unsupported(params);
+}
+
+/**
  * Classify artifact bytes without reading from File/Blob and without touching
  * DOM APIs.
  *
