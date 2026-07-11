@@ -54,12 +54,15 @@ function successorSelectionNeedsOpen(selection) {
 }
 
 /**
- * Opens the outer hub disclosure when attention is required; otherwise keeps it collapsed.
+ * Opens the outer hub disclosure when attention is required. Background refreshes
+ * preserve an already-open disclosure so they cannot undo an operator action.
+ * Explicit empty-input resets may request collapse with `collapseWhenClear`.
  *
  * @param {'restore'|'liteRestore'|'attach'|'reshare'|'review'} prefix
  * @param {object|null} [successorSelection] - from restore successorSelectionState (restore / lite / reshare)
+ * @param {{ collapseWhenClear?: boolean }} [options]
  */
-export function syncArchiveReviewHub(prefix, successorSelection = null) {
+export function syncArchiveReviewHub(prefix, successorSelection = null, options = {}) {
   const rootId = HUB_ROOT_IDS[prefix];
   if (!rootId) return;
   const root = document.getElementById(rootId);
@@ -75,7 +78,11 @@ export function syncArchiveReviewHub(prefix, successorSelection = null) {
     open = intakeShowsAttentionSignals(INTAKE_IDS.review);
   }
 
-  root.open = open;
+  if (open) {
+    root.open = true;
+  } else if (options.collapseWhenClear === true) {
+    root.open = false;
+  }
   wireDisclosureAria(root);
 }
 

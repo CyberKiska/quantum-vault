@@ -433,7 +433,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   if (!files.length) {
     clearArchiveInspector(ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix]);
     clearSuccessorSelectionUi(prefix, actionButton);
-    syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
+    syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix), { collapseWhenClear: true });
     return successorSelectionState.get(prefix);
   }
 

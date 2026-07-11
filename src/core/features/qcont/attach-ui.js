@@ -590,7 +590,7 @@ async function updateAttachStatus() {
     clearAttachResultPanel();
     clearAttachTargetBindingPreview();
     if (requestId !== attachStatusSeq) return;
-    syncArchiveReviewHub('attach');
+    syncArchiveReviewHub('attach', null, { collapseWhenClear: true });
     return;
   }
 
