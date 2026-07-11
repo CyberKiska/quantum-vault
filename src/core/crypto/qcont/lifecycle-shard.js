@@ -29,6 +29,7 @@ import {
   assertArchiveStateMatchesQencMetadata,
   mergeLifecycleShardIntoCohortGroups,
   normalizeHexString,
+  rehydrateLifecycleBundleForCohort,
   reconstructLifecycleCohortMaterial,
 } from './lifecycle-cohort-shared.js';
 
@@ -231,8 +232,12 @@ function collectSinglePredecessorCohort(preparedShards, options = {}) {
 }
 
 async function selectPredecessorLifecycleBundle(candidate, options = {}) {
+  const explicitDigest = normalizeHexString(options.selectedLifecycleBundleDigestHex);
   if (options.lifecycleBundleBytes instanceof Uint8Array) {
     const parsedBundle = await parseLifecycleBundleBytes(options.lifecycleBundleBytes);
+    if (explicitDigest && explicitDigest !== normalizeHexString(parsedBundle.digest.value)) {
+      throw new Error('Provided lifecycle-bundle bytes do not match selectedLifecycleBundleDigestHex');
+    }
     const canonicalArchiveState = canonicalizeArchiveStateDescriptor(parsedBundle.lifecycleBundle.archiveState);
     const canonicalCohortBinding = canonicalizeCohortBinding(parsedBundle.lifecycleBundle.currentCohortBinding);
     if (
@@ -256,16 +261,17 @@ async function selectPredecessorLifecycleBundle(candidate, options = {}) {
   }
 
   const embeddedDigests = [...candidate.embeddedLifecycleBundles.keys()].sort();
-  const explicitDigest = normalizeHexString(options.selectedLifecycleBundleDigestHex);
   if (explicitDigest) {
     const selected = candidate.embeddedLifecycleBundles.get(explicitDigest);
     if (!selected) {
       throw new Error(`Selected lifecycle-bundle digest ${explicitDigest} is not present in the predecessor cohort`);
     }
     return {
-      lifecycleBundle: selected.bundle,
-      lifecycleBundleBytes: selected.bytes,
-      lifecycleBundleDigestHex: selected.digestHex,
+      ...await rehydrateLifecycleBundleForCohort(
+        candidate,
+        selected,
+        'Selected predecessor embedded lifecycle bundle',
+      ),
       lifecycleBundleSource: 'selected-embedded-lifecycle-bundle-digest',
     };
   }
@@ -278,9 +284,11 @@ async function selectPredecessorLifecycleBundle(candidate, options = {}) {
 
   const selected = candidate.embeddedLifecycleBundles.get(embeddedDigests[0]);
   return {
-    lifecycleBundle: selected.bundle,
-    lifecycleBundleBytes: selected.bytes,
-    lifecycleBundleDigestHex: selected.digestHex,
+    ...await rehydrateLifecycleBundleForCohort(
+      candidate,
+      selected,
+      'Predecessor embedded lifecycle bundle',
+    ),
     lifecycleBundleSource: 'embedded-lifecycle-bundle',
   };
 }
@@ -433,6 +441,25 @@ function buildSuccessorShardBlob({
   bodyBytes,
 }) {
   const metaJSONBytes = new TextEncoder().encode(JSON.stringify(metaJSON));
+  const requireBytesLength = (bytes, field, { min = 1, max }) => {
+    if (!(bytes instanceof Uint8Array) || bytes.length < min || bytes.length > max) {
+      throw new Error(`${field} length must be between ${min} and ${max} bytes`);
+    }
+  };
+  requireBytesLength(metaJSONBytes, 'Shard metadata', { max: MAX_META_LEN });
+  requireBytesLength(archiveStateBytes, 'Archive-state artifact', { max: MAX_ARTIFACT_LEN });
+  requireBytesLength(cohortBindingBytes, 'Cohort-binding artifact', { max: MAX_ARTIFACT_LEN });
+  requireBytesLength(lifecycleBundleBytes, 'Lifecycle-bundle artifact', { max: MAX_ARTIFACT_LEN });
+  requireBytesLength(encapsulatedKey, 'Encapsulated key', { max: 0xffffffff });
+  requireBytesLength(containerNonce, 'Container nonce', { min: 12, max: 12 });
+  requireBytesLength(kdfSalt, 'KDF salt', { min: 16, max: 16 });
+  requireBytesLength(qencMetaBytes, 'QENC metadata', { max: MAX_META_LEN });
+  requireBytesLength(keyCommitment, 'Key commitment', { min: KEY_COMMITMENT_LEN, max: KEY_COMMITMENT_LEN });
+  requireBytesLength(share, 'Shamir share', { max: 0xffff });
+  requireBytesLength(bodyBytes, 'Shard body', { max: 0xffffffff });
+  if (!Number.isInteger(shardIndex) || shardIndex < 0 || shardIndex > 0xffff) {
+    throw new Error('Shard index is outside uint16 wire range');
+  }
   const metaLenBytes = new Uint8Array(2);
   new DataView(metaLenBytes.buffer).setUint16(0, metaJSONBytes.length, false);
 
@@ -561,14 +588,16 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     throw new Error('QENC metadata is missing valid domainStrings');
   }
 
-  let trialSharedSecret;
+  let trialSharedSecret = null;
+  let trialKraw = null;
+  let trialKenc = null;
+  let trialKiv = null;
   try {
     trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
-    const { Kraw, Kenc, Kiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
+    ({ Kraw: trialKraw, Kenc: trialKenc, Kiv: trialKiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
       includeAesKey: false,
-    });
-    const keyMatch = verifyKeyCommitment(Kenc, keyCommitment);
-    clearKeys(trialSharedSecret, Kraw, Kenc, Kiv);
+    }));
+    const keyMatch = verifyKeyCommitment(trialKenc, keyCommitment);
     if (!keyMatch) {
       throw new Error(
         'Private key does not match this .qenc container (key commitment mismatch). ' +
@@ -576,9 +605,10 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
       );
     }
   } catch (error) {
-    if (trialSharedSecret instanceof Uint8Array) trialSharedSecret.fill(0);
     if (String(error?.message || error).includes('does not match')) throw error;
     throw new Error(`Key verification failed: ${error?.message || error}`);
+  } finally {
+    clearKeys(trialSharedSecret, trialKraw, trialKenc, trialKiv);
   }
 
   const effectiveLength = meta.payloadLength || meta.originalLength;
@@ -589,6 +619,7 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
   const { splitSecret } = await import('../splitting/sss.js');
   const shares = await splitSecret(privKeyBytes, n, t);
   const shareCommitments = shares.map((share) => computeDigestHex(share));
+  try {
 
   const shardBuffers = Array.from({ length: n }, () => []);
   const chunkSize = meta.chunkSize;
@@ -789,22 +820,27 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     shards.push({ blob, index: j });
   }
 
-  return {
-    shards,
-    archiveId,
-    stateId,
-    cohortId,
-    archiveState,
-    archiveStateBytes: canonicalArchiveState.bytes,
-    archiveStateDigestHex: canonicalArchiveState.digest.value,
-    cohortBinding,
-    cohortBindingBytes: canonicalCohortBinding.bytes,
-    cohortBindingDigestHex: canonicalCohortBinding.digest.value,
-    lifecycleBundle,
-    lifecycleBundleBytes: canonicalLifecycleBundle.bytes,
-    lifecycleBundleDigestHex: canonicalLifecycleBundle.digest.value,
-    formatVersion: LIFECYCLE_QCONT_FORMAT_VERSION,
-  };
+    return {
+      shards,
+      archiveId,
+      stateId,
+      cohortId,
+      archiveState,
+      archiveStateBytes: canonicalArchiveState.bytes,
+      archiveStateDigestHex: canonicalArchiveState.digest.value,
+      cohortBinding,
+      cohortBindingBytes: canonicalCohortBinding.bytes,
+      cohortBindingDigestHex: canonicalCohortBinding.digest.value,
+      lifecycleBundle,
+      lifecycleBundleBytes: canonicalLifecycleBundle.bytes,
+      lifecycleBundleDigestHex: canonicalLifecycleBundle.digest.value,
+      formatVersion: LIFECYCLE_QCONT_FORMAT_VERSION,
+    };
+  } finally {
+    for (const share of shares) {
+      if (share instanceof Uint8Array) share.fill(0);
+    }
+  }
 }
 
 export function rewriteLifecycleBundleInShard(shard, lifecycleBundleBytes) {
@@ -1077,7 +1113,7 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
   const targetParams = validateReshareTargetParams(params, predecessorCandidate.cohortBinding);
 
   if (expectedEd25519Signer.length > 0) {
-    onWarn('Same-state resharing does not run full restore archive-policy evaluation. The expected Ed25519 signer was recorded as operator context only.');
+    onWarn('Same-state resharing does not verify or persist expectedEd25519Signer; the supplied value was ignored. Verify signer expectations during Restore or Verify.');
   }
 
   const transitionOptions = options.transition || options.transitionRecord || {};

@@ -6,7 +6,7 @@ import { unpackPqpk, unpackQsig } from '../../crypto/auth/qsig.js';
 import { isSupportedStellarSignatureDocumentBytes } from '../../crypto/auth/stellar-sig.js';
 import { parseJsonBytesStrict } from '../../crypto/manifest/strict-json.js';
 import { canonicalizeJson } from '../../crypto/manifest/jcs.js';
-import { parseLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
+import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../crypto/qcont/lifecycle-shard.js';
 import { classifyJsonArtifactObject, digestSha3_512Hex } from '../lib/artifacts.js';
 import { parseSingleFileCommandArgs } from '../lib/args.js';
 import { readBytesFromFile } from '../lib/io.js';
@@ -52,26 +52,30 @@ async function inspectBinaryArtifact(bytes, filePath) {
 
   if (startsWithAscii(bytes, 'QVC1')) {
     const parsed = await parseLifecycleShard(bytes, { strict: true });
-    return {
-      command: 'inspect',
-      file: filePath,
-      artifactType: 'QVqcont-7',
-      artifactVersion: 'QVqcont-7',
-      encoding: 'binary',
-      digestAlg: 'SHA3-512',
-      digestHex: inputDigestHex,
-      canonicalJson: parsed.metaJSON,
-      canonicalJsonText: canonicalizeJson(parsed.metaJSON),
-      parsedSummary: {
-        archiveId: parsed.archiveState.archiveId,
-        stateId: parsed.stateId,
-        cohortId: parsed.cohortId,
-        shardIndex: parsed.shardIndex,
-        archiveStateDigestHex: parsed.archiveStateDigestHex,
-        cohortBindingDigestHex: parsed.cohortBindingDigestHex,
-        lifecycleBundleDigestHex: parsed.lifecycleBundleDigestHex,
-      },
-    };
+    try {
+      return {
+        command: 'inspect',
+        file: filePath,
+        artifactType: 'QVqcont-7',
+        artifactVersion: 'QVqcont-7',
+        encoding: 'binary',
+        digestAlg: 'SHA3-512',
+        digestHex: inputDigestHex,
+        canonicalJson: parsed.metaJSON,
+        canonicalJsonText: canonicalizeJson(parsed.metaJSON),
+        parsedSummary: {
+          archiveId: parsed.archiveState.archiveId,
+          stateId: parsed.stateId,
+          cohortId: parsed.cohortId,
+          shardIndex: parsed.shardIndex,
+          archiveStateDigestHex: parsed.archiveStateDigestHex,
+          cohortBindingDigestHex: parsed.cohortBindingDigestHex,
+          lifecycleBundleDigestHex: parsed.lifecycleBundleDigestHex,
+        },
+      };
+    } finally {
+      zeroizeParsedLifecycleShard(parsed);
+    }
   }
 
   if (startsWithAscii(bytes, 'PQSG')) {
@@ -180,7 +184,11 @@ export function parseInspectArgs(args) {
 export async function runInspectCommand(filePath) {
   await ensureRuntimeCrypto();
   const bytes = await readBytesFromFile(filePath);
-  return inspectArtifact(bytes, filePath);
+  try {
+    return await inspectArtifact(bytes, filePath);
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 export function renderInspectSummary(report) {

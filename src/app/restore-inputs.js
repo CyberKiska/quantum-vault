@@ -27,11 +27,12 @@ export async function classifyRestoreInputFiles(files) {
 
     if (classification.kind === 'qcont-shard') {
       shardFiles.push(file);
+      bytes.fill(0);
       continue;
     }
 
     if (classification.kind === 'pqpk') {
-      appendUniqueByteArtifact(pinnedPqPublicKeyFileBytesList, bytes);
+      if (!appendUniqueByteArtifact(pinnedPqPublicKeyFileBytesList, bytes)) bytes.fill(0);
       continue;
     }
 
@@ -48,9 +49,11 @@ export async function classifyRestoreInputFiles(files) {
     if (classification.kind === 'lifecycle-bundle') {
       if (classification.status !== 'recognized') {
         if (lowerName.endsWith('.lifecycle-bundle.json')) {
+          bytes.fill(0);
           throwArtifactClassificationError(classification, 'Malformed lifecycle bundle file.');
         }
         ignoredFileNames.push(name);
+        bytes.fill(0);
         continue;
       }
       lifecycleBundleBytes = mergeSingleCanonicalArtifactBytes(
@@ -58,15 +61,18 @@ export async function classifyRestoreInputFiles(files) {
         classification.canonicalBytes,
         'Multiple different lifecycle bundle files were provided. Keep only one.'
       );
+      bytes.fill(0);
       continue;
     }
 
     if (classification.kind === 'archive-state') {
       if (classification.status !== 'recognized') {
         if (lowerName.endsWith('.archive-state.json')) {
+          bytes.fill(0);
           throwArtifactClassificationError(classification, 'Malformed archive-state descriptor file.');
         }
         ignoredFileNames.push(name);
+        bytes.fill(0);
         continue;
       }
       archiveStateBytes = mergeSingleCanonicalArtifactBytes(
@@ -74,10 +80,12 @@ export async function classifyRestoreInputFiles(files) {
         classification.canonicalBytes,
         'Multiple different archive-state descriptor files were provided. Keep only one.'
       );
+      bytes.fill(0);
       continue;
     }
 
     ignoredFileNames.push(name);
+    bytes.fill(0);
   }
 
   return {

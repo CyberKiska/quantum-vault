@@ -32,6 +32,7 @@ import {
   assertArchiveStateMatchesQencMetadata,
   mergeLifecycleShardIntoCohortGroups,
   normalizeHexString,
+  rehydrateLifecycleBundleForCohort,
   reconstructLifecycleCohortMaterial,
 } from './lifecycle-cohort-shared.js';
 
@@ -577,6 +578,18 @@ async function attachLifecycleSignatureDigests(result) {
   };
 }
 
+function verifiedSignerIdentity(result) {
+  if (result?.format === 'qsig') {
+    const fingerprint = normalizeHexString(result.signerFingerprintHex);
+    return /^[0-9a-f]{64}$/.test(fingerprint) ? `pq-sha3-256:${fingerprint}` : '';
+  }
+  if (result?.format === 'stellar-sig') {
+    const signer = String(result.signer || '').trim().toUpperCase();
+    return signer ? `stellar-ed25519:${signer}` : '';
+  }
+  return '';
+}
+
 function buildLifecycleVerificationCounts(results) {
   const counts = {
     validTotal: 0,
@@ -594,6 +607,7 @@ function buildLifecycleVerificationCounts(results) {
   };
   const duplicateWarnings = [];
   const selfSignedWarnings = [];
+  const unidentifiableSignerWarnings = [];
   const uniqueValid = new Map();
 
   for (const result of results) {
@@ -604,7 +618,15 @@ function buildLifecycleVerificationCounts(results) {
     }
     if (!result?.ok || typeof result.proofIdentityDigestHex !== 'string') continue;
     const family = String(result.family || 'archive-approval');
-    const dedupeKey = `${family}:${result.format}:${result.proofIdentityDigestHex}`;
+    const signerIdentity = verifiedSignerIdentity(result);
+    if (!signerIdentity) {
+      unidentifiableSignerWarnings.push(
+        `Verified detached ${family} signature was not counted because no stable verified signer identity was available: ${result.name || result.artifactId || 'unnamed signature'}`
+      );
+      continue;
+    }
+    result.signerIdentity = signerIdentity;
+    const dedupeKey = `${family}:${signerIdentity}`;
     const current = uniqueValid.get(dedupeKey);
     if (!current) {
       uniqueValid.set(dedupeKey, {
@@ -614,6 +636,7 @@ function buildLifecycleVerificationCounts(results) {
         bundlePinned: result.bundlePinned === true,
         userPinned: result.userPinned === true,
         names: [result.name || result.artifactId || dedupeKey],
+        proofIdentities: new Set([result.proofIdentityDigestHex]),
       });
       if (family === 'archive-approval') {
         result.countedForPolicy = true;
@@ -626,6 +649,7 @@ function buildLifecycleVerificationCounts(results) {
     current.bundlePinned = current.bundlePinned || result.bundlePinned === true;
     current.userPinned = current.userPinned || result.userPinned === true;
     current.names.push(result.name || result.artifactId || dedupeKey);
+    current.proofIdentities.add(result.proofIdentityDigestHex);
   }
 
   for (const entry of uniqueValid.values()) {
@@ -646,11 +670,14 @@ function buildLifecycleVerificationCounts(results) {
       counts.validSourceEvidence += 1;
     }
     if (entry.names.length > 1) {
-      duplicateWarnings.push(`Duplicate detached ${entry.family} signature ignored for policy/state counting: ${entry.names.join(', ')}`);
+      const detail = entry.proofIdentities.size === 1
+        ? 'Duplicate detached signature proof'
+        : 'Additional detached signature from the same verified signer';
+      duplicateWarnings.push(`${detail} ignored for ${entry.family} policy/state counting: ${entry.names.join(', ')}`);
     }
   }
 
-  return { counts, duplicateWarnings, selfSignedWarnings };
+  return { counts, duplicateWarnings, selfSignedWarnings, unidentifiableSignerWarnings };
 }
 
 function evaluateSuccessorArchivePolicy(authPolicy, verification) {
@@ -670,19 +697,26 @@ function evaluateSuccessorArchivePolicy(authPolicy, verification) {
       level,
       minValidSignatures,
       satisfied: true,
+      validArchiveApprovals: counts.validArchiveApproval || 0,
+      deficits: { missingArchiveApprovals: 0, missingStrongPqApprovals: 0 },
       reason: 'integrity-only policy does not require signatures',
     };
   }
 
   if (level === 'any-signature') {
     const satisfied = counts.validArchiveApproval >= minValidSignatures;
+    const missingArchiveApprovals = Math.max(0, minValidSignatures - counts.validArchiveApproval);
     return {
       level,
       minValidSignatures,
       satisfied,
+      validArchiveApprovals: counts.validArchiveApproval,
+      deficits: { missingArchiveApprovals, missingStrongPqApprovals: 0 },
       reason: satisfied
         ? 'required archive-approval signature count satisfied'
-        : 'no verified archive-approval signature satisfies archive policy',
+        : counts.validArchiveApproval === 0
+          ? 'no verified archive-approval signature satisfies archive policy'
+          : `archive-approval signature threshold not satisfied (${counts.validArchiveApproval}/${minValidSignatures})`,
     };
   }
 
@@ -691,13 +725,20 @@ function evaluateSuccessorArchivePolicy(authPolicy, verification) {
       counts.validArchiveApproval >= minValidSignatures &&
       counts.validArchiveApprovalStrongPq >= 1
     );
+    const missingArchiveApprovals = Math.max(0, minValidSignatures - counts.validArchiveApproval);
+    const missingStrongPqApprovals = counts.validArchiveApprovalStrongPq >= 1 ? 0 : 1;
     return {
       level,
       minValidSignatures,
       satisfied,
+      validArchiveApprovals: counts.validArchiveApproval,
+      validStrongPqArchiveApprovals: counts.validArchiveApprovalStrongPq,
+      deficits: { missingArchiveApprovals, missingStrongPqApprovals },
       reason: satisfied
         ? 'required strong PQ archive-approval signature present'
-        : 'no verified strong PQ archive-approval signature satisfies archive policy',
+        : missingArchiveApprovals > 0 && counts.validArchiveApproval > 0
+          ? `archive-approval signature threshold not satisfied (${counts.validArchiveApproval}/${minValidSignatures})`
+          : 'no verified strong PQ archive-approval signature satisfies archive policy',
     };
   }
 
@@ -893,6 +934,7 @@ async function inspectSuccessorTimestampEvidence({
       const resolved = await resolveOpenTimestampTarget({
         timestampBytes: base64ToBytes(timestamp.proof),
         timestampName: timestamp.id,
+        declaredTargetDigest: timestamp.targetDigest,
         signatures: [{
           id: signature.artifactId || signature.name,
           name: signature.name,
@@ -1000,7 +1042,12 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     }));
   }
 
-  const { counts, duplicateWarnings, selfSignedWarnings } = buildLifecycleVerificationCounts(results);
+  const {
+    counts,
+    duplicateWarnings,
+    selfSignedWarnings,
+    unidentifiableSignerWarnings,
+  } = buildLifecycleVerificationCounts(results);
   const warnings = [];
   for (const result of results) {
     for (const warning of result.warnings || []) warnings.push(warning);
@@ -1008,6 +1055,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
   warnings.push(...pinNormalizationWarnings);
   warnings.push(...selfSignedWarnings);
   warnings.push(...duplicateWarnings);
+  warnings.push(...unidentifiableSignerWarnings);
 
   const policy = evaluateSuccessorArchivePolicy(lifecycleBundle.authPolicy, { counts });
   const timestampInspection = await inspectSuccessorTimestampEvidence({
@@ -1104,7 +1152,12 @@ async function evaluateBundlelessSuccessorAuthenticity(candidate, verificationOp
     }));
   }
 
-  const { counts, duplicateWarnings, selfSignedWarnings } = buildLifecycleVerificationCounts(results);
+  const {
+    counts,
+    duplicateWarnings,
+    selfSignedWarnings,
+    unidentifiableSignerWarnings,
+  } = buildLifecycleVerificationCounts(results);
   const warnings = [];
   for (const result of results) {
     for (const warning of result.warnings || []) warnings.push(warning);
@@ -1112,6 +1165,7 @@ async function evaluateBundlelessSuccessorAuthenticity(candidate, verificationOp
   warnings.push(...pinNormalizationWarnings);
   warnings.push(...selfSignedWarnings);
   warnings.push(...duplicateWarnings);
+  warnings.push(...unidentifiableSignerWarnings);
 
   const timestampInspection = await inspectSuccessorTimestampEvidence({
     bundle: null,
@@ -1272,9 +1326,18 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
   let lifecycleBundleDigestHex;
   let lifecycleBundleSource = 'embedded';
   let candidate = null;
+  const requestedLifecycleBundleDigestHex = normalizeHexString(
+    verificationOptions.selectedLifecycleBundleDigestHex
+  );
 
   if (verificationOptions.lifecycleBundleBytes instanceof Uint8Array) {
     const parsedBundle = await parseLifecycleBundleBytes(verificationOptions.lifecycleBundleBytes);
+    if (
+      requestedLifecycleBundleDigestHex &&
+      requestedLifecycleBundleDigestHex !== normalizeHexString(parsedBundle.digest.value)
+    ) {
+      throw new Error('Provided lifecycle-bundle bytes do not match selectedLifecycleBundleDigestHex');
+    }
     const canonicalBundleArchiveState = canonicalizeArchiveStateDescriptor(parsedBundle.lifecycleBundle.archiveState);
     const canonicalBundleCohortBinding = canonicalizeCohortBinding(parsedBundle.lifecycleBundle.currentCohortBinding);
     if (uploadedArchiveState && !bytesEqual(uploadedArchiveState.bytes, canonicalBundleArchiveState.bytes)) {
@@ -1314,21 +1377,19 @@ async function resolveSuccessorArchiveContext(shards, verificationOptions = {}) 
     }
     candidate = candidates[0];
     const embeddedDigests = [...candidate.embeddedLifecycleBundles.keys()].sort();
-    const explicitDigest = normalizeHexString(verificationOptions.selectedLifecycleBundleDigestHex);
+    const explicitDigest = requestedLifecycleBundleDigestHex;
     if (explicitDigest) {
       const selected = candidate.embeddedLifecycleBundles.get(explicitDigest);
       if (!selected) {
         throw new Error(`Selected lifecycle-bundle digest ${explicitDigest} is not present in the chosen archive/state/cohort candidate`);
       }
-      lifecycleBundle = selected.bundle;
-      lifecycleBundleBytes = selected.bytes;
-      lifecycleBundleDigestHex = selected.digestHex;
+      ({ lifecycleBundle, lifecycleBundleBytes, lifecycleBundleDigestHex } =
+        await rehydrateLifecycleBundleForCohort(candidate, selected, 'Selected embedded lifecycle bundle'));
       lifecycleBundleSource = 'embedded-selected-lifecycle-bundle-digest';
     } else if (embeddedDigests.length === 1) {
       const selected = candidate.embeddedLifecycleBundles.get(embeddedDigests[0]);
-      lifecycleBundle = selected.bundle;
-      lifecycleBundleBytes = selected.bytes;
-      lifecycleBundleDigestHex = selected.digestHex;
+      ({ lifecycleBundle, lifecycleBundleBytes, lifecycleBundleDigestHex } =
+        await rehydrateLifecycleBundleForCohort(candidate, selected, 'Embedded lifecycle bundle'));
     } else {
       throw new Error(
         'Selected archive/state/cohort carries multiple embedded lifecycle-bundle digests. Provide lifecycle-bundle bytes or explicit operator selection of one embedded bundle digest.'
@@ -1389,6 +1450,25 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   const keyValidationHooks = options.keyValidationHooks || null;
 
   const archiveContext = await resolveSuccessorArchiveContext(shards, verificationOptions);
+  const candidate = archiveContext.candidate;
+  const group = candidate.shards.slice();
+  const embeddedLifecycleBundleDigestsUsed = collectSortedUniqueLifecycleBundleDigests(group);
+  const bundleCohortMixed = embeddedLifecycleBundleDigestsUsed.length > 1;
+  const prePolicyMixedBundleWarning = buildMixedLifecycleBundleVariantWarning(
+    embeddedLifecycleBundleDigestsUsed,
+    archiveContext.lifecycleBundleDigestHex,
+  );
+  if (prePolicyMixedBundleWarning) {
+    archiveContext.authenticity.warnings = dedupeWarnings([
+      ...(archiveContext.authenticity.warnings || []),
+      prePolicyMixedBundleWarning,
+    ]);
+    archiveContext.authenticity.status = {
+      ...(archiveContext.authenticity.status || {}),
+      bundleCohortMixed: true,
+      mixedLifecycleBundleVariantsWithinCohort: true,
+    };
+  }
   if (options.enforcePolicy !== false && !archiveContext.authenticity.policy.satisfied) {
     for (const warning of archiveContext.authenticity.warnings || []) {
       onWarn(warning);
@@ -1397,15 +1477,11 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     error.authenticity = archiveContext.authenticity;
     throw error;
   }
-  const candidate = archiveContext.candidate;
   const archiveState = candidate.archiveState;
   const cohortBinding = candidate.cohortBinding;
   const lifecycleBundle = archiveContext.lifecycleBundle;
   const lifecycleBundleDigestHex = archiveContext.lifecycleBundleDigestHex;
 
-  const group = candidate.shards.slice();
-  const embeddedLifecycleBundleDigestsUsed = collectSortedUniqueLifecycleBundleDigests(group);
-  const bundleCohortMixed = embeddedLifecycleBundleDigestsUsed.length > 1;
   const rejectedShardIndices = shards
     .filter((shard) => (
       normalizeHexString(shard?.metaJSON?.archiveId) !== candidate.archiveId ||
@@ -1476,6 +1552,9 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     recoveredQencHash,
     recoveredPrivHash,
     rejectedShardIndices,
+    invalidShareIndices: [...reconstructed.invalidShareIndices],
+    corruptedShardIndices: [...reconstructed.corruptedShardIndices],
+    missingShardIndices: [...reconstructed.missingShardIndices],
     qencOk: true,
     qkeyOk,
     archiveState,

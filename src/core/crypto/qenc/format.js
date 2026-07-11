@@ -1,12 +1,13 @@
 // --- QENC Container Format Helpers ---
 
-import { MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from '../constants.js';
+import { CHUNK_SIZE, MAGIC, MINIMAL_CONTAINER_SIZE, KEY_COMMITMENT_SIZE, FORMAT_VERSION } from '../constants.js';
 import {
     IV_STRATEGY_SINGLE_IV,
     IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
     NONCE_COUNTER_BITS_U32,
     NONCE_MAX_CHUNK_COUNT_U32,
 } from '../aead.js';
+import { parseJsonBytesStrict } from '../manifest/strict-json.js';
 
 function writeUint16BE(value) {
     const out = new Uint8Array(2);
@@ -51,6 +52,9 @@ export function buildQencHeader({
 }) {
     if (!(encapsulatedKey instanceof Uint8Array)) {
         throw new Error('encapsulatedKey must be Uint8Array');
+    }
+    if (encapsulatedKey.length <= 0 || encapsulatedKey.length > 0xffffffff) {
+        throw new Error(`Invalid encapsulatedKey length: ${encapsulatedKey.length}`);
     }
     if (!(containerNonce instanceof Uint8Array) || containerNonce.length !== 12) {
         throw new Error('containerNonce must be 12-byte Uint8Array');
@@ -151,7 +155,7 @@ export function parseQencHeader(containerBytes, options = {}) {
     const metaBytes = containerBytes.subarray(offset, offset + metaLen);
     let metadata;
     try {
-        metadata = JSON.parse(new TextDecoder().decode(metaBytes));
+        metadata = parseJsonBytesStrict(metaBytes);
     } catch (error) {
         throw new Error(`Invalid metadata JSON: ${error?.message || error}`);
     }
@@ -193,14 +197,17 @@ export function parseQencHeader(containerBytes, options = {}) {
     if (metadata.maxChunkCount > NONCE_MAX_CHUNK_COUNT_U32) {
         throw new Error(`Invalid metadata: maxChunkCount exceeds uint32 counter capacity (${NONCE_MAX_CHUNK_COUNT_U32})`);
     }
-    if (metadata.payloadLength != null && (!Number.isInteger(metadata.payloadLength) || metadata.payloadLength <= 0)) {
+    if (!Number.isSafeInteger(metadata.payloadLength) || metadata.payloadLength <= 0) {
         throw new Error('Invalid metadata: payloadLength must be a positive integer');
     }
-    if (metadata.chunkCount != null && (!Number.isInteger(metadata.chunkCount) || metadata.chunkCount <= 0)) {
+    if (!Number.isSafeInteger(metadata.chunkCount) || metadata.chunkCount <= 0) {
         throw new Error('Invalid metadata: chunkCount must be a positive integer');
     }
-    if (metadata.chunkSize != null && (!Number.isInteger(metadata.chunkSize) || metadata.chunkSize <= 0)) {
+    if (!Number.isSafeInteger(metadata.chunkSize) || metadata.chunkSize <= 0) {
         throw new Error('Invalid metadata: chunkSize must be a positive integer');
+    }
+    if (metadata.chunkSize !== CHUNK_SIZE) {
+        throw new Error(`Invalid metadata: unsupported chunkSize ${metadata.chunkSize}; expected ${CHUNK_SIZE}`);
     }
     if (metadata.chunkCount != null && metadata.chunkCount > metadata.maxChunkCount) {
         throw new Error('Invalid metadata: chunkCount exceeds maxChunkCount');
@@ -215,6 +222,9 @@ export function parseQencHeader(containerBytes, options = {}) {
         if (metadata.maxChunkCount !== 1) {
             throw new Error('Invalid metadata: single-container-aead requires maxChunkCount=1');
         }
+        if (metadata.chunkCount !== 1) {
+            throw new Error('Invalid metadata: single-container-aead requires chunkCount=1');
+        }
     } else if (metadata.aead_mode === 'per-chunk-aead') {
         if (metadata.iv_strategy !== IV_STRATEGY_KMAC_PREFIX64_CTR32_V3) {
             throw new Error(`Invalid metadata: per-chunk-aead requires iv_strategy="${IV_STRATEGY_KMAC_PREFIX64_CTR32_V3}"`);
@@ -224,6 +234,10 @@ export function parseQencHeader(containerBytes, options = {}) {
         }
         if (metadata.chunkCount == null) {
             throw new Error('Invalid metadata: per-chunk-aead requires chunkCount');
+        }
+        const expectedChunkCount = Math.ceil(metadata.payloadLength / metadata.chunkSize);
+        if (metadata.chunkCount !== expectedChunkCount) {
+            throw new Error(`Invalid metadata: chunkCount does not match payloadLength/chunkSize geometry (expected ${expectedChunkCount})`);
         }
     } else {
         throw new Error(`Unsupported AEAD mode: ${metadata.aead_mode}`);
@@ -241,6 +255,11 @@ export function parseQencHeader(containerBytes, options = {}) {
 
     if (offset >= containerBytes.length) {
         throw new Error('Invalid container: ciphertext is missing');
+    }
+    const ciphertextLength = containerBytes.length - offset;
+    const expectedCiphertextLength = metadata.payloadLength + (16 * metadata.chunkCount);
+    if (ciphertextLength !== expectedCiphertextLength) {
+        throw new Error(`Invalid container: ciphertext length does not match authenticated geometry (expected ${expectedCiphertextLength}, got ${ciphertextLength})`);
     }
 
     const header = containerBytes.subarray(0, offset);

@@ -1,7 +1,8 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { toHex } from '../bytes.js';
+import { base64ToBytes, toHex } from '../bytes.js';
 import { canonicalizeJsonToBytes } from '../manifest/jcs.js';
 import { parseJsonBytesStrict } from '../manifest/strict-json.js';
+import { unpackQsig } from './qsig.js';
 
 const STELLAR_SIGNATURE_SCHEMA = 'stellar-signature/v2';
 
@@ -77,6 +78,13 @@ function buildStellarProofIdentityPayload(signatureBytes) {
   ) {
     const signatureB64 = String(doc.signatureB64 || '').trim();
     if (!signatureB64) return null;
+    let signature;
+    try {
+      signature = base64ToBytes(signatureB64);
+    } catch {
+      return null;
+    }
+    if (signature.length !== 64) return null;
     return canonicalizeJsonToBytes({
       format: 'stellar-sig',
       schema,
@@ -84,7 +92,7 @@ function buildStellarProofIdentityPayload(signatureBytes) {
       payloadType,
       signatureScheme,
       signer,
-      signatureB64,
+      signatureHex: toHex(signature),
       hashes: normalizeHashEntries(doc.hashes),
     });
   }
@@ -97,6 +105,13 @@ function buildStellarProofIdentityPayload(signatureBytes) {
     const signedXdr = String(doc.signedXdr || '').trim();
     const networkPassphrase = String(doc.network?.passphrase || '').trim();
     if (!signedXdr || !networkPassphrase) return null;
+    let signedXdrBytes;
+    try {
+      signedXdrBytes = base64ToBytes(signedXdr);
+    } catch {
+      return null;
+    }
+    if (signedXdrBytes.length === 0) return null;
     return canonicalizeJsonToBytes({
       format: 'stellar-sig',
       schema,
@@ -105,13 +120,35 @@ function buildStellarProofIdentityPayload(signatureBytes) {
       signatureScheme,
       signer,
       networkPassphrase,
-      signedXdr,
+      signedXdrHex: toHex(signedXdrBytes),
       hashes: normalizeHashEntries(doc.hashes),
       manageDataEntries: normalizeManageDataEntries(doc.manageData?.entries),
     });
   }
 
   return null;
+}
+
+function buildQsigProofIdentityPayload(signatureBytes) {
+  let parsed;
+  try {
+    parsed = unpackQsig(signatureBytes);
+  } catch {
+    return null;
+  }
+
+  return canonicalizeJsonToBytes({
+    format: 'qsig',
+    versionMajor: parsed.versionMajor,
+    versionMinor: parsed.versionMinor,
+    suiteId: parsed.suiteId,
+    signatureProfileId: parsed.signatureProfileId,
+    payloadDigestAlgId: parsed.payloadDigestAlgId,
+    authDigestAlgId: parsed.authDigestAlgId,
+    tbsHex: toHex(parsed.tbs),
+    contextHex: toHex(parsed.ctxBytes),
+    signatureHex: toHex(parsed.signature),
+  });
 }
 
 export function computeDetachedSignatureIdentityDigestHex({ format, signatureBytes }) {
@@ -121,6 +158,14 @@ export function computeDetachedSignatureIdentityDigestHex({ format, signatureByt
 
   if (format === 'stellar-sig') {
     const normalized = buildStellarProofIdentityPayload(signatureBytes);
+    if (normalized instanceof Uint8Array) {
+      return toHex(sha3_512(normalized));
+    }
+    return null;
+  }
+
+  if (format === 'qsig') {
+    const normalized = buildQsigProofIdentityPayload(signatureBytes);
     if (normalized instanceof Uint8Array) {
       return toHex(sha3_512(normalized));
     }

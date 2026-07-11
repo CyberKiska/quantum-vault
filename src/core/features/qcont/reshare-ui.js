@@ -1,4 +1,9 @@
-import { isLifecycleParsedShard, parseLifecycleShard, reshareSameState } from '../../../app/crypto-service.js';
+import {
+  isLifecycleParsedShard,
+  parseLifecycleShard,
+  reshareSameState,
+  zeroizeParsedLifecycleShard,
+} from '../../../app/crypto-service.js';
 import { collectRestoreVerificationOptions } from './restore-ui.js';
 import { bindRsParamsUI } from './rs-params-display.js';
 import { createSuccessorShardInputRefreshController } from './successor-workflow-input.js';
@@ -222,6 +227,8 @@ export function initQcontReshareUI() {
     }
 
     setWorkflowBusy('proViewReshare', true);
+    let shardBytes = [];
+    let parsedShards = [];
     try {
       const verificationOptions = await collectRestoreVerificationOptions('reshare', files);
       if (!verificationOptions.shardFiles.length) {
@@ -231,8 +238,8 @@ export function initQcontReshareUI() {
         logWarning(`Ignored non-reshare attachments: ${verificationOptions.ignoredFileNames.join(', ')}`);
       }
 
-      const shardBytes = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-      const parsedShards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: false })));
+      shardBytes = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
+      parsedShards = await Promise.all(shardBytes.map((bytes) => parseLifecycleShard(bytes, { strict: false })));
       const shards = parsedShards.map((shard, index) => {
         if (isLifecycleParsedShard(shard)) {
           return shard;
@@ -260,7 +267,6 @@ export function initQcontReshareUI() {
         selectedCohortId: verificationOptions.selectedCohortId,
         selectedLifecycleBundleDigestHex: verificationOptions.selectedLifecycleBundleDigestHex,
         lifecycleBundleBytes: verificationOptions.lifecycleBundleBytes,
-        expectedEd25519Signer: verificationOptions.expectedEd25519Signer,
         transition: {
           reasonCode,
           operatorRole,
@@ -330,6 +336,10 @@ export function initQcontReshareUI() {
       clearReshareExportState();
       logError(error);
     } finally {
+      for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+      for (const bytes of shardBytes) {
+        if (bytes instanceof Uint8Array) bytes.fill(0);
+      }
       setWorkflowBusy('proViewReshare', false);
       void updateReshareStatus();
     }

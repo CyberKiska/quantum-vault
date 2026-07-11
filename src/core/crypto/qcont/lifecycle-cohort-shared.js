@@ -1,6 +1,16 @@
-import { bytesEqual } from '../bytes.js';
+import { sha3_512 } from '@noble/hashes/sha3.js';
+import { bytesEqual, toHex } from '../bytes.js';
 import { clearKeys, deriveKeyWithKmac, verifyKeyCommitment } from '../kdf.js';
-import { REED_SOLOMON_CODEC_ID, validateRuntimeSupportedCohortTuple } from '../lifecycle/artifacts.js';
+import {
+  canonicalizeArchiveStateDescriptor,
+  canonicalizeCohortBinding,
+  deriveCohortId,
+  parseArchiveStateDescriptorBytes,
+  parseCohortBindingBytes,
+  parseLifecycleBundleBytes,
+  REED_SOLOMON_CODEC_ID,
+  validateRuntimeSupportedCohortTuple,
+} from '../lifecycle/artifacts.js';
 import { decapsulate } from '../mlkem.js';
 import { buildQencHeader } from '../qenc/format.js';
 import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
@@ -90,11 +100,37 @@ async function validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privK
  */
 export function mergeLifecycleShardIntoCohortGroups(byIdentity, shard, options) {
   const { groupLabel, missingIdentityMessage } = options;
-  const archiveId = normalizeHexString(shard?.archiveState?.archiveId || shard?.metaJSON?.archiveId);
-  const stateId = normalizeHexString(shard?.stateId || shard?.metaJSON?.stateId);
-  const cohortId = normalizeHexString(shard?.cohortId || shard?.metaJSON?.cohortId);
+  const parsedArchiveState = parseArchiveStateDescriptorBytes(shard?.archiveStateBytes);
+  const parsedCohortBinding = parseCohortBindingBytes(shard?.cohortBindingBytes);
+  const archiveId = normalizeHexString(parsedArchiveState.archiveState.archiveId);
+  const stateId = normalizeHexString(parsedArchiveState.stateId);
+  const cohortBindingDigestHex = normalizeHexString(parsedCohortBinding.digest.value);
+  const cohortId = normalizeHexString(deriveCohortId({
+    archiveId,
+    stateId,
+    cohortBindingDigest: parsedCohortBinding.digest,
+  }));
   if (!archiveId || !stateId || !cohortId) {
     throw new Error(missingIdentityMessage);
+  }
+  if (normalizeHexString(shard?.archiveStateDigestHex) !== stateId) {
+    throw new Error(`archive-state digest mismatch inside ${groupLabel}`);
+  }
+  if (normalizeHexString(shard?.cohortBindingDigestHex) !== cohortBindingDigestHex) {
+    throw new Error(`cohort-binding digest mismatch inside ${groupLabel}`);
+  }
+  if (normalizeHexString(parsedCohortBinding.cohortBinding.archiveId) !== archiveId) {
+    throw new Error(`cohort-binding archiveId mismatch inside ${groupLabel}`);
+  }
+  if (normalizeHexString(parsedCohortBinding.cohortBinding.stateId) !== stateId) {
+    throw new Error(`cohort-binding stateId mismatch inside ${groupLabel}`);
+  }
+  if (
+    normalizeHexString(shard?.metaJSON?.archiveId) !== archiveId ||
+    normalizeHexString(shard?.metaJSON?.stateId) !== stateId ||
+    normalizeHexString(shard?.metaJSON?.cohortId) !== cohortId
+  ) {
+    throw new Error(`Shard metadata identity mismatch inside ${groupLabel}`);
   }
   const key = `${archiveId}:${stateId}:${cohortId}`;
   if (!byIdentity.has(key)) {
@@ -103,12 +139,12 @@ export function mergeLifecycleShardIntoCohortGroups(byIdentity, shard, options) 
       archiveId,
       stateId,
       cohortId,
-      archiveStateBytes: shard.archiveStateBytes,
-      archiveStateDigestHex: normalizeHexString(shard.archiveStateDigestHex),
-      archiveState: shard.archiveState,
-      cohortBindingBytes: shard.cohortBindingBytes,
-      cohortBindingDigestHex: normalizeHexString(shard.cohortBindingDigestHex),
-      cohortBinding: shard.cohortBinding,
+      archiveStateBytes: parsedArchiveState.bytes.slice(),
+      archiveStateDigestHex: stateId,
+      archiveState: parsedArchiveState.archiveState,
+      cohortBindingBytes: parsedCohortBinding.bytes.slice(),
+      cohortBindingDigestHex,
+      cohortBinding: parsedCohortBinding.cohortBinding,
       embeddedLifecycleBundles: new Map(),
       shards: [],
     });
@@ -126,22 +162,14 @@ export function mergeLifecycleShardIntoCohortGroups(byIdentity, shard, options) 
   if (entry.cohortBindingDigestHex !== normalizeHexString(shard.cohortBindingDigestHex)) {
     throw new Error(`cohort-binding digest mismatch inside ${groupLabel} ${key}`);
   }
-  if (archiveId !== normalizeHexString(shard?.metaJSON?.archiveId || shard?.archiveState?.archiveId)) {
-    throw new Error(`Mixed archiveId values detected inside ${groupLabel} ${key}`);
+  const lifecycleBundleDigestHex = toHex(sha3_512(shard.lifecycleBundleBytes));
+  if (lifecycleBundleDigestHex !== normalizeHexString(shard.lifecycleBundleDigestHex)) {
+    throw new Error(`Lifecycle-bundle digest mismatch inside ${groupLabel} ${key}`);
   }
-  if (stateId !== normalizeHexString(shard?.metaJSON?.stateId || shard?.stateId)) {
-    throw new Error(`Mixed stateId values detected inside ${groupLabel} ${key}`);
-  }
-  if (cohortId !== normalizeHexString(shard?.metaJSON?.cohortId || shard?.cohortId)) {
-    throw new Error(`Mixed cohortId values detected inside ${groupLabel} ${key}`);
-  }
-
-  const lifecycleBundleDigestHex = normalizeHexString(shard.lifecycleBundleDigestHex);
   if (!entry.embeddedLifecycleBundles.has(lifecycleBundleDigestHex)) {
     entry.embeddedLifecycleBundles.set(lifecycleBundleDigestHex, {
       digestHex: lifecycleBundleDigestHex,
-      bytes: shard.lifecycleBundleBytes,
-      bundle: shard.lifecycleBundle,
+      bytes: shard.lifecycleBundleBytes.slice(),
     });
   }
   const bundleEntry = entry.embeddedLifecycleBundles.get(lifecycleBundleDigestHex);
@@ -149,6 +177,38 @@ export function mergeLifecycleShardIntoCohortGroups(byIdentity, shard, options) 
     throw new Error(`Lifecycle-bundle bytes mismatch inside ${groupLabel} ${key} for digest ${lifecycleBundleDigestHex}`);
   }
   entry.shards.push(shard);
+}
+
+export async function rehydrateLifecycleBundleForCohort(candidate, bundleEntry, sourceLabel = 'lifecycle bundle') {
+  if (!(bundleEntry?.bytes instanceof Uint8Array)) {
+    throw new Error(`Missing canonical bytes for ${sourceLabel}`);
+  }
+  const parsedBundle = await parseLifecycleBundleBytes(bundleEntry.bytes);
+  const digestHex = normalizeHexString(parsedBundle.digest.value);
+  if (digestHex !== normalizeHexString(bundleEntry.digestHex)) {
+    throw new Error(`${sourceLabel} digest does not match its canonical bytes`);
+  }
+
+  const canonicalArchiveState = canonicalizeArchiveStateDescriptor(parsedBundle.lifecycleBundle.archiveState);
+  const canonicalCohortBinding = canonicalizeCohortBinding(parsedBundle.lifecycleBundle.currentCohortBinding);
+  if (
+    parsedBundle.lifecycleBundle.archiveStateDigest.value !== candidate.archiveStateDigestHex ||
+    !bytesEqual(canonicalArchiveState.bytes, candidate.archiveStateBytes)
+  ) {
+    throw new Error(`${sourceLabel} does not match the selected archive-state bytes`);
+  }
+  if (
+    parsedBundle.lifecycleBundle.currentCohortBindingDigest.value !== candidate.cohortBindingDigestHex ||
+    !bytesEqual(canonicalCohortBinding.bytes, candidate.cohortBindingBytes)
+  ) {
+    throw new Error(`${sourceLabel} does not match the selected cohort-binding bytes`);
+  }
+
+  return {
+    lifecycleBundle: parsedBundle.lifecycleBundle,
+    lifecycleBundleBytes: parsedBundle.bytes,
+    lifecycleBundleDigestHex: digestHex,
+  };
 }
 
 export async function reconstructLifecycleCohortMaterial(candidate, options = {}) {
@@ -339,10 +399,12 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
 
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
   const { secret: privKey, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, t);
-  const recoveredKeyCommitmentValidated = await validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privKey, {
-    messages,
-    keyValidationHooks,
-  });
+  let materialReturned = false;
+  try {
+    const recoveredKeyCommitmentValidated = await validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privKey, {
+      messages,
+      keyValidationHooks,
+    });
 
   const rsEncodeBase = Number.isInteger(base.metaJSON?.rsEncodeBase) ? base.metaJSON.rsEncodeBase : 255;
   const cipherChunks = [];
@@ -456,14 +518,21 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
     onWarn(messages.privateKeyHashMismatch);
   }
 
-  return {
-    qencBytes,
-    privKey,
-    invalidShareIndices: [...invalidShareIndices].sort((a, b) => a - b),
-    corruptedShardIndices: [...corruptedShardIndices].sort((a, b) => a - b),
-    missingShardIndices: [...missingIndices].sort((a, b) => a - b),
-    recoveredKeyCommitmentValidated,
-    privateKeyHashMatchesMetadata,
-    shareCopiesCleared,
-  };
+    const result = {
+      qencBytes,
+      privKey,
+      invalidShareIndices: [...invalidShareIndices].sort((a, b) => a - b),
+      corruptedShardIndices: [...corruptedShardIndices].sort((a, b) => a - b),
+      missingShardIndices: [...missingIndices].sort((a, b) => a - b),
+      recoveredKeyCommitmentValidated,
+      privateKeyHashMatchesMetadata,
+      shareCopiesCleared,
+    };
+    materialReturned = true;
+    return result;
+  } finally {
+    if (!materialReturned) {
+      clearKeys(privKey);
+    }
+  }
 }

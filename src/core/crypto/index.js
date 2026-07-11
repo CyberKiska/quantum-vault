@@ -17,6 +17,7 @@ import {
 import { toUint8, toHex } from './bytes.js';
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE } from './constants.js';
 import { buildQencHeader, parseQencHeader } from './qenc/format.js';
+import { parseJsonBytesStrict } from './manifest/strict-json.js';
 import {
     DEFAULT_CRYPTO_PROFILE,
     assertChunkCountWithinPolicy,
@@ -256,18 +257,21 @@ export async function decryptFile(containerBytes, privateKey) {
     }
     
     const encryptedData = containerBytes.subarray(offset);
+    const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
     
     let sharedSecret = null;
     let Kraw = null;
     let Kenc = null;
     let Kiv = null;
+    let decryptedPayload = null;
+    let fileBytesOut = null;
+    const decryptedChunks = [];
 
     try {
         // Step 2: KEM Decapsulation (FIPS 203)
         sharedSecret = await decapsulate(encapsulatedKey, privateKey);
         
         // Step 3: Derive decryption keys (SP 800-185)
-        const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
         const ds = metadata.domainStrings;
         const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, ds);
         Kraw = derived.Kraw;
@@ -283,7 +287,6 @@ export async function decryptFile(containerBytes, privateKey) {
             throw new Error('Key commitment verification failed. Container may be corrupted or tampered with.');
         }
 
-        let decryptedPayload;
         const effectiveLength = metadata.payloadLength || metadata.originalLength;
         
         if (metadata.aead_mode === 'per-chunk-aead') {
@@ -297,7 +300,6 @@ export async function decryptFile(containerBytes, privateKey) {
                 counterBits: metadata.counterBits,
                 ivStrategy,
             });
-            const plains = []; 
             let encOffset = 0;
             
             for (let i = 0; i < totalChunks; i++) {
@@ -313,7 +315,7 @@ export async function decryptFile(containerBytes, privateKey) {
                 const aad = buildChunkAAD(header, i, plainLen);
                 
                 const decrypted = await decryptChunk(aesKey, cipherChunk, iv, aad);
-                plains.push(decrypted); 
+                decryptedChunks.push(decrypted);
                 encOffset += encLen;
             }
 
@@ -322,10 +324,10 @@ export async function decryptFile(containerBytes, privateKey) {
             }
             
             // Combine all chunks
-            const totalPlain = plains.reduce((a, c) => a + c.length, 0);
+            const totalPlain = decryptedChunks.reduce((a, c) => a + c.length, 0);
             decryptedPayload = new Uint8Array(totalPlain);
             let p2 = 0; 
-            for (const ch of plains) { 
+            for (const ch of decryptedChunks) {
                 decryptedPayload.set(ch, p2); 
                 p2 += ch.length; 
             }
@@ -334,6 +336,10 @@ export async function decryptFile(containerBytes, privateKey) {
             decryptedPayload = await decryptChunk(aesKey, encryptedData, containerNonce, header);
         } else {
             throw new Error(`Unsupported AEAD mode: ${metadata.aead_mode ?? 'unknown'}`);
+        }
+
+        if (decryptedPayload.length !== effectiveLength) {
+            throw new Error(`Decrypted payload length mismatch: expected ${effectiveLength}, got ${decryptedPayload.length}`);
         }
         
         // Step 5: Unwrap payload (extract private metadata if wrapped-v1 format)
@@ -351,23 +357,38 @@ export async function decryptFile(containerBytes, privateKey) {
             }
             
             const privateMetaBytes = decryptedPayload.subarray(4, 4 + privateMetaLen);
-            const privateMeta = JSON.parse(new TextDecoder().decode(privateMetaBytes));
+            const privateMeta = parseJsonBytesStrict(privateMetaBytes);
             fileBytes = decryptedPayload.subarray(4 + privateMetaLen);
+
+            if (
+                Number.isSafeInteger(privateMeta.originalLength) &&
+                privateMeta.originalLength !== fileBytes.length
+            ) {
+                throw new Error(`Decrypted file length mismatch: expected ${privateMeta.originalLength}, got ${fileBytes.length}`);
+            }
             
-            mergedMetadata = { ...metadata, ...privateMeta };
+            // Public authenticated policy/format metadata is authoritative. Private
+            // metadata may add user-facing fields but cannot rewrite crypto reporting.
+            mergedMetadata = { ...privateMeta, ...metadata };
         } else {
             throw new Error(`Unsupported payload format: ${metadata.payloadFormat ?? 'unknown'}`);
         }
         
         // Copy fileBytes before zeroizing decryptedPayload
-        const fileBytesOut = new Uint8Array(fileBytes.length);
+        fileBytesOut = new Uint8Array(fileBytes.length);
         fileBytesOut.set(fileBytes);
-        decryptedPayload.fill(0);
-        
-        return { decryptedBlob: new Blob([fileBytesOut]), metadata: mergedMetadata, warnings };
+        const decryptedBlob = new Blob([fileBytesOut]);
+        fileBytesOut.fill(0);
+        fileBytesOut = null;
+
+        return { decryptedBlob, metadata: mergedMetadata, warnings };
         
     } finally {
-        // Clear sensitive material
+        for (const chunk of decryptedChunks) {
+            if (chunk instanceof Uint8Array) chunk.fill(0);
+        }
+        if (decryptedPayload instanceof Uint8Array) decryptedPayload.fill(0);
+        if (fileBytesOut instanceof Uint8Array) fileBytesOut.fill(0);
         clearKeys(sharedSecret, Kraw, Kenc, Kiv);
     }
 }

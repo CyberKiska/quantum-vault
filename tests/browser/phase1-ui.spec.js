@@ -77,6 +77,22 @@ test('scoped workflow busy leaves sidebar navigation and log toggle enabled', as
   await expect(page.locator('#sidebar-selftest')).toBeEnabled();
 });
 
+test('browser cryptographic self-test runs only browser-compatible cases and passes', async ({ page }) => {
+  test.setTimeout(180000);
+  const failedCliModuleRequests = [];
+  page.on('requestfailed', (request) => {
+    if (/\/cli\/qv\.js(?:$|\?)/.test(request.url())) failedCliModuleRequests.push(request.url());
+  });
+
+  await page.goto('/');
+  await page.getByTestId('operations-log').waitFor({ state: 'attached' });
+  await page.locator('#sidebar-selftest').click();
+  await expect(page.getByTestId('operations-log')).toContainText(/Self-test PASS \(\d+\/\d+\)/, {
+    timeout: 170000,
+  });
+  expect(failedCliModuleRequests).toEqual([]);
+});
+
 function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
 }

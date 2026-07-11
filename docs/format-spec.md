@@ -369,9 +369,9 @@ This separation is one of the current format family's core invariants. Archive-a
 | `aadPolicyId` | `QV-AAD-HEADER-CHUNK-v1` | required by current validation |
 | `hasKeyCommitment` | `true` | current containers require a key commitment |
 | `payloadFormat` | `wrapped-v1` | current payload wrapper |
-| `payloadLength` | positive integer | cleartext payload length |
-| `chunkSize` | positive integer | runtime chunk size |
-| `chunkCount` | positive integer | validated against the nonce policy |
+| `payloadLength` | positive safe integer | wrapped cleartext payload length |
+| `chunkSize` | `8388608` | fixed runtime chunk size for the current format |
+| `chunkCount` | positive safe integer | MUST equal `ceil(payloadLength / chunkSize)` for per-chunk mode and `1` for single-container mode |
 | `domainStrings.kdf` | `quantum-vault:kdf:v2` | required by current validation |
 | `domainStrings.iv` | `quantum-vault:chunk-iv:v2` | required by current validation |
 | `domainStrings.kenc` | `quantum-vault:kenc:v2` | required by current validation |
@@ -391,6 +391,8 @@ Current `wrapped-v1` payload format is:
 ```text
 [uint32be privateMetaLen][privateMetaJSON][fileBytes]
 ```
+
+Both public and private metadata are decoded with fatal UTF-8 and duplicate-key rejection. The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one AES-GCM tag per chunk.
 
 When multiple files are archived, the payload bytes are a `.qvpack` bundle detected by magic `QVB1`, not by filename.
 

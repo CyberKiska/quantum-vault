@@ -294,15 +294,23 @@ async function readShardInputs(patterns, cwd) {
     throw usage('reshare matched no shard files');
   }
   const parsedShards = [];
-  for (const filePath of resolvedShardPaths) {
-    const bytes = await readBytesFromFile(filePath);
-    try {
-      parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
-    } catch (error) {
-      throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+  const rawShardBytes = [];
+  try {
+    for (const filePath of resolvedShardPaths) {
+      const bytes = await readBytesFromFile(filePath);
+      rawShardBytes.push(bytes);
+      try {
+        parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
+      } catch (error) {
+        throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+      }
     }
+    return { shardPaths: resolvedShardPaths, parsedShards, rawShardBytes };
+  } catch (error) {
+    for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of rawShardBytes) bytes.fill(0);
+    throw error;
   }
-  return { shardPaths: resolvedShardPaths, parsedShards };
 }
 
 async function readReshareInputs(options, cwd) {
@@ -314,21 +322,28 @@ async function readReshareInputs(options, cwd) {
   ]) {
     await ensureInputFile(filePath, 'Reshare maintenance input file');
   }
-  const { shardPaths, parsedShards } = await readShardInputs(options.shardPatterns, cwd);
-  return {
-    shardPaths,
-    parsedShards,
-    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath, smallArtifactReadOptions('--bundle')),
-    maintenanceSignatures: await Promise.all(options.maintenanceSignaturePaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-sig')))
-    ))),
-    maintenancePqpkBytesList: await Promise.all(options.maintenancePqpkPaths.map((filePath) => (
-      readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-pqpk'))
-    ))),
-    maintenanceTimestamps: await Promise.all(options.maintenanceOtsPaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-ots')))
-    ))),
-  };
+  const { shardPaths, parsedShards, rawShardBytes } = await readShardInputs(options.shardPatterns, cwd);
+  try {
+    return {
+      shardPaths,
+      parsedShards,
+      rawShardBytes,
+      lifecycleBundleBytes: await readOptionalBytes(options.bundlePath, smallArtifactReadOptions('--bundle')),
+      maintenanceSignatures: await Promise.all(options.maintenanceSignaturePaths.map(async (filePath) => (
+        makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-sig')))
+      ))),
+      maintenancePqpkBytesList: await Promise.all(options.maintenancePqpkPaths.map((filePath) => (
+        readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-pqpk'))
+      ))),
+      maintenanceTimestamps: await Promise.all(options.maintenanceOtsPaths.map(async (filePath) => (
+        makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--maintenance-ots')))
+      ))),
+    };
+  } catch (error) {
+    for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of rawShardBytes) bytes.fill(0);
+    throw error;
+  }
 }
 
 function classifyReshareError(error) {
@@ -566,6 +581,7 @@ export async function runReshareCommand(options, {
     for (const shard of inputs?.parsedShards || []) {
       zeroizeParsedLifecycleShard(shard);
     }
+    for (const bytes of inputs?.rawShardBytes || []) bytes.fill(0);
   }
 }
 

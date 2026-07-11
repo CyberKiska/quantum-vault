@@ -64,8 +64,9 @@ function buildContainer({
   containerNonce = bytes(12, 0x20),
   kdfSalt = bytes(16, 0x30),
   keyCommitment = bytes(KEY_COMMITMENT_SIZE, 0x40),
-  ciphertext = bytes(17, 0x50),
+  ciphertext = null,
 } = {}) {
+  const ciphertextBytes = ciphertext || bytes(metadata.payloadLength + (16 * metadata.chunkCount), 0x50);
   const metaBytes = encoder.encode(JSON.stringify(metadata));
   const header = buildQencHeader({
     encapsulatedKey,
@@ -76,14 +77,14 @@ function buildContainer({
   });
   return {
     header,
-    container: concatBytes(header, ciphertext),
+    container: concatBytes(header, ciphertextBytes),
     metaBytes,
     metadata,
     encapsulatedKey,
     containerNonce,
     kdfSalt,
     keyCommitment,
-    ciphertext,
+    ciphertext: ciphertextBytes,
   };
 }
 
@@ -104,7 +105,7 @@ test('.qenc header builder and parser preserve framing and authenticated metadat
   assert.deepEqual(parsed.containerNonce, vector.containerNonce);
   assert.deepEqual(parsed.kdfSalt, vector.kdfSalt);
   assert.deepEqual(parsed.metaBytes, vector.metaBytes);
-  assert.deepEqual(parsed.metadata, vector.metadata);
+  assert.equal(JSON.stringify(parsed.metadata), JSON.stringify(vector.metadata));
   assert.deepEqual(parsed.storedKeyCommitment, vector.keyCommitment);
   assert.equal(parsed.metadata.hasKeyCommitment, true);
   assert.equal(toHex(sha3_512(parsed.header)), toHex(sha3_512(vector.header)));
@@ -161,5 +162,30 @@ test('.qenc parser fails closed on malformed header lengths and missing key comm
   assert.throws(
     () => parseQencHeader(noCommitmentFlag.container),
     /hasKeyCommitment must be true/,
+  );
+});
+
+test('.qenc parser rejects duplicate metadata keys and inconsistent authenticated geometry', () => {
+  const metadata = metadataForMode('single-container-aead');
+  const canonicalText = JSON.stringify(metadata);
+  const duplicateMetaBytes = encoder.encode(`{"fmt":"${FORMAT_VERSION}",${canonicalText.slice(1)}`);
+  const header = buildQencHeader({
+    encapsulatedKey: bytes(1568, 0x10),
+    containerNonce: bytes(12, 0x20),
+    kdfSalt: bytes(16, 0x30),
+    metaBytes: duplicateMetaBytes,
+    keyCommitment: bytes(KEY_COMMITMENT_SIZE, 0x40),
+  });
+  assert.throws(
+    () => parseQencHeader(concatBytes(header, bytes(metadata.payloadLength + 16, 0x50))),
+    /Duplicate object key "fmt"/,
+  );
+
+  const inconsistent = buildContainer({
+    metadata: { ...metadataForMode('per-chunk-aead'), chunkCount: 3 },
+  });
+  assert.throws(
+    () => parseQencHeader(inconsistent.container),
+    /chunkCount does not match payloadLength\/chunkSize geometry/,
   );
 });

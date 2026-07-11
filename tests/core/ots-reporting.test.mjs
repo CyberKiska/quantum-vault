@@ -132,6 +132,27 @@ test('OpenTimestamps target resolution rejects zero and ambiguous detached signa
   );
 });
 
+test('OpenTimestamps target resolution rejects a declared digest that differs from proof and signature bytes', async () => {
+  const signature = buildQsigFixture(textBytes('ots-declared-target-digest'));
+  const timestampBytes = await buildOtsFixture(signature.qsigBytes, { completeProof: true });
+
+  await assert.rejects(
+    async () => resolveOpenTimestampTarget({
+      timestampBytes,
+      timestampName: 'archive.qsig.ots',
+      declaredTargetDigest: { alg: 'SHA-256', value: '00'.repeat(32) },
+      signatures: [{
+        id: 'sig:archive',
+        name: 'archive.qsig',
+        source: 'bundle',
+        ok: true,
+        bytes: signature.qsigBytes,
+      }],
+    }),
+    /does not match its declared targetDigest/,
+  );
+});
+
 test('OpenTimestamps reporting preserves linkage fields while ignoring stale cached signature digests', async () => {
   const signature = buildQsigFixture(textBytes('ots-reporting-cache-ignore'));
   const timestampBytes = await buildOtsFixture(signature.qsigBytes, { completeProof: false });

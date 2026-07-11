@@ -13,6 +13,7 @@ import {
 import { parseLifecycleShard, reshareSameState } from '../../src/core/crypto/qcont/lifecycle-shard.js';
 import { assessRestoreFromShards, restoreFromShards } from '../../src/core/crypto/qcont/restore.js';
 import { canonicalizeLifecycleBundle } from '../../src/core/crypto/lifecycle/artifacts.js';
+import { computeDetachedSignatureIdentityDigestHex } from '../../src/core/crypto/auth/signature-identity.js';
 
 async function parseShardSet(result) {
   return Promise.all(result.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
@@ -34,6 +35,18 @@ function withLifecycleBundle(parsedShards, bundle, bundleBytes, digestHex) {
 function wipeRestoreResult(result) {
   if (result?.qencBytes instanceof Uint8Array) result.qencBytes.fill(0);
   if (result?.privKey instanceof Uint8Array) result.privKey.fill(0);
+}
+
+function mutateQsigDisplayFilenameByte(qsigBytes) {
+  const out = qsigBytes.slice();
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  const contextLength = out[108];
+  const authenticatedMetadataLength = view.getUint16(110, true);
+  const displayMetadataLength = view.getUint16(112, true);
+  const displayMetadataOffset = 118 + contextLength + authenticatedMetadataLength;
+  assert(displayMetadataLength >= 4, 'fixture must carry mutable display metadata');
+  out[displayMetadataOffset + 3] ^= 0x01;
+  return out;
 }
 
 test.before(async () => {
@@ -120,6 +133,87 @@ test('restore policy vectors require strong PQ archive approval for strong-pq-si
     assert.equal(signedAssessment.authenticity.policy.satisfied, true);
   } finally {
     wipeRestoreResult(signedAssessment);
+    sample.pair.privateKey.fill(0);
+  }
+});
+
+test('restore derives lifecycle policy from canonical bundle bytes rather than mutable parsed objects', async () => {
+  const sample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-policy-canonical-byte-authority'),
+    authPolicyLevel: 'strong-pq-signature',
+    minValidSignatures: 1,
+  });
+  const mutated = sample.parsed.map((shard) => {
+    const archiveState = cloneJson(shard.archiveState);
+    archiveState.qenc.payloadLength += 1;
+    const cohortBinding = cloneJson(shard.cohortBinding);
+    cohortBinding.sharding.shamir.threshold = 2;
+    return {
+      ...shard,
+      archiveState,
+      cohortBinding,
+      lifecycleBundle: {
+        ...shard.lifecycleBundle,
+        authPolicy: {
+          level: 'integrity-only',
+          minValidSignatures: 1,
+        },
+      },
+    };
+  });
+
+  try {
+    const assessment = await assessRestoreFromShards(mutated, {
+      onLog: () => {},
+      onError: () => {},
+    });
+    assert.equal(assessment.authenticity.policy.level, 'strong-pq-signature');
+    assert.equal(assessment.authenticity.policy.satisfied, false);
+    await assert.rejects(
+      async () => restoreFromShards(mutated, { onLog: () => {}, onError: () => {} }),
+      /strong PQ archive-approval signature/,
+    );
+  } finally {
+    sample.pair.privateKey.fill(0);
+  }
+});
+
+test('restore counts one approval per verified signer when qsig display metadata differs', async () => {
+  const sample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-policy-distinct-signers'),
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 2,
+  });
+  const approval = buildQsigFixture(sample.split.archiveStateBytes);
+  const displayVariant = mutateQsigDisplayFilenameByte(approval.qsigBytes);
+
+  const originalIdentity = computeDetachedSignatureIdentityDigestHex({
+    format: 'qsig',
+    signatureBytes: approval.qsigBytes,
+  });
+  const variantIdentity = computeDetachedSignatureIdentityDigestHex({
+    format: 'qsig',
+    signatureBytes: displayVariant,
+  });
+
+  const assessment = await assessRestoreFromShards(sample.parsed, {
+    verification: {
+      signatures: [
+        { name: 'approval-a.qsig', bytes: approval.qsigBytes },
+        { name: 'approval-a-display-variant.qsig', bytes: displayVariant },
+      ],
+      pinnedPqPublicKeyFileBytesList: [approval.pqpkBytes],
+    },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(originalIdentity, variantIdentity);
+    assert.equal(assessment.authenticity.verification.counts.validArchiveApproval, 1);
+    assert.equal(assessment.authenticity.policy.satisfied, false);
+    assert(assessment.authenticity.warnings.some((warning) => /ignored for archive-approval policy\/state counting/.test(warning)));
+  } finally {
+    wipeRestoreResult(assessment);
     sample.pair.privateKey.fill(0);
   }
 });
@@ -411,6 +505,18 @@ test('restore successor selection handles uploaded lifecycle bundles and mixed e
   } finally {
     wipeRestoreResult(uploadedBundleSelected);
   }
+
+  await assert.rejects(
+    async () => restoreFromShards(forkedCandidates, {
+      verification: {
+        lifecycleBundleBytes: successor.lifecycleBundleBytes,
+        selectedLifecycleBundleDigestHex: forkBase.split.lifecycleBundleDigestHex,
+      },
+      onLog: () => {},
+      onError: () => {},
+    }),
+    /do not match selectedLifecycleBundleDigestHex/,
+  );
 
   const mixedBundleBase = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('core-selection-mixed-bundle-digests'),

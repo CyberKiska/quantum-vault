@@ -4254,7 +4254,7 @@ function buildCases() {
             onLog: () => {},
             onWarn: () => {},
           }),
-          /qencHash mismatch/i,
+          /archive-state digest mismatch|qencHash mismatch/i,
           'same-state resharing unexpectedly accepted preserved archive-state bytes with a mismatched qencHash'
         );
       },
@@ -4282,7 +4282,7 @@ function buildCases() {
             onLog: () => {},
             onWarn: () => {},
           }),
-          /containerId mismatch/i,
+          /archive-state digest mismatch|containerId mismatch/i,
           'same-state resharing unexpectedly accepted preserved archive-state bytes with a mismatched containerId'
         );
       },
@@ -4310,7 +4310,7 @@ function buildCases() {
             onLog: () => {},
             onWarn: () => {},
           }),
-          /qenc\.chunkSize mismatch/i,
+          /archive-state digest mismatch|qenc\.chunkSize mismatch/i,
           'same-state resharing unexpectedly accepted preserved archive-state bytes with mismatched qenc metadata'
         );
       },
@@ -5483,6 +5483,21 @@ function buildCases() {
         });
         assert(reorderedDigest === validDigest, 'valid Stellar .sig identity digest should stay stable across equivalent JSON ordering');
 
+        const base64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        const signatureIndex = parsed.signatureB64.length - 3;
+        const signatureCharIndex = base64Alphabet.indexOf(parsed.signatureB64[signatureIndex]);
+        const nonCanonicalChar = base64Alphabet[(signatureCharIndex & 0x30) | 0x01];
+        const nonCanonicalBase64 = `${parsed.signatureB64.slice(0, signatureIndex)}${nonCanonicalChar}${parsed.signatureB64.slice(signatureIndex + 1)}`;
+        const nonCanonicalBytes = textBytes(JSON.stringify({
+          ...parsed,
+          signatureB64: nonCanonicalBase64,
+        }));
+        const nonCanonicalDigest = computeDetachedSignatureIdentityDigestHex({
+          format: 'stellar-sig',
+          signatureBytes: nonCanonicalBytes,
+        });
+        assert(nonCanonicalDigest === validDigest, 'Stellar .sig identity must normalize equivalent base64 pad bits');
+
         const validText = new TextDecoder().decode(fixture.bytes);
         const duplicateBytes = textBytes(`{"schema":"stellar-signature/v2",${validText.slice(1)}`);
         const duplicateDigest = computeDetachedSignatureIdentityDigestHex({
@@ -6202,6 +6217,7 @@ function buildCases() {
     },
     {
       name: 'qv verify JSON matches restore authenticity object on the same successor inputs',
+      runtime: 'node',
       fn: async () => {
         const { verifyArchiveInputs } = await importQvCliModuleForSelfTest();
         const sample = await buildSuccessorRestoreSample({
@@ -6250,6 +6266,7 @@ function buildCases() {
     },
     {
       name: 'qv restore --dry-run summary excludes recovered key and plaintext material',
+      runtime: 'node',
       fn: async () => {
         const { restoreDryRunFromInputs } = await importQvCliModuleForSelfTest();
         const sample = await buildSuccessorRestoreSample({
@@ -6320,11 +6337,13 @@ export async function runSelfTest({ onProgress, filter = '' } = {}) {
   await ensureErasureRuntime();
 
   const filterText = String(filter || '').trim().toLowerCase();
+  const isNodeRuntime = typeof process !== 'undefined' && Boolean(process.versions?.node);
   const cases = buildCases()
     .map((item) => ({
       ...item,
       name: prefixSelfTestName(item.name),
     }))
+    .filter((item) => item.runtime !== 'node' || isNodeRuntime)
     .filter((item) => !filterText || item.name.toLowerCase().includes(filterText));
   const results = [];
 

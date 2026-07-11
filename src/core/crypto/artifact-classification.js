@@ -17,7 +17,7 @@ import {
   parseSourceEvidenceBytes,
   parseTransitionRecordBytes,
 } from './lifecycle/artifacts.js';
-import { parseLifecycleShard } from './qcont/lifecycle-shard.js';
+import { parseLifecycleShard, zeroizeParsedLifecycleShard } from './qcont/lifecycle-shard.js';
 
 const QCONT_MAGIC = 'QVC1';
 
@@ -156,8 +156,9 @@ export async function classifyArtifactBytes(bytes, options = {}) {
 
   if (lowerName.endsWith('.qcont') || startsWithAscii(bytes, QCONT_MAGIC)) {
     const qcontParams = { ...params, kind: 'qcont-shard', format: 'qcont' };
+    let parsed = null;
     try {
-      const parsed = await parseLifecycleShard(bytes, { strict: true });
+      parsed = await parseLifecycleShard(bytes, { strict: true });
       return recognized(qcontParams, {
         archiveId: parsed.archiveState?.archiveId || '',
         stateId: parsed.stateId || '',
@@ -167,6 +168,8 @@ export async function classifyArtifactBytes(bytes, options = {}) {
       });
     } catch (error) {
       return malformed(qcontParams, error);
+    } finally {
+      zeroizeParsedLifecycleShard(parsed);
     }
   }
 
@@ -247,7 +250,6 @@ export async function classifyArtifactBytes(bytes, options = {}) {
       {
         archiveId: parsed.archiveState?.archiveId || '',
         stateDigestHex: parsed.digest.value,
-        authPolicyLevel: parsed.archiveState?.authPolicyCommitment?.level || '',
       },
       { canonicalBytes: parsed.bytes }
     );

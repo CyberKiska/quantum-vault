@@ -268,7 +268,6 @@ export async function classifyArtifactFile(file, options = {}) {
       });
       addDetail(row, 'Archive id', metadata.archiveId);
       addDetail(row, 'State digest', metadata.stateDigestHex);
-      addDetail(row, 'Archive policy', metadata.authPolicyLevel);
       return row;
     }
     row.kind = 'archive-state';
