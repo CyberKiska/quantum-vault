@@ -33,7 +33,7 @@
         <div class="header-group">
           <h1>Quantum Vault</h1>
           <p class="subtitle">PQC encryption & sharding</p>
-          <span class="version-badge">v2.1.1</span>
+          <span class="version-badge">v2.1.3</span>
         </div>
 
         <div class="mode-switch-container">
@@ -749,13 +749,6 @@
                   <small class="muted-copy">Same-state resharing is maintenance, not archive re-approval. It keeps the archive-state approval target unchanged and emits a new cohort plus a transition record.</small>
                   <small class="muted-copy">This tool emits maintenance artifacts only. It does not create legacy material and it does not run full archive-policy evaluation like Restore.</small>
                   <small class="muted-copy">An uploaded <code>.lifecycle-bundle.json</code> can explicitly choose one embedded lifecycle-bundle digest when needed.</small>
-                </div>
-              </details>
-              <details class="verification-section">
-                <summary>Operator context (optional)</summary>
-                <div class="form-group verification-fields">
-                  <label for="reshareExpectedEdSigner">Expected Ed25519 signer (optional)</label>
-                  <input type="text" id="reshareExpectedEdSigner" placeholder="G...">
                 </div>
               </details>
                   </section>

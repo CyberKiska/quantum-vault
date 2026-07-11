@@ -65,7 +65,7 @@ test('version --json emits package and registered format metadata', async () => 
   assert.equal(result.json.command, 'version');
   assert.equal(result.json.ok, true);
   assert.equal(result.json.cliSchemaVersion, 1);
-  assert.equal(result.json.version, '2.1.2');
+  assert.equal(result.json.version, '2.1.3');
   assert.equal(result.json.format.qenc, 'QVv1-5-0');
   assert.equal(result.json.format.qcont, 'QVqcont-7');
   assert.equal(result.json.format.lifecycleBundle, 'QV-Lifecycle-Bundle/v1');
