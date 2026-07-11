@@ -77,6 +77,22 @@ test('scoped workflow busy leaves sidebar navigation and log toggle enabled', as
   await expect(page.locator('#sidebar-selftest')).toBeEnabled();
 });
 
+test('browser cryptographic self-test runs only browser-compatible cases and passes', async ({ page }) => {
+  test.setTimeout(180000);
+  const failedCliModuleRequests = [];
+  page.on('requestfailed', (request) => {
+    if (/\/cli\/qv\.js(?:$|\?)/.test(request.url())) failedCliModuleRequests.push(request.url());
+  });
+
+  await page.goto('/');
+  await page.getByTestId('operations-log').waitFor({ state: 'attached' });
+  await page.locator('#sidebar-selftest').click();
+  await expect(page.getByTestId('operations-log')).toContainText(/Self-test PASS \(\d+\/\d+\)/, {
+    timeout: 170000,
+  });
+  expect(failedCliModuleRequests).toEqual([]);
+});
+
 function shortenHashForUi(hash) {
   return `${hash.slice(0, 6)}...${hash.slice(-6)}`;
 }
@@ -497,6 +513,39 @@ test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async (
   await expect(restoreResult).toContainText('Signer pinned by user input');
   await expect(restoreResult).toContainText('User-entered signer pin matched');
   await expect(restoreResult).toContainText('Archive policy satisfied');
+});
+
+test('pro restore release clears evaluated outputs and requires re-evaluation before another release', async ({ page }) => {
+  await openProTab(page, 'tab-restore');
+  await page.getByTestId('restore-input').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+
+  const restoreButton = page.getByTestId('restore-button');
+  await expect(restoreButton).toBeEnabled();
+  await restoreButton.click();
+
+  const releaseButton = page.getByTestId('release-button');
+  await expect(releaseButton).toBeVisible();
+  await expect(releaseButton).toBeEnabled();
+
+  const downloads = [];
+  page.on('download', (download) => {
+    downloads.push(download);
+  });
+
+  await Promise.all([
+    page.waitForEvent('download'),
+    releaseButton.click(),
+  ]);
+  await expect.poll(() => downloads.length, { timeout: 10_000 }).toBe(2);
+
+  await expect(releaseButton).toBeHidden();
+  await expect(releaseButton).toBeDisabled();
+  await expect(page.getByTestId('restore-result')).toContainText('Plaintext released under strong PQ archive-approval policy');
+
+  await restoreButton.click();
+  await expect(releaseButton).toBeVisible();
+  await expect(releaseButton).toBeEnabled();
+  await expect(page.getByTestId('restore-result')).toContainText('Plaintext release allowed under strong PQ archive-approval policy');
 });
 
 test('restore reports unpinned embedded-key qsig as self-verified when another signature is pinned', async ({ page }) => {

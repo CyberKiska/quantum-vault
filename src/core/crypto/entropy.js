@@ -40,14 +40,22 @@ export function mixEntropy(baseSeed, userEntropy = new Uint8Array(0)) {
         return baseSeed;
     }
 
-    const kmacMixed = kmac256(baseSeed, userEntropy, {
-        customization: 'quantum-vault:entropy-mix:v2',
-    });
+    let kmacMixed = null;
+    let freshRandom = null;
+    try {
+        kmacMixed = kmac256(baseSeed, userEntropy, {
+            customization: 'quantum-vault:entropy-mix:v2',
+        });
+        freshRandom = crypto.getRandomValues(new Uint8Array(32));
 
-    const rawMixed = new Uint8Array(SEED_LENGTH);
-    rawMixed.set(kmacMixed, 0);
-    rawMixed.set(crypto.getRandomValues(new Uint8Array(32)), 32);
-    return rawMixed;
+        const rawMixed = new Uint8Array(SEED_LENGTH);
+        rawMixed.set(kmacMixed, 0);
+        rawMixed.set(freshRandom, 32);
+        return rawMixed;
+    } finally {
+        if (kmacMixed instanceof Uint8Array) kmacMixed.fill(0);
+        if (freshRandom instanceof Uint8Array) freshRandom.fill(0);
+    }
 }
 
 export async function generateEnhancedSeed(options = {}) {
@@ -58,8 +66,12 @@ export async function generateEnhancedSeed(options = {}) {
         return { seed: baseSeed, hasUserEntropy: false };
     }
 
-    const mixedSeed = mixEntropy(baseSeed, userEntropyBytes);
-    return { seed: mixedSeed, hasUserEntropy: true };
+    try {
+        const mixedSeed = mixEntropy(baseSeed, userEntropyBytes);
+        return { seed: mixedSeed, hasUserEntropy: true };
+    } finally {
+        baseSeed.fill(0);
+    }
 }
 
 export function validateSeed(seed) {

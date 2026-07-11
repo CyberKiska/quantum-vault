@@ -286,15 +286,23 @@ async function readShardInputs(patterns, cwd) {
   }
   const resolvedShardPaths = dedupeSorted(shardPaths);
   const parsedShards = [];
-  for (const filePath of resolvedShardPaths) {
-    const bytes = await readBytesFromFile(filePath);
-    try {
-      parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
-    } catch (error) {
-      throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+  const rawShardBytes = [];
+  try {
+    for (const filePath of resolvedShardPaths) {
+      const bytes = await readBytesFromFile(filePath);
+      rawShardBytes.push(bytes);
+      try {
+        parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
+      } catch (error) {
+        throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+      }
     }
+    return { shardPaths: resolvedShardPaths, parsedShards, rawShardBytes };
+  } catch (error) {
+    for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of rawShardBytes) bytes.fill(0);
+    throw error;
   }
-  return { shardPaths: resolvedShardPaths, parsedShards };
 }
 
 async function readAttachInputs(options, cwd) {
@@ -310,28 +318,35 @@ async function readAttachInputs(options, cwd) {
   if (options.sourceEvidencePath) await ensureInputFile(options.sourceEvidencePath, '--source-evidence');
   if (options.sourceEvidenceBytesPath) await ensureInputFile(options.sourceEvidenceBytesPath, '--source-evidence-bytes');
 
-  const { shardPaths, parsedShards } = await readShardInputs(options.shardPatterns, cwd);
-  const sourceEvidence = await readSourceEvidence(options);
-  const signatureImports = await Promise.all(options.signatureImportSpecs.map((spec) => (
-    readSignatureImport(spec, sourceEvidence)
-  )));
+  const { shardPaths, parsedShards, rawShardBytes } = await readShardInputs(options.shardPatterns, cwd);
+  try {
+    const sourceEvidence = await readSourceEvidence(options);
+    const signatureImports = await Promise.all(options.signatureImportSpecs.map((spec) => (
+      readSignatureImport(spec, sourceEvidence)
+    )));
 
-  return {
-    shardPaths,
-    parsedShards,
-    archiveStateBytes: await readOptionalBytes(options.archiveStatePath, smallArtifactReadOptions('--archive-state')),
-    lifecycleBundleBytes: await readOptionalBytes(options.bundlePath, smallArtifactReadOptions('--bundle')),
-    signatures: await Promise.all(options.signaturePaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--sig')))
-    ))),
-    signatureImports,
-    timestamps: await Promise.all(options.otsPaths.map(async (filePath) => (
-      makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--ots')))
-    ))),
-    pqPublicKeyFileBytesList: await Promise.all(options.pqpkPaths.map((filePath) => (
-      readBytesFromFile(filePath, smallArtifactReadOptions('--pqpk'))
-    ))),
-  };
+    return {
+      shardPaths,
+      parsedShards,
+      rawShardBytes,
+      archiveStateBytes: await readOptionalBytes(options.archiveStatePath, smallArtifactReadOptions('--archive-state')),
+      lifecycleBundleBytes: await readOptionalBytes(options.bundlePath, smallArtifactReadOptions('--bundle')),
+      signatures: await Promise.all(options.signaturePaths.map(async (filePath) => (
+        makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--sig')))
+      ))),
+      signatureImports,
+      timestamps: await Promise.all(options.otsPaths.map(async (filePath) => (
+        makeExternalArtifactRecord(filePath, await readBytesFromFile(filePath, smallArtifactReadOptions('--ots')))
+      ))),
+      pqPublicKeyFileBytesList: await Promise.all(options.pqpkPaths.map((filePath) => (
+        readBytesFromFile(filePath, smallArtifactReadOptions('--pqpk'))
+      ))),
+    };
+  } catch (error) {
+    for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of rawShardBytes) bytes.fill(0);
+    throw error;
+  }
 }
 
 function classifyAttachError(error) {
@@ -535,6 +550,7 @@ export async function runAttachCommand(options, {
     for (const shard of inputs?.parsedShards || []) {
       zeroizeParsedLifecycleShard(shard);
     }
+    for (const bytes of inputs?.rawShardBytes || []) bytes.fill(0);
   }
 }
 

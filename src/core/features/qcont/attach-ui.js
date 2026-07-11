@@ -2,18 +2,21 @@ import {
   attachLifecycleBundleToShards,
   exportSourceEvidenceForSigning,
   parseLifecycleShard,
+  zeroizeParsedLifecycleShard,
 } from '../../../app/crypto-service.js';
-import { packPqpk } from '../../crypto/auth/qsig.js';
-import { base64ToBytes, bytesEqual } from '../../crypto/bytes.js';
-import { isSupportedStellarSignatureDocumentBytes } from '../../crypto/auth/stellar-sig.js';
 import {
-  canonicalizeArchiveStateDescriptor,
-  parseArchiveStateDescriptorBytes,
-  parseLifecycleBundleBytes,
-  parseSourceEvidenceBytes,
-  parseTransitionRecordBytes,
-} from '../../crypto/lifecycle/artifacts.js';
-import { startsWithAscii } from '../../crypto/byte-prefix.js';
+  appendUniqueByteArtifact,
+  classifyArtifactFileBytes,
+  mergeSingleCanonicalArtifactBytes,
+  parseArchiveStateViewBytes,
+  parseLifecycleBundleArchiveStateViewBytes,
+  parseLifecycleBundleViewBytes,
+  parseSourceEvidenceViewBytes,
+  parseTransitionRecordViewBytes,
+  throwArtifactClassificationError,
+} from '../../../app/artifact-intake-service.js';
+import { packPqpk } from '../../crypto/auth/qsig.js';
+import { base64ToBytes } from '../../crypto/bytes.js';
 import { clearInlineError, showInlineError, summarizeFileList } from '../ui/inline-error.js';
 import { clearArtifactIntakeTable, renderArtifactIntakeTable } from '../ui/artifact-intake.js';
 import { buildAttachEvidenceMatrixSections, renderEvidenceMatrix } from '../ui/evidence-matrix.js';
@@ -59,13 +62,6 @@ function activeAttachChannel() {
   return ATTACH_CHANNELS[value] ? value : 'archive-approval';
 }
 
-function ensureSingleCanonicalArtifact(existingBytes, parsedArtifact, duplicateMessage) {
-  if (existingBytes && !bytesEqual(existingBytes, parsedArtifact.bytes)) {
-    throw new Error(duplicateMessage);
-  }
-  return parsedArtifact.bytes;
-}
-
 export async function classifyAttachFiles(files) {
   const shardFiles = [];
   const signatures = [];
@@ -79,95 +75,108 @@ export async function classifyAttachFiles(files) {
   for (const file of files) {
     const name = String(file?.name || 'unnamed');
     const lowerName = name.toLowerCase();
-    if (lowerName.endsWith('.qcont')) {
-      shardFiles.push(file);
-      continue;
-    }
     if (isLegacyAttachFilename(name)) {
       throw new Error(
         'Unsupported attach input: manifest-side files are no longer accepted here. Use successor shards, archive-state descriptors, lifecycle bundles, archive-approval .qsig/.sig files, .pqpk files, or .ots proofs.'
       );
     }
 
-    const bytes = await readFileAsUint8Array(file);
-    if (startsWithAscii(bytes, 'QVC1')) {
+    const { bytes, classification } = await classifyArtifactFileBytes(file);
+
+    if (classification.kind === 'qcont-shard') {
       shardFiles.push(file);
+      bytes.fill(0);
       continue;
     }
-    if (startsWithAscii(bytes, 'PQPK') || lowerName.endsWith('.pqpk')) {
-      const alreadyPresent = pqPublicKeyFileBytesList.some((item) => bytesEqual(item, bytes));
-      if (!alreadyPresent) {
-        pqPublicKeyFileBytesList.push(bytes);
-      }
+
+    if (classification.kind === 'pqpk') {
+      if (!appendUniqueByteArtifact(pqPublicKeyFileBytesList, bytes)) bytes.fill(0);
       continue;
     }
-    if (startsWithAscii(bytes, 'PQSG') || lowerName.endsWith('.qsig')) {
+
+    if (classification.kind === 'signature') {
       signatures.push({ name, bytes });
       continue;
     }
-    if (lowerName.endsWith('.ots')) {
+
+    if (classification.kind === 'ots-proof') {
       timestamps.push({ name, bytes });
       continue;
     }
-    if (isSupportedStellarSignatureDocumentBytes(bytes)) {
-      signatures.push({ name, bytes });
+
+    if (classification.kind === 'lifecycle-bundle') {
+      if (classification.status !== 'recognized') {
+        if (lowerName.endsWith('.lifecycle-bundle.json')) {
+          bytes.fill(0);
+          throwArtifactClassificationError(classification, 'Malformed lifecycle bundle file.');
+        }
+        bytes.fill(0);
+        continue;
+      }
+      lifecycleBundleBytes = mergeSingleCanonicalArtifactBytes(
+        lifecycleBundleBytes,
+        classification.canonicalBytes,
+        'Multiple different lifecycle bundle files were provided. Keep only one.'
+      );
+      bytes.fill(0);
       continue;
     }
 
-    try {
-      const parsedLifecycleBundle = await parseLifecycleBundleBytes(bytes);
-      if (lifecycleBundleBytes && !bytesEqual(lifecycleBundleBytes, parsedLifecycleBundle.bytes)) {
-        throw new Error('Multiple different lifecycle bundle files were provided. Keep only one.');
+    if (classification.kind === 'archive-state') {
+      if (classification.status !== 'recognized') {
+        if (lowerName.endsWith('.archive-state.json')) {
+          bytes.fill(0);
+          throwArtifactClassificationError(classification, 'Malformed archive-state descriptor file.');
+        }
+        bytes.fill(0);
+        continue;
       }
-      lifecycleBundleBytes = parsedLifecycleBundle.bytes;
-      continue;
-    } catch (error) {
-      if (lowerName.endsWith('.lifecycle-bundle.json')) {
-        throw error;
-      }
-    }
-
-    try {
-      const parsedArchiveState = parseArchiveStateDescriptorBytes(bytes);
-      archiveStateBytes = ensureSingleCanonicalArtifact(
+      archiveStateBytes = mergeSingleCanonicalArtifactBytes(
         archiveStateBytes,
-        parsedArchiveState,
+        classification.canonicalBytes,
         'Multiple different archive-state descriptor files were provided. Keep only one.'
       );
+      bytes.fill(0);
       continue;
-    } catch (error) {
-      if (lowerName.endsWith('.archive-state.json')) {
-        throw error;
-      }
     }
 
-    try {
-      const parsedTransitionRecord = parseTransitionRecordBytes(bytes);
-      transitionRecordBytes = ensureSingleCanonicalArtifact(
+    if (classification.kind === 'transition-record') {
+      if (classification.status !== 'recognized') {
+        if (lowerName.endsWith('.transition-record.json')) {
+          bytes.fill(0);
+          throwArtifactClassificationError(classification, 'Malformed transition-record file.');
+        }
+        bytes.fill(0);
+        continue;
+      }
+      transitionRecordBytes = mergeSingleCanonicalArtifactBytes(
         transitionRecordBytes,
-        parsedTransitionRecord,
+        classification.canonicalBytes,
         'Multiple different transition-record files were provided. Keep only one.'
       );
+      bytes.fill(0);
       continue;
-    } catch (error) {
-      if (lowerName.endsWith('.transition-record.json')) {
-        throw error;
-      }
     }
 
-    try {
-      const parsedSourceEvidence = parseSourceEvidenceBytes(bytes);
-      sourceEvidenceBytes = ensureSingleCanonicalArtifact(
+    if (classification.kind === 'source-evidence') {
+      if (classification.status !== 'recognized') {
+        if (lowerName.endsWith('.source-evidence.json')) {
+          bytes.fill(0);
+          throwArtifactClassificationError(classification, 'Malformed source-evidence file.');
+        }
+        bytes.fill(0);
+        continue;
+      }
+      sourceEvidenceBytes = mergeSingleCanonicalArtifactBytes(
         sourceEvidenceBytes,
-        parsedSourceEvidence,
+        classification.canonicalBytes,
         'Multiple different source-evidence files were provided. Keep only one.'
       );
+      bytes.fill(0);
       continue;
-    } catch (error) {
-      if (lowerName.endsWith('.source-evidence.json')) {
-        throw error;
-      }
     }
+
+    bytes.fill(0);
   }
 
   return {
@@ -328,16 +337,47 @@ export function buildAttachedArtifactExports(bundle, baseName) {
 }
 
 async function parseAttachShards(classified) {
-  const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
-  return Promise.all(shardBytes.map(async (bytes, index) => {
-    try {
-      return await parseLifecycleShard(bytes, { strict: true });
-    } catch (error) {
-      throw new Error(
-        `Shard ${classified.shardFiles[index]?.name || index + 1} is not a supported successor shard: expected QVqcont-7. ${error?.message || error}`
-      );
+  const rawShardBytes = [];
+  const parsedShards = [];
+  try {
+    for (let index = 0; index < classified.shardFiles.length; index += 1) {
+      const bytes = await readFileAsUint8Array(classified.shardFiles[index]);
+      rawShardBytes.push(bytes);
+      try {
+        parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
+      } catch (error) {
+        throw new Error(
+          `Shard ${classified.shardFiles[index]?.name || index + 1} is not a supported successor shard: expected QVqcont-7. ${error?.message || error}`
+        );
+      }
     }
-  }));
+    Object.defineProperty(parsedShards, 'rawShardBytes', {
+      value: rawShardBytes,
+      enumerable: false,
+    });
+    return parsedShards;
+  } catch (error) {
+    for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of rawShardBytes) bytes.fill(0);
+    throw error;
+  }
+}
+
+function zeroizeAttachShards(shards) {
+  for (const shard of shards || []) zeroizeParsedLifecycleShard(shard);
+  for (const bytes of shards?.rawShardBytes || []) bytes.fill(0);
+}
+
+function publicAttachShardView(shard) {
+  return {
+    archiveState: shard.archiveState,
+    stateId: shard.stateId,
+    cohortId: shard.cohortId,
+    lifecycleBundleDigestHex: shard.lifecycleBundleDigestHex,
+    lifecycleBundle: shard.lifecycleBundle,
+    metaJSON: shard.metaJSON,
+    shardIndex: shard.shardIndex,
+  };
 }
 
 function deriveAttachPlan(shards) {
@@ -399,11 +439,17 @@ async function safeAttachPreviewPlan(classified) {
   if (!classified) {
     return { shards: [], plan: deriveAttachPlan([]) };
   }
+  let shards = [];
   try {
-    const shards = await parseAttachShards(classified);
-    return { shards, plan: deriveAttachPlan(shards) };
+    shards = await parseAttachShards(classified);
+    return {
+      shards: shards.map(publicAttachShardView),
+      plan: deriveAttachPlan(shards),
+    };
   } catch {
     return { shards: [], plan: deriveAttachPlan([]) };
+  } finally {
+    zeroizeAttachShards(shards);
   }
 }
 
@@ -411,11 +457,11 @@ async function resolveAttachBindingTarget(classified, channel, shards) {
   if (channel === 'maintenance') {
     if (classified.transitionRecordBytes instanceof Uint8Array) {
       try {
-        const parsed = parseTransitionRecordBytes(classified.transitionRecordBytes);
+        const parsed = parseTransitionRecordViewBytes(classified.transitionRecordBytes);
         return {
           artifactLabel: 'transition-record (canonical JSON)',
-          targetRef: `transition:sha3-512:${parsed.digest.value}`,
-          digestSummary: shortHexForAttachPreview(parsed.digest.value),
+          targetRef: parsed.targetRef,
+          digestSummary: shortHexForAttachPreview(parsed.digestHex),
         };
       } catch {
         return {
@@ -434,11 +480,11 @@ async function resolveAttachBindingTarget(classified, channel, shards) {
   if (channel === 'source-evidence') {
     if (classified.sourceEvidenceBytes instanceof Uint8Array) {
       try {
-        const parsed = parseSourceEvidenceBytes(classified.sourceEvidenceBytes);
+        const parsed = parseSourceEvidenceViewBytes(classified.sourceEvidenceBytes);
         return {
           artifactLabel: 'source-evidence (canonical JSON)',
-          targetRef: `source-evidence:sha3-512:${parsed.digest.value}`,
-          digestSummary: shortHexForAttachPreview(parsed.digest.value),
+          targetRef: parsed.targetRef,
+          digestSummary: shortHexForAttachPreview(parsed.digestHex),
         };
       } catch {
         return {
@@ -456,28 +502,27 @@ async function resolveAttachBindingTarget(classified, channel, shards) {
   }
   try {
     if (Array.isArray(shards) && shards.length > 0 && shards[0]?.archiveStateBytes instanceof Uint8Array) {
-      const embedded = parseArchiveStateDescriptorBytes(shards[0].archiveStateBytes);
+      const embedded = parseArchiveStateViewBytes(shards[0].archiveStateBytes);
       return {
         artifactLabel: 'archive-state descriptor (canonical JSON)',
         targetRef: `state:${embedded.stateId}`,
-        digestSummary: shortHexForAttachPreview(embedded.digest.value),
+        digestSummary: shortHexForAttachPreview(embedded.digestHex),
       };
     }
     if (classified.lifecycleBundleBytes instanceof Uint8Array) {
-      const parsed = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
-      const canon = canonicalizeArchiveStateDescriptor(parsed.lifecycleBundle.archiveState);
-      return {
-        artifactLabel: 'archive-state descriptor (canonical JSON)',
-        targetRef: `state:${canon.stateId}`,
-        digestSummary: shortHexForAttachPreview(canon.digest.value),
-      };
-    }
-    if (classified.archiveStateBytes instanceof Uint8Array) {
-      const parsed = parseArchiveStateDescriptorBytes(classified.archiveStateBytes);
+      const parsed = await parseLifecycleBundleArchiveStateViewBytes(classified.lifecycleBundleBytes);
       return {
         artifactLabel: 'archive-state descriptor (canonical JSON)',
         targetRef: `state:${parsed.stateId}`,
-        digestSummary: shortHexForAttachPreview(parsed.digest.value),
+        digestSummary: shortHexForAttachPreview(parsed.digestHex),
+      };
+    }
+    if (classified.archiveStateBytes instanceof Uint8Array) {
+      const parsed = parseArchiveStateViewBytes(classified.archiveStateBytes);
+      return {
+        artifactLabel: 'archive-state descriptor (canonical JSON)',
+        targetRef: `state:${parsed.stateId}`,
+        digestSummary: shortHexForAttachPreview(parsed.digestHex),
       };
     }
   } catch {
@@ -496,12 +541,18 @@ async function resolveAttachBindingTarget(classified, channel, shards) {
 
 async function resolveAttachSourceBundle(classified) {
   if (classified.lifecycleBundleBytes instanceof Uint8Array) {
-    return (await parseLifecycleBundleBytes(classified.lifecycleBundleBytes)).lifecycleBundle;
+    return (await parseLifecycleBundleViewBytes(classified.lifecycleBundleBytes)).lifecycleBundle;
   }
   if (classified.shardFiles.length > 0) {
     const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
-    const parsedShard = await parseLifecycleShard(shardBytes, { strict: true });
-    return parsedShard.lifecycleBundle;
+    let parsedShard = null;
+    try {
+      parsedShard = await parseLifecycleShard(shardBytes, { strict: true });
+      return parsedShard.lifecycleBundle;
+    } finally {
+      zeroizeParsedLifecycleShard(parsedShard);
+      shardBytes.fill(0);
+    }
   }
   if (classified.archiveStateBytes instanceof Uint8Array) {
     return null;
@@ -539,7 +590,7 @@ async function updateAttachStatus() {
     clearAttachResultPanel();
     clearAttachTargetBindingPreview();
     if (requestId !== attachStatusSeq) return;
-    syncArchiveReviewHub('attach');
+    syncArchiveReviewHub('attach', null, { collapseWhenClear: true });
     return;
   }
 
@@ -549,6 +600,7 @@ async function updateAttachStatus() {
   hint.textContent = `${count} file(s) loaded.`;
   status.setAttribute('aria-label', text.textContent);
   let classified = null;
+  let shards = [];
   try {
     const files = [...(input.files || [])];
     classified = await classifyAttachFiles(files);
@@ -562,7 +614,7 @@ async function updateAttachStatus() {
       error: lastAttachIntakeError,
     });
     if (requestId !== attachStatusSeq) return;
-    const shards = await parseAttachShards(classified);
+    shards = await parseAttachShards(classified);
     if (requestId !== attachStatusSeq) return;
     const plan = deriveAttachPlan(shards);
     const requirements = deriveAttachRequirements(channel, classified);
@@ -668,7 +720,9 @@ async function updateAttachStatus() {
     });
     if (requestId !== attachStatusSeq) return;
     if (shards.length > 0) {
-      void renderArchiveInspectorPanel('attachArchiveInspector', { attachShards: shards });
+      await renderArchiveInspectorPanel('attachArchiveInspector', {
+        attachShards: shards.map(publicAttachShardView),
+      });
     } else {
       void renderArchiveInspectorPanel('attachArchiveInspector', { files: [...(input.files || [])] });
     }
@@ -748,6 +802,8 @@ async function updateAttachStatus() {
     });
     if (requestId !== attachStatusSeq) return;
     syncArchiveReviewHub('attach');
+  } finally {
+    zeroizeAttachShards(shards);
   }
 }
 
@@ -781,17 +837,19 @@ async function exportSignableArtifact() {
   }
 
   setWorkflowBusy('proViewAttach', true);
+  let parsedShard = null;
+  let shardBytes = null;
   try {
     const classified = await classifyAttachFiles(files);
 
     let signableBytes = classified.archiveStateBytes;
     if (!signableBytes && classified.lifecycleBundleBytes) {
-      const parsedLifecycleBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
-      signableBytes = canonicalizeArchiveStateDescriptor(parsedLifecycleBundle.lifecycleBundle.archiveState).bytes;
+      const parsedLifecycleBundle = await parseLifecycleBundleArchiveStateViewBytes(classified.lifecycleBundleBytes);
+      signableBytes = parsedLifecycleBundle.canonicalBytes;
     }
     if (!signableBytes && classified.shardFiles.length > 0) {
-      const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
-      const parsedShard = await parseLifecycleShard(shardBytes, { strict: true });
+      shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
+      parsedShard = await parseLifecycleShard(shardBytes, { strict: true });
       signableBytes = parsedShard.archiveStateBytes;
     }
     if (!(signableBytes instanceof Uint8Array)) {
@@ -804,6 +862,8 @@ async function exportSignableArtifact() {
   } catch (error) {
     logError(error);
   } finally {
+    zeroizeParsedLifecycleShard(parsedShard);
+    if (shardBytes instanceof Uint8Array) shardBytes.fill(0);
     setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }
@@ -898,10 +958,11 @@ async function attachFilesToShards() {
   }
 
   setWorkflowBusy('proViewAttach', true);
+  let shards = [];
   try {
     clearInlineError(ATTACH_INLINE_ERROR_ID);
     const classified = await classifyAttachFiles(files);
-    const shards = await parseAttachShards(classified);
+    shards = await parseAttachShards(classified);
     if (!classified.shardFiles.length && !(classified.lifecycleBundleBytes instanceof Uint8Array)) {
       throw new Error('Attach requires at least one successor .qcont shard or an existing lifecycle bundle.');
     }
@@ -930,27 +991,27 @@ async function attachFilesToShards() {
       if (!(classified.transitionRecordBytes instanceof Uint8Array)) {
         throw new Error('Maintenance attach requires one canonical transition-record.json artifact.');
       }
-      const parsedTransitionRecord = parseTransitionRecordBytes(classified.transitionRecordBytes);
+      const parsedTransitionRecord = parseTransitionRecordViewBytes(classified.transitionRecordBytes);
       signatureImports = classified.signatures.map((signature) => ({
         ...signature,
         signatureFamily: 'maintenance',
         targetType: 'transition-record',
-        targetRef: `transition:sha3-512:${parsedTransitionRecord.digest.value}`,
-        targetDigest: parsedTransitionRecord.digest.value,
+        targetRef: parsedTransitionRecord.targetRef,
+        targetDigest: parsedTransitionRecord.digestHex,
       }));
       legacyArchiveApprovalSignatures = [];
     } else if (channel === 'source-evidence') {
       if (!(classified.sourceEvidenceBytes instanceof Uint8Array)) {
         throw new Error('Source-evidence attach requires one canonical source-evidence.json artifact.');
       }
-      const parsedSourceEvidence = parseSourceEvidenceBytes(classified.sourceEvidenceBytes);
+      const parsedSourceEvidence = parseSourceEvidenceViewBytes(classified.sourceEvidenceBytes);
       signatureImports = classified.signatures.map((signature) => ({
         ...signature,
         signatureFamily: 'source-evidence',
         targetType: 'source-evidence',
-        targetRef: `source-evidence:sha3-512:${parsedSourceEvidence.digest.value}`,
-        targetDigest: parsedSourceEvidence.digest.value,
-        sourceEvidenceBytes: parsedSourceEvidence.bytes,
+        targetRef: parsedSourceEvidence.targetRef,
+        targetDigest: parsedSourceEvidence.digestHex,
+        sourceEvidenceBytes: parsedSourceEvidence.canonicalBytes,
       }));
       legacyArchiveApprovalSignatures = [];
     }
@@ -1016,6 +1077,7 @@ async function attachFilesToShards() {
     });
     logError(error);
   } finally {
+    zeroizeAttachShards(shards);
     setWorkflowBusy('proViewAttach', false);
     void updateAttachStatus();
   }

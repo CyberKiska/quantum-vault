@@ -182,10 +182,12 @@ export function initQcontBuildUI() {
             return;
         }
         setWorkflowBusy('proViewDistribution', true);
+        let qencBytes = null;
+        let privKeyBytes = null;
         try {
             clearInlineError(SPLIT_INLINE_ERROR_ID);
-            const qencBytes = await readFileAsUint8Array(readiness.qencFile);
-            const privKeyBytes = await readFileAsUint8Array(readiness.privKeyFile);
+            qencBytes = await readFileAsUint8Array(readiness.qencFile);
+            privKeyBytes = await readFileAsUint8Array(readiness.privKeyFile);
             const { n, k, t } = readiness.geometry;
             const authPolicyLevel = readiness.authPolicyLevel;
             log(`Building .qcont shards with n=${n}, k=${k}, m=${n - k} (t=${t}), chunkSize=8 MiB ...`);
@@ -222,6 +224,11 @@ export function initQcontBuildUI() {
                 action: 'Verify the .qenc and private .qkey pair, keep the shard geometry valid, then retry Split.',
             });
             logError(e);
-        } finally { setWorkflowBusy('proViewDistribution', false); updateSplitReadiness(); }
+        } finally {
+            if (qencBytes instanceof Uint8Array) qencBytes.fill(0);
+            if (privKeyBytes instanceof Uint8Array) privKeyBytes.fill(0);
+            setWorkflowBusy('proViewDistribution', false);
+            updateSplitReadiness();
+        }
     });
 }

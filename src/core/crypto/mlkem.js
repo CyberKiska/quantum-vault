@@ -63,6 +63,9 @@ export async function encapsulate(publicKey) {
 
 // Decapsulate using ML-KEM-1024 private key
 export async function decapsulate(encapsulatedKey, privateKey) {
+    validateEncapsulatedKey(encapsulatedKey);
+    validatePrivateKey(privateKey);
+
     const result = await ml_kem1024.decapsulate(encapsulatedKey, privateKey);
     const sharedSecret = toUint8(result);
     

@@ -301,15 +301,24 @@ async function readParsedShards(options, cwd) {
       : 'restore matched no shard files');
   }
 
-  const parsedShards = await Promise.all(resolvedShardPaths.map(async (filePath) => {
-    const bytes = await readBytesFromFile(filePath);
-    try {
-      return await parseLifecycleShard(bytes, { strict: true });
-    } catch (error) {
-      throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+  const parsedShards = [];
+  const rawShardBytes = [];
+  try {
+    for (const filePath of resolvedShardPaths) {
+      const bytes = await readBytesFromFile(filePath);
+      rawShardBytes.push(bytes);
+      try {
+        parsedShards.push(await parseLifecycleShard(bytes, { strict: true }));
+      } catch (error) {
+        throw usage(`Shard ${filePath} is not a supported successor shard: ${error?.message || error}`);
+      }
     }
-  }));
-  return { shardPaths: resolvedShardPaths, parsedShards };
+    return { shardPaths: resolvedShardPaths, parsedShards, rawShardBytes };
+  } catch (error) {
+    for (const shard of parsedShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of rawShardBytes) bytes.fill(0);
+    throw error;
+  }
 }
 
 async function readRestoreVerification(options) {
@@ -375,7 +384,7 @@ export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } =
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
 
-  const { parsedShards } = await readParsedShards(options, cwd);
+  const { parsedShards, rawShardBytes } = await readParsedShards(options, cwd);
   try {
     const verification = await readRestoreVerification(options);
     return await restoreDryRunFromInputs({
@@ -387,6 +396,7 @@ export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } =
     for (const shard of parsedShards) {
       zeroizeParsedLifecycleShard(shard);
     }
+    for (const bytes of rawShardBytes) bytes.fill(0);
   }
 }
 
@@ -475,7 +485,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
 
-  const { parsedShards } = await readParsedShards(options, cwd);
+  const { parsedShards, rawShardBytes } = await readParsedShards(options, cwd);
   let result = null;
   let plaintextBytes = null;
   try {
@@ -522,6 +532,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
     for (const shard of parsedShards) {
       zeroizeParsedLifecycleShard(shard);
     }
+    for (const bytes of rawShardBytes) bytes.fill(0);
   }
 }
 

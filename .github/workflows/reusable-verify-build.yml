@@ -61,8 +61,20 @@ jobs:
         if: ${{ inputs.run-audit }}
         run: npm audit --audit-level=high
 
+      - name: Core tests
+        run: npm run test:core
+
+      - name: CLI tests
+        run: npm run test:cli
+
+      - name: Core/CLI parity tests
+        run: npm run test:parity
+
       - name: Self-test
         run: npm run selftest
+
+      - name: CLI self-test
+        run: npm run cli:selftest
 
       - name: Schema fixtures
         run: npm run schema:fixtures

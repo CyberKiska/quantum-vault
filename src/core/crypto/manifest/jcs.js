@@ -81,3 +81,8 @@ export function canonicalizeJson(value) {
 export function canonicalizeJsonToBytes(value) {
   return encoder.encode(canonicalizeJson(value));
 }
+
+export function canonicalizeJsonWithBytes(value) {
+  const canonical = canonicalizeJson(value);
+  return { canonical, bytes: encoder.encode(canonical) };
+}

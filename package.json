@@ -1,6 +1,6 @@
 {
   "name": "QuantumVault",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "type": "module",
   "engines": {
     "node": ">=24.14.0",
@@ -23,6 +23,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "cli": "node bin/qv.mjs",
+    "test:core": "node --test tests/core/*.test.mjs",
     "test:cli": "node --test tests/cli/*.test.mjs",
     "test:parity": "node --test tests/parity/*.test.mjs",
     "selftest": "node scripts/selftest.mjs",
@@ -30,7 +31,7 @@
     "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
-    "check": "npm run test:cli && npm run test:parity && npm run selftest && npm run cli:selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
+    "check": "npm run test:core && npm run test:cli && npm run test:parity && npm run selftest && npm run cli:selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
     "release:check": "npm run check && npm run test:browser",
     "deploy": "npm run build"
   },

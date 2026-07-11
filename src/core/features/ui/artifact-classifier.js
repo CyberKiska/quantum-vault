@@ -3,19 +3,7 @@
  * Outputs describe what the UI shows the operator; they do not gate crypto workflows.
  */
 
-import { parseLifecycleShard } from '../../../app/crypto-service.js';
-import { readFileAsUint8Array } from '../../../utils.js';
-import { startsWithAscii } from '../../crypto/byte-prefix.js';
-import { digestSha256, toHex } from '../../crypto/bytes.js';
-import { parseOpenTimestampProof } from '../../crypto/auth/opentimestamps.js';
-import { unpackPqpk, unpackQsig } from '../../crypto/auth/qsig.js';
-import { isSupportedStellarSignatureDocumentBytes } from '../../crypto/auth/stellar-sig.js';
-import {
-  parseArchiveStateDescriptorBytes,
-  parseLifecycleBundleBytes,
-  parseSourceEvidenceBytes,
-  parseTransitionRecordBytes,
-} from '../../crypto/lifecycle/artifacts.js';
+import { classifyArtifactFileBytes } from '../../../app/artifact-intake-service.js';
 import { shortDigestLabel } from './digest-details.js';
 
 /** Default next-action copy from markAccepted; grouped rows replace duplicates with one summary (see artifact-table-ui). */
@@ -124,7 +112,7 @@ function markAccepted(row, { classifiedAs, target, role, kind, nextAction = DEFA
  * @param {File} file
  * @param {{ workflow?: string, channel?: string }} [options]
  */
-export async function classifyArtifactFile(file, options) {
+export async function classifyArtifactFile(file, options = {}) {
   const { workflow = 'restore', channel = 'archive-approval' } = options;
   const row = createBaseRow(file, workflow, channel);
   const name = row.file;
@@ -139,9 +127,9 @@ export async function classifyArtifactFile(file, options) {
     return row;
   }
 
-  let bytes;
+  let classification;
   try {
-    bytes = await readFileAsUint8Array(file);
+    ({ classification } = await classifyArtifactFileBytes(file));
   } catch (error) {
     row.status = 'malformed';
     row.tone = 'fail';
@@ -149,206 +137,186 @@ export async function classifyArtifactFile(file, options) {
     return row;
   }
 
-  addDetail(row, 'File SHA-256', toHex(await digestSha256(bytes)));
+  addDetail(row, 'File SHA-256', classification.fileSha256Hex);
+  const metadata = classification.metadata || {};
+  const message = errorMessageText(classification.errorMessage || classification.error);
 
-  if (lowerName.endsWith('.qcont') || startsWithAscii(bytes, 'QVC1')) {
-    try {
-      const parsed = await parseLifecycleShard(bytes, { strict: true });
+  if (classification.kind === 'qcont-shard') {
+    if (classification.status === 'recognized') {
       markAccepted(row, {
         classifiedAs: 'QVqcont-7 shard',
-        target: `Archive ${shortDigestLabel(parsed.archiveState?.archiveId, { edgeLength: 8 })} / Cohort ${shortDigestLabel(parsed.cohortId, { edgeLength: 8 })}`,
+        target: `Archive ${shortDigestLabel(metadata.archiveId, { edgeLength: 8 })} / Cohort ${shortDigestLabel(metadata.cohortId, { edgeLength: 8 })}`,
         role: workflow === 'reshare' ? 'Reshare predecessor input' : 'Restore threshold material',
         kind: 'qcont-shard',
       });
-      addDetail(row, 'Archive id', parsed.archiveState?.archiveId);
-      addDetail(row, 'State digest', parsed.stateId);
-      addDetail(row, 'Cohort id', parsed.cohortId);
-      addDetail(row, 'Shard index', String(parsed.shardIndex));
-      addDetail(row, 'Lifecycle-bundle digest', parsed.lifecycleBundleDigestHex);
-    } catch (error) {
-      row.kind = 'qcont-shard';
-      row.classifiedAs = 'QVqcont-7 shard';
-      row.target = 'Unreadable shard metadata';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace this shard. ${errorMessageText(error)}`;
+      addDetail(row, 'Archive id', metadata.archiveId);
+      addDetail(row, 'State digest', metadata.stateId);
+      addDetail(row, 'Cohort id', metadata.cohortId);
+      addDetail(row, 'Shard index', String(metadata.shardIndex));
+      addDetail(row, 'Lifecycle-bundle digest', metadata.lifecycleBundleDigestHex);
+      return row;
     }
+    row.kind = 'qcont-shard';
+    row.classifiedAs = 'QVqcont-7 shard';
+    row.target = 'Unreadable shard metadata';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace this shard. ${message}`;
     return row;
   }
 
-  if (startsWithAscii(bytes, 'PQPK') || lowerName.endsWith('.pqpk')) {
-    try {
-      const parsed = unpackPqpk(bytes);
+  if (classification.kind === 'pqpk') {
+    if (classification.status === 'recognized') {
       markAccepted(row, {
         classifiedAs: 'PQ signer key',
-        target: parsed.suiteDisplay || parsed.suite,
+        target: metadata.suiteDisplay || metadata.suite,
         role: 'Signer pin material',
         kind: 'pqpk',
         nextAction: 'Use with matching detached PQ signatures when policy requires trusted signer evidence.',
       });
-      addDetail(row, 'Signature suite', parsed.suiteDisplay || parsed.suite);
-      addDetail(row, 'Public key SHA-256', toHex(await digestSha256(parsed.keyBytes)));
-    } catch (error) {
-      row.kind = 'pqpk';
-      row.classifiedAs = 'PQ signer key';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed signer key. ${errorMessageText(error)}`;
+      addDetail(row, 'Signature suite', metadata.suiteDisplay || metadata.suite);
+      addDetail(row, 'Public key SHA-256', metadata.publicKeySha256Hex);
+      return row;
     }
+    row.kind = 'pqpk';
+    row.classifiedAs = 'PQ signer key';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed signer key. ${message}`;
     return row;
   }
 
-  if (startsWithAscii(bytes, 'PQSG') || lowerName.endsWith('.qsig')) {
-    try {
-      const parsed = unpackQsig(bytes);
+  if (classification.kind === 'signature') {
+    if (classification.status === 'recognized') {
       markAccepted(row, {
         classifiedAs: inferSignatureClass(workflow, channel),
-        target: `Payload digest ${shortDigestLabel(toHex(parsed.payloadDigest), { edgeLength: 8 })}`,
+        target: classification.format === 'stellar-sig'
+          ? 'Stellar detached signature document'
+          : `Payload digest ${shortDigestLabel(metadata.payloadDigestHex, { edgeLength: 8 })}`,
         role: inferSignatureRole(workflow, channel),
         kind: 'signature',
         nextAction: 'Evaluation will verify target bytes and signer trust before using this signature.',
       });
       row.status = 'pending';
       row.tone = 'warn';
-      addDetail(row, 'Payload digest', toHex(parsed.payloadDigest));
-      addDetail(row, 'Signature suite', parsed.suiteDisplay || parsed.suite);
-      addDetail(row, 'Context', parsed.ctx);
-    } catch (error) {
-      row.kind = 'signature';
-      row.classifiedAs = inferSignatureClass(workflow, channel);
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed detached PQ signature. ${errorMessageText(error)}`;
+      if (classification.format === 'qsig') {
+        addDetail(row, 'Payload digest', metadata.payloadDigestHex);
+        addDetail(row, 'Signature suite', metadata.suiteDisplay || metadata.suite);
+        addDetail(row, 'Context', metadata.context);
+      }
+      return row;
     }
+    row.kind = 'signature';
+    row.classifiedAs = inferSignatureClass(workflow, channel);
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed detached PQ signature. ${message}`;
     return row;
   }
 
-  if (lowerName.endsWith('.ots')) {
-    try {
-      const parsed = parseOpenTimestampProof(bytes, { name });
+  if (classification.kind === 'ots-proof') {
+    if (classification.status === 'recognized') {
       markAccepted(row, {
         classifiedAs: 'OTS proof',
-        target: `Stamped SHA-256 ${shortDigestLabel(parsed.stampedDigestHex, { edgeLength: 8 })}`,
+        target: `Stamped SHA-256 ${shortDigestLabel(metadata.stampedDigestHex, { edgeLength: 8 })}`,
         role: 'Timestamp only',
         kind: 'ots-proof',
         nextAction: 'Evaluation will link this proof to a loaded detached signature.',
       });
       row.status = 'pending';
       row.tone = 'warn';
-      addDetail(row, 'Stamped SHA-256', parsed.stampedDigestHex);
-      addDetail(row, 'Proof completeness', parsed.appearsComplete ? 'complete-looking' : 'pending/incomplete');
-    } catch (error) {
-      row.kind = 'ots-proof';
-      row.classifiedAs = 'OTS proof';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed timestamp proof. ${errorMessageText(error)}`;
-    }
-    return row;
-  }
-
-  if (isSupportedStellarSignatureDocumentBytes(bytes)) {
-    markAccepted(row, {
-      classifiedAs: inferSignatureClass(workflow, channel),
-      target: 'Stellar detached signature document',
-      role: inferSignatureRole(workflow, channel),
-      kind: 'signature',
-      nextAction: 'Evaluation will verify target bytes and signer trust before using this signature.',
-    });
-    row.status = 'pending';
-    row.tone = 'warn';
-    return row;
-  }
-
-  try {
-    const parsed = await parseLifecycleBundleBytes(bytes);
-    markAccepted(row, {
-      classifiedAs: 'lifecycle bundle',
-      target: `Bundle ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
-      role: workflow === 'attach' ? 'Evidence merge target' : 'Disambiguation input',
-      kind: 'lifecycle-bundle',
-    });
-    addDetail(row, 'Lifecycle-bundle digest', parsed.digest.value);
-    addDetail(row, 'Archive-state digest', parsed.lifecycleBundle?.archiveStateDigest?.value);
-    addDetail(row, 'Current cohort-binding digest', parsed.lifecycleBundle?.currentCohortBindingDigest?.value);
-    return row;
-  } catch (error) {
-    if (lowerName.endsWith('.lifecycle-bundle.json')) {
-      row.kind = 'lifecycle-bundle';
-      row.classifiedAs = 'lifecycle bundle';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed lifecycle bundle. ${errorMessageText(error)}`;
+      addDetail(row, 'Stamped SHA-256', metadata.stampedDigestHex);
+      addDetail(row, 'Proof completeness', metadata.appearsComplete ? 'complete-looking' : 'pending/incomplete');
       return row;
     }
+    row.kind = 'ots-proof';
+    row.classifiedAs = 'OTS proof';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed timestamp proof. ${message}`;
+    return row;
   }
 
-  try {
-    const parsed = parseArchiveStateDescriptorBytes(bytes);
-    markAccepted(row, {
-      classifiedAs: 'archive-state descriptor',
-      target: `State ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
-      role: workflow === 'attach' ? 'Archive approval target' : 'Disambiguation input',
-      kind: 'archive-state',
-    });
-    addDetail(row, 'Archive id', parsed.archiveState?.archiveId);
-    addDetail(row, 'State digest', parsed.digest.value);
-    addDetail(row, 'Archive policy', parsed.archiveState?.authPolicyCommitment?.level);
-    return row;
-  } catch (error) {
-    if (lowerName.endsWith('.archive-state.json')) {
-      row.kind = 'archive-state';
-      row.classifiedAs = 'archive-state descriptor';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed archive-state descriptor. ${errorMessageText(error)}`;
+  if (classification.kind === 'lifecycle-bundle') {
+    if (classification.status === 'recognized') {
+      markAccepted(row, {
+        classifiedAs: 'lifecycle bundle',
+        target: `Bundle ${shortDigestLabel(metadata.digestHex, { edgeLength: 8 })}`,
+        role: workflow === 'attach' ? 'Evidence merge target' : 'Disambiguation input',
+        kind: 'lifecycle-bundle',
+      });
+      addDetail(row, 'Lifecycle-bundle digest', metadata.digestHex);
+      addDetail(row, 'Archive-state digest', metadata.archiveStateDigestHex);
+      addDetail(row, 'Current cohort-binding digest', metadata.currentCohortBindingDigestHex);
       return row;
     }
+    row.kind = 'lifecycle-bundle';
+    row.classifiedAs = 'lifecycle bundle';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed lifecycle bundle. ${message}`;
+    return row;
   }
 
-  try {
-    const parsed = parseTransitionRecordBytes(bytes);
-    markAccepted(row, {
-      classifiedAs: 'transition-record JSON',
-      target: `Transition ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
-      role: 'Separate evidence only',
-      kind: 'transition-record',
-    });
-    addDetail(row, 'Transition-record digest', parsed.digest.value);
-    addDetail(row, 'From cohort', parsed.transitionRecord?.fromCohortId);
-    addDetail(row, 'To cohort', parsed.transitionRecord?.toCohortId);
-    return row;
-  } catch (error) {
-    if (lowerName.endsWith('.transition-record.json')) {
-      row.kind = 'transition-record';
-      row.classifiedAs = 'transition-record JSON';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed transition record. ${errorMessageText(error)}`;
+  if (classification.kind === 'archive-state') {
+    if (classification.status === 'recognized') {
+      markAccepted(row, {
+        classifiedAs: 'archive-state descriptor',
+        target: `State ${shortDigestLabel(metadata.stateDigestHex, { edgeLength: 8 })}`,
+        role: workflow === 'attach' ? 'Archive approval target' : 'Disambiguation input',
+        kind: 'archive-state',
+      });
+      addDetail(row, 'Archive id', metadata.archiveId);
+      addDetail(row, 'State digest', metadata.stateDigestHex);
       return row;
     }
+    row.kind = 'archive-state';
+    row.classifiedAs = 'archive-state descriptor';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed archive-state descriptor. ${message}`;
+    return row;
   }
 
-  try {
-    const parsed = parseSourceEvidenceBytes(bytes);
-    markAccepted(row, {
-      classifiedAs: 'source-evidence JSON',
-      target: `Source evidence ${shortDigestLabel(parsed.digest.value, { edgeLength: 8 })}`,
-      role: 'Separate evidence only',
-      kind: 'source-evidence',
-    });
-    addDetail(row, 'Source-evidence digest', parsed.digest.value);
-    addDetail(row, 'Relation type', parsed.sourceEvidence?.relationType);
-    return row;
-  } catch (error) {
-    if (lowerName.endsWith('.source-evidence.json')) {
-      row.kind = 'source-evidence';
-      row.classifiedAs = 'source-evidence JSON';
-      row.status = 'malformed';
-      row.tone = 'fail';
-      row.nextAction = `Replace malformed source-evidence JSON. ${errorMessageText(error)}`;
+  if (classification.kind === 'transition-record') {
+    if (classification.status === 'recognized') {
+      markAccepted(row, {
+        classifiedAs: 'transition-record JSON',
+        target: `Transition ${shortDigestLabel(metadata.digestHex, { edgeLength: 8 })}`,
+        role: 'Separate evidence only',
+        kind: 'transition-record',
+      });
+      addDetail(row, 'Transition-record digest', metadata.digestHex);
+      addDetail(row, 'From cohort', metadata.fromCohortId);
+      addDetail(row, 'To cohort', metadata.toCohortId);
       return row;
     }
+    row.kind = 'transition-record';
+    row.classifiedAs = 'transition-record JSON';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed transition record. ${message}`;
+    return row;
+  }
+
+  if (classification.kind === 'source-evidence') {
+    if (classification.status === 'recognized') {
+      markAccepted(row, {
+        classifiedAs: 'source-evidence JSON',
+        target: `Source evidence ${shortDigestLabel(metadata.digestHex, { edgeLength: 8 })}`,
+        role: 'Separate evidence only',
+        kind: 'source-evidence',
+      });
+      addDetail(row, 'Source-evidence digest', metadata.digestHex);
+      addDetail(row, 'Relation type', metadata.relationType);
+      return row;
+    }
+    row.kind = 'source-evidence';
+    row.classifiedAs = 'source-evidence JSON';
+    row.status = 'malformed';
+    row.tone = 'fail';
+    row.nextAction = `Replace malformed source-evidence JSON. ${message}`;
+    return row;
   }
 
   row.status = workflow === 'restore' || workflow === 'lite-restore' || workflow === 'reshare' ? 'ignored' : 'unsupported';

@@ -16,6 +16,7 @@ import {
     isLifecycleParsedShard as isParsedSuccessorLifecycleShard,
     parseLifecycleShard as parseLifecycleQcontShardBytes,
     reshareSameState as reshareSameStateShardSet,
+    zeroizeParsedLifecycleShard as zeroizeParsedSuccessorLifecycleShard,
 } from '../core/crypto/qcont/lifecycle-shard.js';
 import { restoreFromShards as restoreShardSet } from '../core/crypto/qcont/restore.js';
 import {
@@ -66,6 +67,10 @@ export async function parseLifecycleShard(bytes, options = {}) {
 
 export function isLifecycleParsedShard(shard) {
     return isParsedSuccessorLifecycleShard(shard);
+}
+
+export function zeroizeParsedLifecycleShard(shard) {
+    zeroizeParsedSuccessorLifecycleShard(shard);
 }
 
 export async function reshareSameState(shards, params, options = {}) {

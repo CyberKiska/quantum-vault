@@ -303,7 +303,7 @@ export function initUI() {
             statusDiv.style.display = 'none';
             statusText.textContent = '0 review files selected';
             updateProWorkflowStatus();
-            syncArchiveReviewHub('review');
+            syncArchiveReviewHub('review', null, { collapseWhenClear: true });
             return;
         }
 

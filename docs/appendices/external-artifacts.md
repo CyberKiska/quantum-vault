@@ -130,13 +130,13 @@ Current pinning consequences:
 
 ## 4. Proof identity deduplication and ambiguity handling
 
-Current policy counting deduplicates detached signatures by proof identity, not by filename.
+Current policy counting deduplicates detached signatures by verified signer identity, not by filename. Proof identity remains available for exact-proof diagnostics.
 
 Current proof-identity rules:
 
-- `qsig` proofs are deduplicated by `SHA3-512` of the detached signature bytes
-- Stellar proofs are deduplicated by a normalized semantic payload, not raw JSON formatting alone
-- semantically duplicate signatures across bundled and external inputs count once for policy purposes
+- `qsig` proof identity hashes the signed TBS fields, signing context, and signature bytes; unauthenticated display metadata is excluded
+- Stellar proof identity uses a normalized semantic payload with decoded signature or XDR bytes, not raw JSON or base64 spelling
+- signatures from the same verified signer count once per signature family, including across bundled and external inputs
 
 Current ambiguity handling:
 

@@ -1,7 +1,7 @@
-import { parseLifecycleShard } from '../../../app/crypto-service.js';
+import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../../app/crypto-service.js';
+import { parseArchiveStateViewBytes } from '../../../app/artifact-intake-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { readFileAsUint8Array } from '../../../utils.js';
-import { parseArchiveStateDescriptorBytes } from '../../crypto/lifecycle/artifacts.js';
 import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 import {
@@ -433,10 +433,12 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   if (!files.length) {
     clearArchiveInspector(ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix]);
     clearSuccessorSelectionUi(prefix, actionButton);
-    syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix));
+    syncArchiveReviewHub(prefix, peekSuccessorSelectionState(prefix), { collapseWhenClear: true });
     return successorSelectionState.get(prefix);
   }
 
+  let shardBytes = [];
+  let successorShards = [];
   try {
     const classified = await classifyRestoreInputFiles(files);
     if (!classified.shardFiles.length) {
@@ -452,8 +454,8 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       return out;
     }
 
-    const shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
-    const successorShards = await Promise.all(shardBytes.map(async (bytes, index) => {
+    shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
+    successorShards = await Promise.all(shardBytes.map(async (bytes, index) => {
       const shard = await parseLifecycleShard(bytes, { strict: true });
       return {
         ...shard,
@@ -476,7 +478,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
 
     const model = buildSuccessorSelectionModel(successorShards);
     const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
-      ? parseArchiveStateDescriptorBytes(classified.archiveStateBytes)
+      ? parseArchiveStateViewBytes(classified.archiveStateBytes)
       : null;
     const lifecycleBundleProvided = classified.lifecycleBundleBytes instanceof Uint8Array;
     const uploadedStateKey = uploadedArchiveState
@@ -612,11 +614,20 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const stateForRestore = stateChoiceRequired && selectedState
       ? { selectedArchiveId: selectedState.archiveId, selectedStateId: selectedState.stateId }
       : { selectedArchiveId: null, selectedStateId: null };
+    const inspectorShards = successorShards.map((shard) => ({
+      sourceFileName: shard.sourceFileName,
+      archiveState: shard.archiveState,
+      stateId: shard.stateId,
+      cohortId: shard.cohortId,
+      lifecycleBundleDigestHex: shard.lifecycleBundleDigestHex,
+      lifecycleBundle: shard.lifecycleBundle,
+      metaJSON: shard.metaJSON,
+    }));
     successorSelectionState.set(prefix, {
       ...nextState,
       mode: 'successor',
       model,
-      parsedSuccessorShards: successorShards,
+      parsedSuccessorShards: inspectorShards,
       selectedStateKey,
       selectedArchiveId: stateForRestore.selectedArchiveId,
       selectedStateId: stateForRestore.selectedStateId,
@@ -635,6 +646,11 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       error?.message || String(error),
       'invalid'
     );
+  } finally {
+    for (const shard of successorShards) zeroizeParsedLifecycleShard(shard);
+    for (const bytes of shardBytes) {
+      if (bytes instanceof Uint8Array) bytes.fill(0);
+    }
   }
 
   const current = successorSelectionState.get(prefix);

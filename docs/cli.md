@@ -844,7 +844,7 @@ Prints package version, registered container/lifecycle format identifiers, and t
   "command": "version",
   "ok": true,
   "cliSchemaVersion": 1,
-  "version": "2.1.2",
+  "version": "2.1.3",
   "format": {
     "qenc": "QVv1-5-0",
     "qcont": "QVqcont-7",

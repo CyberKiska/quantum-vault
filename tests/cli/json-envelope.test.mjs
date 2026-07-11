@@ -140,6 +140,14 @@ test('root-level symlink path components keep the documented macOS /tmp carve-ou
   await writeFile(archivePath, await readFile(archiveStateFixture));
 
   await assert.doesNotReject(assertNoSymlinkPath(archivePath));
+
+  const etcStats = await lstat('/etc');
+  if (etcStats.isSymbolicLink()) {
+    await assert.rejects(
+      assertNoSymlinkPath('/etc/hosts'),
+      /Refusing to read symlink without --allow-symlink: \/etc/,
+    );
+  }
 });
 
 test('non-JSON errors use the centralized CLI formatter', async () => {

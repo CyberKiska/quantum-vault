@@ -19,8 +19,7 @@ import {
 import {
   BUNDLE_CANONICALIZATION_LABEL,
   MANIFEST_CANONICALIZATION_LABEL,
-  canonicalizeJson,
-  canonicalizeJsonToBytes,
+  canonicalizeJsonWithBytes,
 } from '../manifest/jcs.js';
 import { parseJsonBytesStrict } from '../manifest/strict-json.js';
 import {
@@ -1472,8 +1471,7 @@ export function validateArchiveStateDescriptorObject(value) {
 
 export function canonicalizeArchiveStateDescriptor(value) {
   const validated = validateArchiveStateDescriptorObject(value);
-  const canonical = canonicalizeJson(validated.archiveState);
-  const bytes = canonicalizeJsonToBytes(validated.archiveState);
+  const { canonical, bytes } = canonicalizeJsonWithBytes(validated.archiveState);
   return {
     archiveState: validated.archiveState,
     canonical,
@@ -1497,8 +1495,7 @@ export function validateCohortBindingObject(value) {
 
 export function canonicalizeCohortBinding(value) {
   const validated = validateCohortBindingObject(value);
-  const canonical = canonicalizeJson(validated.cohortBinding);
-  const bytes = canonicalizeJsonToBytes(validated.cohortBinding);
+  const { canonical, bytes } = canonicalizeJsonWithBytes(validated.cohortBinding);
   return {
     cohortBinding: validated.cohortBinding,
     canonical,
@@ -1521,8 +1518,7 @@ export function validateTransitionRecordObject(value) {
 
 export function canonicalizeTransitionRecord(value) {
   const validated = validateTransitionRecordObject(value);
-  const canonical = canonicalizeJson(validated.transitionRecord);
-  const bytes = canonicalizeJsonToBytes(validated.transitionRecord);
+  const { canonical, bytes } = canonicalizeJsonWithBytes(validated.transitionRecord);
   return {
     transitionRecord: validated.transitionRecord,
     canonical,
@@ -1545,8 +1541,7 @@ export function validateSourceEvidenceObject(value) {
 
 export function canonicalizeSourceEvidence(value) {
   const validated = validateSourceEvidenceObject(value);
-  const canonical = canonicalizeJson(validated.sourceEvidence);
-  const bytes = canonicalizeJsonToBytes(validated.sourceEvidence);
+  const { canonical, bytes } = canonicalizeJsonWithBytes(validated.sourceEvidence);
   return {
     sourceEvidence: validated.sourceEvidence,
     canonical,
@@ -1570,8 +1565,7 @@ export async function validateLifecycleBundleObject(value) {
 
 export async function canonicalizeLifecycleBundle(value) {
   const validated = await validateLifecycleBundleObject(value);
-  const canonical = canonicalizeJson(validated.lifecycleBundle);
-  const bytes = canonicalizeJsonToBytes(validated.lifecycleBundle);
+  const { canonical, bytes } = canonicalizeJsonWithBytes(validated.lifecycleBundle);
   return {
     lifecycleBundle: validated.lifecycleBundle,
     canonical,
@@ -1619,8 +1613,7 @@ export function canonicalizeCohortIdPreimage({ archiveId, stateId, cohortBinding
     stateId: ensureHex(stateId, 'cohortIdPreimage.stateId', 128),
     cohortBindingDigest: digest,
   };
-  const canonical = canonicalizeJson(preimage);
-  const bytes = canonicalizeJsonToBytes(preimage);
+  const { canonical, bytes } = canonicalizeJsonWithBytes(preimage);
   return {
     preimage,
     canonical,

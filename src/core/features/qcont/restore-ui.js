@@ -1,7 +1,13 @@
-import { parseLifecycleShard, restoreFromShards } from '../../../app/crypto-service.js';
+import {
+  parseLifecycleShard,
+  restoreFromShards,
+  zeroizeParsedLifecycleShard,
+} from '../../../app/crypto-service.js';
+import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
+import { parseLifecycleBundleViewBytes } from '../../../app/artifact-intake-service.js';
 import { download, readFileAsUint8Array, setWorkflowBusy, shortenHash } from '../../../utils.js';
-import { parseLifecycleBundleBytes } from '../../crypto/lifecycle/artifacts.js';
+import { wipeRestoreResult } from '../../crypto/zeroize.js';
 import {
   formatAuthenticityStatusMessage,
   formatSignatureResultSummary,
@@ -416,7 +422,7 @@ async function buildRestorePreflightDecisionForFiles({
   let parsedProvidedBundle = null;
   if (classified.lifecycleBundleBytes instanceof Uint8Array) {
     try {
-      parsedProvidedBundle = await parseLifecycleBundleBytes(classified.lifecycleBundleBytes);
+      parsedProvidedBundle = await parseLifecycleBundleViewBytes(classified.lifecycleBundleBytes);
     } catch {
       parsedProvidedBundle = null;
     }
@@ -497,9 +503,7 @@ function setReleaseButtonState(enabled) {
 }
 
 function clearProRestoreEvaluation() {
-  if (proRestoreEvaluation?.result?.privKey instanceof Uint8Array) {
-    proRestoreEvaluation.result.privKey.fill(0);
-  }
+  wipeRestoreResult(proRestoreEvaluation?.result);
   proRestoreEvaluation = null;
   setReleaseButtonState(false);
 }
@@ -685,6 +689,7 @@ export function buildRestorePolicyFailureSummary(error, resultPanelId) {
 }
 
 export function initQcontRestoreUI() {
+  registerSessionWipeHandler(clearProRestoreEvaluation);
   const qcontShardsInput = document.getElementById('qcontShardsInput');
   const restoreQcontBtn = document.getElementById('restoreQcontBtn');
   const releaseRestoredFilesBtn = document.getElementById('releaseRestoredFilesBtn');
@@ -722,6 +727,8 @@ export function initQcontRestoreUI() {
 
     setWorkflowBusy('proViewRestore', true);
     let renderedPreflightDecision = null;
+    let shardBytesArr = [];
+    let shards = [];
     try {
       clearInlineError(RESTORE_INLINE_ERROR_ID);
       const allFiles = [...files];
@@ -748,8 +755,8 @@ export function initQcontRestoreUI() {
         logWarning(`Ignored non-restore attachments: ${verificationOptions.ignoredFileNames.join(', ')}`);
       }
 
-      const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
-      const shards = await Promise.all(shardBytesArr.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
+      shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
+      shards = await Promise.all(shardBytesArr.map((bytes) => parseLifecycleShard(bytes, { strict: true })));
 
       const result = await restoreFromShards(shards, {
         onLog: (msg) => log(msg),
@@ -814,6 +821,10 @@ export function initQcontRestoreUI() {
       });
       logError(error);
     } finally {
+      for (const shard of shards) zeroizeParsedLifecycleShard(shard);
+      for (const bytes of shardBytesArr) {
+        if (bytes instanceof Uint8Array) bytes.fill(0);
+      }
       setWorkflowBusy('proViewRestore', false);
       setReleaseButtonState(Boolean(proRestoreEvaluation));
     }

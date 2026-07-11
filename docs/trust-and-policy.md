@@ -349,8 +349,9 @@ Current wrapper distinction:
 
 Current counting rules are:
 
-- `minValidSignatures` counts unique detached proof identities, not repeated verification results for the same proof
-- semantically equivalent Stellar proofs are deduplicated even if JSON serialization differs
+- `minValidSignatures` counts unique verified signer identities within the archive-approval family; multiple proofs from one signer count once
+- QSIG proof identity is derived from signed TBS fields, signing context, and signature bytes, excluding unauthenticated display metadata
+- semantically equivalent Stellar proofs are deduplicated using decoded signature/XDR bytes even if JSON serialization or base64 spelling differs
 - invalid extra signatures are reported but ignored for archive-policy counting
 - self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting; "self-verified" means the signature was verified exclusively against the public key carried inside the `.qsig` binary wrapper, without corroboration from an externally-anchored identity source; this condition is excluded from policy satisfaction because it provides no binding to an identity established outside the artifact being evaluated
 - `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature in addition to `minValidSignatures`

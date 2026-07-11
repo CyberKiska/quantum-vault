@@ -12,6 +12,7 @@ import {
     assessShardSelection,
 } from '../../app/crypto-service.js';
 import { LITE_DEFAULT_AUTH_POLICY_LEVEL } from '../crypto/constants.js';
+import { wipeBytes, wipeRestoreResult } from '../crypto/zeroize.js';
 import {
     buildRestorePolicyFailureSummary,
     buildRestoreResultSummary,
@@ -512,6 +513,9 @@ async function createLiteShards() {
 
     setWorkflowBusy('liteViewProtect', true);
     updateLitePipeline('liteViewProtect', 'step-lock'); // Start: Encrypting
+
+    let payloadBytes = null;
+    let encBytes = null;
     
     try {
         const params = calculateParametersFromThreshold(n, thresholdPercent);
@@ -522,7 +526,6 @@ async function createLiteShards() {
         const inputFiles = [...filesInput.files];
         const isBundle = inputFiles.length > 1;
 
-        let payloadBytes;
         let payloadName;
         let payloadLabel;
         if (isBundle) {
@@ -542,7 +545,7 @@ async function createLiteShards() {
 
         // 1. Encrypt payload (single file or multi-file bundle)
         const encBlob = await encryptFile(payloadBytes, liteKeys.publicKey, payloadName);
-        const encBytes = await readFileAsUint8Array(encBlob);
+        encBytes = await readFileAsUint8Array(encBlob);
         const encHash = await hashBytes(encBytes);
         originalFileNames.set(encHash, payloadName);
 
@@ -593,6 +596,7 @@ async function createLiteShards() {
     } catch (error) {
         logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
     } finally {
+        wipeBytes(payloadBytes, encBytes);
         setWorkflowBusy('liteViewProtect', false);
         updateCreateShardsButton();
         setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
@@ -650,6 +654,10 @@ async function restoreLiteShards() {
         liteResultPanel.style.display = 'none';
         liteResultPanel.replaceChildren();
     }
+
+    let shardBytesArr = [];
+    let result = null;
+    let decBytes = null;
     
     try {
         clearInlineError(LITE_RESTORE_INLINE_ERROR_ID);
@@ -662,7 +670,7 @@ async function restoreLiteShards() {
         }
 
         // Parse shards using shared function
-        const shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
+        shardBytesArr = await Promise.all(verificationOptions.shardFiles.map(readFileAsUint8Array));
         const shards = await Promise.all(shardBytesArr.map((arr) => parseLifecycleShard(arr, { strict: true })));
         
         // Log restoration start
@@ -670,7 +678,7 @@ async function restoreLiteShards() {
         logRestoration(verificationOptions.shardFiles.length, containerId, { isLiteMode: true });
         
         // Restore using shared core logic
-        const result = await restoreFromShards(shards, {
+        result = await restoreFromShards(shards, {
             onLog: (msg) => log(msg, { isLiteMode: true }),
             onError: (msg) => logError(msg, { isLiteMode: true }),
             onWarn: (msg) => logWarning(msg, { isLiteMode: true }),
@@ -702,7 +710,7 @@ async function restoreLiteShards() {
         }
         
         const { decryptedBlob, metadata } = await decryptFile(qencBytes, privKey);
-        const decBytes = await readFileAsUint8Array(decryptedBlob);
+        decBytes = await readFileAsUint8Array(decryptedBlob);
         const decHash = await hashBytes(decBytes);
         const integrityOk = metadata.fileHash === decHash;
 
@@ -762,6 +770,8 @@ async function restoreLiteShards() {
         });
         logError(error, { isLiteMode: true });
     } finally {
+        wipeBytes(...shardBytesArr, decBytes);
+        wipeRestoreResult(result);
         setWorkflowBusy('liteViewRestore', false);
         void updateShardsStatus();
         setTimeout(() => updateLitePipeline('liteViewRestore', null), 2000); // Reset after delay

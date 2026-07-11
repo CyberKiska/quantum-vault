@@ -71,8 +71,23 @@ function buildLifecycleBundleSignatureArtifacts(bundle) {
 // trusted cached SHA-256 for detached-signature bytes. Successor lifecycle
 // attachment code must resolve OTS targets from exact `signature.bytes`
 // directly and must not rely on `otsStampedDigestHex` shortcuts.
-export async function resolveOpenTimestampTarget({ timestampBytes, timestampName = '', signatures = [] }) {
+export async function resolveOpenTimestampTarget({
+  timestampBytes,
+  timestampName = '',
+  signatures = [],
+  declaredTargetDigest = null,
+}) {
   const parsedProof = parseOpenTimestampProof(timestampBytes, { name: timestampName });
+  if (declaredTargetDigest !== null) {
+    const declaredAlg = String(declaredTargetDigest?.alg || '').trim().toUpperCase();
+    const declaredValue = String(declaredTargetDigest?.value || '').trim().toLowerCase();
+    if (declaredAlg !== 'SHA-256' || !/^[0-9a-f]{64}$/.test(declaredValue)) {
+      throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} has an invalid declared targetDigest`);
+    }
+    if (declaredValue !== parsedProof.stampedDigestHex) {
+      throw new Error(`OpenTimestamps proof ${timestampName || 'proof'} does not match its declared targetDigest`);
+    }
+  }
   const hashedSignatures = await Promise.all(signatures.map(async (signature) => {
     if (!(signature?.bytes instanceof Uint8Array)) return null;
     return {
@@ -136,6 +151,7 @@ export async function inspectLifecycleBundleTimestamps(bundle) {
     const resolved = await resolveOpenTimestampTarget({
       timestampBytes: base64ToBytes(timestamp.proof),
       timestampName: timestamp.id,
+      declaredTargetDigest: timestamp.targetDigest,
       signatures: [targetSignature],
     });
     return {

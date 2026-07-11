@@ -45,6 +45,11 @@ export function assertPerChunkNonceContract({
 }
 
 export function buildChunkAAD(headerBytes, chunkIndex, plainLen) {
+    if (!(headerBytes instanceof Uint8Array)) {
+        throw new Error('headerBytes must be Uint8Array');
+    }
+    assertUint32(chunkIndex, 'chunkIndex');
+    assertUint32(plainLen, 'plainLen');
     const aad = new Uint8Array(headerBytes.length + 8);
     aad.set(headerBytes, 0);
     const dv = new DataView(aad.buffer, aad.byteOffset, aad.byteLength);

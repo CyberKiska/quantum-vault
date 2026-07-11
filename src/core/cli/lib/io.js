@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
-import { lstat, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { link, lstat, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { QV_CODE, makeQvError } from './exit.js';
 
@@ -29,9 +29,13 @@ export async function assertNoSymlinkPath(filePath) {
     cursor = path.join(cursor, part);
     const stats = await lstat(cursor);
     if (stats.isSymbolicLink()) {
-      // macOS exposes /tmp as a root-level symlink to /private/tmp. Keep that
-      // platform alias usable while still refusing symlinks below the root.
-      if (path.dirname(cursor) === parsed.root) {
+      // Darwin exposes selected system-managed roots as aliases into /private.
+      // Allow only the explicit temporary/runtime aliases required by Node and
+      // reject unrelated root-level symlinks such as /etc.
+      const allowedDarwinRootAlias = process.platform === 'darwin' && (
+        cursor === '/tmp' || cursor === '/var'
+      );
+      if (allowedDarwinRootAlias) {
         continue;
       }
       throw makeQvError(`Refusing to read symlink without --allow-symlink: ${cursor}`, QV_CODE.USAGE);
@@ -146,11 +150,20 @@ export async function writeBytesAtomic(filePath, bytes, {
     await handle.close();
     handle = null;
 
-    if (!force && await pathExists(destination)) {
-      throw new Error(`Refusing to overwrite existing file: ${destination}`);
+    if (force) {
+      await rename(tempPath, destination);
+    } else {
+      try {
+        await link(tempPath, destination);
+      } catch (error) {
+        if (error?.code === 'EEXIST') {
+          throw new Error(`Refusing to overwrite existing file: ${destination}`);
+        }
+        throw error;
+      }
+      await unlink(tempPath);
     }
-
-    await rename(tempPath, destination);
+    createdTemp = false;
     await fsyncDirectory(parentDir);
     return {
       path: destination,
@@ -169,6 +182,11 @@ export async function writeBytesAtomic(filePath, bytes, {
 function uniqueTempPath(destination) {
   const token = `${process.pid}.${randomUUID()}`;
   return `${destination}.tmp-${token}`;
+}
+
+function uniqueBackupPath(destination) {
+  const token = `${process.pid}.${randomUUID()}`;
+  return `${destination}.backup-${token}`;
 }
 
 async function writeTempFile(tempPath, bytes, mode) {
@@ -206,6 +224,7 @@ export async function writeArtifactSetAtomic(entries, { force = false } = {}) {
 
   const staged = [];
   const renamed = [];
+  const backups = [];
   try {
     for (const entry of normalized) {
       const tempPath = uniqueTempPath(entry.path);
@@ -213,17 +232,45 @@ export async function writeArtifactSetAtomic(entries, { force = false } = {}) {
       staged.push({ ...entry, tempPath, bytesWritten });
     }
 
-    for (const entry of staged) {
-      if (!force && await pathExists(entry.path)) {
-        throw makeQvError(`Refusing to overwrite existing file: ${entry.path}`, QV_CODE.USAGE);
+    if (force) {
+      for (const entry of staged) {
+        if (await pathExists(entry.path)) {
+          const backupPath = uniqueBackupPath(entry.path);
+          await rename(entry.path, backupPath);
+          backups.push({ path: entry.path, backupPath });
+        }
       }
-      await rename(entry.tempPath, entry.path);
+    }
+
+    for (const entry of staged) {
+      if (force) {
+        await rename(entry.tempPath, entry.path);
+      } else {
+        try {
+          await link(entry.tempPath, entry.path);
+        } catch (error) {
+          if (error?.code === 'EEXIST') {
+            throw makeQvError(`Refusing to overwrite existing file: ${entry.path}`, QV_CODE.USAGE);
+          }
+          throw error;
+        }
+        await unlink(entry.tempPath);
+      }
       renamed.push(entry);
     }
 
     const dirs = new Set(staged.map((entry) => path.dirname(entry.path)));
     for (const dir of dirs) {
       await fsyncDirectory(dir);
+    }
+    for (const backup of backups) {
+      try {
+        await unlinkIfExists(backup.backupPath);
+      } catch {
+        // The committed destination is authoritative. A same-mode backup may
+        // remain for operator cleanup, but cleanup failure must not trigger a
+        // destructive rollback after other backups were already removed.
+      }
     }
 
     return staged.map((entry) => ({
@@ -235,10 +282,11 @@ export async function writeArtifactSetAtomic(entries, { force = false } = {}) {
     for (const entry of staged) {
       await unlinkIfExists(entry.tempPath);
     }
-    if (!force) {
-      for (const entry of renamed.reverse()) {
-        await unlinkIfExists(entry.path);
-      }
+    for (const entry of renamed.reverse()) {
+      await unlinkIfExists(entry.path);
+    }
+    for (const backup of backups.reverse()) {
+      await rename(backup.backupPath, backup.path);
     }
     throw error;
   }
