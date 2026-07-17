@@ -49,6 +49,11 @@ Filesystem notes:
 
 - Schema **v1** may add new object fields. It must not remove or rename fields, and must not change a field's type incompatibly (for example `string` → `number`, widening or narrowing arrays in ways that break parsers). Any incompatible change requires incrementing the schema version.
 - Error JSON from failed commands includes `command`, `ok: false`, `cliSchemaVersion`, `error`, and `qvCode` only (no success-only payload fields).
+- Local QVPACK count/length/aggregate limit failures use
+  `qvCode: "RESOURCE_LIMIT"` with the fixed, non-reflective message
+  `QVPACK resource limit exceeded`. They retain exit status `4`, so automation
+  that needs to distinguish resource exhaustion from malformed input must inspect
+  `qvCode` rather than the numeric exit status or prose.
 
 ## Commands
 
@@ -125,7 +130,9 @@ Exit status:
 
 - `0` when the container was written
 - `2` for usage errors, including missing flags, duplicate pack entry names, or refused overwrite
-- `4` for format/policy rejection, including payloads above `MAX_FILE_SIZE`
+- `4` for format/policy rejection, including payloads above `MAX_FILE_SIZE`; a
+  structured QVPACK profile-limit rejection uses `qvCode: "RESOURCE_LIMIT"` at
+  the same compatible numeric status
 - `5` for invalid public key material
 - `1` for other failures
 
@@ -203,7 +210,9 @@ Exit status:
 
 - `0` when plaintext was written
 - `2` for usage errors, including conflicting output flags, unsafe recovered names, or refused overwrite
-- `4` for format/policy rejection, including malformed containers or malformed `.qvpack` payloads
+- `4` for format/policy rejection, including malformed containers or malformed
+  `.qvpack` payloads; an authenticated QVPACK profile-limit rejection instead
+  uses `qvCode: "RESOURCE_LIMIT"` at the same numeric status
 - `5` for invalid private key length
 - `6` for AEAD/key-commitment/authentication failure
 - `11` for restored plaintext hash mismatch against authenticated private metadata

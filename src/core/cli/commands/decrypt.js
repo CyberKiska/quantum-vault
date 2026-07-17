@@ -4,7 +4,11 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { decryptFile } from '../../crypto/index.js';
 import { toHex } from '../../crypto/bytes.js';
 import { parseQencHeader } from '../../crypto/qenc/format.js';
-import { isQvpackPayload, parseQvpackPayload } from '../../crypto/qvpack.js';
+import {
+  isQvpackPayload,
+  parseQvpackPayload,
+  QvpackResourceLimitError,
+} from '../../crypto/qvpack.js';
 import { validatePrivateKey } from '../../crypto/mlkem.js';
 import { takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
@@ -21,6 +25,10 @@ function usage(message) {
 
 function formatPolicy(message, cause) {
   return makeQvError(message, QV_CODE.FORMAT_POLICY_REJECT, { cause });
+}
+
+function resourceLimit(cause) {
+  return makeQvError('QVPACK resource limit exceeded', QV_CODE.RESOURCE_LIMIT, { cause });
 }
 
 function keyRejected(message, cause) {
@@ -205,6 +213,9 @@ function validateAndClonePrivateKey(bytes) {
 
 function classifyDecryptError(error) {
   if (typeof error?.qvCode === 'string') return error;
+  if (error instanceof QvpackResourceLimitError || error?.code === 'QVPACK_RESOURCE_LIMIT') {
+    return resourceLimit(error);
+  }
 
   const message = error?.message || String(error);
   if (/Invalid ML-KEM-1024 private key length|Private key must be Uint8Array/.test(message)) {

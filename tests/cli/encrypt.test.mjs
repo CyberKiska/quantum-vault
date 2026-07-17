@@ -10,7 +10,11 @@ import {
   MAX_QENC_PRIVATE_METADATA_BYTES,
 } from '../../src/core/crypto/index.js';
 import { parseQencHeader } from '../../src/core/crypto/qenc/format.js';
-import { buildQvpackPayloadBytes, parseQvpackPayload } from '../../src/core/crypto/qvpack.js';
+import {
+  buildQvpackPayloadBytes,
+  MAX_QVPACK_ENTRY_PAYLOAD_BYTES,
+  parseQvpackPayload,
+} from '../../src/core/crypto/qvpack.js';
 import { runQvCli } from '../../src/core/cli/qv.js';
 
 function createCaptureStream() {
@@ -58,6 +62,25 @@ function digestHex(bytes) {
 
 async function blobToBytes(blob) {
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+function buildDeclaredOverLimitQvpack(name) {
+  const nameBytes = new TextEncoder().encode(name);
+  const out = new Uint8Array(4 + 1 + 2 + 2 + nameBytes.length + 4);
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  out.set(new TextEncoder().encode('QVB1'), offset);
+  offset += 4;
+  out[offset] = 1;
+  offset += 1;
+  view.setUint16(offset, 1, false);
+  offset += 2;
+  view.setUint16(offset, nameBytes.length, false);
+  offset += 2;
+  out.set(nameBytes, offset);
+  offset += nameBytes.length;
+  view.setUint32(offset, MAX_QVPACK_ENTRY_PAYLOAD_BYTES + 1, false);
+  return out;
 }
 
 test('encrypt --json writes a .qenc container that decrypts through core', async () => {
@@ -306,4 +329,34 @@ test('encrypt recognizes an existing .qvpack payload by magic', async () => {
   assert.equal(report.fileCount, 1);
   assert.equal(report.originalFilename, 'existing.qvpack');
   assert.equal(report.fileHashHex, digestHex(qvpackBytes));
+});
+
+test('encrypt reports declared QVPACK resource geometry distinctly without writing output', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const sensitiveName = 'PRIVATE_QVPACK_RESOURCE_CANARY.bin';
+  const packPath = join(baseDir, 'oversized-declaration.qvpack');
+  const outputPath = join(baseDir, 'must-not-exist.qenc');
+  await writeFile(packPath, buildDeclaredOverLimitQvpack(sensitiveName));
+
+  const result = await runCli([
+    'encrypt',
+    packPath,
+    '--public-key',
+    keys.publicKeyPath,
+    '--out',
+    outputPath,
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 4);
+  assert.equal(result.stderrText, '');
+  const error = JSON.parse(result.stdoutText);
+  assert.equal(error.command, 'encrypt');
+  assert.equal(error.ok, false);
+  assert.equal(error.qvCode, 'RESOURCE_LIMIT');
+  assert.equal(error.error, 'QVPACK resource limit exceeded');
+  assert.equal(error.error.includes(sensitiveName), false);
+  assert.equal(result.stdoutText.includes(sensitiveName), false);
+  await assert.rejects(() => stat(outputPath), { code: 'ENOENT' });
 });

@@ -105,6 +105,11 @@ test('CLI exit registry maps explicit qvCode values', async () => {
   const { EXIT, QV_CODE, makeQvError, mapErrorToExitCode } = await import('../../src/core/cli/lib/exit.js');
   assert.equal(mapErrorToExitCode(makeQvError('bad args', QV_CODE.USAGE)), EXIT.USAGE);
   assert.equal(mapErrorToExitCode(makeQvError('ambiguous cohort', QV_CODE.AMBIGUOUS_INPUTS)), EXIT.AMBIGUITY);
+  assert.equal(EXIT.FORMAT_POLICY, 4);
+  assert.equal(
+    mapErrorToExitCode(makeQvError('bounded locally', QV_CODE.RESOURCE_LIMIT)),
+    EXIT.FORMAT_POLICY,
+  );
   assert.equal(
     mapErrorToExitCode(makeQvError('ack', QV_CODE.RESTORE_LIFECYCLE_VARIANT_ACK_REQUIRED)),
     EXIT.RESTORE_VARIANT_ACK,

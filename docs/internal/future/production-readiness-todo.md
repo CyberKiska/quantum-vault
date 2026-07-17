@@ -178,8 +178,11 @@ Status values:
     entry, aggregate payload, and encoded bundle. Fatal UTF-8, duplicate names,
     truncation, trailing bytes, and checked pre-allocation arithmetic have negative
     and deterministic property coverage; canonical in-profile bytes are unchanged.
-    Adapter pre-read bounds, streaming, distinct CLI resource `qvCode`,
-    filesystem-normalized aliases, and physical boundary tests remain open.
+    CLI encrypt/decrypt map this structured failure to the fixed non-reflective
+    `RESOURCE_LIMIT` qvCode while preserving exit status 4 and no-output behavior.
+    Adapter pre-read bounds, streaming, structured resource errors in other
+    subsystems, filesystem-normalized aliases, and physical boundary tests remain
+    open.
 - [ ] **REL-303 (open, large): streaming encryption, decryption, RS, hashing, and
   private temporary output.** Peak memory must be a documented bounded function of
   chunk size and shard profile. Publication occurs only after AEAD, length, private

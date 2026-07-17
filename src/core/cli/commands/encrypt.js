@@ -8,6 +8,7 @@ import {
   buildQvpackPayloadBytes,
   isQvpackPayload,
   parseQvpackPayload,
+  QvpackResourceLimitError,
 } from '../../crypto/qvpack.js';
 import { validatePublicKey } from '../../crypto/mlkem.js';
 import { MAX_FILE_SIZE } from '../../crypto/constants.js';
@@ -25,6 +26,10 @@ function usage(message) {
 
 function formatPolicy(message, cause) {
   return makeQvError(message, QV_CODE.FORMAT_POLICY_REJECT, { cause });
+}
+
+function resourceLimit(cause) {
+  return makeQvError('QVPACK resource limit exceeded', QV_CODE.RESOURCE_LIMIT, { cause });
 }
 
 function keyRejected(message, cause) {
@@ -100,6 +105,9 @@ async function readPublicKeyBytes(publicKeyPath) {
 }
 
 function classifyEncryptError(error) {
+  if (error instanceof QvpackResourceLimitError || error?.code === 'QVPACK_RESOURCE_LIMIT') {
+    return resourceLimit(error);
+  }
   const message = error?.message || String(error);
   if (/Invalid ML-KEM-1024 public key length|Public key must be Uint8Array/.test(message)) {
     return keyRejected(message, error);

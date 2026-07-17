@@ -7,7 +7,10 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../../src/core/crypto/bytes.js';
 import { encryptFile } from '../../src/core/crypto/index.js';
 import { parseQencHeader } from '../../src/core/crypto/qenc/format.js';
-import { parseQvpackPayload } from '../../src/core/crypto/qvpack.js';
+import {
+  MAX_QVPACK_ENTRY_PAYLOAD_BYTES,
+  parseQvpackPayload,
+} from '../../src/core/crypto/qvpack.js';
 import { runQvCli } from '../../src/core/cli/qv.js';
 
 function createCaptureStream() {
@@ -64,6 +67,25 @@ function modeBits(stats) {
 
 async function blobToBytes(blob) {
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+function buildDeclaredOverLimitQvpack(name) {
+  const nameBytes = new TextEncoder().encode(name);
+  const out = new Uint8Array(4 + 1 + 2 + 2 + nameBytes.length + 4);
+  const view = new DataView(out.buffer);
+  let offset = 0;
+  out.set(new TextEncoder().encode('QVB1'), offset);
+  offset += 4;
+  out[offset] = 1;
+  offset += 1;
+  view.setUint16(offset, 1, false);
+  offset += 2;
+  view.setUint16(offset, nameBytes.length, false);
+  offset += 2;
+  out.set(nameBytes, offset);
+  offset += nameBytes.length;
+  view.setUint32(offset, MAX_QVPACK_ENTRY_PAYLOAD_BYTES + 1, false);
+  return out;
 }
 
 async function encryptFixture({ baseDir, keys, plaintext, filename = 'plain.txt' }) {
@@ -330,6 +352,39 @@ test('decrypt handles authenticated .qvpack payloads and explicit extraction', a
   assert.equal(modeBits(await stat(join(extractDir, 'b.bin'))), 0o600);
   assert.equal(extractReport.qvpackEntries[0].name, 'a.txt');
   assert.equal(extractReport.qvpackEntries[0].outputPath, join(extractDir, 'a.txt'));
+});
+
+test('decrypt reports authenticated QVPACK resource geometry distinctly without writing plaintext', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const publicKey = new Uint8Array(await readFile(keys.publicKeyPath));
+  const sensitiveName = 'PRIVATE_DECRYPT_RESOURCE_CANARY.bin';
+  const qvpackBytes = buildDeclaredOverLimitQvpack(sensitiveName);
+  const encrypted = await encryptFile(qvpackBytes, publicKey, 'bounded.qvpack');
+  const qencPath = join(baseDir, 'resource-limit.qenc');
+  const outputPath = join(baseDir, 'must-not-exist.qvpack');
+  await writeFile(qencPath, await blobToBytes(encrypted));
+
+  const result = await runCli([
+    'decrypt',
+    qencPath,
+    '--private-key',
+    keys.privateKeyPath,
+    '--out',
+    outputPath,
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 4);
+  assert.equal(result.stderrText, '');
+  const error = JSON.parse(result.stdoutText);
+  assert.equal(error.command, 'decrypt');
+  assert.equal(error.ok, false);
+  assert.equal(error.qvCode, 'RESOURCE_LIMIT');
+  assert.equal(error.error, 'QVPACK resource limit exceeded');
+  assert.equal(error.error.includes(sensitiveName), false);
+  assert.equal(result.stdoutText.includes(sensitiveName), false);
+  await assert.rejects(() => stat(outputPath), { code: 'ENOENT' });
 });
 
 test('qvpack extraction rejects a bad later destination without changing earlier outputs', async () => {
