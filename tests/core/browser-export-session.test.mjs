@@ -311,6 +311,32 @@ test('cancellation aborts an in-flight requester and cannot be overwritten by la
   assert.equal(session.snapshot().rows[0].state, BROWSER_EXPORT_STATES.CANCELLED);
 });
 
+test('a concurrent request for one artifact is rejected without duplicating publication', async () => {
+  let release;
+  let requesterCalls = 0;
+  const wait = new Promise((resolve) => { release = resolve; });
+  const session = await createBrowserExportSession([artifact('concurrent.qcont', 'concurrent')]);
+
+  const firstRequest = session.request(0, async () => {
+    requesterCalls += 1;
+    await wait;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    () => session.request(0, async () => { requesterCalls += 1; }),
+    (error) => assertFixedError(error, 'BROWSER_EXPORT_STATE_INVALID'),
+  );
+  assert.equal(requesterCalls, 1);
+
+  release();
+  await firstRequest;
+  assert.equal(requesterCalls, 1);
+  assert.equal(
+    session.snapshot().rows[0].state,
+    BROWSER_EXPORT_STATES.REQUESTED_UNVERIFIED,
+  );
+});
+
 test('snapshots, JSON, and errors never expose private names or digests', async () => {
   const secretName = 'ULTRA-SECRET-client-name.qcont';
   const source = bytes('top-secret-source');
@@ -364,4 +390,25 @@ test('Blob hashing is streaming-compatible with byte hashing', async () => {
   const source = bytes('blob-stream-digest');
   const blobDigest = await digestBrowserExportSourceSha3_512(new Blob([source]));
   assert.deepEqual(blobDigest, sha3_512(source));
+});
+
+test('Blob hashing aborts with a fixed error and cancels the active reader', async () => {
+  const abortController = new AbortController();
+  let readerCancelled = false;
+  const source = new Blob([new Uint8Array([1, 2])]);
+  source.stream = () => new ReadableStream({
+    async pull(controller) {
+      controller.enqueue(new Uint8Array([1]));
+      abortController.abort();
+    },
+    cancel() {
+      readerCancelled = true;
+    },
+  });
+
+  await assert.rejects(
+    () => digestBrowserExportSourceSha3_512(source, { signal: abortController.signal }),
+    (error) => assertFixedError(error, 'BROWSER_EXPORT_STATE_INVALID'),
+  );
+  assert.equal(readerCancelled, true);
 });

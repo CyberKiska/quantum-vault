@@ -182,10 +182,15 @@ function digestsEqual(left, right) {
   return difference === 0;
 }
 
+function throwIfAborted(signal) {
+  if (signal?.aborted) stateInvalid();
+}
+
 /** Hash a bounded byte or Blob source without converting a Blob wholesale. */
-export async function digestBrowserExportSourceSha3_512(source) {
+export async function digestBrowserExportSourceSha3_512(source, { signal } = {}) {
   const byteLength = sourceByteLength(source);
   validateByteLength(byteLength);
+  throwIfAborted(signal);
 
   if (source instanceof Uint8Array) {
     return sha3_512(source);
@@ -193,16 +198,27 @@ export async function digestBrowserExportSourceSha3_512(source) {
 
   const hasher = sha3_512.create();
   const reader = source.stream().getReader();
+  const abortReader = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener('abort', abortReader, { once: true });
   try {
     while (true) {
+      throwIfAborted(signal);
       const { done, value } = await reader.read();
       if (done) break;
       if (!(value instanceof Uint8Array)) planInvalid();
-      hasher.update(value);
-      value.fill(0);
+      try {
+        throwIfAborted(signal);
+        hasher.update(value);
+      } finally {
+        value.fill(0);
+      }
     }
+    throwIfAborted(signal);
     return hasher.digest();
   } finally {
+    signal?.removeEventListener('abort', abortReader);
     reader.releaseLock();
     if (typeof hasher.destroy === 'function') hasher.destroy();
   }
