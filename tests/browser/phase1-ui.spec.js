@@ -17,6 +17,9 @@ import { lastToast, openArchiveReviewHub, openProMode, openProTab, evaluateAndRe
 import { expectNoHorizontalOverflow } from './support/visual-assertions.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const ARCHIVE_EXTERNAL_COPY_HAZARD = 'One or more archive downloads were requested and may remain outside page control; retain them under the archive custody policy or securely delete them. A threshold set is a complete recovery root.';
+const PRIVATE_KEY_EXTERNAL_COPY_HAZARD = 'A raw private-key download was requested and may remain outside page control; the browser cannot delete it. Securely delete every unneeded copy under the key-custody policy.';
+const RESTORE_PLAINTEXT_EXTERNAL_COPY_HAZARD = 'A restored plaintext download was requested and may remain outside page control; cancellation, page cleanup, and object-URL revocation cannot delete a browser-managed copy.';
 
 let fixtures;
 
@@ -39,77 +42,120 @@ async function payloadFromDownload(download, overrideName = '') {
   };
 }
 
-async function captureDownloads(page, expectedCount, action) {
-  const downloads = [];
-  const onDownload = (download) => downloads.push(download);
-  page.on('download', onDownload);
-  try {
-    await action();
-    await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(expectedCount);
-    return await Promise.all(downloads.map((download) => payloadFromDownload(download)));
-  } finally {
-    page.off('download', onDownload);
-  }
-}
-
-async function installSyntheticDownloadCapture(page) {
-  await page.addInitScript(() => {
-    const blobs = new Map();
-    let nextId = 1;
-    window.__qvSyntheticDownloads = [];
-
-    URL.createObjectURL = (blob) => {
-      const value = `blob:qv-playwright-capture/${nextId}`;
-      nextId += 1;
-      blobs.set(value, blob);
-      return value;
-    };
-    URL.revokeObjectURL = () => {};
-
-    HTMLAnchorElement.prototype.click = function captureDownloadClick() {
-      const href = this.getAttribute('href') || this.href;
-      const blob = blobs.get(href);
-      if (!blob || !this.download) return;
-      const name = this.download;
-      void blob.arrayBuffer().then((buffer) => {
-        window.__qvSyntheticDownloads.push({
-          name,
-          bytes: Array.from(new Uint8Array(buffer)),
-        });
-      });
-    };
-  });
-}
-
-async function captureSyntheticDownloads(page, expectedCount, action) {
-  const start = await page.evaluate(() => window.__qvSyntheticDownloads.length);
-  await action();
-  await expect.poll(
-    () => page.evaluate(() => window.__qvSyntheticDownloads.length),
-    { timeout: 60_000 },
-  ).toBe(start + expectedCount);
-  const captured = await page.evaluate(
-    ({ offset, count }) => window.__qvSyntheticDownloads.slice(offset, offset + count),
-    { offset: start, count: expectedCount },
-  );
-  return captured.map(({ name, bytes }) => ({
-    name,
-    mimeType: mimeTypeForFilename(name),
-    buffer: Buffer.from(bytes),
-  }));
-}
-
-async function createLiteArchiveAndCapture(page, name, plaintext, capture = captureDownloads) {
+async function beginLiteArchiveWithoutAutomaticDownloads(
+  page,
+  name,
+  plaintext,
+  { retainRawKeyBackup = false } = {},
+) {
   await page.locator('#liteFilesInput').setInputFiles({
     name,
     mimeType: 'text/plain',
     buffer: Buffer.from(plaintext),
   });
+  const backupAcknowledgement = page.getByTestId('lite-raw-key-backup-ack');
+  await expect(backupAcknowledgement).not.toBeChecked();
+  if (retainRawKeyBackup) {
+    await backupAcknowledgement.check();
+  }
   const createButton = page.locator('#liteCreateShardsBtn');
   await expect(createButton).toBeEnabled();
-  const payloads = await capture(page, 7, () => createButton.click());
-  await expect(page.locator('#keyStatus .status-text')).toContainText('Last archive key backup available');
-  return payloads;
+
+  const unexpectedDownloads = [];
+  const onDownload = (download) => unexpectedDownloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await createButton.click();
+    await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(7, {
+      timeout: 60_000,
+    });
+    await page.waitForTimeout(250);
+    expect(unexpectedDownloads).toHaveLength(0);
+  } finally {
+    page.off('download', onDownload);
+  }
+
+  await expect(backupAcknowledgement).toBeDisabled();
+  await expect(backupAcknowledgement).not.toBeChecked();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Archive incomplete');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(createButton).toBeDisabled();
+}
+
+async function downloadEveryLiteExportRow(page, expectedCount) {
+  const observedDownloads = [];
+  const onDownload = (download) => observedDownloads.push(download);
+  page.on('download', onDownload);
+  try {
+    for (let index = 0; index < expectedCount; index += 1) {
+      const action = page.getByTestId(`lite-export-row-action-${index}`);
+      await expect(action).toHaveText('Download');
+      await action.click();
+      await expect.poll(() => observedDownloads.length, { timeout: 30_000 }).toBe(index + 1);
+      await expect(page.getByTestId(`lite-export-row-${index}`)).toContainText(
+        'Download requested; re-import not verified',
+      );
+    }
+    await page.waitForTimeout(100);
+    expect(observedDownloads).toHaveLength(expectedCount);
+    return await Promise.all(observedDownloads.map((download) => payloadFromDownload(download)));
+  } finally {
+    page.off('download', onDownload);
+  }
+}
+
+async function reimportLiteArtifacts(page, payloads) {
+  const button = page.locator('#liteExportReimportBtn');
+  await expect(button).toBeEnabled();
+  await button.focus();
+  await expect(button).toBeFocused();
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    button.press('Enter'),
+  ]);
+  await chooser.setFiles(payloads);
+}
+
+async function downloadLiteExportRow(page, index) {
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId(`lite-export-row-action-${index}`).click(),
+  ]);
+  await expect(page.getByTestId(`lite-export-row-${index}`)).toContainText(
+    'Download requested; re-import not verified',
+  );
+  return payloadFromDownload(download);
+}
+
+async function expectVerifiedLiteRows(page, count) {
+  // A completed session is synchronously scrubbed from the export surface.
+  // Assert the post-settlement checklist instead of racing the terminal row
+  // render; partial sessions continue to expose their verified row states.
+  if (count === 7) {
+    await expect(page.getByTestId('lite-export-session')).toBeHidden({ timeout: 30_000 });
+    await expect(page.getByTestId('lite-export-checklist')).toBeVisible();
+    await expect(page.getByTestId('lite-export-checklist')).toContainText(
+      'QVqcont-7 shard artifacts re-import verified',
+      { timeout: 30_000 },
+    );
+    return;
+  }
+  if (count === 2) {
+    await expect.poll(async () => {
+      const states = await page.locator('.lite-export-session-state').allTextContents();
+      const verifiedRows = states.filter(
+        (state) => state.includes('Exact name, size, and SHA3-512 digest verified'),
+      ).length;
+      if (verifiedRows === 2) return true;
+      return (await page.getByTestId('lite-export-checklist').innerText())
+        .includes('Authorized 1-of-1 key backup re-import verified');
+    }, { timeout: 30_000 }).toBe(true);
+    return;
+  }
+  await expect.poll(async () => {
+    const states = await page.locator('.lite-export-session-state').allTextContents();
+    return states.filter((state) => state.includes('Exact name, size, and SHA3-512 digest verified')).length;
+  }, { timeout: 30_000 }).toBe(count);
 }
 
 async function parseDownloadedLiteShards(payloads) {
@@ -118,6 +164,56 @@ async function parseDownloadedLiteShards(payloads) {
   return Promise.all(shardPayloads.map((payload) => (
     parseLifecycleShard(new Uint8Array(payload.buffer), { strict: true })
   )));
+}
+
+async function detachExactNode(page, id, slot) {
+  await page.evaluate(({ nodeId, storageSlot }) => {
+    const node = document.getElementById(nodeId);
+    if (!node?.parentNode) throw new Error('test fixture node is unavailable');
+    const marker = document.createComment(`qv-test-detached-${storageSlot}`);
+    node.parentNode.insertBefore(marker, node);
+    node.remove();
+    window[storageSlot] = { marker, node };
+  }, { nodeId: id, storageSlot: slot });
+}
+
+async function detachExactNodeAfterExportMutation(page, id, slot) {
+  await page.evaluate(({ nodeId, storageSlot }) => {
+    const panel = document.getElementById('liteExportSessionPanel');
+    if (!panel) throw new Error('test fixture export panel is unavailable');
+    const observer = new MutationObserver(() => {
+      const node = document.getElementById(nodeId);
+      if (!node?.parentNode) return;
+      observer.disconnect();
+      const marker = document.createComment(`qv-test-detached-${storageSlot}`);
+      node.parentNode.insertBefore(marker, node);
+      node.remove();
+      window[storageSlot] = { marker, node };
+    });
+    observer.observe(panel, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+  }, { nodeId: id, storageSlot: slot });
+}
+
+async function restoreExactNode(page, slot) {
+  await page.evaluate((storageSlot) => {
+    const detached = window[storageSlot];
+    if (!detached?.marker?.isConnected || detached.node?.isConnected) {
+      throw new Error('test fixture detached node state is invalid');
+    }
+    detached.marker.replaceWith(detached.node);
+    delete window[storageSlot];
+  }, slot);
+}
+
+async function dispatchPersistedPageTransition(page, type) {
+  await page.evaluate((eventType) => {
+    window.dispatchEvent(new PageTransitionEvent(eventType, { persisted: true }));
+  }, type);
 }
 
 test('advanced entropy collection shows heuristic progress and success copy without bit estimates', async ({ page }) => {
@@ -264,7 +360,7 @@ test('policy consequence previews update in Lite Create and Pro Split', async ({
   await expect(litePreview).toHaveClass(/warning/);
 
   await page.locator('#liteAuthPolicy').selectOption('any-signature');
-  await expect(litePreview).toContainText('Restore requires at least one valid archive-approval signature.');
+  await expect(litePreview).toContainText('Restore requires at least one valid archive-approval signature matched by an external signer pin.');
   await expect(litePreview).toContainText('Maintenance, source-evidence, and timestamp evidence do not satisfy this policy.');
   await expect(litePreview).toHaveClass(/informational/);
   await expect.poll(async () => litePreview.evaluate((element) => {
@@ -275,14 +371,14 @@ test('policy consequence previews update in Lite Create and Pro Split', async ({
   await expect.poll(async () => litePreview.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(200);
 
   await page.locator('#liteAuthPolicy').selectOption('strong-pq-signature');
-  await expect(litePreview).toContainText('Restore requires a strong PQ archive-approval signature over the archive-state descriptor.');
-  await expect(litePreview).toContainText('Self-verified signatures are ignored for policy.');
+  await expect(litePreview).toContainText('Restore requires a strong PQ archive-approval signature over the archive-state descriptor matched by an external signer pin.');
+  await expect(litePreview).toContainText('Embedded or bundled signer material alone is ignored for policy.');
   await expect(litePreview).toHaveClass(/strict/);
 
   await openProMode(page);
   await page.locator('#proTabDistribution').click();
   const proPreview = page.getByTestId('pro-policy-consequence');
-  await expect(proPreview).toContainText('Restore requires a strong PQ archive-approval signature over the archive-state descriptor.');
+  await expect(proPreview).toContainText('Restore requires a strong PQ archive-approval signature over the archive-state descriptor matched by an external signer pin.');
   await expect(proPreview).toHaveClass(/strict/);
 
   await page.locator('#proAuthPolicy').selectOption('integrity-only');
@@ -290,17 +386,102 @@ test('policy consequence previews update in Lite Create and Pro Split', async ({
   await expect(proPreview).toHaveClass(/warning/);
 
   await page.locator('#proAuthPolicy').selectOption('any-signature');
-  await expect(proPreview).toContainText('Restore requires at least one valid archive-approval signature.');
+  await expect(proPreview).toContainText('Restore requires at least one valid archive-approval signature matched by an external signer pin.');
   await expect(proPreview).toHaveClass(/informational/);
   await expect.poll(async () => proPreview.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(200);
 });
 
-test('lite custody guidance appears when ready and export checklist updates after create and optional key backup', async ({ page }) => {
+test('Lite create rejects noninteger configuration and oversized plaintext before key ownership', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'bounded-preflight-private-name.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('x'),
+  });
+
+  const createButton = page.locator('#liteCreateShardsBtn');
+  const nInput = page.locator('#liteN');
+  const thresholdInput = page.locator('#liteThreshold');
+  const setNumberValue = async (locator, value) => {
+    await locator.evaluate((element, nextValue) => {
+      element.value = nextValue;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    }, value);
+  };
+
+  for (const value of ['4', '26', '5.5']) {
+    await setNumberValue(nInput, value);
+    await expect(createButton).toBeDisabled();
+  }
+  await setNumberValue(nInput, '5');
+  for (const value of ['49', '91', '60.5']) {
+    await setNumberValue(thresholdInput, value);
+    await expect(createButton).toBeDisabled();
+  }
+
+  await setNumberValue(thresholdInput, '90');
+  await expect(page.locator('#thresholdText')).toHaveText('Configuration Error');
+  await expect(createButton).toBeDisabled();
+
+  await setNumberValue(thresholdInput, '60');
+  await expect(createButton).toBeEnabled();
+
+  await page.locator('#liteAuthPolicy').evaluate((element) => {
+    element.value = '';
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await expect(createButton).toBeDisabled();
+  await page.locator('#liteAuthPolicy').selectOption('integrity-only');
+  await expect(createButton).toBeEnabled();
+
+  const rejectedName = 'oversized-selection-secret-name.bin';
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: rejectedName,
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.alloc((8 * 1024 * 1024) + 1, 0x5a),
+  });
+  await expect(createButton).toBeDisabled();
+  await expect(page.locator('#liteFilesList')).toContainText('exceeds the fixed Lite browser input profile');
+  await expect(page.locator('#liteFilesInput')).toHaveValue('');
+
+  // Install a FileList without dispatching the normal change event so the
+  // click handler's independent profile check is exercised directly.
+  const handlerRejectedName = 'handler-preflight-secret-name.bin';
+  await page.locator('#liteFilesInput').evaluate((element, name) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(
+      [new Uint8Array((8 * 1024 * 1024) + 1)],
+      name,
+      { type: 'application/octet-stream' },
+    ));
+    element.files = transfer.files;
+  }, handlerRejectedName);
+  await createButton.evaluate((element) => { element.disabled = false; });
+  await createButton.click();
+  await expect(page.locator('#liteFilesInput')).toHaveValue('');
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  const bodyText = await page.locator('body').innerText();
+  expect(bodyText).not.toContain(rejectedName);
+  expect(bodyText).not.toContain(handlerRejectedName);
+  await expect(page.getByTestId('operations-log')).not.toContainText(rejectedName);
+  await expect(page.getByTestId('operations-log')).not.toContainText(handlerRejectedName);
+});
+
+test('Lite raw-key backup is default-off and requires a fresh threshold-bypass acknowledgement', async ({ page }) => {
+  test.setTimeout(120_000);
   await page.goto('/');
   await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
 
   await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
   await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+
+  const backupWarning = page.getByTestId('lite-raw-key-backup-warning');
+  const backupAcknowledgement = page.getByTestId('lite-raw-key-backup-ack');
+  await expect(backupWarning).toContainText('raw ML-KEM private key');
+  await expect(backupWarning).toContainText('unilateral 1-of-1 recovery root');
+  await expect(backupWarning).toContainText('bypasses the shard threshold');
+  await expect(backupAcknowledgement).not.toBeChecked();
 
   const custody = page.getByTestId('lite-custody-guidance');
   await expect(custody).toBeVisible();
@@ -310,52 +491,1565 @@ test('lite custody guidance appears when ready and export checklist updates afte
   await expect(custody).toContainText('Optional 1-of-1 Key Backup');
   await expect(custody).toContainText('bypasses the shard threshold');
   await expect(custody).toContainText(/optional/i);
+  await expect(custody).toContainText('not storage confirmation');
 
   const createBtn = page.locator('#liteCreateShardsBtn');
   await expect(createBtn).toBeDisabled();
 
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'cancelled-export-private-name.txt',
+    'cancelled export payload',
+  );
+  const exportPanel = page.getByTestId('lite-export-session');
+  await expect(exportPanel).toContainText('temporarily holds the operation key and a complete recovery set');
+  await expect(exportPanel).toContainText('does not prove durable storage');
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(7);
+  await expect(page.getByTestId('lite-export-checklist')).toBeHidden();
+
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(exportPanel).toBeHidden();
+  await expect(createBtn).toBeDisabled();
+  await expect(page.locator('#liteFilesInput')).toHaveValue('');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(backupAcknowledgement).not.toBeChecked();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.getByTestId('operations-log')).not.toContainText('cancelled-export-private-name.txt');
+
   await page.locator('#liteFilesInput').setInputFiles({
-    name: 'custody-export-check.txt',
+    name: 'fresh-selection-after-cancel.txt',
     mimeType: 'text/plain',
-    buffer: Buffer.from('custody-export-check'),
+    buffer: Buffer.from('fresh'),
+  });
+  await expect(createBtn).toBeEnabled();
+});
+
+test('a pending acknowledged key blocks supersession until explicit export or discard', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'pending-key-decision-private-name.txt',
+    'pending key custody decision',
+    { retainRawKeyBackup: true },
+  );
+  const payloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, payloads);
+  await expectVerifiedLiteRows(page, 7);
+
+  const createButton = page.locator('#liteCreateShardsBtn');
+  const plaintextInput = page.locator('#liteFilesInput');
+  const acknowledgement = page.getByTestId('lite-raw-key-backup-ack');
+  const exportButton = page.locator('#liteDownloadKeysBtn');
+  const discardButton = page.locator('#liteDiscardKeysBtn');
+  await expect(page.locator('#keyStatus .status-text')).toContainText(
+    'Pending 1-of-1 key decision blocks the next archive',
+  );
+  await expect(exportButton).toBeVisible();
+  await expect(discardButton).toBeVisible();
+  await expect(createButton).toBeDisabled();
+  await expect(plaintextInput).toBeDisabled();
+  await expect(acknowledgement).toBeDisabled();
+
+  // Disabled controls are only a presentation boundary. Force the handler to
+  // run and prove the controller itself refuses to supersede pending material.
+  await createButton.evaluate((button) => { button.disabled = false; });
+  await createButton.click();
+  await expect(exportButton).toBeVisible();
+  await expect(discardButton).toBeVisible();
+  await expect(lastToast(page)).toContainText('before creating another archive');
+
+  await page.getByTestId('mode-toggle-control').click();
+  await expect(page.getByTestId('mode-toggle')).not.toBeChecked();
+  await expect(exportButton).toBeVisible();
+  await expect(lastToast(page)).toContainText('before switching modes');
+
+  await discardButton.click();
+  await expect(exportButton).toBeHidden();
+  await expect(discardButton).toBeHidden();
+  await expect(plaintextInput).toBeEnabled();
+  await expect(acknowledgement).toBeEnabled();
+  await expect(page.getByTestId('lite-export-checklist')).toContainText(
+    'Authorized 1-of-1 key export cancelled',
+  );
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Pending optional 1-of-1 key material was explicitly discarded',
+  );
+
+  await plaintextInput.setInputFiles({
+    name: 'after-explicit-key-discard.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('next archive may start'),
+  });
+  await expect(createButton).toBeEnabled();
+  expect(await page.locator('body').innerText()).not.toContain('pending-key-decision-private-name.txt');
+});
+
+test('missing exact key-decision controls suppress optional retention without stranding Lite custody', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'key-decision-control-private-name.txt',
+    'key decision control replacement',
+    { retainRawKeyBackup: true },
+  );
+
+  await page.evaluate(() => {
+    for (const id of ['liteDownloadKeysBtn', 'liteDiscardKeysBtn']) {
+      const original = document.getElementById(id);
+      const replacement = original.cloneNode(true);
+      original.replaceWith(replacement);
+    }
   });
 
-  await expect(createBtn).toBeEnabled();
-
-  await captureDownloads(page, 7, () => createBtn.click());
-
-  const checklist = page.getByTestId('lite-export-checklist');
-  await expect(checklist).toBeVisible();
-  await expect(checklist).toContainText('QVqcont-7 shards exported');
-  await expect(checklist).toContainText('Archive-state descriptor exported');
-  await expect(checklist).toContainText('Lifecycle bundle exported');
-  await expect(checklist).toContainText('Optional key backup not exported');
-
-  await captureDownloads(page, 2, () => page.locator('#liteDownloadKeysBtn').click());
-
-  await expect(checklist).toContainText('Optional key backup exported');
+  const payloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, payloads);
+  await expectVerifiedLiteRows(page, 7);
+  await expect(page.getByTestId('lite-export-checklist')).toContainText(
+    'Authorized 1-of-1 key export cancelled',
+  );
+  await expect(page.locator('#keyStatus .status-text')).toContainText(
+    'Fresh keys are generated per archive',
+  );
   await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Authorized optional key retention was suppressed because its exact bound decision controls were unavailable',
+  );
+
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'after-key-control-fail-closed.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('next threshold-only archive may start'),
+  });
+  await expect(page.locator('#liteCreateShardsBtn')).toBeEnabled();
+  expect(await page.locator('body').innerText()).not.toContain('key-decision-control-private-name.txt');
+});
+
+test('active archive and retained-key custody block Lite Restore until explicit resolution', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.goto('/');
+
+  const restoreTab = page.locator('#liteTabRestore');
+  const protectTab = page.locator('#liteTabProtect');
+  const forceRestoreHandler = async () => {
+    await restoreTab.evaluate((tab) => {
+      tab.disabled = false;
+      tab.setAttribute('aria-disabled', 'false');
+      tab.click();
+    });
+    await expect(restoreTab).toHaveAttribute('aria-selected', 'true');
+    await page.locator('#liteRestoreBtn').evaluate((button) => {
+      button.disabled = false;
+      button.click();
+    });
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Lite Restore was blocked because another workflow remains unresolved',
+    );
+  };
+
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'active-custody-input.txt',
+    'active archive custody',
+  );
+  await expect(restoreTab).toBeDisabled();
+  await expect(restoreTab).toHaveAttribute('aria-disabled', 'true');
+  await expect(protectTab).toHaveAttribute('aria-selected', 'true');
+
+  await forceRestoreHandler();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(7);
+  await protectTab.click();
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(restoreTab).toBeEnabled();
+  await expect(restoreTab).toHaveAttribute('aria-disabled', 'false');
+
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'retained-custody-input.txt',
+    'retained key custody',
+    { retainRawKeyBackup: true },
+  );
+  const payloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, payloads);
+  await expectVerifiedLiteRows(page, 7);
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeVisible();
+  await expect(restoreTab).toBeDisabled();
+  await expect(restoreTab).toHaveAttribute('aria-disabled', 'true');
+
+  await forceRestoreHandler();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeVisible();
+  await protectTab.click();
+  await page.locator('#liteDiscardKeysBtn').click();
+  await expect(restoreTab).toBeEnabled();
+  await expect(restoreTab).toHaveAttribute('aria-disabled', 'false');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
+});
+
+test('partial archive cancellation warns about external copies and retries failed URL revocation', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'partial-archive-cancel-private-name.txt',
+    'partial archive cancellation',
+  );
+
+  await page.evaluate(() => {
+    const originalRevoke = URL.revokeObjectURL.bind(URL);
+    let failuresRemaining = 2;
+    window.__qvRevokeAttempts = 0;
+    URL.revokeObjectURL = (objectUrl) => {
+      window.__qvRevokeAttempts += 1;
+      if (failuresRemaining > 0) {
+        failuresRemaining -= 1;
+        throw new Error('fault-injected URL revocation failure');
+      }
+      originalRevoke(objectUrl);
+    };
+  });
+
+  const requestedArtifact = await downloadLiteExportRow(page, 0);
+  await expect.poll(() => page.evaluate(() => window.__qvRevokeAttempts)).toBe(1);
+  const unexpectedRetryDownloads = [];
+  const onRetryDownload = (download) => unexpectedRetryDownloads.push(download);
+  page.on('download', onRetryDownload);
+  try {
+    await page.getByTestId('lite-export-row-action-0').click();
+    await page.waitForTimeout(150);
+    expect(unexpectedRetryDownloads).toHaveLength(0);
+  } finally {
+    page.off('download', onRetryDownload);
+  }
+  await expect.poll(() => page.evaluate(() => window.__qvRevokeAttempts)).toBe(2);
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Artifact download request failed; retry the affected row',
+  );
+  await page.getByTestId('mode-toggle-control').click();
+  await expect(page.getByTestId('mode-toggle')).not.toBeChecked();
+  await expect(page.getByTestId('lite-export-session')).toBeVisible();
+  await expect(page.getByTestId('lite-export-row-0')).toContainText(
+    'Download requested; re-import not verified',
+  );
+  await expect(lastToast(page)).toContainText('before switching modes');
+  await page.getByTestId('lite-export-cancel').click();
+  await expect.poll(() => page.evaluate(() => window.__qvRevokeAttempts)).toBeGreaterThanOrEqual(3);
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'requested downloads and any reported pending URL capabilities remain outside that proof',
+  );
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'a threshold set is a complete recovery root',
+  );
+  await expect(lastToast(page)).toContainText('outside page control');
+  expect(await page.locator('body').innerText()).not.toContain(requestedArtifact.name);
+  await expect(page.locator('#liteFilesInput')).toHaveValue('');
+});
+
+test('a Lite archive DOM handoff fault releases key ownership and permits a clean retry', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'handoff-fault-private-name.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('handoff fault'),
+  });
+  await page.evaluate(() => {
+    const originalCreateElement = document.createElement.bind(document);
+    let failListItemOnce = true;
+    window.__qvRestoreCreateElement = () => {
+      document.createElement = originalCreateElement;
+    };
+    document.createElement = (tagName, options) => {
+      if (failListItemOnce && String(tagName).toLowerCase() === 'li') {
+        failListItemOnce = false;
+        throw new Error('fault-injected export renderer failure');
+      }
+      return originalCreateElement(tagName, options);
+    };
+  });
+
+  await page.locator('#liteCreateShardsBtn').click();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Lite archive preparation failed; no artifact was published',
+    { timeout: 60_000 },
+  );
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteFilesInput')).toHaveValue('');
+
+  await page.evaluate(() => window.__qvRestoreCreateElement());
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'handoff-retry-private-name.txt',
+    'clean retry',
+  );
+  await page.getByTestId('lite-export-cancel').click();
+  expect(await page.locator('body').innerText()).not.toContain('handoff-fault-private-name.txt');
+});
+
+test('missing bound export controls fail closed and exact-node restoration permits retry or discard', async ({ page }) => {
+  test.setTimeout(300_000);
+  await page.goto('/');
+
+  const createButton = page.locator('#liteCreateShardsBtn');
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'control-preflight-input.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('control preflight'),
+  });
+  await detachExactNode(page, 'liteExportSessionPanel', '__qvDetachedExportPanel');
+  await createButton.click();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Lite archive creation could not start because required export controls are unavailable',
+  );
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(createButton).toBeEnabled();
+  await restoreExactNode(page, '__qvDetachedExportPanel');
+
+  // The complete surface exists at preflight, then the exact bound file input
+  // disappears while preparation is yielding. Handoff must discard ownership.
+  await detachExactNodeAfterExportMutation(
+    page,
+    'liteExportReimportInput',
+    '__qvDetachedReimportInput',
+  );
+  await createButton.click();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Lite archive preparation failed; no artifact was published',
+    { timeout: 60_000 },
+  );
+  await expect.poll(
+    () => page.evaluate(() => Boolean(window.__qvDetachedReimportInput)),
+  ).toBe(true);
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteFilesInput')).toHaveValue('');
+  await restoreExactNode(page, '__qvDetachedReimportInput');
+
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'control-handoff-retry.txt',
+    'control handoff retry',
+    { retainRawKeyBackup: true },
+  );
+  const payloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, payloads);
+  await expectVerifiedLiteRows(page, 7);
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+
+  // A missing exact cancel control during key-session setup must return the
+  // retained pair to lifecycle custody, never silently discard or supersede it.
+  await detachExactNodeAfterExportMutation(
+    page,
+    'liteExportCancelBtn',
+    '__qvDetachedExportCancel',
+  );
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Optional key export setup failed; pending key material remains available',
+  );
+  await expect.poll(
+    () => page.evaluate(() => Boolean(window.__qvDetachedExportCancel)),
+  ).toBe(true);
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeVisible();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Pending 1-of-1 key decision');
+  await restoreExactNode(page, '__qvDetachedExportCancel');
+
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(2);
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
   await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
 });
 
-test('consecutive Lite creations use isolated archive keys and retain only the latest pair for optional backup', async ({ page }) => {
+test('switching modes clears an idle Lite plaintext FileList from the DOM', async ({ page }) => {
+  await page.goto('/');
+  const privateName = 'idle-mode-switch-private-name.txt';
+  const input = page.locator('#liteFilesInput');
+  await input.setInputFiles({
+    name: privateName,
+    mimeType: 'text/plain',
+    buffer: Buffer.from('idle mode switch'),
+  });
+  await expect(input).not.toHaveValue('');
+  await page.getByTestId('mode-toggle-control').click();
+  await expect(page.getByTestId('mode-toggle')).toBeChecked();
+  await expect(input).toHaveValue('');
+  await expect(page.locator('#liteFilesList')).toBeHidden();
+  expect(await page.locator('body').innerText()).not.toContain(privateName);
+});
+
+test('Lite export requires exact name length and digest and makes every failed row retryable', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'verification-dimensions-private-name.txt',
+    'verify exact browser export evidence',
+  );
+  const payloads = await downloadEveryLiteExportRow(page, 7);
+  const row = page.getByTestId('lite-export-row-0');
+  let current = payloads[0];
+
+  const floodingFiles = Array.from({ length: 65 }, (_, index) => ({
+    name: `reimport-flood-${String(index).padStart(2, '0')}.bin`,
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from([index]),
+  }));
+  await reimportLiteArtifacts(page, floodingFiles);
+  await expectVerifiedLiteRows(page, 0);
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Artifact re-import selection exceeded the fixed verification profile',
+  );
+
+  await reimportLiteArtifacts(page, [{
+    ...current,
+    name: `wrong-${current.name}`,
+  }]);
+  await expect(row).toContainText('Download requested; re-import not verified');
+  await expect(page.getByTestId('lite-export-row-action-0')).toHaveText('Retry');
+  current = await downloadLiteExportRow(page, 0);
+
+  await reimportLiteArtifacts(page, [{
+    ...current,
+    buffer: Buffer.concat([current.buffer, Buffer.from([0])]),
+  }]);
+  await expect(row).toContainText('Verification failed; retry required');
+  current = await downloadLiteExportRow(page, 0);
+
+  const corrupted = Buffer.from(current.buffer);
+  corrupted[0] ^= 1;
+  await reimportLiteArtifacts(page, [{ ...current, buffer: corrupted }]);
+  await expect(row).toContainText('Verification failed; retry required');
+  current = await downloadLiteExportRow(page, 0);
+
+  await reimportLiteArtifacts(page, [current]);
+  await expect(row).toContainText('Exact name, size, and SHA3-512 digest verified');
+  await reimportLiteArtifacts(page, payloads.slice(1));
+  await expectVerifiedLiteRows(page, 7);
+  await expect(page.getByTestId('lite-export-checklist')).toBeVisible();
+  await expect(page.getByTestId('operations-log')).toContainText('Artifact re-import verification failed');
+
+  const bodyText = await page.locator('body').innerText();
+  for (const payload of payloads) {
+    expect(bodyText).not.toContain(payload.name);
+  }
+  expect(bodyText).not.toContain('verification-dimensions-private-name.txt');
+});
+
+test('Lite re-import hashing is single-flight and cancellation aborts before new work', async ({ page }) => {
   test.setTimeout(120_000);
-  await installSyntheticDownloadCapture(page);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'reimport-concurrency-private-name.txt',
+    'single flight re-import hashing',
+  );
+  const payload = await downloadLiteExportRow(page, 0);
+
+  await page.evaluate(() => {
+    const originalStream = Blob.prototype.stream;
+    Blob.prototype.stream = function delayedBlobStream() {
+      const upstream = originalStream.call(this).getReader();
+      let delayed = false;
+      let cancelled = false;
+      return new ReadableStream({
+        async pull(controller) {
+          if (!delayed) {
+            delayed = true;
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+          }
+          if (cancelled) return;
+          const result = await upstream.read();
+          if (cancelled) return;
+          if (result.done) controller.close();
+          else controller.enqueue(result.value);
+        },
+        cancel(reason) {
+          cancelled = true;
+          return upstream.cancel(reason);
+        },
+      });
+    };
+  });
+
+  await reimportLiteArtifacts(page, [payload]);
+  await expect(page.locator('#liteExportReimportBtn')).toBeDisabled();
+  await page.locator('#liteExportReimportInput').evaluate((input, file) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([Uint8Array.from(file.bytes)], file.name, {
+      type: file.mimeType,
+    }));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, {
+    name: payload.name,
+    mimeType: payload.mimeType,
+    bytes: [...payload.buffer],
+  });
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Artifact re-import verification is already active',
+  );
+  await expect(lastToast(page)).toContainText('active artifact verification');
+
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteFilesInput')).toBeEnabled();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'requested downloads and any reported pending URL capabilities remain outside that proof',
+  );
+  expect(await page.locator('body').innerText()).not.toContain(payload.name);
+  expect(await page.locator('body').innerText()).not.toContain('reimport-concurrency-private-name.txt');
+});
+
+test('cancelling after a private-key request preserves an external-copy warning', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'private-key-cancel-warning-source.txt',
+    'private key cancellation warning',
+    { retainRawKeyBackup: true },
+  );
+  const archivePayloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, archivePayloads);
+  await expectVerifiedLiteRows(page, 7);
+
+  const acknowledgement = page.getByTestId('lite-raw-key-backup-ack');
+  await expect(acknowledgement).toBeDisabled();
+  await expect(acknowledgement).not.toBeChecked();
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(2);
+  await expect(acknowledgement).toBeDisabled();
+  await expect(page.getByTestId('lite-export-row-0')).toContainText('Private-key artifact');
+  await expect(page.getByTestId('lite-export-cancel')).toHaveText(
+    'Cancel & discard pending 1-of-1 key',
+  );
+
+  const privateKeyPayload = await downloadLiteExportRow(page, 0);
+  await page.getByTestId('mode-toggle-control').click();
+  await expect(page.getByTestId('mode-toggle')).not.toBeChecked();
+  await expect(page.getByTestId('lite-export-session')).toBeVisible();
+  await expect(page.getByTestId('lite-export-row-0')).toContainText(
+    'Download requested; re-import not verified',
+  );
+  await expect(lastToast(page)).toContainText('before switching modes');
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(acknowledgement).toBeEnabled();
+  await expect(acknowledgement).not.toBeChecked();
+
+  const checklist = page.getByTestId('lite-export-checklist');
+  await expect(checklist).toContainText('external private-key copy may exist');
+  await expect(checklist).toContainText('browser cannot delete requested downloads');
+  await expect(checklist).toContainText('securely delete');
+  await expect(checklist).not.toContainText('Threshold-only recovery preserved');
+  await expect(page.getByTestId('operations-log')).toContainText('requires operator-controlled secure deletion');
+  const bodyText = await page.locator('body').innerText();
+  expect(bodyText).not.toContain(privateKeyPayload.name);
+  expect(bodyText).not.toContain('private-key-cancel-warning-source.txt');
+});
+
+test('persisted pagehide ends archive export capability but preserves the generic download hazard', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'pagehide-archive-input.txt',
+    'pagehide archive input',
+  );
+  const payload = await downloadLiteExportRow(page, 0);
+  const warning = page.getByTestId('lite-external-copy-warning');
+  await expect(warning).toBeVisible();
+  await expect(page.locator('#liteExternalCopyWarningSummary')).toHaveText(
+    ARCHIVE_EXTERNAL_COPY_HAZARD,
+  );
+
+  await dispatchPersistedPageTransition(page, 'pagehide');
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(0);
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.locator('#liteTabRestore')).toBeEnabled();
+
+  await dispatchPersistedPageTransition(page, 'pageshow');
+  await expect(warning).toBeVisible();
+  await expect(page.locator('#liteExternalCopyWarningSummary')).toHaveText(
+    ARCHIVE_EXTERNAL_COPY_HAZARD,
+  );
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+
+  // Re-importing a former download after the wipe cannot resurrect the ended
+  // controller or its operation-key capability.
+  await page.locator('#liteExportReimportInput').setInputFiles(payload);
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(0);
+  await expect(page.locator('#liteExternalCopyWarningSummary')).toHaveText(
+    ARCHIVE_EXTERNAL_COPY_HAZARD,
+  );
+});
+
+test('persisted pagehide ends private-key export capability without clearing either hazard fact', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'pagehide-key-input.txt',
+    'pagehide private key input',
+    { retainRawKeyBackup: true },
+  );
+  const archivePayloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, archivePayloads);
+  await expectVerifiedLiteRows(page, 7);
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(2);
+  await downloadLiteExportRow(page, 0);
+
+  const expectedWarning = `${ARCHIVE_EXTERNAL_COPY_HAZARD} ${PRIVATE_KEY_EXTERNAL_COPY_HAZARD}`;
+  const warning = page.getByTestId('lite-external-copy-warning');
+  await expect(warning).toBeVisible();
+  await expect(page.locator('#liteExternalCopyWarningSummary')).toHaveText(expectedWarning);
+
+  await dispatchPersistedPageTransition(page, 'pagehide');
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(0);
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.locator('#liteTabRestore')).toBeEnabled();
+
+  await dispatchPersistedPageTransition(page, 'pageshow');
+  await expect(warning).toBeVisible();
+  await expect(page.locator('#liteExternalCopyWarningSummary')).toHaveText(expectedWarning);
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
+});
+
+test('DOM faults cannot prevent archive settlement or strand optional key-export ownership', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'settlement-fault-private-name.txt',
+    'settlement and key handoff fault',
+    { retainRawKeyBackup: true },
+  );
+  const payloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, payloads.slice(0, -1));
+  await expectVerifiedLiteRows(page, 6);
+
+  const injectOneListItemFailure = async () => {
+    await page.evaluate(() => {
+      const originalCreateElement = document.createElement.bind(document);
+      let failOnce = true;
+      window.__qvRestoreCreateElementAfterFault = () => {
+        document.createElement = originalCreateElement;
+      };
+      document.createElement = (tagName, options) => {
+        if (failOnce && String(tagName).toLowerCase() === 'li') {
+          failOnce = false;
+          throw new Error('fault-injected completion renderer failure');
+        }
+        return originalCreateElement(tagName, options);
+      };
+    });
+  };
+
+  // The first fault occurs while rendering the completion checklist. Security
+  // settlement must already have happened, so the acknowledged key is offered.
+  await injectOneListItemFailure();
+  await reimportLiteArtifacts(page, payloads.slice(-1));
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+  await expect(page.getByTestId('lite-raw-key-backup-ack')).toBeDisabled();
+  await page.evaluate(() => window.__qvRestoreCreateElementAfterFault());
+
+  // The second fault occurs while rendering the two-row key session. Starting
+  // export is not a discard decision, so setup failure must return ownership.
+  await injectOneListItemFailure();
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect(page.getByTestId('operations-log')).toContainText(
+    'Optional key export setup failed; pending key material remains available',
+  );
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeVisible();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Pending 1-of-1 key decision');
+  await expect(lastToast(page)).toContainText('pending key was preserved');
+  await page.evaluate(() => window.__qvRestoreCreateElementAfterFault());
+
+  // A clean retry still owns the same pending decision; explicit cancellation
+  // then performs the destructive transition named by the button.
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(2);
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  expect(await page.locator('body').innerText()).not.toContain('settlement-fault-private-name.txt');
+});
+
+test('Lite publication requires the exact visible warning surface and detached anchors never enter the DOM', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'warning-surface-private-name.txt',
+    'warning surface publication gate',
+  );
+
+  await page.evaluate(() => {
+    window.__qvConnectedDownloadAnchors = [];
+    window.__qvDownloadAnchorObserver = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const added of record.addedNodes) {
+          if (!(added instanceof Element)) continue;
+          const anchors = added.matches('a')
+            ? [added]
+            : [...added.querySelectorAll('a')];
+          for (const anchor of anchors) {
+            if (anchor.hasAttribute('download') || String(anchor.href || '').startsWith('blob:')) {
+              window.__qvConnectedDownloadAnchors.push({
+                download: anchor.getAttribute('download'),
+                href: anchor.getAttribute('href'),
+              });
+            }
+          }
+        }
+      }
+    });
+    window.__qvDownloadAnchorObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+
+    const summary = document.getElementById('liteExternalCopyWarningSummary');
+    const marker = document.createComment('qv-test-warning-summary');
+    summary.parentNode.insertBefore(marker, summary);
+    summary.remove();
+    const replacement = document.createElement('p');
+    replacement.id = 'liteExternalCopyWarningSummary';
+    marker.parentNode.insertBefore(replacement, marker.nextSibling);
+    window.__qvWarningSummaryFixture = { marker, summary, replacement };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    const action = page.getByTestId('lite-export-row-action-0');
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Download');
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Artifact download request failed; retry the affected row',
+    );
+
+    await page.evaluate(() => {
+      const { marker, summary, replacement } = window.__qvWarningSummaryFixture;
+      replacement.remove();
+      marker.replaceWith(summary);
+      summary.hidden = true;
+    });
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Download');
+
+    await page.evaluate(() => {
+      window.__qvWarningSummaryFixture.summary.hidden = false;
+      window.__qvWarningSummaryFixture.summary.style.visibility = 'hidden';
+    });
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Download');
+
+    await page.evaluate(() => {
+      const summary = window.__qvWarningSummaryFixture.summary;
+      summary.style.visibility = '';
+      summary.parentElement.style.opacity = '0';
+    });
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Download');
+
+    await page.evaluate(() => {
+      window.__qvWarningSummaryFixture.summary.parentElement.style.opacity = '';
+      document.getElementById('liteExportCancelBtn').style.display = 'none';
+    });
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Download');
+
+    await page.evaluate(() => {
+      document.getElementById('liteExportCancelBtn').style.display = '';
+      document.getElementById('liteExportReimportBtn').style.display = 'none';
+    });
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Download');
+
+    await page.evaluate(() => {
+      document.getElementById('liteExportReimportBtn').style.display = '';
+    });
+    const payload = await downloadLiteExportRow(page, 0);
+    expect(payload.name).toMatch(/\.qcont$/i);
+    await expect.poll(() => page.evaluate(
+      () => window.__qvConnectedDownloadAnchors.length,
+    )).toBe(0);
+    expect(await page.locator('body').innerText()).not.toContain(payload.name);
+  } finally {
+    page.off('download', onDownload);
+    await page.evaluate(() => window.__qvDownloadAnchorObserver?.disconnect());
+  }
+});
+
+test('composed object-URL registration and revocation faults poison Lite publication retry', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'object-url-accounting-private-name.txt',
+    'object URL accounting fail closed',
+  );
+
+  await page.evaluate(() => {
+    const originalSet = Map.prototype.set;
+    const originalRevoke = URL.revokeObjectURL;
+    window.__qvRestoreObjectUrlFaults = () => {
+      Map.prototype.set = originalSet;
+      URL.revokeObjectURL = originalRevoke;
+    };
+    Map.prototype.set = function faultObjectUrlRegistration(key, value) {
+      if (typeof key === 'string' && key.startsWith('blob:') && typeof value === 'number') {
+        throw new Error('fault-injected object URL registration failure');
+      }
+      return originalSet.call(this, key, value);
+    };
+    URL.revokeObjectURL = () => {
+      throw new Error('fault-injected object URL revocation failure');
+    };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    const action = page.getByTestId('lite-export-row-action-0');
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Retry');
+    await page.evaluate(() => window.__qvRestoreObjectUrlFaults());
+    await expect(page.locator('#liteExternalCopyWarningSummary')).toContainText(
+      'Browser object-URL cleanup or per-row capability accounting failed closed',
+    );
+
+    // Restoring the faulted adapters does not restore trust in an unaccounted
+    // capability. The document remains poisoned until it is closed.
+    await action.click();
+    await page.waitForTimeout(150);
+    expect(downloads).toHaveLength(0);
+    await expect(action).toHaveText('Retry');
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Artifact download request failed; retry the affected row',
+    );
+  } finally {
+    page.off('download', onDownload);
+    await page.evaluate(() => window.__qvRestoreObjectUrlFaults?.());
+  }
+});
+
+test('synchronous pagehide during final archive and key renders cannot resurrect export authority', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.goto('/');
+
+  const installFinalRenderBoundary = async () => {
+    await page.evaluate(() => {
+      const originalAppendChild = Node.prototype.appendChild;
+      Node.prototype.appendChild = function dispatchPagehideOnFinalExportRow(child) {
+        if (
+          this instanceof HTMLElement &&
+          this.id === 'liteExportSessionRows' &&
+          child instanceof HTMLLIElement
+        ) {
+          Node.prototype.appendChild = originalAppendChild;
+          window.__qvFinalRenderPagehideCount =
+            Number(window.__qvFinalRenderPagehideCount || 0) + 1;
+          window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        }
+        return originalAppendChild.call(this, child);
+      };
+    });
+  };
+
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'archive-final-render-private-name.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('archive final render boundary'),
+  });
+  await installFinalRenderBoundary();
+  await page.locator('#liteCreateShardsBtn').click();
+  await expect.poll(() => page.evaluate(
+    () => Number(window.__qvFinalRenderPagehideCount || 0),
+  ), { timeout: 60_000 }).toBe(1);
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(0);
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.locator('#liteTabRestore')).toBeEnabled();
+
+  await dispatchPersistedPageTransition(page, 'pageshow');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'key-final-render-private-name.txt',
+    'key final render boundary',
+    { retainRawKeyBackup: true },
+  );
+  const archivePayloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, archivePayloads);
+  await expectVerifiedLiteRows(page, 7);
+  await installFinalRenderBoundary();
+  await page.locator('#liteDownloadKeysBtn').click();
+  await expect.poll(() => page.evaluate(
+    () => Number(window.__qvFinalRenderPagehideCount || 0),
+  ), { timeout: 60_000 }).toBe(2);
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(0);
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeHidden();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.locator('#liteTabRestore')).toBeEnabled();
+});
+
+test('session wipe clears exact and same-ID Lite file inputs through captured native accessors', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'native-plaintext-clear-private-name.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('native plaintext clear'),
+  });
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+
+  await page.evaluate(() => {
+    const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    const filesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+    if (!valueDescriptor?.get || !filesDescriptor?.get) {
+      throw new Error('native input descriptors unavailable');
+    }
+    const installOwnValueFault = (input, mode) => {
+      Object.defineProperty(input, 'value', {
+        configurable: true,
+        get() { return valueDescriptor.get.call(this); },
+        set() {
+          if (mode === 'throw') throw new Error('fault-injected input value setter');
+          // Deliberate no-op.
+        },
+      });
+    };
+    const detachWithReplacement = (id, mode) => {
+      const exact = document.getElementById(id);
+      const marker = document.createComment(`qv-test-${id}`);
+      exact.parentNode.insertBefore(marker, exact);
+      exact.remove();
+      installOwnValueFault(exact, mode);
+
+      const replacement = document.createElement('input');
+      replacement.type = 'file';
+      replacement.id = id;
+      replacement.multiple = true;
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([new Uint8Array([1, 2, 3])], `${id}-replacement.bin`));
+      replacement.files = transfer.files;
+      installOwnValueFault(replacement, mode === 'throw' ? 'noop' : 'throw');
+      marker.parentNode.insertBefore(replacement, marker.nextSibling);
+      return { exact, replacement };
+    };
+    window.__qvNativeClearInputs = {
+      plaintext: detachWithReplacement('liteFilesInput', 'throw'),
+      restore: detachWithReplacement('liteShardsInput', 'noop'),
+      filesGetter: filesDescriptor.get,
+    };
+  });
+
+  await dispatchPersistedPageTransition(page, 'pagehide');
+  const inputState = await page.evaluate(() => {
+    const { plaintext, restore, filesGetter } = window.__qvNativeClearInputs;
+    const length = (input) => Number(filesGetter.call(input)?.length || 0);
+    return {
+      plaintextExact: length(plaintext.exact),
+      plaintextReplacement: length(plaintext.replacement),
+      restoreExact: length(restore.exact),
+      restoreReplacement: length(restore.replacement),
+      plaintextExactConnected: plaintext.exact.isConnected,
+      restoreExactConnected: restore.exact.isConnected,
+    };
+  });
+  expect(inputState).toEqual({
+    plaintextExact: 0,
+    plaintextReplacement: 0,
+    restoreExact: 0,
+    restoreReplacement: 0,
+    plaintextExactConnected: false,
+    restoreExactConnected: false,
+  });
+  await expect(page.locator('#shardsStatusText')).toHaveText('No restore inputs selected');
+});
+
+test('stale outer Lite Restore refresh cannot repopulate cleared session presentation', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.evaluate(() => {
+    const originalArrayBuffer = Blob.prototype.arrayBuffer;
+    let releaseRead;
+    const gate = new Promise((resolve) => { releaseRead = resolve; });
+    let delayed = false;
+    window.__qvStaleRefreshReadStarted = false;
+    window.__qvReleaseStaleRefreshRead = () => releaseRead();
+    Blob.prototype.arrayBuffer = async function delayedOuterRestoreRefresh() {
+      if (!delayed) {
+        delayed = true;
+        window.__qvStaleRefreshReadStarted = true;
+        await gate;
+      }
+      return originalArrayBuffer.call(this);
+    };
+  });
+
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+  await expect.poll(
+    () => page.evaluate(() => window.__qvStaleRefreshReadStarted),
+  ).toBe(true);
+  await dispatchPersistedPageTransition(page, 'pagehide');
+  await page.evaluate(() => window.__qvReleaseStaleRefreshRead());
+  await page.waitForTimeout(300);
+
+  await expect(page.locator('#liteShardsInput')).toHaveValue('');
+  await expect(page.locator('#shardsStatus')).toBeHidden();
+  await expect(page.locator('#shardsStatusText')).toHaveText('No restore inputs selected');
+  for (const selector of [
+    '#liteRestoreArtifactIntake',
+    '#liteRestorePreflightDecision',
+    '#liteRestoreArchiveInspector',
+  ]) {
+    await expect(page.locator(selector)).toBeHidden();
+    await expect(page.locator(selector)).toBeEmpty();
+  }
+  await expect(page.locator('#liteRestoreSuccessorSelection')).toBeHidden();
+  await expect(page.locator('#liteRestoreSuccessorSelectionSummary')).toBeEmpty();
+  await expect(page.locator('#liteRestoreSuccessorSelectionHelp')).toBeEmpty();
+  await expect(page.locator('#liteRestoreStateSelection option')).toHaveCount(0);
+  await expect(page.locator('#liteRestoreCohortSelection option')).toHaveCount(0);
+  await expect(page.locator('#liteRestoreBundleSelection option')).toHaveCount(0);
+  await expect(page.locator('#liteRestoreArchiveReviewRoot')).not.toHaveAttribute('open', '');
+});
+
+test('re-import control faults release verification ownership and selected File references', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'reimport-setter-fault-private-name.txt',
+    'reimport setter fault release',
+  );
+  const first = await downloadLiteExportRow(page, 0);
+  const second = await downloadLiteExportRow(page, 1);
+
+  await page.evaluate((expectedNames) => {
+    const disabledDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'disabled');
+    const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    if (!disabledDescriptor?.get || !valueDescriptor?.get) {
+      throw new Error('native input accessors unavailable');
+    }
+    const input = document.getElementById('liteExportReimportInput');
+    Object.defineProperty(input, 'disabled', {
+      configurable: true,
+      get() { return disabledDescriptor.get.call(this); },
+      set() { throw new Error('fault-injected re-import disabled setter'); },
+    });
+    Object.defineProperty(input, 'value', {
+      configurable: true,
+      get() { return valueDescriptor.get.call(this); },
+      set() { throw new Error('fault-injected re-import value setter'); },
+    });
+
+    const names = new Set(expectedNames);
+    const originalPush = Array.prototype.push;
+    window.__qvCapturedReimportArrays = [];
+    window.__qvRestoreReimportArrayPush = () => { Array.prototype.push = originalPush; };
+    Array.prototype.push = function captureReimportFiles(...items) {
+      if (items.some((item) => item instanceof File && names.has(item.name))) {
+        window.__qvCapturedReimportArrays.push(this);
+      }
+      return originalPush.apply(this, items);
+    };
+  }, [first.name, second.name]);
+
+  await reimportLiteArtifacts(page, [first]);
+  await expectVerifiedLiteRows(page, 1);
+  await page.locator('#liteExportReimportInput').evaluate((input) => {
+    delete input.disabled;
+  });
+  await reimportLiteArtifacts(page, [second]);
+  await expectVerifiedLiteRows(page, 2);
+  const capturedLengths = await page.evaluate(() => {
+    window.__qvRestoreReimportArrayPush();
+    const input = document.getElementById('liteExportReimportInput');
+    const filesGetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files')?.get;
+    const inputFileCount = filesGetter ? Number(filesGetter.call(input)?.length || 0) : -1;
+    delete input.disabled;
+    delete input.value;
+    return {
+      capturedLengths: window.__qvCapturedReimportArrays.map((files) => files.length),
+      inputFileCount,
+    };
+  });
+  expect(capturedLengths.capturedLengths.length).toBeGreaterThanOrEqual(2);
+  expect(capturedLengths.capturedLengths.every((length) => length === 0)).toBe(true);
+  expect(capturedLengths.inputFileCount).toBe(0);
+  await expect(page.getByTestId('operations-log')).not.toContainText(
+    'Artifact re-import verification is already active',
+  );
+});
+
+test('explicit cancel and pagehide settle Lite custody despite raw-ack and input setter faults', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+
+  const installSetterFaults = async () => {
+    await page.evaluate(() => {
+      const checkedDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
+      const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      const acknowledgement = document.getElementById('liteRetainRawKeyAck');
+      const input = document.getElementById('liteFilesInput');
+      Object.defineProperty(acknowledgement, 'checked', {
+        configurable: true,
+        get() { return checkedDescriptor.get.call(this); },
+        set() { throw new Error('fault-injected acknowledgement setter'); },
+      });
+      Object.defineProperty(input, 'value', {
+        configurable: true,
+        get() { return valueDescriptor.get.call(this); },
+        set() { throw new Error('fault-injected plaintext input setter'); },
+      });
+    });
+  };
+  const removeSetterFaults = async () => {
+    await page.evaluate(() => {
+      delete document.getElementById('liteRetainRawKeyAck').checked;
+      delete document.getElementById('liteFilesInput').value;
+    });
+  };
+
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'explicit-cancel-setter-fault.txt',
+    'explicit cancellation survives setters',
+  );
+  await installSetterFaults();
+  await page.getByTestId('lite-export-cancel').click();
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.locator('#liteTabRestore')).toBeEnabled();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+
+  await removeSetterFaults();
+  await beginLiteArchiveWithoutAutomaticDownloads(
+    page,
+    'pagehide-setter-fault.txt',
+    'pagehide cancellation survives setters',
+  );
+  await installSetterFaults();
+  await dispatchPersistedPageTransition(page, 'pagehide');
+  await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(0);
+  await expect(page.locator('#liteTabRestore')).toBeEnabled();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+
+  await removeSetterFaults();
+  await page.locator('#liteFilesInput').setInputFiles({
+    name: 'post-fault-clean-selection.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('post fault clean selection'),
+  });
+  await expect(page.locator('#liteCreateShardsBtn')).toBeEnabled();
+});
+
+test('Lite Restore blocks the native click when pagehide fires from the output anchor setter', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled({ timeout: 30_000 });
+
+  await page.evaluate(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'download');
+    const originalClick = HTMLAnchorElement.prototype.click;
+    window.__qvRestoreDownloadSetter = () => {
+      Object.defineProperty(HTMLAnchorElement.prototype, 'download', descriptor);
+      HTMLAnchorElement.prototype.click = originalClick;
+    };
+    window.__qvRestoreAnchorClickCount = 0;
+    let fired = false;
+    Object.defineProperty(HTMLAnchorElement.prototype, 'download', {
+      configurable: descriptor.configurable,
+      enumerable: descriptor.enumerable,
+      get: descriptor.get,
+      set(value) {
+        descriptor.set.call(this, value);
+        if (!fired) {
+          fired = true;
+          window.__qvRestoreSetterPagehideFired = true;
+          window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        }
+      },
+    });
+    HTMLAnchorElement.prototype.click = function countGuardedRestoreClick() {
+      window.__qvRestoreAnchorClickCount += 1;
+      return originalClick.call(this);
+    };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await restoreButton.click();
+    await expect.poll(
+      () => page.evaluate(() => window.__qvRestoreSetterPagehideFired === true),
+      { timeout: 60_000 },
+    ).toBe(true);
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Lite Restore was cancelled; no new plaintext output was released after cancellation',
+    );
+    expect(downloads).toHaveLength(0);
+    expect(await page.evaluate(() => window.__qvRestoreAnchorClickCount)).toBe(0);
+    await expect(page.locator('#liteRestoreResult')).toBeHidden();
+    await expect(page.locator('#liteTabProtect')).toBeEnabled();
+  } finally {
+    page.off('download', onDownload);
+    await page.evaluate(() => window.__qvRestoreDownloadSetter?.());
+  }
+});
+
+test('pagehide after the native Restore click cannot resurrect stale success presentation', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled({ timeout: 30_000 });
+
+  await page.evaluate(() => {
+    const originalClick = HTMLAnchorElement.prototype.click;
+    window.__qvRestoreClickAfterPagehide = () => {
+      HTMLAnchorElement.prototype.click = originalClick;
+    };
+    let fired = false;
+    HTMLAnchorElement.prototype.click = function pagehideAfterNativeRestoreClick() {
+      const result = originalClick.call(this);
+      if (!fired) {
+        fired = true;
+        window.__qvRestorePostClickPagehideFired = true;
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      }
+      return result;
+    };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await restoreButton.click();
+    await expect.poll(
+      () => page.evaluate(() => window.__qvRestorePostClickPagehideFired === true),
+      { timeout: 60_000 },
+    ).toBe(true);
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Lite Restore was cancelled; no new plaintext output was released after cancellation',
+    );
+    await page.waitForTimeout(250);
+    expect(downloads.length).toBeLessThanOrEqual(1);
+    await expect(page.locator('#liteRestoreResult')).toBeHidden();
+    await expect(page.getByTestId('operations-log')).not.toContainText(
+      'Container restored successfully from a policy-satisfying archive cohort',
+    );
+    await expect(page.locator('#liteExternalCopyWarningSummary')).toContainText(
+      RESTORE_PLAINTEXT_EXTERNAL_COPY_HAZARD,
+    );
+  } finally {
+    page.off('download', onDownload);
+    await page.evaluate(() => window.__qvRestoreClickAfterPagehide?.());
+  }
+});
+
+test('pagehide from Restore logging prevents later plaintext decryption work', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled({ timeout: 30_000 });
+
+  await page.evaluate(() => {
+    const originalArrayBuffer = Blob.prototype.arrayBuffer;
+    const logElement = document.getElementById('log');
+    const originalAppendChild = logElement.appendChild;
+    window.__qvRestoreLoggingFault = () => {
+      Blob.prototype.arrayBuffer = originalArrayBuffer;
+      logElement.appendChild = originalAppendChild;
+    };
+    window.__qvReadsAfterRestoreLogPagehide = 0;
+    window.__qvRestoreLogPagehideFired = false;
+    Blob.prototype.arrayBuffer = async function countReadsAfterRestoreCancellation() {
+      if (window.__qvRestoreLogPagehideFired) {
+        window.__qvReadsAfterRestoreLogPagehide += 1;
+      }
+      return originalArrayBuffer.call(this);
+    };
+    logElement.appendChild = function pagehideFromRestoreSelectionLog(node) {
+      const result = originalAppendChild.call(this, node);
+      if (
+        !window.__qvRestoreLogPagehideFired &&
+        String(node?.textContent || '').includes('Selected archiveId:')
+      ) {
+        window.__qvRestoreLogPagehideFired = true;
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      }
+      return result;
+    };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await restoreButton.click();
+    await expect.poll(
+      () => page.evaluate(() => window.__qvRestoreLogPagehideFired),
+      { timeout: 60_000 },
+    ).toBe(true);
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Lite Restore was cancelled; no new plaintext output was released after cancellation',
+    );
+    expect(await page.evaluate(() => window.__qvReadsAfterRestoreLogPagehide)).toBe(0);
+    expect(downloads).toHaveLength(0);
+    await expect(page.locator('#liteRestoreResult')).toBeHidden();
+  } finally {
+    page.off('download', onDownload);
+    await page.evaluate(() => window.__qvRestoreLoggingFault?.());
+  }
+});
+
+test('pagehide inside a Lite Restore failure renderer cannot leave stale error DOM', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicyFailFiles);
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeDisabled();
+
+  await page.evaluate(() => {
+    const panel = document.getElementById('liteRestoreInlineError');
+    const originalReplaceChildren = panel.replaceChildren;
+    window.__qvRestoreFailureRenderer = () => { panel.replaceChildren = originalReplaceChildren; };
+    let fired = false;
+    panel.replaceChildren = function pagehideFromFailureRenderer(...children) {
+      const result = originalReplaceChildren.apply(this, children);
+      if (!fired) {
+        fired = true;
+        window.__qvRestoreFailurePagehideFired = true;
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+      }
+      return result;
+    };
+  });
+
+  try {
+    await restoreButton.evaluate((button) => {
+      button.disabled = false;
+      button.click();
+    });
+    await expect.poll(
+      () => page.evaluate(() => window.__qvRestoreFailurePagehideFired === true),
+      { timeout: 60_000 },
+    ).toBe(true);
+    await expect(page.locator('#liteTabProtect')).toBeEnabled();
+    await expect(page.getByTestId('lite-restore-inline-error')).toBeHidden();
+    await expect(page.getByTestId('lite-restore-inline-error')).toBeEmpty();
+    await expect(page.locator('#liteRestoreResult')).toBeHidden();
+  } finally {
+    await page.evaluate(() => window.__qvRestoreFailureRenderer?.());
+  }
+});
+
+test('failed Restore URL revocation remains accounted and poisons later Lite publication', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled({ timeout: 30_000 });
+
+  await page.evaluate(() => {
+    const originalRevoke = URL.revokeObjectURL;
+    window.__qvRestoreUrlRevocation = () => { URL.revokeObjectURL = originalRevoke; };
+    window.__qvRestoreRevokeAttempts = 0;
+    URL.revokeObjectURL = () => {
+      window.__qvRestoreRevokeAttempts += 1;
+      throw new Error('fault-injected Restore URL revocation failure');
+    };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await restoreButton.click();
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Lite restore output publication failed.',
+      { timeout: 60_000 },
+    );
+    await page.waitForTimeout(250);
+    const firstDownloadCount = downloads.length;
+    expect(firstDownloadCount).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId('operations-log')).not.toContainText(
+      'Container restored successfully from a policy-satisfying archive cohort',
+    );
+    const warning = page.locator('#liteExternalCopyWarningSummary');
+    await expect(warning).toContainText(RESTORE_PLAINTEXT_EXTERNAL_COPY_HAZARD);
+    await expect(warning).toContainText('Best-effort cleanup remains pending for 1 bounded in-page object-URL capability');
+    await expect(warning).toContainText('No further Lite publication is allowed in this page');
+
+    await restoreButton.evaluate((button) => {
+      button.disabled = false;
+      button.click();
+    });
+    await expect(lastToast(page)).toContainText('Lite publication is unavailable in this page');
+    await page.waitForTimeout(250);
+    expect(downloads).toHaveLength(firstDownloadCount);
+  } finally {
+    page.off('download', onDownload);
+    await page.evaluate(() => {
+      window.__qvRestoreUrlRevocation?.();
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    });
+  }
+});
+
+test('Lite Restore preserves valid zero-byte QVPACK entries under the publication profile', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.locator('#liteFilesInput').setInputFiles([
+    {
+      name: 'empty-preservation-entry.bin',
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.alloc(0),
+    },
+    {
+      name: 'nonempty-preservation-entry.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('preserved companion entry'),
+    },
+  ]);
+  await expect(page.locator('#liteCreateShardsBtn')).toBeEnabled();
+  await page.locator('#liteCreateShardsBtn').click();
+  await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(7, {
+    timeout: 60_000,
+  });
+  const archivePayloads = await downloadEveryLiteExportRow(page, 7);
+  await reimportLiteArtifacts(page, archivePayloads);
+  await expectVerifiedLiteRows(page, 7);
+
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(
+    archivePayloads.filter((payload) => /\.qcont$/i.test(payload.name)),
+  );
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled({ timeout: 30_000 });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await restoreButton.click();
+    await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(2);
+    const restored = await Promise.all(downloads.map((download) => payloadFromDownload(download)));
+    const emptyEntry = restored.find((entry) => entry.name === 'empty-preservation-entry.bin');
+    expect(emptyEntry).toBeDefined();
+    expect(emptyEntry.buffer).toHaveLength(0);
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Container restored successfully from a policy-satisfying archive cohort',
+    );
+  } finally {
+    page.off('download', onDownload);
+  }
+});
+
+test('two Lite archives require 14 individual downloads and exact re-import before key settlement', async ({ page }) => {
+  test.setTimeout(240_000);
   await page.goto('/');
   await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
 
-  const firstPayloads = await createLiteArchiveAndCapture(
+  await beginLiteArchiveWithoutAutomaticDownloads(
     page,
     'lite-key-domain-one.txt',
     'first Lite archive key domain',
-    captureSyntheticDownloads,
   );
-  const secondPayloads = await createLiteArchiveAndCapture(
+  const firstPayloads = await downloadEveryLiteExportRow(page, 7);
+  firstPayloads.forEach((payload) => {
+    expect(payload.name).toMatch(/^qv-[0-9a-f]{32}-(?:shard-[0-9]{2}-of-[0-9]{2}\.qcont|archive-state\.json|lifecycle-bundle\.json)$/);
+    expect(payload.name).not.toContain('lite-key-domain-one');
+  });
+  await expectVerifiedLiteRows(page, 0);
+  await expect(page.locator('#liteCreateShardsBtn')).toBeDisabled();
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+
+  // A missing required artifact keeps the operation key provisional and blocks
+  // another create even after every download was individually requested.
+  await reimportLiteArtifacts(page, firstPayloads.slice(0, -1));
+  await expectVerifiedLiteRows(page, 6);
+  await expect(page.locator('#liteCreateShardsBtn')).toBeDisabled();
+  await expect(page.getByTestId('lite-export-session-status')).toContainText('6 of 7');
+  await reimportLiteArtifacts(page, firstPayloads.slice(-1));
+  await expectVerifiedLiteRows(page, 7);
+  await expect(page.getByTestId('lite-raw-key-backup-ack')).toBeEnabled();
+  await expect(page.getByTestId('lite-raw-key-backup-ack')).not.toBeChecked();
+  await expect(page.getByTestId('lite-export-checklist')).toContainText('Threshold-only recovery preserved');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+
+  await beginLiteArchiveWithoutAutomaticDownloads(
     page,
     'lite-key-domain-two.txt',
     'second Lite archive key domain',
-    captureSyntheticDownloads,
+    { retainRawKeyBackup: true },
   );
+  const secondPayloads = await downloadEveryLiteExportRow(page, 7);
+  secondPayloads.forEach((payload) => {
+    expect(payload.name).toMatch(/^qv-[0-9a-f]{32}-(?:shard-[0-9]{2}-of-[0-9]{2}\.qcont|archive-state\.json|lifecycle-bundle\.json)$/);
+    expect(payload.name).not.toContain('lite-key-domain-two');
+  });
+  expect([...firstPayloads, ...secondPayloads]).toHaveLength(14);
+  expect(new Set([...firstPayloads, ...secondPayloads].map((payload) => payload.name)).size).toBe(14);
+  await reimportLiteArtifacts(page, secondPayloads);
+  await expectVerifiedLiteRows(page, 7);
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeVisible();
+  await expect(page.locator('#liteDiscardKeysBtn')).toBeVisible();
+  await expect(page.locator('#liteFilesInput')).toBeDisabled();
+  await expect(page.getByTestId('lite-export-checklist')).toContainText('Authorized 1-of-1 key backup pending');
 
   const firstShards = await parseDownloadedLiteShards(firstPayloads);
   const secondShards = await parseDownloadedLiteShards(secondPayloads);
@@ -383,15 +2077,32 @@ test('consecutive Lite creations use isolated archive keys and retain only the l
     await expect(page.locator('#ctx-pub-status')).toHaveText('Loaded');
     await expect(page.locator('#ctx-sec-status')).toHaveText('Loaded');
 
-    const backupPayloads = await captureSyntheticDownloads(
-      page,
-      2,
-      () => page.locator('#liteDownloadKeysBtn').click(),
-    );
-    const privateBackup = backupPayloads.find((payload) => /privateKey\.qkey$/i.test(payload.name));
-    const publicBackup = backupPayloads.find((payload) => /publicKey\.qkey$/i.test(payload.name));
+    const unexpectedKeyDownloads = [];
+    const onKeyDownload = (download) => unexpectedKeyDownloads.push(download);
+    page.on('download', onKeyDownload);
+    try {
+      await page.locator('#liteDownloadKeysBtn').click();
+      await expect(page.getByTestId('lite-export-session-rows').locator('li')).toHaveCount(2);
+      await page.waitForTimeout(100);
+      expect(unexpectedKeyDownloads).toHaveLength(0);
+    } finally {
+      page.off('download', onKeyDownload);
+    }
+    await expect(page.getByTestId('lite-raw-key-backup-ack')).toBeDisabled();
+    await expect(page.getByTestId('lite-raw-key-backup-ack')).not.toBeChecked();
+    await expect(page.locator('#liteCreateShardsBtn')).toBeDisabled();
+    const backupPayloads = await downloadEveryLiteExportRow(page, 2);
+    const privateBackup = backupPayloads.find((payload) => /-private\.qkey$/i.test(payload.name));
+    const publicBackup = backupPayloads.find((payload) => /-public\.qkey$/i.test(payload.name));
     assert.ok(privateBackup, 'latest Lite private-key backup was not downloaded');
     assert.ok(publicBackup, 'latest Lite public-key backup was not downloaded');
+    backupPayloads.forEach((payload) => {
+      expect(payload.name).toMatch(/^qv-[0-9a-f]{32}-(?:private|public)\.qkey$/);
+    });
+
+    await reimportLiteArtifacts(page, backupPayloads);
+    await expectVerifiedLiteRows(page, 2);
+    await expect(page.getByTestId('lite-export-checklist')).toContainText('Authorized 1-of-1 key backup re-import verified');
 
     const backedUpPrivateKeyHash = await hashBytes(new Uint8Array(privateBackup.buffer));
     const backedUpPublicKeyHash = await hashBytes(new Uint8Array(publicBackup.buffer));
@@ -406,6 +2117,8 @@ test('consecutive Lite creations use isolated archive keys and retain only the l
     expect(bodyText).not.toContain(firstMetadata.privateKeyHash);
     expect(bodyText).not.toContain(secondMetadata.privateKeyHash);
     expect(bodyText).not.toContain(backedUpPublicKeyHash);
+    const exportPanelText = await page.getByTestId('lite-export-session').innerText();
+    backupPayloads.forEach((payload) => expect(exportPanelText).not.toContain(payload.name));
     await expect(page.locator('#ctx-pub-status')).toHaveText('Not Loaded');
     await expect(page.locator('#ctx-sec-status')).toHaveText('Not Loaded');
     await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
@@ -431,7 +2144,8 @@ test('narrow layouts do not horizontally overflow with long filenames and digest
       mimeType: 'application/octet-stream',
       buffer: Buffer.from('responsive-layout-check'),
     });
-    await expect(page.locator('#liteFilesList .file-name')).toContainText(longName);
+    await expect(page.locator('#liteFilesList .file-name')).toContainText('Plaintext selection ready (1 file)');
+    expect(await page.locator('body').innerText()).not.toContain(longName);
     await expectNoHorizontalOverflow(page);
 
     await openProMode(page);
@@ -557,7 +2271,7 @@ test('distribution build exports successor shards and the generated shards resto
   await expect(restoreResult).toContainText('Plaintext released under integrity-only policy');
   await expect(restoreResult).toContainText('Allowed by integrity-only policy');
   await expect(restoreResult).toContainText('Archive policy satisfied');
-  await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
+  await expect(restoreResult).toContainText('No cryptographically verified archive-approval signature over archive-state');
 });
 
 test('pro split readiness blocks missing qenc and missing private key', async ({ page }) => {
@@ -647,6 +2361,81 @@ test('lite restore policy blocker disables the CTA before evaluation', async ({ 
   ).resolves.toBe(true);
   await expect(litePreflight).toContainText('Required archive-approval signature evidence');
   await expect(page.getByTestId('lite-restore-inline-error')).toBeHidden();
+});
+
+test('delayed Lite Restore blocks competing workflows and pagehide prevents late plaintext output', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.locator('#liteTabRestore').click();
+  await page.locator('#liteShardsInput').setInputFiles(fixtures.strongPolicySatisfiedFiles);
+  const restoreButton = page.locator('#liteRestoreBtn');
+  await expect(restoreButton).toBeEnabled({ timeout: 30_000 });
+
+  await page.evaluate(() => {
+    const originalArrayBuffer = Blob.prototype.arrayBuffer;
+    let releaseRead;
+    const readGate = new Promise((resolve) => { releaseRead = resolve; });
+    window.__qvDelayedRestoreReadStarted = false;
+    window.__qvReleaseDelayedRestoreRead = () => releaseRead();
+    Blob.prototype.arrayBuffer = async function delayedRestoreArrayBuffer() {
+      window.__qvDelayedRestoreReadStarted = true;
+      await readGate;
+      return originalArrayBuffer.call(this);
+    };
+  });
+
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await restoreButton.click();
+    await expect.poll(
+      () => page.evaluate(() => window.__qvDelayedRestoreReadStarted),
+    ).toBe(true);
+
+    const protectTab = page.locator('#liteTabProtect');
+    await expect(protectTab).toBeDisabled();
+    await expect(protectTab).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.locator('#liteCreateShardsBtn')).toBeDisabled();
+    await expect(page.locator('#liteFilesInput')).toBeDisabled();
+
+    await page.getByTestId('mode-toggle-control').click();
+    await expect(page.getByTestId('mode-toggle')).not.toBeChecked();
+    await expect(lastToast(page)).toContainText('active Lite Restore');
+
+    // Disabled navigation and CTAs are presentation boundaries. Force both
+    // handlers and prove the active restore token still blocks a new create.
+    await protectTab.evaluate((tab) => {
+      tab.disabled = false;
+      tab.setAttribute('aria-disabled', 'false');
+      tab.click();
+    });
+    await page.locator('#liteCreateShardsBtn').evaluate((button) => {
+      button.disabled = false;
+      button.click();
+    });
+    await expect(lastToast(page)).toContainText('active Lite Restore');
+    await expect(page.getByTestId('lite-export-session')).toBeHidden();
+    expect(downloads).toHaveLength(0);
+
+    await dispatchPersistedPageTransition(page, 'pagehide');
+    await page.getByTestId('mode-toggle-control').click();
+    await expect(page.getByTestId('mode-toggle')).not.toBeChecked();
+    await expect(lastToast(page)).toContainText('cancelled Lite Restore work to settle');
+    expect(downloads).toHaveLength(0);
+
+    await page.evaluate(() => window.__qvReleaseDelayedRestoreRead());
+    await expect(page.getByTestId('operations-log')).toContainText(
+      'Lite Restore was cancelled; no new plaintext output was released after cancellation',
+    );
+    await expect(page.locator('#liteTabProtect')).toBeEnabled();
+    await page.waitForTimeout(250);
+    expect(downloads).toHaveLength(0);
+    await expect(page.locator('#liteRestoreResult')).toBeHidden();
+    await expect(page.getByTestId('lite-export-session')).toBeHidden();
+  } finally {
+    page.off('download', onDownload);
+  }
 });
 
 test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async ({ page }) => {
@@ -1015,7 +2804,7 @@ test('maintenance attach imports detached qsig evidence and restore reports it s
   await expect(restoreResult).toBeVisible();
   await expect(restoreResult).toContainText('Plaintext released under integrity-only policy');
   await expect(restoreResult).toContainText('Maintenance signature verified');
-  await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
+  await expect(restoreResult).toContainText('No cryptographically verified archive-approval signature over archive-state');
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
 
@@ -1185,7 +2974,7 @@ test('source-evidence builder exports canonical JSON for external signing, re-im
   await expect(restoreResult).toBeVisible();
   await expect(restoreResult).toContainText('Plaintext released under integrity-only policy');
   await expect(restoreResult).toContainText('Source-evidence signature verified');
-  await expect(restoreResult).toContainText('No verified archive-approval signature over archive-state');
+  await expect(restoreResult).toContainText('No cryptographically verified archive-approval signature over archive-state');
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
 

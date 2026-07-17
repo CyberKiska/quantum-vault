@@ -429,6 +429,10 @@ h3 { margin: 0 0 0.75rem 0; font-size: 1rem; font-weight: 600; }
   order: 10;
 }
 
+.main-content > #liteExternalCopyWarning {
+  margin-bottom: var(--space-4);
+}
+
 .workflow-surface > #liteExportChecklist {
   order: 15;
 }
@@ -1366,6 +1370,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 
 .key-status-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: var(--space-sm);
@@ -1566,6 +1571,11 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   background: rgba(148, 163, 184, 0.06);
 }
 
+.lite-checklist-row--warning {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.08);
+}
+
 .lite-checklist-title {
   font-weight: 600;
   color: var(--text-main);
@@ -1576,6 +1586,53 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
   flex: 1 1 12rem;
   color: var(--text-muted);
   text-align: right;
+}
+
+.lite-export-session {
+  margin-top: var(--space-md);
+}
+
+.lite-export-session-title {
+  margin: 0 0 var(--space-xs);
+  font-size: 0.95rem;
+}
+
+.lite-export-session-rows {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0;
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.lite-export-session-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) minmax(13rem, 1.5fr) auto;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.lite-export-session-role {
+  font-weight: 600;
+}
+
+.lite-export-session-state {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.lite-export-session-actions {
+  margin-top: var(--space-sm);
+}
+
+@media (max-width: 700px) {
+  .lite-export-session-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .operation-input-panel {

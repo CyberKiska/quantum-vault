@@ -95,6 +95,12 @@
     <!-- Main Content -->
     <main class="main-content">
       <div id="toast-container" class="toast-container" data-testid="toast-container"></div>
+
+      <div id="liteExternalCopyWarning" class="qv-callout qv-callout--warning operation-warning warning-callout initially-hidden" data-testid="lite-external-copy-warning" role="status" aria-live="polite">
+        <h4>External copies may still exist</h4>
+        <p id="liteExternalCopyWarningSummary" class="muted-copy"></p>
+        <p class="muted-copy">This warning is monotonic for the current page lifetime: clearing page memory, cancelling, changing workflows, or switching modes cannot prove that a browser-managed download or pending object URL was deleted.</p>
+      </div>
       
       <!-- LITE MODE -->
       <section id="liteMode" class="mode-section active">
@@ -126,7 +132,7 @@
             <div class="workflow-surface full-width">
               <div class="dropzone-area" id="liteDropzone">
                 <h3>Select files to protect</h3>
-                <p id="liteFilesHelp" class="muted-copy">Drag files here or use the file picker to select plaintext inputs for local encryption.</p>
+                <p id="liteFilesHelp" class="muted-copy">Drag files here or use the file picker to select plaintext inputs for local encryption. Lite accepts 1–256 files and at most 8 MiB aggregate per operation.</p>
                 <label for="liteFilesInput" class="visually-hidden">Select files to protect</label>
                 <input type="file" id="liteFilesInput" multiple aria-describedby="liteFilesHelp">
                 <div id="liteFilesList" class="files-list initially-hidden"></div>
@@ -138,9 +144,20 @@
                      <span class="status-icon">🛡️</span>
                      <span class="status-text">Fresh keys are generated per archive</span>
                    </div>
-                   <button id="liteDownloadKeysBtn" class="button secondary small initially-hidden" type="button" aria-describedby="liteCustodyGuidanceSummary">
-                     📥 Optional 1-of-1 Key Backup
+                   <button id="liteDownloadKeysBtn" class="button secondary small initially-hidden" type="button" aria-describedby="liteRawKeyBackupWarning">
+                     Start Optional 1-of-1 Key Export
                    </button>
+                   <button id="liteDiscardKeysBtn" class="button danger small initially-hidden" type="button" aria-describedby="liteRawKeyBackupWarning">
+                     Discard Pending 1-of-1 Key
+                   </button>
+                </div>
+
+                <div id="liteRawKeyBackupWarning" class="qv-callout qv-callout--warning operation-warning warning-callout" data-testid="lite-raw-key-backup-warning">
+                  <label class="checkbox-row" for="liteRetainRawKeyAck">
+                    <input type="checkbox" id="liteRetainRawKeyAck" data-testid="lite-raw-key-backup-ack">
+                    <span>I explicitly authorize retaining and exporting the raw ML-KEM private key for this archive. This creates a unilateral 1-of-1 recovery root and bypasses the shard threshold.</span>
+                  </label>
+                  <small class="muted-copy">Default is threshold-only recovery. This acknowledgement resets after every create attempt and must be made separately for each archive. If authorized, export or explicitly discard the pending key before creating another archive or switching modes.</small>
                 </div>
 
                 <div class="config-controls">
@@ -182,6 +199,25 @@
                 <button id="liteCreateShardsBtn" class="button primary" disabled type="button">🛡️ Encrypt & Create Successor Shards</button>
               </div>
 
+              <div id="liteExportSessionPanel" class="qv-callout qv-callout--warning operation-warning warning-callout lite-export-session initially-hidden" data-testid="lite-export-session" aria-live="polite">
+                <h4 id="liteExportSessionTitle" class="lite-export-session-title">Verify required archive artifacts</h4>
+                <p id="liteExportSessionStatus" class="muted-copy" data-testid="lite-export-session-status"></p>
+                <p class="muted-copy">
+                  Each Download or Retry click requests exactly one artifact. A row remains unverified until you re-import the exact bytes through the file picker. Re-import verification does not prove durable storage.
+                </p>
+                <p class="muted-copy">
+                  Until completion or cancellation, this page temporarily holds the operation key and a complete recovery set. Re-importing every shard exposes that recovery set to this browser session.
+                </p>
+                <ul id="liteExportSessionRows" class="lite-export-session-rows" data-testid="lite-export-session-rows"></ul>
+                <div class="action-row button-group lite-export-session-actions">
+                  <button id="liteExportReimportBtn" class="button secondary small" type="button" aria-controls="liteExportReimportInput">
+                    Choose downloaded artifacts for verification
+                  </button>
+                  <input type="file" id="liteExportReimportInput" class="visually-hidden" multiple data-testid="lite-export-reimport-input" aria-label="Re-import downloaded Lite export artifacts">
+                  <button id="liteExportCancelBtn" class="button danger small" type="button" data-testid="lite-export-cancel">Cancel incomplete export</button>
+                </div>
+              </div>
+
               <div id="liteCustodyGuidance" class="qv-decision-card qv-decision-card--informational lite-custody-panel policy-consequence-panel informational initially-hidden" data-testid="lite-custody-guidance" aria-live="polite">
                 <h4 class="qv-decision-card__title">Custody and archive exports</h4>
                 <p id="liteCustodyGuidanceSummary" class="muted-copy lite-custody-lede">
@@ -190,6 +226,7 @@
                 <ul class="lite-custody-list">
                   <li>Store <code>QVqcont-7</code> shards across separate locations or custodians.</li>
                   <li>Retain the archive-state descriptor and lifecycle bundle JSON; Review, Pro Attach, and Restore depend on them.</li>
+                  <li>Browser download requests are not storage confirmation. Lite completes only after every required planned artifact is exactly re-import verified; separately confirm durable, independent custody.</li>
                   <li>Archive approval happens outside the browser: sign archive-state bytes, then use Pro Attach for signatures and evidence.</li>
                   <li><strong>Optional 1-of-1 Key Backup</strong> bypasses the shard threshold; skip it when custody policy forbids retaining a unilateral ML-KEM recovery key.</li>
                 </ul>
@@ -197,7 +234,7 @@
 
               <div id="liteExportChecklist" class="lite-export-checklist initially-hidden" data-testid="lite-export-checklist" aria-live="polite">
                 <h4 class="lite-export-checklist-title">Last create export checklist</h4>
-                <p class="muted-copy lite-export-checklist-lede">The browser started downloads for the primary artifacts. Confirm each file is stored where your policy requires.</p>
+                <p class="muted-copy lite-export-checklist-lede">Every required artifact passed exact name, size, and SHA3-512 digest re-import verification. This is not durable-storage evidence; confirm independent custody separately.</p>
                 <ul id="liteExportChecklistItems" class="lite-export-checklist-items"></ul>
               </div>
             </div>
