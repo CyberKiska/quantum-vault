@@ -37,16 +37,20 @@ export function renderDecisionCard(host, model, options = {}) {
   const dataAttrs = options.dataAttrs || {};
 
   if (!model) {
-    root.replaceChildren();
-    root.style.display = 'none';
-    root.className = ['qv-decision-card', 'initially-hidden', ...extra].filter(Boolean).join(' ');
-    root.removeAttribute('aria-live');
-    root.removeAttribute('data-release-state');
+    try { root.style.display = 'none'; } catch { /* Keep clearing independently. */ }
+    try {
+      root.className = ['qv-decision-card', 'initially-hidden', ...extra].filter(Boolean).join(' ');
+    } catch { /* Keep clearing independently. */ }
+    try { root.replaceChildren(); } catch { /* Hidden stale content is non-actionable. */ }
+    try { root.removeAttribute('aria-live'); } catch { /* Keep clearing independently. */ }
+    try { root.removeAttribute('data-release-state'); } catch { /* Keep clearing independently. */ }
     for (const [key, value] of Object.entries(dataAttrs)) {
       const attr = key.startsWith('data-') ? key : `data-${key}`;
-      root.removeAttribute(attr);
+      try { root.removeAttribute(attr); } catch { /* Keep clearing independently. */ }
     }
-    if (options.rootDataTestId) root.setAttribute('data-testid', options.rootDataTestId);
+    if (options.rootDataTestId) {
+      try { root.setAttribute('data-testid', options.rootDataTestId); } catch { /* Cosmetic only. */ }
+    }
     return;
   }
 

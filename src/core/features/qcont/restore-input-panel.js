@@ -73,6 +73,7 @@ export async function refreshRestoreInputPanel(options) {
     files: list,
     workflow: intakeWorkflow,
     label: intakeLabel,
+    isCurrent,
   });
   if (!isCurrent()) return { assessment: assessment || null };
 
@@ -85,6 +86,7 @@ export async function refreshRestoreInputPanel(options) {
     expectedSignerInput,
     renderPreflightForFiles: renderRestorePreflightForFiles,
     onSelectionChange: options.onSelectionChange,
+    isCurrent,
   });
   if (!isCurrent()) return { assessment: assessment || null };
   return { assessment: assessment || null };

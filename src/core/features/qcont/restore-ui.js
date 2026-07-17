@@ -31,6 +31,7 @@ import { buildRestoreRecoveryAction } from './restore-recovery-action.js';
 import { collectLifecycleAttachmentCounts, peekSuccessorSelectionState } from './successor-selection-ui.js';
 const RESTORE_INLINE_ERROR_ID = 'proRestoreInlineError';
 const RESTORE_PREFLIGHT_CARD_ID = 'restorePreflightDecision';
+const restorePreflightRenderEpochs = new Map();
 let proRestoreEvaluation = null;
 let restoreSelectionListenerRegistered = false;
 
@@ -92,6 +93,10 @@ function shouldShowPreflightAlertRow(decision) {
 }
 
 function renderRestorePreflightCard(containerId, decision, options = {}) {
+  restorePreflightRenderEpochs.set(
+    containerId,
+    (restorePreflightRenderEpochs.get(containerId) || 0) + 1,
+  );
   const compact = options.compact === true;
   const panel = document.getElementById(containerId);
   if (!panel) return;
@@ -143,7 +148,7 @@ function renderRestorePreflightCard(containerId, decision, options = {}) {
   );
 }
 
-function clearRestorePreflightCard(containerId) {
+export function clearRestorePreflightCard(containerId) {
   renderRestorePreflightCard(containerId, null);
 }
 
@@ -403,10 +408,14 @@ async function buildRestorePreflightDecisionForFiles({
   prefix = 'restore',
   files = [],
   expectedSignerInput,
+  expectedEd25519Signer = null,
 }) {
   const selected = peekSuccessorSelectionState(prefix) || {};
   const assessment = selected.assessment || null;
   const compact = prefix === 'liteRestore';
+  const expectedSignerConstraint = expectedEd25519Signer === null
+    ? String(expectedSignerInput?.value || '').trim()
+    : String(expectedEd25519Signer).trim();
   if (!files.length) return null;
 
   let classified;
@@ -419,7 +428,7 @@ async function buildRestorePreflightDecisionForFiles({
       parsedProvidedBundle: null,
       successorSelection: selected,
       classifyError: error?.message || String(error),
-      expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+      expectedEd25519Signer: expectedSignerConstraint,
       compact,
     });
   }
@@ -439,7 +448,7 @@ async function buildRestorePreflightDecisionForFiles({
     parsedProvidedBundle,
     successorSelection: selected,
     classifyError: null,
-    expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+    expectedEd25519Signer: expectedSignerConstraint,
     compact,
   });
 }
@@ -449,9 +458,22 @@ export async function renderRestorePreflightForFiles({
   containerId = RESTORE_PREFLIGHT_CARD_ID,
   files = [],
   expectedSignerInput = null,
+  expectedEd25519Signer = null,
   actionButton = null,
+  isCurrent: externalIsCurrent = () => true,
 }) {
-  const decision = await buildRestorePreflightDecisionForFiles({ prefix, files, expectedSignerInput });
+  const renderEpoch = (restorePreflightRenderEpochs.get(containerId) || 0) + 1;
+  restorePreflightRenderEpochs.set(containerId, renderEpoch);
+  const root = document.getElementById(containerId);
+  const isCurrent = () => restorePreflightRenderEpochs.get(containerId) === renderEpoch &&
+    externalIsCurrent() && root?.isConnected && document.getElementById(containerId) === root;
+  const decision = await buildRestorePreflightDecisionForFiles({
+    prefix,
+    files,
+    expectedSignerInput,
+    expectedEd25519Signer,
+  });
+  if (!isCurrent()) return null;
   renderRestorePreflightCard(containerId, decision, { compact: prefix === 'liteRestore' });
   applyRestorePreflightActionState(actionButton, decision, { prefix });
   return decision;
@@ -890,12 +912,17 @@ export function initQcontRestoreUI() {
   });
 }
 
-export async function collectRestoreVerificationOptions(prefix = 'restore', files = []) {
+export async function collectRestoreVerificationOptions(prefix = 'restore', files = [], {
+  expectedEd25519Signer = null,
+} = {}) {
   const expectedSignerInput = document.getElementById(`${prefix}ExpectedEdSigner`);
-
-  return readVerificationOptionsFromDom({
+  const verificationOptions = await readVerificationOptionsFromDom({
     prefix,
     allFiles: files,
     expectedSignerInput,
   });
+  if (expectedEd25519Signer !== null) {
+    verificationOptions.expectedEd25519Signer = String(expectedEd25519Signer).trim();
+  }
+  return verificationOptions;
 }

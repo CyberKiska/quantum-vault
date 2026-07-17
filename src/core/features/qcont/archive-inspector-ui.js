@@ -1,10 +1,23 @@
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { parseLifecycleBundleViewBytes } from '../../../app/artifact-intake-service.js';
-import { parseLifecycleShard } from '../../../app/crypto-service.js';
+import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../../app/crypto-service.js';
 import { readFileAsUint8Array, shortenHash } from '../../../utils.js';
 import { createDisclosurePanel } from '../ui/disclosure.js';
 
 const INSPECTOR_POLICY_NOTE = 'Maintenance signatures and source-evidence objects are separate from archive approval. They do not satisfy archive restore policy on their own. Timestamp (.ots) evidence is timestamp-only and also does not satisfy archive policy.';
+const inspectorRenderEpochs = new Map();
+
+function nextInspectorRenderEpoch(containerId) {
+  const epoch = (inspectorRenderEpochs.get(containerId) || 0) + 1;
+  inspectorRenderEpochs.set(containerId, epoch);
+  return epoch;
+}
+
+function isCurrentInspectorRender(containerId, root, epoch) {
+  return inspectorRenderEpochs.get(containerId) === epoch &&
+    root.isConnected &&
+    document.getElementById(containerId) === root;
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -14,11 +27,12 @@ function el(tag, className, text) {
 }
 
 export function clearArchiveInspector(containerId) {
+  nextInspectorRenderEpoch(containerId);
   const root = document.getElementById(containerId);
   if (!root) return;
-  root.replaceChildren();
-  root.className = 'archive-inspector-host initially-hidden';
-  root.style.display = 'none';
+  try { root.style.display = 'none'; } catch { /* Keep clearing independently. */ }
+  try { root.className = 'archive-inspector-host initially-hidden'; } catch { /* Keep clearing independently. */ }
+  try { root.replaceChildren(); } catch { /* Hidden stale content is non-actionable. */ }
 }
 
 function countAttachments(bundle) {
@@ -120,13 +134,20 @@ async function buildBundleViewFromFiles(files) {
   if (!classified.shardFiles.length) {
     return { bundle: null, bundleDigest: null, classified };
   }
-  const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
-  const shard = await parseLifecycleShard(shardBytes, { strict: true });
-  return {
-    bundle: shard.lifecycleBundle,
-    bundleDigest: shard.lifecycleBundleDigestHex || null,
-    classified,
-  };
+  let shardBytes = null;
+  let shard = null;
+  try {
+    shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
+    shard = await parseLifecycleShard(shardBytes, { strict: true });
+    return {
+      bundle: shard.lifecycleBundle,
+      bundleDigest: shard.lifecycleBundleDigestHex || null,
+      classified,
+    };
+  } finally {
+    try { zeroizeParsedLifecycleShard(shard); } catch { /* Continue cleanup. */ }
+    try { shardBytes?.fill(0); } catch { /* Best-effort browser cleanup. */ }
+  }
 }
 
 function renderInspectorDom(root, {
@@ -237,6 +258,8 @@ function renderInspectorDom(root, {
 export async function renderArchiveInspectorPanel(containerId, options = {}) {
   const root = document.getElementById(containerId);
   if (!root) return;
+  const renderEpoch = nextInspectorRenderEpoch(containerId);
+  const isCurrent = () => isCurrentInspectorRender(containerId, root, renderEpoch);
 
   const { files = [], successorSelection = null, attachShards = null } = options;
 
@@ -338,6 +361,7 @@ export async function renderArchiveInspectorPanel(containerId, options = {}) {
 
     if (files.length > 0) {
       const { bundle, bundleDigest, classified } = await buildBundleViewFromFiles(files);
+      if (!isCurrent()) return;
       const warnings = [];
       if (!bundle && !classified.shardFiles.length) {
         clearArchiveInspector(containerId);
@@ -378,12 +402,22 @@ export async function renderArchiveInspectorPanel(containerId, options = {}) {
       let t = 0;
       let cohortLine = '—';
       if (classified.shardFiles.length) {
-        const shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
-        const shard = await parseLifecycleShard(shardBytes, { strict: true });
-        n = Number(shard.metaJSON?.n || 0);
-        t = Number(shard.metaJSON?.t || 0);
-        cohortLine = `${shortenHash(shard.cohortId || shard.metaJSON?.cohortId || '')} · from first shard`;
+        let shardBytes = null;
+        let shard = null;
+        try {
+          shardBytes = await readFileAsUint8Array(classified.shardFiles[0]);
+          if (!isCurrent()) return;
+          shard = await parseLifecycleShard(shardBytes, { strict: true });
+          if (!isCurrent()) return;
+          n = Number(shard.metaJSON?.n || 0);
+          t = Number(shard.metaJSON?.t || 0);
+          cohortLine = `${shortenHash(shard.cohortId || shard.metaJSON?.cohortId || '')} · from first shard`;
+        } finally {
+          try { zeroizeParsedLifecycleShard(shard); } catch { /* Continue cleanup. */ }
+          try { shardBytes?.fill(0); } catch { /* Best-effort browser cleanup. */ }
+        }
       }
+      if (!isCurrent()) return;
       renderInspectorDom(root, {
         title: 'Archive inspector (read-only)',
         archiveId: String(bundle.archiveState?.archiveId || ''),
@@ -402,9 +436,9 @@ export async function renderArchiveInspectorPanel(containerId, options = {}) {
       return;
     }
   } catch {
-    clearArchiveInspector(containerId);
+    if (isCurrent()) clearArchiveInspector(containerId);
     return;
   }
 
-  clearArchiveInspector(containerId);
+  if (isCurrent()) clearArchiveInspector(containerId);
 }

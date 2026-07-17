@@ -22,9 +22,9 @@ export function summarizeFileList(files = [], fallback = 'Selected input set') {
 export function clearInlineError(panelId) {
   const panel = document.getElementById(panelId);
   if (!panel) return;
-  panel.replaceChildren();
-  panel.classList.add('initially-hidden');
-  panel.style.display = 'none';
+  try { panel.style.display = 'none'; } catch { /* Keep clearing independently. */ }
+  try { panel.classList.add('initially-hidden'); } catch { /* Keep clearing independently. */ }
+  try { panel.replaceChildren(); } catch { /* Hidden stale content is non-actionable. */ }
 }
 
 export function showInlineError(panelId, {

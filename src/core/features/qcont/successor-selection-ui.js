@@ -14,6 +14,11 @@ import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-in
 import { buildSuccessorSelectionUiMode } from './successor-selection-view-model.js';
 
 const successorSelectionState = new Map();
+const successorRefreshEpochs = new Map();
+
+function presentationBestEffort(action) {
+  try { action(); } catch { /* State invalidation must survive mutable DOM faults. */ }
+}
 
 const ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX = Object.freeze({
   restore: 'restoreArchiveInspector',
@@ -352,16 +357,6 @@ function renderSelectionInfoUi(prefix, actionButton, nextState, summaryText, hel
 
 function clearSuccessorSelectionUi(prefix, actionButton) {
   const elements = getSuccessorSelectionElements(prefix);
-  if (elements.container) {
-    elements.container.style.display = 'none';
-    elements.container.className = 'verification-section initially-hidden';
-  }
-  if (elements.summary) elements.summary.textContent = '';
-  if (elements.help) elements.help.textContent = '';
-  [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
-    if (group) group.style.display = 'none';
-  });
-  clearSelectionDetails(prefix);
   successorSelectionState.set(prefix, {
     mode: 'none',
     assessment: successorSelectionState.get(prefix)?.assessment || null,
@@ -375,7 +370,47 @@ function clearSuccessorSelectionUi(prefix, actionButton) {
     selectedCohortId: null,
     selectedLifecycleBundleDigestHex: null,
   });
-  setRestoreActionAvailability(prefix, actionButton);
+  if (elements.container) {
+    presentationBestEffort(() => { elements.container.style.display = 'none'; });
+    presentationBestEffort(() => { elements.container.className = 'verification-section initially-hidden'; });
+  }
+  if (elements.summary) presentationBestEffort(() => { elements.summary.textContent = ''; });
+  if (elements.help) presentationBestEffort(() => { elements.help.textContent = ''; });
+  [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
+    if (group) presentationBestEffort(() => { group.style.display = 'none'; });
+  });
+  for (const select of [elements.stateSelect, elements.cohortSelect, elements.bundleSelect]) {
+    if (select) {
+      presentationBestEffort(() => { select.onchange = null; });
+      presentationBestEffort(() => select.replaceChildren());
+    }
+  }
+  presentationBestEffort(() => clearSelectionDetails(prefix));
+  presentationBestEffort(() => setRestoreActionAvailability(prefix, actionButton));
+}
+
+/** Synchronously revoke File/state/DOM ownership for a workflow session boundary. */
+export function resetSuccessorSelectionSession(prefix = 'restore', actionButton = null) {
+  successorRefreshEpochs.set(prefix, (successorRefreshEpochs.get(prefix) || 0) + 1);
+  successorSelectionState.set(prefix, {
+    mode: 'none',
+    assessment: null,
+    actionButton,
+    files: [],
+    selectionRequired: false,
+    selectionComplete: true,
+    successorSelectionUiMode: 'none',
+    selectedArchiveId: null,
+    selectedStateId: null,
+    selectedCohortId: null,
+    selectedLifecycleBundleDigestHex: null,
+  });
+  presentationBestEffort(() => clearArchiveInspector(ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix]));
+  presentationBestEffort(() => clearSuccessorSelectionUi(prefix, actionButton));
+  presentationBestEffort(() => {
+    syncArchiveReviewHub(prefix, successorSelectionState.get(prefix), { collapseWhenClear: true });
+  });
+  return successorSelectionState.get(prefix);
 }
 
 export function buildSuccessorSelectionModel(parsedShards = []) {
@@ -442,6 +477,7 @@ export function buildSuccessorSelectionModel(parsedShards = []) {
 }
 
 export async function refreshSuccessorSelectionUi(prefix = 'restore', files = [], actionButton = null, assessment = null, options = {}) {
+  const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   const elements = getSuccessorSelectionElements(prefix);
   const previous = successorSelectionState.get(prefix) || {};
   const nextState = {
@@ -475,6 +511,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   let successorShards = [];
   try {
     const classified = await classifyRestoreInputFiles(files);
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
     if (!classified.shardFiles.length) {
       const out = renderSelectionInfoUi(
         prefix,
@@ -489,6 +526,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }
 
     shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
     successorShards = await Promise.all(shardBytes.map(async (bytes, index) => {
       const shard = await parseLifecycleShard(bytes, { strict: true });
       return {
@@ -496,6 +534,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
         sourceFileName: classified.shardFiles[index]?.name || `selected-shard-${index + 1}.qcont`,
       };
     }));
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
 
     if (!successorShards.length) {
       const out = renderSelectionInfoUi(
@@ -664,6 +703,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       successorSelectionUiMode,
     });
   } catch (error) {
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
     renderSelectionInfoUi(
       prefix,
       actionButton,
@@ -679,6 +719,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }
   }
 
+  if (!isCurrent()) return successorSelectionState.get(prefix) || null;
   const current = successorSelectionState.get(prefix);
   const onSelectionChange = () => {
     const detail = buildSuccessorSelectionChangeDetail(prefix, successorSelectionState.get(prefix));
@@ -718,13 +759,21 @@ export async function refreshSelectionAndPreflight({
   expectedSignerInput = null,
   renderPreflightForFiles = null,
   onSelectionChange = null,
+  isCurrent: externalIsCurrent = () => true,
 }) {
+  const refreshEpoch = (successorRefreshEpochs.get(prefix) || 0) + 1;
+  successorRefreshEpochs.set(prefix, refreshEpoch);
+  const isCurrent = () => (
+    successorRefreshEpochs.get(prefix) === refreshEpoch && externalIsCurrent()
+  );
   await refreshSuccessorSelectionUi(prefix, files, actionButton, assessment, {
     preflightContainerId,
     expectedSignerInput,
     renderPreflightForFiles,
     onSelectionChange,
+    isCurrent,
   });
+  if (!isCurrent()) return;
   if (!preflightContainerId || typeof renderPreflightForFiles !== 'function') return;
   await renderPreflightForFiles({
     prefix,
@@ -732,5 +781,6 @@ export async function refreshSelectionAndPreflight({
     files,
     expectedSignerInput,
     actionButton,
+    isCurrent,
   });
 }
