@@ -107,7 +107,7 @@ function classifyEncryptError(error) {
   if (/Refusing to overwrite existing file/.test(message)) {
     return usage(message);
   }
-  if (/exceeds maximum allowed size|fileBytes must be a non-empty Uint8Array|QVPACK/.test(message)) {
+  if (/exceeds maximum allowed size|fileBytes must be a non-empty Uint8Array|Invalid private metadata|QVPACK/.test(message)) {
     return formatPolicy(message, error);
   }
   return error;

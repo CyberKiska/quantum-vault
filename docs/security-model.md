@@ -399,6 +399,7 @@ Current long-horizon qualification:
 | Missing external signer pin | Block `any-signature` and `strong-pq-signature`; remain non-blocking for `integrity-only` | Cryptographic signature validity and structural integrity may still be reported separately |
 | Absent OTS evidence | Do not fail solely for absence | Integrity and signature validity may still be known |
 | Malformed or ambiguously linked OTS evidence | Reject the evidence path rather than silently trusting it | Other valid signatures or structural checks may still remain knowable |
+| Invalid authenticated `wrapped-v1` private metadata, or a private length/hash mismatch | Reject before returning or publishing plaintext; do not reflect private field values in the error | Public authenticated format metadata may still remain knowable |
 
 ## 10. CLI operator responsibilities
 

@@ -223,7 +223,10 @@ function classifyDecryptError(error) {
   if (/Refusing to overwrite existing file/.test(message)) {
     return usage(message);
   }
-  if (/Invalid file format|File is too small|Unsupported container format|Invalid metadata|Incomplete container|Invalid container|Unsupported AEAD mode|QVPACK/.test(message)) {
+  if (/Authenticated private metadata does not match the decrypted payload/.test(message)) {
+    return restoredIntegrityFailed(message, error);
+  }
+  if (/Invalid file format|File is too small|Unsupported container format|Invalid metadata|Invalid private metadata|Incomplete container|Invalid container|Unsupported AEAD mode|QVPACK/.test(message)) {
     return formatPolicy(message, error);
   }
   if (/Key commitment verification failed|KEM decapsulation failed|operation-specific|ciphertext|Encrypted payload/.test(message)) {

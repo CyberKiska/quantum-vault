@@ -388,12 +388,16 @@ normative dispatch constraints, not descriptive annotations.
 
 ### 5.3 Payload and private metadata
 
-Current private payload metadata for `wrapped-v1` contains:
+Current private payload metadata for `wrapped-v1` is a closed object with exactly
+four members. Missing, duplicate, or unknown members MUST be rejected after AEAD
+authentication and before plaintext is returned or published.
 
-- `originalFilename`
-- `timestamp`
-- `fileHash`
-- `originalLength`
+| Field | Current required value or shape | Validation rule |
+| --- | --- | --- |
+| `originalFilename` | `null` or a well-formed Unicode string | The complete encoded private object, including this value, MUST remain within the shared byte limit below |
+| `timestamp` | canonical UTC ISO-8601 with exactly millisecond precision, for example `2026-07-17T12:34:56.789Z` | MUST be exactly 24 ASCII bytes and round-trip through calendar validation without normalization |
+| `fileHash` | 128 lowercase hexadecimal characters | MUST equal `SHA3-512(fileBytes)` |
+| `originalLength` | positive safe integer no greater than the current 1 GiB plaintext limit | MUST equal the recovered `fileBytes` length exactly |
 
 Current `wrapped-v1` payload format is:
 
@@ -401,22 +405,27 @@ Current `wrapped-v1` payload format is:
 [uint32be privateMetaLen][privateMetaJSON][fileBytes]
 ```
 
-Both public and private metadata are decoded with fatal UTF-8 and duplicate-key rejection. The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one AES-GCM tag per chunk. Implementations MUST reject unsafe-integer overflow before this calculation and MUST reject both truncated ciphertext and trailing bytes.
-
-The current public metadata schema above is closed. The authenticated private
-metadata object is not yet a closed schema: current JavaScript requires valid
-strict JSON and enforces `originalLength` only when it is a safe integer. Closing
-and making every private field mandatory is a separate compatibility change and
-remains an open hardening task.
+`privateMetaLen` MUST be in `1..4096`; writers and readers MUST enforce the same
+non-bypassable upper bound. Both public and private metadata are decoded with
+fatal UTF-8 and duplicate-key rejection. After authentication, readers MUST
+validate the closed private schema, compare `originalLength`, recompute
+`SHA3-512(fileBytes)`, and reject on either mismatch before returning plaintext.
+The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one
+AES-GCM tag per chunk. Implementations MUST reject unsafe-integer overflow before
+this calculation and MUST reject both truncated ciphertext and trailing bytes.
 
 Strict-current migration note: canonical output from the shipped JavaScript and
 Rust writers remains valid. Artifacts using false algorithm/profile labels,
 missing or unknown public members, a non-1568-byte encapsulated key, or public
 metadata larger than 4096 bytes are now invalid for normal decrypt, split, and
-restore processing. They MUST NOT be reinterpreted or accepted through a larger
-caller-supplied limit. Any future inspection-only legacy path must be explicitly
-named, byte-preserving, non-decrypting, and separate from current-format
-acceptance.
+restore processing. Authenticated private objects with missing or extra members,
+noncanonical timestamps, non-lowercase or incorrect hashes, mismatched lengths,
+or more than 4096 encoded bytes are likewise invalid. This includes Rust artifacts
+created with a noncanonical custom timestamp override; default canonical Rust
+writer timestamps remain compatible. These artifacts MUST NOT be reinterpreted or
+accepted through a larger caller-supplied limit. Any future inspection-only legacy
+path must be explicitly named, byte-preserving, non-decrypting, and separate from
+current-format acceptance. Canonical current JavaScript writer bytes are unchanged.
 
 When multiple files are archived, the payload bytes are a `.qvpack` bundle detected by magic `QVB1`, not by filename.
 

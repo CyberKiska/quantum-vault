@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../../src/core/crypto/bytes.js';
-import { decryptFile } from '../../src/core/crypto/index.js';
+import {
+  decryptFile,
+  MAX_QENC_PRIVATE_METADATA_BYTES,
+} from '../../src/core/crypto/index.js';
 import { parseQencHeader } from '../../src/core/crypto/qenc/format.js';
 import { buildQvpackPayloadBytes, parseQvpackPayload } from '../../src/core/crypto/qvpack.js';
 import { runQvCli } from '../../src/core/cli/qv.js';
@@ -152,6 +155,34 @@ test('encrypt supports private metadata filename override', async () => {
   ]);
   assert.equal(rejected.exitCode, 2);
   assert.equal(JSON.parse(rejected.stdoutText).qvCode, 'USAGE');
+});
+
+test('encrypt rejects oversized private metadata filenames without reflecting them', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const inputPath = join(baseDir, 'source.bin');
+  const outputPath = join(baseDir, 'source.qenc');
+  const sensitivePrefix = 'DO_NOT_LEAK_OVERSIZED_FILENAME';
+  await writeFile(inputPath, new Uint8Array([1, 2, 3, 4]));
+
+  const result = await runCli([
+    'encrypt',
+    inputPath,
+    '--public-key',
+    keys.publicKeyPath,
+    '--out',
+    outputPath,
+    '--filename',
+    `${sensitivePrefix}${'x'.repeat(MAX_QENC_PRIVATE_METADATA_BYTES)}`,
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 4);
+  const error = JSON.parse(result.stdoutText);
+  assert.equal(error.qvCode, 'FORMAT_POLICY_REJECT');
+  assert.match(error.error, /private metadata byte limit/);
+  assert.equal(error.error.includes(sensitivePrefix), false);
+  await assert.rejects(() => stat(outputPath), /ENOENT/);
 });
 
 test('encrypt rejects invalid public key length with KEY_REJECTED', async () => {

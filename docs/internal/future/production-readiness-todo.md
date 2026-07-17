@@ -104,9 +104,14 @@ Status values:
     algorithms/profile/nonce contracts, exact 1568-byte ML-KEM ciphertext, one
     non-bypassable 4096-byte metadata cap, safe ciphertext arithmetic, and exact
     ciphertext exhaustion. Golden and malformed vectors cover the boundary.
-  - [ ] **FMT-201-JS-PRIVATE (open):** make authenticated `wrapped-v1` private
-    metadata a closed required schema without accepting ambiguous historical
-    meanings.
+  - [x] **FMT-201-JS-PRIVATE (complete):** authenticated `wrapped-v1` private
+    metadata is an exact four-field schema under one 4096-byte writer/reader cap.
+    The timestamp has one canonical UTC millisecond form; original length and
+    lowercase SHA3-512 fixity are mandatory and recomputed before plaintext is
+    returned. Negative vectors cover missing, extra, duplicate, mistyped,
+    oversized, noncanonical, and inconsistent authenticated values without
+    reflecting private values in errors. Canonical writer bytes remain unchanged;
+    noncanonical custom-timestamp artifacts are quarantine-only.
   - [ ] **FMT-201-RUST (blocked-external):** Rust baseline `f29f090` already
     denies unknown public fields but still permits omitted algorithm/profile
     labels, lets its low-level writer exceed its 4096-byte reader cap, and defers
