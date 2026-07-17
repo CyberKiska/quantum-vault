@@ -166,6 +166,14 @@ Status values:
 - [ ] **FMT-202 (open, high): normative Shamir and erasure-code specification.**
   Freeze field polynomials, coordinate encodings, generator matrices, shortening,
   padding, fragment geometry, corruption semantics, and known-answer vectors.
+  - [x] **FMT-202-SSS-COORDINATE (complete):** the current dependency encoding is
+    now explicit: 3168 evaluation bytes followed by one distinct coordinate in
+    `1..255`. JavaScript rejects coordinate `0` before interpolation, matching the
+    pinned Rust reader; current writers and canonical bytes are unchanged.
+  - [ ] **FMT-202-CODEC-KATS (open):** freeze the full Shamir random-consumption
+    order and systematic RS polynomial/block construction in independently
+    generated exact vectors. Current Rust properties and one RS vector do not
+    replace shared JavaScript/Rust KATs or live bidirectional CI.
 - [ ] **INT-201 (blocked-external): live JS↔Rust interoperability and differential
   malformed-input testing.** Each implementation must generate artifacts consumed
   by the other in CI; copied fixtures and JS-core parity are insufficient.

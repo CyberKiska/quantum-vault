@@ -540,7 +540,7 @@ After `metaJSON`, the byte stream embeds three canonical JSON artifacts with fix
 | `keyCommitBytes` | `keyCommitLen` bytes | required `SHA3-256(Kenc)` |
 | `shardIndex` | 2 bytes (Uint16 BE) | 0-based shard index |
 | `shareLen` | 2 bytes (Uint16 BE) | MUST be `3169` for a current ML-KEM-1024 private-key share |
-| `shareBytes` | exactly 3169 bytes | one dependency-compatible Shamir share: one coordinate byte plus 3168 secret bytes |
+| `shareBytes` | exactly 3169 bytes | one dependency-compatible Shamir share: 3168 evaluation bytes followed by one nonzero coordinate byte |
 | `fragments stream` | variable | RS fragment stream encoded as repeated `[len32 | fragmentBytes]` |
 
 ### 6.2 Successor shard metadata contract
@@ -584,6 +584,18 @@ Current shard metadata rules:
   `QVqcont-7` wire format. It MUST NOT override the authenticated QENC key
   commitment, and normal restore result/UI/event surfaces MUST expose only the
   boolean comparison outcome, never the expected or recovered digest value.
+
+Current Shamir share encoding places the GF(256) evaluation coordinate in the
+final byte of `shareBytes`. That coordinate MUST be in `1..255`, and all shares
+submitted to one reconstruction MUST have distinct coordinates. Coordinate `0`
+is the secret intercept, not a valid emitted share coordinate, and MUST be
+rejected before interpolation. The JavaScript wrapper enforces this rule even
+though `shamir-secret-sharing@0.0.4` does not enforce it in its low-level reader.
+
+Reader-hardening migration note: current writers already emit only distinct
+coordinates in `1..255`, and the pinned Rust reader already rejects `0`, so
+canonical artifacts are unchanged. A stored shard set containing coordinate `0`
+is noncanonical and is quarantine-only; it is never silently reinterpreted.
 
 Presentation-boundary migration note: `QVqcont-7` bytes are unchanged and remain
 linkable by their clear `privateKeyHash`. The JavaScript `restoreFromShards()`

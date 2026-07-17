@@ -244,7 +244,7 @@ Quantum Vault splits archive material across `n` shards using two complementary 
 
 Share commitments are recorded in the cohort binding. During restoration, each submitted share is checked against its committed digest before entering reconstruction.
 
-**Reed-Solomon erasure coding** [12] splits the `.qenc` ciphertext into `k` data fragments and `n - k` parity fragments, such that any `k` of `n` fragments suffice to reconstruct the ciphertext. Per-shard fragment body hashes are also recorded in the cohort binding and verified during restoration.
+**Reed-Solomon erasure coding** [12] uses `k` data-share positions and `n - k` parity-share positions. The current `QV-RS-ErasureCodes-v1` decoder substitutes zero slices for missing or rejected shard bodies and invokes an error-correcting decoder without supplying erasure locations. It therefore supports at most `(n - k) / 2` missing or corrupt whole-shard slices, and current end-to-end recovery requires `t = k + (n - k) / 2` consistent shards—not merely any `k` shards. Per-shard fragment body hashes are recorded in the cohort binding and checked before reconstruction; the final authenticated `qencHash` remains mandatory.
 
 Each `QVqcont-7` shard carries one Shamir share, one set of Reed-Solomon fragments, and the embedded archive-state, cohort-binding, and lifecycle-bundle bytes for the selected cohort.
 

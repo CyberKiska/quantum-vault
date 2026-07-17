@@ -367,6 +367,8 @@ Current threshold and shard invariants:
 - shard cohort selection MUST be deterministic and MUST NOT use a "largest cohort wins" rule
 - threshold semantics MUST remain deterministic, with current threshold derived as `t = k + (n-k)/2`
 - Shamir share commitments MUST bind raw share bytes
+- the final byte of each current Shamir share MUST be a distinct coordinate in
+  `1..255`; coordinate `0` MUST be rejected before interpolation
 - fragment integrity validation MUST remain mandatory
 - allocation and RS geometry MUST come from a closed QENC header whose exact
   bytes match the archive-state `containerId`, never from redundant outer shard
