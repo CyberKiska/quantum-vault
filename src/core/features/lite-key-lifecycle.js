@@ -1,8 +1,8 @@
 // Ownership boundary for Lite archive-creation key material.
 //
 // An operation token exists before asynchronous key generation begins so a
-// session wipe or mode switch can cancel the operation while an await is in
-// flight. A keypair returned after cancellation is wiped instead of adopted.
+// session wipe or explicit cancellation can cancel the operation while an await
+// is in flight. A keypair returned after cancellation is wiped instead of adopted.
 
 export class LiteArchiveCreationCancelledError extends Error {
     constructor() {
@@ -29,10 +29,18 @@ function assertKeyPair(keyPair) {
 
 export function wipeLiteArchiveKeyPair(keyPair) {
     if (isByteArray(keyPair?.privateKey)) {
-        keyPair.privateKey.fill(0);
+        try {
+            keyPair.privateKey.fill(0);
+        } catch {
+            // Best-effort cleanup must not interrupt ownership settlement.
+        }
     }
     if (isByteArray(keyPair?.publicKey)) {
-        keyPair.publicKey.fill(0);
+        try {
+            keyPair.publicKey.fill(0);
+        } catch {
+            // Continue even if another buffer is detached or otherwise unwritable.
+        }
     }
 }
 
@@ -55,6 +63,9 @@ export function createLiteArchiveKeyLifecycle() {
     function beginOperation() {
         if (activeOperation) {
             throw new Error('A Lite archive creation is already active.');
+        }
+        if (retainedKeyPair) {
+            throw new Error('Pending Lite archive key material must be exported or discarded first.');
         }
 
         const operation = {
@@ -91,18 +102,30 @@ export function createLiteArchiveKeyLifecycle() {
         return operation.keyPair;
     }
 
-    function retainAfterSuccess(operation) {
+    function settleSuccessfulOperation(operation, retainForBackup) {
         const keyPair = getOperationKeyPair(operation);
-        const supersededKeyPair = retainedKeyPair;
+        if (retainedKeyPair) {
+            // This state is unreachable through the public ownership API, but
+            // keep settlement fail-closed if a future refactor violates it.
+            throw new Error('Lite archive key settlement found unresolved retained material.');
+        }
 
-        retainedKeyPair = keyPair;
+        retainedKeyPair = retainForBackup ? keyPair : null;
         operation.keyPair = null;
         operation.settled = true;
         activeOperation = null;
 
-        if (supersededKeyPair && supersededKeyPair !== keyPair) {
-            wipeLiteArchiveKeyPair(supersededKeyPair);
+        if (!retainForBackup) {
+            wipeLiteArchiveKeyPair(keyPair);
         }
+    }
+
+    function retainAfterSuccess(operation) {
+        settleSuccessfulOperation(operation, true);
+    }
+
+    function completeWithoutRetention(operation) {
+        settleSuccessfulOperation(operation, false);
     }
 
     function discardOperation(operation) {
@@ -145,6 +168,7 @@ export function createLiteArchiveKeyLifecycle() {
         assertActive,
         getOperationKeyPair,
         retainAfterSuccess,
+        completeWithoutRetention,
         discardOperation,
         cancelActiveOperation,
         takeRetainedKeyPair,

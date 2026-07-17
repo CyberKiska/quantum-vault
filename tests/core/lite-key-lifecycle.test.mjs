@@ -19,7 +19,31 @@ function assertWiped(bytes, label) {
   assert.ok(bytes.every((value) => value === 0), `${label} was not wiped`);
 }
 
-test('Lite key lifecycle retains only the latest successful archive pair and wipes the superseded pair', () => {
+test('pending retained material rejects a new operation without changing its bytes', () => {
+  const lifecycle = createLiteArchiveKeyLifecycle();
+  const retained = keyPair(0x01, 0x02);
+
+  const retainedOperation = lifecycle.beginOperation();
+  lifecycle.adoptKeyPair(retainedOperation, retained);
+  lifecycle.retainAfterSuccess(retainedOperation);
+
+  assert.throws(
+    () => lifecycle.beginOperation(),
+    /must be exported or discarded first/,
+  );
+  assert.ok(retained.privateKey.every((value) => value === 0x01));
+  assert.ok(retained.publicKey.every((value) => value === 0x02));
+  assert.equal(lifecycle.hasRetainedKeyPair(), true);
+  assert.equal(lifecycle.hasActiveOperation(), false);
+
+  const taken = lifecycle.takeRetainedKeyPair();
+  assert.equal(taken, retained);
+  wipeLiteArchiveKeyPair(taken);
+  assertWiped(retained.privateKey, 'explicitly released retained private key');
+  assertWiped(retained.publicKey, 'explicitly released retained public key');
+});
+
+test('a later operation starts only after retained ownership is explicitly transferred', () => {
   const lifecycle = createLiteArchiveKeyLifecycle();
   const first = keyPair(0x11, 0x12);
   const second = keyPair(0x21, 0x22);
@@ -29,40 +53,34 @@ test('Lite key lifecycle retains only the latest successful archive pair and wip
   lifecycle.retainAfterSuccess(firstOperation);
   assert.equal(lifecycle.hasRetainedKeyPair(), true);
 
+  const transferred = lifecycle.takeRetainedKeyPair();
+  assert.equal(transferred, first);
   const secondOperation = lifecycle.beginOperation();
   lifecycle.adoptKeyPair(secondOperation, second);
-  lifecycle.retainAfterSuccess(secondOperation);
+  lifecycle.completeWithoutRetention(secondOperation);
 
-  assertWiped(first.privateKey, 'superseded private key');
-  assertWiped(first.publicKey, 'superseded public key');
-  assert.equal(lifecycle.hasRetainedKeyPair(), true);
-  assert.ok(second.privateKey.some((value) => value !== 0));
-  assert.ok(second.publicKey.some((value) => value !== 0));
+  assert.ok(first.privateKey.every((value) => value === 0x11));
+  assert.ok(first.publicKey.every((value) => value === 0x12));
+  assertWiped(second.privateKey, 'threshold-only private key');
+  assertWiped(second.publicKey, 'threshold-only public key');
+  assert.equal(lifecycle.hasRetainedKeyPair(), false);
 
-  lifecycle.wipeAll();
-  assertWiped(second.privateKey, 'latest retained private key');
-  assertWiped(second.publicKey, 'latest retained public key');
+  wipeLiteArchiveKeyPair(transferred);
+  assertWiped(first.privateKey, 'transferred private key');
+  assertWiped(first.publicKey, 'transferred public key');
 });
 
-test('failed Lite archive operation is wiped without discarding the last successful backup pair', () => {
+test('failure without a prior authorized success offers no new backup pair', () => {
   const lifecycle = createLiteArchiveKeyLifecycle();
-  const successful = keyPair(0x31, 0x32);
-  const failed = keyPair(0x41, 0x42);
-
-  const successfulOperation = lifecycle.beginOperation();
-  lifecycle.adoptKeyPair(successfulOperation, successful);
-  lifecycle.retainAfterSuccess(successfulOperation);
-
+  const failed = keyPair(0x43, 0x44);
   const failedOperation = lifecycle.beginOperation();
   lifecycle.adoptKeyPair(failedOperation, failed);
   lifecycle.discardOperation(failedOperation);
 
-  assertWiped(failed.privateKey, 'failed operation private key');
-  assertWiped(failed.publicKey, 'failed operation public key');
-  assert.equal(lifecycle.hasRetainedKeyPair(), true);
-  assert.ok(successful.privateKey.some((value) => value !== 0));
-
-  lifecycle.wipeAll();
+  assertWiped(failed.privateKey, 'failed private key');
+  assertWiped(failed.publicKey, 'failed public key');
+  assert.equal(lifecycle.hasRetainedKeyPair(), false);
+  assert.equal(lifecycle.takeRetainedKeyPair(), null);
 });
 
 test('cancellation wipes an adopted pair and rejects future use of its operation token', () => {
@@ -78,6 +96,21 @@ test('cancellation wipes an adopted pair and rejects future use of its operation
     () => lifecycle.getOperationKeyPair(operation),
     LiteArchiveCreationCancelledError,
   );
+  assert.equal(lifecycle.hasRetainedKeyPair(), false);
+});
+
+test('a second operation cannot take ownership while the first remains active', () => {
+  const lifecycle = createLiteArchiveKeyLifecycle();
+  const first = keyPair(0x57, 0x58);
+  const operation = lifecycle.beginOperation();
+
+  assert.throws(() => lifecycle.beginOperation(), /already active/);
+  lifecycle.adoptKeyPair(operation, first);
+  lifecycle.completeWithoutRetention(operation);
+
+  assertWiped(first.privateKey, 'single-owner private key');
+  assertWiped(first.publicKey, 'single-owner public key');
+  assert.equal(lifecycle.hasActiveOperation(), false);
 });
 
 test('key generation that returns after cancellation is rejected and wiped', () => {
@@ -95,25 +128,27 @@ test('key generation that returns after cancellation is rejected and wiped', () 
   assert.equal(lifecycle.hasRetainedKeyPair(), false);
 });
 
-test('session wipe clears both the retained pair and an active successor pair', () => {
-  const lifecycle = createLiteArchiveKeyLifecycle();
+test('session wipe clears either retained or active operation material', () => {
+  const retainedLifecycle = createLiteArchiveKeyLifecycle();
+  const activeLifecycle = createLiteArchiveKeyLifecycle();
   const retained = keyPair(0x71, 0x72);
   const active = keyPair(0x81, 0x82);
 
-  const retainedOperation = lifecycle.beginOperation();
-  lifecycle.adoptKeyPair(retainedOperation, retained);
-  lifecycle.retainAfterSuccess(retainedOperation);
+  const retainedOperation = retainedLifecycle.beginOperation();
+  retainedLifecycle.adoptKeyPair(retainedOperation, retained);
+  retainedLifecycle.retainAfterSuccess(retainedOperation);
 
-  const activeOperation = lifecycle.beginOperation();
-  lifecycle.adoptKeyPair(activeOperation, active);
-  lifecycle.wipeAll();
+  const activeOperation = activeLifecycle.beginOperation();
+  activeLifecycle.adoptKeyPair(activeOperation, active);
+  retainedLifecycle.wipeAll();
+  activeLifecycle.wipeAll();
 
   assertWiped(retained.privateKey, 'session-retained private key');
   assertWiped(retained.publicKey, 'session-retained public key');
   assertWiped(active.privateKey, 'session-active private key');
   assertWiped(active.publicKey, 'session-active public key');
-  assert.equal(lifecycle.hasRetainedKeyPair(), false);
-  assert.equal(lifecycle.hasActiveOperation(), false);
+  assert.equal(retainedLifecycle.hasRetainedKeyPair(), false);
+  assert.equal(activeLifecycle.hasActiveOperation(), false);
 });
 
 test('taking the optional backup transfers ownership and the caller can wipe it', () => {
@@ -130,4 +165,13 @@ test('taking the optional backup transfers ownership and the caller can wipe it'
   wipeLiteArchiveKeyPair(taken);
   assertWiped(retained.privateKey, 'backed-up private key');
   assertWiped(retained.publicKey, 'backed-up public key');
+});
+
+test('best-effort pair cleanup tolerates a detached buffer and continues', () => {
+  const pair = keyPair(0xb1, 0xb2);
+  structuredClone(pair.privateKey, { transfer: [pair.privateKey.buffer] });
+
+  assert.doesNotThrow(() => wipeLiteArchiveKeyPair(pair));
+  assert.equal(pair.privateKey.byteLength, 0);
+  assertWiped(pair.publicKey, 'public key after detached private key');
 });
