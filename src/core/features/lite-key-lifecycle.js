@@ -156,6 +156,26 @@ export function createLiteArchiveKeyLifecycle() {
         return keyPair;
     }
 
+    function returnRetainedKeyPair(keyPair) {
+        try {
+            assertKeyPair(keyPair);
+            if (!activeOperation && retainedKeyPair === keyPair) {
+                return keyPair;
+            }
+            if (activeOperation || retainedKeyPair) {
+                throw new Error('Lite archive key ownership return was rejected.');
+            }
+            retainedKeyPair = keyPair;
+            return keyPair;
+        } catch (error) {
+            // A failed ownership return must not strand caller-offered material.
+            if (keyPair !== retainedKeyPair && keyPair !== activeOperation?.keyPair) {
+                wipeLiteArchiveKeyPair(keyPair);
+            }
+            throw error;
+        }
+    }
+
     function wipeAll() {
         cancelActiveOperation();
         wipeLiteArchiveKeyPair(retainedKeyPair);
@@ -172,6 +192,7 @@ export function createLiteArchiveKeyLifecycle() {
         discardOperation,
         cancelActiveOperation,
         takeRetainedKeyPair,
+        returnRetainedKeyPair,
         hasRetainedKeyPair: () => retainedKeyPair !== null,
         hasActiveOperation: () => activeOperation !== null,
         wipeAll,

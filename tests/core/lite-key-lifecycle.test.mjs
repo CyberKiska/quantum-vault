@@ -167,6 +167,63 @@ test('taking the optional backup transfers ownership and the caller can wipe it'
   assertWiped(retained.publicKey, 'backed-up public key');
 });
 
+test('a failed export setup can return transferred ownership without copying or wiping it', () => {
+  const lifecycle = createLiteArchiveKeyLifecycle();
+  const retained = keyPair(0xa1, 0xa2);
+  const operation = lifecycle.beginOperation();
+  lifecycle.adoptKeyPair(operation, retained);
+  lifecycle.retainAfterSuccess(operation);
+
+  const transferred = lifecycle.takeRetainedKeyPair();
+  assert.equal(lifecycle.returnRetainedKeyPair(transferred), retained);
+  assert.equal(lifecycle.returnRetainedKeyPair(transferred), retained);
+  assert.equal(lifecycle.hasRetainedKeyPair(), true);
+  assert.ok(retained.privateKey.every((value) => value === 0xa1));
+  assert.ok(retained.publicKey.every((value) => value === 0xa2));
+  assert.throws(() => lifecycle.beginOperation(), /must be exported or discarded first/);
+
+  const returned = lifecycle.takeRetainedKeyPair();
+  assert.equal(returned, retained);
+  wipeLiteArchiveKeyPair(returned);
+  assertWiped(retained.privateKey, 'returned private key');
+  assertWiped(retained.publicKey, 'returned public key');
+});
+
+test('a conflicting ownership return fails closed and wipes the offered pair', () => {
+  const lifecycle = createLiteArchiveKeyLifecycle();
+  const active = lifecycle.beginOperation();
+  const offered = keyPair(0xa3, 0xa4);
+
+  assert.throws(
+    () => lifecycle.returnRetainedKeyPair(offered),
+    /ownership return was rejected/,
+  );
+  assertWiped(offered.privateKey, 'rejected returned private key');
+  assertWiped(offered.publicKey, 'rejected returned public key');
+  lifecycle.discardOperation(active);
+});
+
+test('a conflicting ownership return cannot overwrite or wipe a retained pair', () => {
+  const lifecycle = createLiteArchiveKeyLifecycle();
+  const retained = keyPair(0xa5, 0xa6);
+  const offered = keyPair(0xa7, 0xa8);
+  const operation = lifecycle.beginOperation();
+  lifecycle.adoptKeyPair(operation, retained);
+  lifecycle.retainAfterSuccess(operation);
+
+  assert.throws(
+    () => lifecycle.returnRetainedKeyPair(offered),
+    /ownership return was rejected/,
+  );
+  assertWiped(offered.privateKey, 'conflicting offered private key');
+  assertWiped(offered.publicKey, 'conflicting offered public key');
+  assert.ok(retained.privateKey.every((value) => value === 0xa5));
+  assert.ok(retained.publicKey.every((value) => value === 0xa6));
+
+  const returned = lifecycle.takeRetainedKeyPair();
+  wipeLiteArchiveKeyPair(returned);
+});
+
 test('best-effort pair cleanup tolerates a detached buffer and continues', () => {
   const pair = keyPair(0xb1, 0xb2);
   structuredClone(pair.privateKey, { transfer: [pair.privateKey.buffer] });
