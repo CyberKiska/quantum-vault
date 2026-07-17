@@ -62,7 +62,7 @@ Status values:
   key carried by the lifecycle bundle as archive-policy authority. Until its
   implementation, negative tests, and migration notes change, SEC-101 is not an
   ecosystem-wide property and the trust milestone remains open.
-- [ ] **SEC-102 (partial, high): fresh Lite ML-KEM keypair per archive.** Remove the
+- [x] **SEC-102 (complete, high): fresh Lite ML-KEM keypair per archive.** Remove the
   session-global archive key reuse domain and wipe per-operation private material
   on success, failure, and cancellation.
   - Gate: two consecutive Lite creations have distinct keys and key commitments;
@@ -73,17 +73,46 @@ Status values:
     operation-local pair. Same-session browser tests prove distinct private-key
     diagnostics and QENC key commitments, successful independent recovery, and
     cross-decryption failure. Cancellation tokens wipe adopted and late-arriving
-    pairs; failure, supersession, session wipe, and one-time backup transfer have
-    lifecycle tests. Key fingerprints no longer enter browser key-generation logs
-    or sidebar state. The optional backup bridge still retains a successful pair,
-    so default wipe-on-success remains open with SEC-103.
+    pairs; failure, rejected supersession, session wipe, one-time backup transfer,
+    and failed-export ownership return have lifecycle tests. Key fingerprints no
+    longer enter browser key-generation logs or sidebar state.
+  - [x] **SEC-102-THRESHOLD-DEFAULT (complete):** Lite Create requests no output
+    automatically and keeps the operation pair provisional until all `n+2`
+    primary artifacts pass exact name, size, and SHA3-512 digest re-import.
+    Default success wipes the owned pair; only a per-attempt acknowledgement may
+    retain it for the separate optional export. Error, cancellation, mode/session
+    wipe, late-result, renderer-fault, and settlement-fault paths are covered.
+    This proves control flow and best-effort buffer overwrites, not JavaScript
+    erasure, deletion of external copies, or durable custody.
 - [ ] **SEC-103 (partial, high): explicit threshold-bypass accounting.** Raw
   private-key export is a 1-of-1 recovery root. Separate it from threshold-only
   creation, require an explicit acknowledgement, and record the choice without
   recording secret material.
-  Current copy labels the bypass and the backup transfer is one-time, but every
-  successful Lite operation is still retained automatically; this is not the
-  required acknowledgement or threshold-only default.
+  - [x] **SEC-103-LITE-GATE (complete):** acknowledgement is default-off,
+    captured/reset per create attempt, and disabled/reset during active work.
+    The primary archive gate precedes acknowledged retention; key transfer is a
+    separate two-artifact verified session. Cancellation after a private-key
+    request preserves a monotonic external-copy warning without exposing the
+    private name or bytes. A pending retained pair blocks the next Lite Create
+    and any mode switch until verified export or explicit discard; it is never
+    silently superseded. Active preparation and export sessions also block mode
+    switching until completion or explicit cancellation, preserving monotonic
+    external-copy warnings. Archive/private-key request hazards remain monotonic
+    for the live document across session wipe and persisted `pagehide`; wiping
+    memory is never treated as proof of external deletion. The warning remains
+    visible outside Lite tab/mode subtrees; private/archive publication requires
+    its exact visible panel and summary, and failed URL cleanup remains reported
+    separately from controller/key settlement. Setup faults and
+    missing/replaced critical controls return or leave the pair in the pending
+    decision; starting export alone is not a discard authorization. The exact
+    key export/discard decision controls are now bound too; optional retention is
+    suppressed or discarded if those controls disappear or are unreachable.
+  - [ ] **SEC-103-CUSTODY-RECORD (open):** define a canonical, durable, nonsecret
+    ceremony record suitable for independent signing. The current UI checklist
+    is ephemeral and is not preservation evidence.
+  - [ ] **SEC-103-KEY-ENVELOPE (open):** raw `.qkey` is unversioned and has no
+    magic, algorithm, role, or length envelope. Define a new successor format and
+    JS/CLI/Rust vectors; never silently reinterpret legacy bytes.
 - [ ] **SEC-104 (partial): secret-boundary regression suite.** Add canaries proving
   private keys, shared secrets, derived keys, plaintext, private filenames, and
   stable private-key fingerprints never enter JSON reports, errors, logs, DOM,
@@ -99,6 +128,21 @@ Status values:
     and a browser canary cover result, event, log, console, DOM text, and HTML
     sinks. QCONT wire metadata, filenames, general errors, CLI schema v1, and Rust
     remain open.
+  - [x] **SEC-104-LITE-EXPORT-PRESENTATION (complete):** Lite Create removes the
+    selected plaintext FileList at operation ownership and mode/session wipe,
+    renders only a generic input count, uses a random 128-bit output basename,
+    exposes index/role/state-only export snapshots, and keeps errors fixed and
+    non-reflective. Browser canaries cover source names, output names, key
+    fingerprints, failed evidence, and cancellation logs. Multi-file preparation
+    wipes accumulated per-file plaintext views on success and partial failure.
+    Lite Restore no longer logs ignored attachment names and attempts to wipe its
+    parsed shards, reconstructed result, bundle-entry copies, and plaintext at
+    settlement. Its session wipe clears the exact initialized shard FileList,
+    invalidates the outer refresh and inner File-backed selection generations,
+    and independently hides/scrubs intake/preflight/inspector/result DOM so a
+    mutable presentation fault cannot stop the remaining cleanup. Pro, remaining Lite
+    Restore error/output filename surfaces,
+    QCONT wire `privateKeyHash`, CLI, and Rust remain open.
 - [ ] **SEC-105 (partial): restore-time external constraints.** Add a minimum policy
   floor and explicit expectation terminology for the existing archive/state/cohort
   selectors. Define a versioned, independently supplied trust-policy artifact
@@ -203,13 +247,30 @@ Status values:
     an earlier output. Crash consistency, rollback/cleanup fault tolerance,
     filesystem-normalized aliases, inode aliases, and parent-directory TOCTOU
     remain open under REL-301.
-  - [ ] **REL-301-BROWSER-EXPORT (open):** repeated multi-file browser exports can
-    hit automatic-download quotas (a same-page two-archive run accepted only the
-    first ten of fourteen triggered files in Chromium). Replace fire-and-forget
-    anchor clicks with a user-verifiable per-artifact queue or an explicitly
-    authorized directory-write flow; never package all threshold shares into one
-    retained 1-of-1 archive merely to reduce the download count.
-- [ ] **REL-302 (open, high): aggregate resource policy.** Bound file count,
+  - [ ] **REL-301-BROWSER-EXPORT (partial):** browser publication still lacks a
+    general late-commit and durable-storage mechanism.
+    - [x] **REL-301-LITE-CREATE-QUEUE (complete):** Lite Create queues `n+2`
+      primary artifacts and the optional key flow queues two. Each real Chromium
+      download requires its own user action and exact re-import; a two-archive
+      regression exercises fourteen distinct requests. Missing, wrong-name,
+      wrong-size, wrong-digest, retry, cancellation, URL-revocation, and DOM-fault
+      paths are covered. Re-import hashing is aggregate-bounded, single-flight,
+      abortable, exact-declared-length bound, rejects non-progressing chunks, and
+      blocks new Lite work until cancellation settles. Live object URLs are
+      limited to one per row, aggregate-accounted, and a retry fails closed if
+      predecessor revocation or row association fails. Missing, replaced, moved,
+      hidden, or inert critical export controls fail before custody handoff or
+      publication; download anchors are never connected to the DOM.
+    - [ ] **REL-301-OTHER-BROWSER-FLOWS (partial):** Pro still uses legacy
+      fire-and-forget publication. Lite Restore now accounts bounded plaintext
+      object URLs, preserves a monotonic external-copy warning, rechecks its token
+      after logging/click/cleanup, and poisons later Lite publication after URL
+      cleanup/accounting failure. It still lacks re-import verification,
+      multi-output atomicity, durability, and a user-visible cancel action.
+      Directory-write authorization, other engines, and browser-crash recovery
+      remain open. Never package all threshold shares into one retained 1-of-1
+      archive merely to reduce download count.
+- [ ] **REL-302 (partial, high): aggregate resource policy.** Bound file count,
   individual bytes, aggregate bytes, metadata, shard count, reconstructed bytes,
   and allocation arithmetic before reads/allocations. Report local resource-limit
   failures distinctly from invalid-format failures.
@@ -223,6 +284,25 @@ Status values:
     Adapter pre-read bounds, streaming, structured resource errors in other
     subsystems, filesystem-normalized aliases, and physical boundary tests remain
     open.
+  - [x] **REL-302-LITE-CREATE-PROFILE (complete):** Lite rejects noninteger or
+    unsupported `n=5..25` / requested-threshold `50..90` configurations and
+    unsupported policy before key ownership; plaintext input is limited to
+    `1..256` files and 8 MiB aggregate before content reads/key generation. The
+    shared export plan enforces 64 artifacts, 64 MiB each, and 128 MiB aggregate,
+    and re-import count/name/size is bounded before hashing. Whole-buffer work,
+    peak-memory measurement, workers/streaming, other workflows, and structured
+    resource errors remain open.
+  - [x] **REL-302-LITE-CROSS-WORKFLOW-LOCK (complete):** active Create custody
+    disables Restore, while active/cancellation-settling Restore disables Create
+    and blocks tab/mode navigation. Restore owns an identity token before its
+    first await, rechecks it after asynchronous boundaries and before output, and
+    after faultable logs, native click, and URL cleanup; session wipe retains the
+    lock until local cleanup settles. Lite Restore input byte caps, streaming,
+    verified/atomic publication, and user cancellation remain open.
+    Exact bound Create-policy and Restore-signer/preflight controls are required:
+    missing/replaced Create policy never defaults to `integrity-only`, the signer
+    constraint is snapshotted once, null/stale preflight decisions block, and a
+    detached/replaced Restore File input cannot retain authority across wipe.
 - [ ] **REL-303 (open, large): streaming encryption, decryption, RS, hashing, and
   private temporary output.** Peak memory must be a documented bounded function of
   chunk size and shard profile. Publication occurs only after AEAD, length, private

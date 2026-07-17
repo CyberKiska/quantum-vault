@@ -296,22 +296,123 @@ Current runtime invariants:
 - session-level wiping on unload or `pagehide` remains part of the current security posture
 - each Lite archive creation MUST generate a fresh operation-local ML-KEM pair;
   failure, cancellation, a late key-generation result after cancellation,
-  supersession, and session wipe MUST attempt to erase the owned arrays
+  and session wipe MUST attempt to erase the owned arrays; attempted supersession
+  MUST be rejected before another operation starts and MUST leave the pending pair
+  unchanged
 - cryptographic operations MUST stay in the core or service layer rather than the UI layer
 - restore results, selection events, inspector state, logs, and DOM MUST NOT carry
   expected or recovered private-key digest values; the authenticated QENC key
   commitment remains the correctness root, while current QCONT fingerprint
   metadata may contribute only a boolean diagnostic
 
-The current Lite backup bridge retains the most recently successful pair in
-memory so the operator can trigger a one-time raw `.qkey` backup, then wipes its
-owned arrays. That retained 1-of-1 recovery root is not threshold custody and is
-not yet default-off behind an explicit pre-creation acknowledgement. Therefore
-the stricter wipe-on-success and threshold-bypass gates remain open even though
-cross-archive key reuse has been removed.
+Lite Create MUST default to threshold-only custody and MUST NOT request any
+download automatically. Before key generation or plaintext reads, it accepts
+only exact integer `n=5..25`, an exact requested threshold percentage of
+`50..90`, and `1..256` plaintext inputs totalling at most 8 MiB. These are
+non-raiseable operational browser bounds, not wire-format limits. The complete
+bound `n`, threshold, and authenticity-policy controls MUST be present and
+supported; missing or same-ID replacements MUST NOT change custody geometry or
+fall back to `integrity-only`. The raw-key bypass checkbox MUST be the exact
+initialized node, MUST be reset default-off at initialization, and grants a
+single create attempt only after a trusted user change event. Restored form state,
+programmatic `.checked`, and same-ID replacements are not authorization. The complete
+primary plan is the `n` shards plus archive-state and lifecycle-bundle artifacts.
+Every row MUST receive an individual request and MUST return through exact-name,
+exact-size, and SHA3-512-digest re-import verification before the operation may
+settle. Re-import verification proves equality to the bytes held by that browser
+session; it does not prove durable storage, independent custody, or deletion of
+other copies.
 
-Migration note: no artifact format changed. Previously created archives remain
-readable, but archives made with a reused Lite key remain linkable and share one
+The raw-key acknowledgement is default-off, captured and reset for one create
+attempt, and disabled while preparation or either export session is active. Only
+an acknowledged operation may retain its fresh pair after primary verification.
+The optional private/public raw-key transfer is a separate two-artifact verified
+session and remains a unilateral 1-of-1 threshold bypass. While an acknowledged
+pair is pending, the browser MUST block another Lite Create and a mode switch
+until the operator either completes that transfer or explicitly discards the
+pair. A later operation MUST NOT silently supersede pending recovery material.
+Failure before the optional key-export controller is handed off MUST return the
+pair to pending lifecycle ownership; merely starting export is not a discard
+decision.
+The export and discard buttons MUST be the exact initialized, connected controls.
+If they are unavailable or not visibly reachable, optional retention MUST be
+suppressed or the retained pair discarded rather than stranded in memory.
+Any active Lite preparation or export MUST also block a mode switch until
+completion or explicit cancellation so that external-copy warnings and custody
+state cannot be suppressed by navigation. Create custody state MUST disable Lite
+Restore, and an active or cancellation-settling Lite Restore token MUST disable
+Create and block tab/mode navigation. Restore MUST revalidate that token after
+every asynchronous boundary, faultable logging, native download click, and URL
+cleanup, and immediately before plaintext publication; a
+session wipe cancels the token but keeps the lock until the restore `finally`
+boundary has attempted to wipe parsed shards, reconstructed results, and
+plaintext buffers. Restore MUST require the exact connected signer-constraint
+input and preflight root wired at initialization, snapshot the optional external
+signer constraint at token acquisition, and carry that immutable value through
+preflight and core verification. Missing/replaced controls or a null/stale
+preflight decision MUST block rather than weaken the constraint. Restore MUST
+also accept only the exact initialized file input and MUST clear that bound input
+even if it is detached and replaced by a same-ID node.
+Default completion, error, cancellation, explicit discard, and session wipe MUST
+attempt best-effort release of owned buffers and capabilities. If a private-key
+request was attempted
+before cancellation, the warning that an external copy may exist is monotonic;
+the browser cannot delete that copy. Cancellation after any archive-artifact
+request likewise warns that requested shards or descriptors may remain outside
+the page and that a threshold set is a complete recovery root. These nonsecret
+hazard facts MUST remain monotonic for the live document across explicit cleanup,
+mode changes, and persisted `pagehide`/back-forward-cache transitions; memory
+wiping is not evidence of external deletion. The warning surface remains outside
+Lite tab and mode-specific subtrees. Session wipe synchronously invalidates the
+outer refresh and inner subsystem generations, clears the exact bound Restore
+FileList, resets File-backed selection state, and independently hides/scrubs the
+intake, preflight, selection options, inspector, result/error DOM, and review
+disclosure. Stale classifier/parser/inspector/preflight promises cannot repopulate
+the invalidated state or archive metadata.
+Restore plaintext publication MUST use the fixed object-URL count/byte profile,
+track a created capability before click, and preserve a monotonic plaintext-copy
+warning. Failed revocation or accounting poisons later Lite publication in that
+document and MUST NOT be reported as Restore success.
+
+The shared browser-export state machine accepts at most 64 artifacts, 64 MiB per
+artifact, and 128 MiB aggregate. It exposes only row index, role, and state;
+exact output names, lengths, source bytes, and digests remain in session-private
+memory. Re-import intake applies the same aggregate bound and permits only one
+hashing flight at a time. Cancellation aborts its Blob reader, invalidates the
+controller, and blocks a new Lite workflow until the aborted task releases its
+File references. Stream hashing MUST consume exactly the validated declared Blob
+length and reject overrun, underrun, wrong chunk types, and non-EOF empty chunks;
+the latter makes pull count a bounded function of declared bytes. Lite output
+names use a random 128-bit per-operation basename.
+The download adapter tracks at most one live object URL per row and accounts all
+live URL Blob bytes against the same 128 MiB aggregate; a retry fails closed when
+the prior row URL cannot be revoked. Before archive operation ownership or an
+optional key-custody transfer, every critical export node MUST be the exact
+connected instance wired during initialization and remain inside the exact
+panel. An active publication surface and its cancellation path MUST be reachable.
+Missing, moved, hidden, inert, or same-ID replacement controls fail before
+handoff/publication. The exact connected monotonic external-copy warning panel
+and summary are a publication precondition: both must visibly render the
+conservative hazard state before any archive/private-key object URL or download
+click. Outstanding bounded object-URL capabilities remain reported after failed
+revocation, and controller or key settlement MUST NOT be described as proof that
+they were revoked.
+Exact request/re-import verification currently applies only to Lite Create and
+its optional key export, not to Pro publication or Lite Restore output. Restore's
+tracked adapter still lacks verified, atomic, and durable publication. Raw
+`.qkey` bytes also remain a legacy unversioned representation rather than a
+crypto-agile key envelope.
+
+Multi-file QVPACK assembly copies the completed payload and then attempts to wipe
+every per-file plaintext view in a `finally` boundary, including partial-read or
+builder failures. The returned bundle remains caller-owned and JavaScript
+zeroization remains best-effort rather than a memory-forensics guarantee.
+
+Migration note: no cryptographic artifact format changed and previously created
+archives remain readable. The Lite browser workflow now uses opaque output names,
+explicit per-artifact requests and re-imports, and fixed operational input caps;
+automation coupled to the former names or fire-and-forget download burst must be
+updated. Archives made with a reused Lite key remain linkable and share one
 failure domain. Resharing the old private key does not isolate them. Isolation
 requires authorized decryption followed by full fresh-key re-encryption and new
 shards; preservation copies must not be silently deleted.
@@ -486,10 +587,28 @@ Current residual risks include:
   aggregate, and encoded-size limits with checked framing, but browser and CLI
   adapters still read whole source files before core rejection and the 1 GiB
   boundary is not a streaming-memory guarantee
-- browser automatic-download quotas can suppress later files across repeated
-  multi-artifact exports without a reliable completion signal; tests use an
-  in-page capture harness for same-session key-domain assertions, while a
-  user-verifiable explicit export queue or directory-write flow remains required
+- Lite Create and its optional raw-key export avoid automatic multi-download
+  bursts through one explicit request per artifact plus exact re-import, with
+  same-page two-archive and fault-injection coverage in Chromium. Pro publication
+  remains legacy fire-and-forget; Lite Restore URLs are bounded, tracked, and
+  late-cancel guarded, but output is still unverified and non-atomic. Browser
+  quota behavior and other browser engines remain unproved
+- Lite Restore excludes concurrent Create/Pro work, gates late plaintext output,
+  and poisons publication after URL cleanup/accounting failure, but it still
+  performs whole-buffer reads and may issue multiple downloads without verified
+  publication, atomicity, or a user-visible cancellation control
+- Lite preparation and RS work still use whole buffers on the main thread. Blob
+  and File hashing streams, but the complete plan remains resident as whole Blob
+  or byte-array sources. Input and publication profiles bound accepted work, but
+  worst-case peak memory has not been measured, preparation cancellation is
+  cooperative, and already-running cryptographic work may finish before cleanup
+- during Lite verification the browser temporarily holds a complete recovery set;
+  exact re-import proves neither durable/independent custody nor secure deletion,
+  object-URL revocation is best-effort, and requested downloads remain outside
+  page control
+- optional raw `.qkey` files have no magic, version, algorithm, role, or length
+  envelope. A crypto-agile successor requires a new explicitly versioned format
+  and JS/CLI/Rust interoperability vectors rather than silent reinterpretation
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
 - multi-file publication is not yet a crash-atomic transaction: `.qvpack`

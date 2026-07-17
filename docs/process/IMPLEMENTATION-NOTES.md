@@ -107,6 +107,99 @@ Contributor rule:
 
 If you touch docs, logs, UI, or code comments, keep that distinction explicit.
 
+### 7. Lite export completion is workflow state, not a download click
+
+`BrowserExportSession` adopts one complete, bounded plan before any publication
+adapter receives bytes. Its public state is deliberately small:
+
+`ready -> requested-unverified -> verified`
+
+A request or evidence failure moves a row to `failed`; only an explicit retry
+returns it to `ready`. Public snapshots carry index, role, and state only. Exact
+names, lengths, SHA3-512 digests, and sources remain private to the in-memory
+session and Lite controller. No request is automatic, and a Lite archive remains
+incomplete until every shard, archive-state descriptor, and lifecycle bundle row
+passes exact-name, size, and digest re-import.
+
+Key custody settles after that gate. The default path wipes the operation pair on
+a best-effort basis. A default-off acknowledgement captured for that create may
+instead retain the pair for one separate two-row raw-key export. Downloaded or
+browser-managed copies remain outside JavaScript cleanup, and re-import does not
+prove durable or independent custody. This verified-publication boundary covers
+Lite Create and its optional key export only. Lite Restore now has bounded tracked
+URL publication and late-cancellation checks, but not the same re-import,
+atomicity, or durability semantics; Pro publication remains outside the gate.
+
+Treat an acknowledged retained pair as an unresolved custody decision. Until its
+verified export completes or the operator explicitly discards it, block another
+Lite Create and a mode switch. Never replace it automatically with a later
+archive's pair.
+
+Mode switching is not a cancellation primitive for an active Lite preparation or
+export. Keep the switch blocked until completion or the visible explicit Cancel
+action so requested-artifact and private-key external-copy warnings cannot be
+discarded as incidental UI state.
+
+Starting optional key export transfers the pair only provisionally: any setup or
+renderer failure before controller handoff returns it to lifecycle ownership for
+retry. Re-import verification is one abortable flight per controller. Apply the
+64-artifact, 64-MiB individual, and 128-MiB aggregate checks before hashing,
+disable intake during that flight, and do not allow a new workflow until aborted
+File references settle. A Blob stream must yield progress, consume exactly its
+validated declared length, and fail with a fixed error on empty chunks, overrun,
+or underrun. Multi-file bundle assembly must wipe every accumulated per-file
+plaintext view in `finally`, on success and partial failure.
+
+Treat the export controls as part of custody handoff, not optional decoration.
+Validate the connected panel, title, status, row root, file input, re-import
+action, and explicit Cancel action before operation/key ownership and again
+before controller handoff. Every node must be the exact instance wired at
+initialization, remain inside the exact panel, and the active handoff/download
+surface must be reachable; a same-ID replacement or hidden/moved action is inert
+and must fail closed.
+Bind the optional key export/discard decision buttons too. Suppress retention at
+archive settlement—or discard an already retained pair—if those exact controls
+are missing or cannot be visibly reached, so DOM replacement cannot strand a
+1-of-1 recovery root.
+Apply the same rule to security policy UI: Create never substitutes
+`integrity-only` for a missing/replaced authenticity-policy select. Restore
+snapshots its exact bound optional signer constraint at token acquisition and
+requires a current bound preflight root; a stale or null decision is blocking.
+
+Create and Restore locks are bidirectional. Create preparation/export/pending-key
+state keeps Restore unavailable. Restore acquires an identity token before its
+first asynchronous preflight, keeps Create/tab/mode navigation blocked through
+cancellation settlement, rechecks the token after asynchronous boundaries and
+immediately before output, and wipes parsed shards/results/plaintext in `finally`.
+Session wipe marks the token cancelled but must not release the lock early.
+Recheck the token after faultable log callbacks, after the detached native click,
+and after object-URL cleanup. Track Restore plaintext URLs in the fixed browser
+publication profile; a revocation/accounting fault is terminal for later Lite
+publication in that document and must remain visibly reported.
+It first invalidates the outer input-refresh generation, then performs a
+synchronous prefix reset of File-backed successor-selection state and independent
+hide/scrub attempts for every Lite Restore presentation surface. Bind and clear
+the exact initialized file input even if it has been detached; a same-ID
+replacement is neither authority nor a reason to retain the original FileList.
+Propagate a generation/current
+predicate through readiness, artifact intake, successor selection, inspector,
+and preflight renderers; checking only after a mutating async helper returns is
+too late because a stale helper may already have repopulated the DOM.
+
+Once any archive, raw private-key, or restored-plaintext download is requested, preserve a
+generic nonsecret external-copy hazard for the lifetime of that live document.
+Do not reset it during mode/session cleanup or persisted `pagehide`; browser
+memory cleanup cannot prove deletion of a browser-managed file. Keep the warning
+outside workflow/mode-specific subtrees and require the exact panel and summary
+to render visibly before a private or archive publication adapter receives bytes.
+
+Object URLs are capabilities and resource owners, not mere presentation data.
+Track one per row, revoke the predecessor before retry, retain failed revocations
+for later cleanup, and account every live Blob against the 128-MiB aggregate.
+Never create another row URL after predecessor cleanup fails. Report outstanding
+capabilities explicitly after best-effort cleanup; controller/key settlement does
+not prove URL revocation.
+
 ## Contributor guidance for future changes
 
 ### If you change archive-state, cohort-binding, transition-record, source-evidence, or lifecycle-bundle structure
@@ -126,6 +219,16 @@ If you touch docs, logs, UI, or code comments, keep that distinction explicit.
 - update `docs/security-model.md`
 - check whether the change weakens fail-closed behavior or broadens claims beyond what the project can honestly support
 
+### If you change browser publication
+
+- update `docs/security-model.md` and keep coverage claims scoped by workflow
+- preserve fixed count/byte caps, checked aggregate arithmetic, generic
+  non-reflective errors, exact stream-length/progress checks, and secret-opaque
+  public state
+- test cancellation, duplicate/concurrent actions, adapter and DOM faults,
+  exact-name/size/digest failures, retries, and external-copy warnings
+- do not treat a download event or re-import as proof of durable custody
+
 ### If you change long-horizon archival behavior
 
 - update `docs/long-term-archive.md`
@@ -144,7 +247,8 @@ If you touch docs, logs, UI, or code comments, keep that distinction explicit.
 | `src/core/crypto/auth/` | Detached signature, pinning, and OTS verification | `.qsig`, `.sig`, `.pqpk`, timestamp linkage, proof-identity dedupe |
 | `src/app/restore-inputs.js` | Restore-time file classification | Detects successor shards, archive-state descriptors, lifecycle bundles, detached signatures, `.pqpk`, and `.ots` |
 | `src/core/features/qcont/` | Pro-mode successor workflows | Split, attach, restore, and reshare UI integration |
-| `src/core/features/lite-mode.js` | Lite-mode workflow | Simplified successor archive creation and restore |
+| `src/core/export/browser-export-session.js` | Bounded browser publication state machine | Secret-opaque row state, exact re-import, retry, cancellation, and disposal |
+| `src/core/features/lite-mode.js` | Lite-mode workflow | Verified export queue for Create/key backup; simplified Restore remains on legacy publication behavior |
 
 ## Current examples and fixtures
 

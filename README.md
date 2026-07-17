@@ -72,11 +72,45 @@ Deferred roadmap:
 - **Verify** detached signatures while keeping integrity, signer pinning, maintenance evidence, source evidence, and policy satisfaction as separate outcomes.
 - **Keep cryptographic operations local** to the client browser or CLI host during normal operation.
 - **Lite Create** generates a fresh operation-local ML-KEM keypair for every
-  archive, shows custody guidance, and exports an archive checklist. The current
-  optional raw-key backup retains only the most recently successful pair in
-  browser memory until backup, supersession, or session wipe; it is a 1-of-1
-  threshold bypass and its explicit default-off acknowledgement gate remains a
-  hardening item.
+  archive and defaults to threshold-only custody. It requests no automatic
+  downloads: the operator requests each of the `n` shards, archive-state
+  descriptor, and lifecycle bundle separately, then re-imports the exact name,
+  size, and SHA3-512 digest before the operation settles and the unretained
+  keypair is wiped. Raw-key backup is a separate optional 1-of-1 recovery root,
+  enabled only by a default-off acknowledgement captured for that create attempt;
+  its private/public artifacts use the same request-and-re-import gate.
+  An acknowledged pending pair blocks another Lite Create and a mode switch until
+  the operator either completes that export or explicitly discards the pair; it
+  is never silently superseded by a later archive.
+  Any active Lite preparation or export likewise blocks Restore and a mode
+  switch until it completes or the operator uses the visible cancellation
+  action. An active Restore blocks Create and mode/tab navigation until its
+  operation token settles; session wipe cancels the token and gates every later
+  plaintext-output boundary. Warnings that requested downloads may exist outside
+  the page remain monotonic for the live document, including persisted
+  `pagehide`/back-forward-cache transitions, and remain globally visible after
+  Lite tab or mode navigation. Failed object-URL revocation remains explicitly
+  reported; controller/key settlement is not represented as URL revocation.
+  Restore plaintext publication uses the same bounded URL accounting and a
+  monotonic plaintext-copy warning, fails closed after cleanup/accounting faults,
+  and rechecks cancellation after logging, native click, and URL cleanup.
+  Key-export setup faults return the still-pending pair for retry, and re-import
+  hashing is single-flight and abortable so repeated selections cannot multiply
+  the fixed browser work profile. The whole already-wired export control surface
+  is required before operation/key ownership, and Blob hashing rejects declared
+  length mismatches or non-progressing stream chunks. Create cannot substitute
+  `integrity-only` for a missing/replaced policy control; Restore snapshots its
+  exact bound optional signer constraint, requires a current preflight decision,
+  requires the exact initialized file input, and invalidates the outer and inner
+  File-backed UI refresh generations on session wipe.
+  Optional key retention also requires the exact initialized export/discard
+  controls; missing or unreachable controls suppress or discard the temporary
+  key while leaving the verified threshold archive authoritative.
+  Re-import verification is not proof of durable or independent custody. This
+  verified-publication workflow currently covers Lite Create and its optional
+  raw-key backup only; Lite Restore has bounded tracked publication and
+  cooperative late-cancellation gates, but neither its output adapter nor Pro
+  browser outputs are covered by verified or atomic publication.
 
 ## Workflow At A Glance
 
@@ -84,7 +118,7 @@ Deferred roadmap:
 | --- | --- | --- | --- |
 | Generate | Browser entropy | `privateKey.qkey`, `publicKey.qkey` | ML-KEM key pair generated client-side |
 | Encrypt | File(s), `publicKey.qkey` | `.qenc` | Post-quantum confidentiality and AEAD integrity |
-| Split | `.qenc`, `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
+| Split | `.qenc`, `privateKey.qkey` | Lite: `.qcont`, `*.archive-state.json`, `*.lifecycle-bundle.json`; Pro also: `*.cohort-binding.json` | Threshold recovery; Lite Create queues all `n+2` artifacts for individual request and exact re-import before completion, while Pro publication is unchanged; successor shards always embed archive-state, cohort-binding, and lifecycle-bundle bytes even when Lite does not export cohort-binding as a standalone file |
 | Attach | Successor shards or lifecycle bundle, optional channel target artifact, `.qsig`/`.sig`, optional `.pqpk`, optional `.ots` | Updated lifecycle bundle, optional rewritten `.qcont` shards | Imports archive-approval, maintenance, or source-evidence signatures through the selected channel; archive-state and cohort-binding bytes stay unchanged |
 | Restore | `.qcont`, optional archive-state descriptor, lifecycle bundle, signatures, pins, timestamps | Recovered `.qenc`, recovered `privateKey.qkey` | Policy-gated archive reconstruction with explicit selection whenever ambiguity exists |
 | Decrypt | `.qenc`, `privateKey.qkey` | Original file(s) | Payload recovery and file-hash confirmation |
@@ -290,6 +324,22 @@ Full command reference and browser-to-CLI migration notes are in [`docs/cli.md`]
 
 ## Security Notes
 
+- Lite Create's verified-export workflow changes browser ceremony, not wire
+  bytes: existing canonical artifacts remain readable. New Lite filenames use a
+  random opaque per-operation basename; automation that expected stable or
+  plaintext-derived names must instead preserve each exact presented name through
+  re-import. The 1–256 file / 8 MiB aggregate Lite input profile is an operational
+  browser limit, not an artifact-format limit.
+- Lite Restore now refuses further Lite publication after an object-URL
+  accounting/cleanup fault and leaves a monotonic plaintext-copy warning. This
+  changes browser failure ceremony only; it does not change artifact bytes or
+  prove atomic or durable plaintext output.
+- Existing archives created under a reused Lite key are not isolated by
+  resharing. They require authorized decryption followed by full fresh-key
+  re-encryption; legacy preservation copies must not be deleted automatically.
+- Optional raw `.qkey` export remains a legacy unversioned key representation.
+  It is not a crypto-agile successor key envelope and must not be silently
+  reinterpreted as one.
 - All cryptographic operations are intended to happen locally in the client browser or CLI host; no private archive material should need to leave the user environment.
 - JavaScript cryptography cannot provide strong side-channel guarantees against hostile local environments.
 - ML-KEM gives confidentiality, not sender authentication; detached signatures and policy evaluation provide provenance at the archive layer.

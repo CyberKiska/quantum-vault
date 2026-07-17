@@ -130,6 +130,39 @@ The archive lifecycle proceeds through the following stages:
 6. **Restore.** A threshold of consistent shards is supplied, along with any optional external archive-state, lifecycle-bundle, signature, independently obtained signer pin, or timestamp material. The system verifies structural integrity, reconstructs the `.qenc` container and private key, verifies detached signatures, evaluates archive policy, and gates restoration accordingly.
 7. **Decrypt.** The restored `.qenc` container is decrypted using the reconstructed private key.
 
+The shipped Lite-only creation ceremony defaults to threshold-only custody. It
+requests no downloads automatically: all `n+2` primary artifacts require one
+explicit request each and exact name, size, and SHA3-512 digest re-import before
+the operation settles. Unless a default-off acknowledgement was captured for
+that create attempt, the operation-local keypair is then wiped on a best-effort
+basis. An acknowledged pair may instead enter a separate two-artifact optional
+raw-key export, which is explicitly a 1-of-1 recovery root. Re-import is evidence
+of equality to the browser session, not durable or independent custody. A pending
+acknowledged pair blocks a later Lite Create and mode switch until the operator
+completes the export or explicitly discards it, preventing silent supersession of
+recovery material. Active Lite preparation and export sessions also block mode
+switching until completion or visible explicit cancellation, preserving any
+external-copy warning. Those nonsecret hazard facts remain monotonic for the live
+document even when a persisted `pagehide` invalidates page-owned controllers and
+DOM state and requests cooperative best-effort cleanup. The warning is outside
+workflow/mode-specific subtrees, and a failed object-URL revocation remains
+reported separately from controller/key settlement. Setup failure
+returns a not-yet-published key pair to the pending decision, while re-import
+hashing is single-flight, aggregate-bounded, abortable, exact-length bound, and
+rejects non-progressing stream chunks. Missing or replaced critical export
+controls fail before custody handoff. Lite Restore and Lite Create exclude one
+another with an operation token; session wipe cancels Restore cooperatively and
+later plaintext-output boundaries, faultable logs, native click, and URL cleanup
+recheck the token. Restore URLs are bounded/accounted, a requested plaintext copy
+leaves a monotonic warning, and cleanup/accounting failure poisons later Lite
+publication. Missing/replaced policy,
+signer-constraint, or preflight controls cannot silently weaken a workflow, and
+generation checks stop pre-wipe classifiers/parsers from repopulating invalidated
+File-backed state; Restore also accepts only its exact initialized file input.
+Verified/atomic publication still does not cover Pro publication or Lite Restore
+output. Optional key retention also fails closed if its exact export/discard
+decision controls disappear or cannot be reached.
+
 ### 3.3 Current implementation boundary
 
 **Implemented now**
@@ -141,6 +174,8 @@ The archive lifecycle proceeds through the following stages:
 - restore-time policy evaluation over archive-approval signatures only
 - fail-closed archive, state, cohort, and lifecycle-bundle selection
 - same-state resharing with required transition records
+- a Lite Create and optional key-export queue with zero automatic requests,
+  bounded plans, and exact re-import before key-custody settlement
 
 **Deferred roadmap**
 
@@ -568,6 +603,26 @@ The current per-chunk mode derives distinct IVs per chunk but uses a single encr
 Key generation depends primarily on the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`. In the shipped implementation, `src/core/crypto/entropy.js` first obtains a 64-byte base seed from `crypto.getRandomValues()`, performs only a minimal consecutive-output sanity check, and optionally mixes user-supplied entropy bytes through KMAC256 under the `quantum-vault:entropy-mix:v2` domain. `src/app/browser-entropy-collector.js` summarizes mouse, keyboard, window, and touch events into coarse event records and periodically folds in fresh OS randomness before producing optional user-entropy bytes for ML-KEM key generation.
 
 This is a robustness measure, not a formal entropy-validation claim. NIST SP 800-90B distinguishes entropy-source assessment from later random-bit generation layers, and SP 800-90C defines full entropy-source-plus-DRBG constructions [19][39]. Quantum Vault does not currently claim that the browser build instantiates a standalone SP 800-90C-style random-bit generator inside the application. The current claim is narrower: the host platform CSPRNG is assumed to be suitable, and event-derived material is treated as best-effort augmentation rather than as a separately validated entropy source.
+
+### 9.8 Browser publication and custody limits
+
+Lite Create and its optional raw-key export now use bounded, explicit
+per-artifact requests and exact re-import, but preparation, erasure coding, and
+cryptographic orchestration remain main-thread work. Blob/File hashing streams,
+but the complete artifact plan is still retained as whole Blob or byte-array
+sources. Preparation cancellation is cooperative rather than immediate,
+worst-case peak memory is unmeasured, and the browser temporarily holds a
+complete recovery set. Re-import supplies no filesystem-atomic or
+durable-storage signal, object-URL revocation and JavaScript zeroization are
+best-effort, and already requested downloads cannot be deleted by the page. The
+real-download regression suite currently establishes Chromium behavior only;
+other engines, Pro publication, and Lite Restore verified output remain outside
+this gate. Lite Restore now has cross-workflow exclusion, parsed-shard/result
+zeroization, bounded tracked object URLs, monotonic plaintext-copy warnings, and
+late cancellation checks, but its adapter can still issue multiple unverified
+downloads and is not crash-atomic.
+Optional `.qkey` export is also still an unversioned legacy byte representation,
+not a crypto-agile successor key envelope.
 
 ---
 
