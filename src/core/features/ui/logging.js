@@ -197,27 +197,16 @@ export function logRestoration(shardCount, containerId, options = {}) {
 }
 
 // Determine if a filename is meaningful (not a hash)
-export function isMeaningfulFilename(filename) {
-    if (!filename.includes('.')) {
-        return !/^[a-f0-9]+$/i.test(filename);
-    }
-    const namePart = filename.split('.')[0];
-    if (/^[a-f0-9]+$/i.test(namePart)) {
-        return false;
-    }
-    return /[a-zA-Z]/.test(namePart) || /\s/.test(namePart) || /[-_]/.test(namePart);
-}
-
 // Log successful restoration
 export function logRestorationSuccess(filename, fileSize, encryptionTime, integrityOk, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;
 
     if (isLiteMode) {
         if (integrityOk) {
-            const displayName = isMeaningfulFilename(filename) ? filename :
-                (filename.includes('.') ?
-                    `${shortenHash(filename.split('.')[0])}.${filename.split('.').pop()}` : filename);
-            logSuccess(`Restored: ${displayName} (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
+            // A successful Restore may intentionally publish the recovered file
+            // under its authenticated name, but that plaintext name must not be
+            // duplicated into the long-lived operations log.
+            logSuccess(`Restored payload (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
         } else {
             logError('Hashes do NOT match. File integrity verification failed.', { elementId, isLiteMode, skipToast: true });
         }
