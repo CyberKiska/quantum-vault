@@ -457,7 +457,9 @@ Current decrypt/verify order is:
 5. verify `keyCommitment`
 6. decrypt with AES-GCM using the required AAD
 7. unpack `wrapped-v1`
-8. optionally compare `privateMeta.fileHash` with a fresh `SHA3-512` over recovered file bytes
+8. require the exact `wrapped-v1` private schema, compare `originalLength`, and
+   compare `privateMeta.fileHash` with a fresh `SHA3-512` over recovered file
+   bytes before returning plaintext
 
 ## 6. `.qcont` shard format
 
