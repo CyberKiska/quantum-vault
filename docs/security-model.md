@@ -416,6 +416,10 @@ Operator responsibilities:
 - leave `QV_ALLOW_DETERMINISTIC` unset outside reproducible test fixtures; deterministic split flags are non-secret fixture controls, but when used their values are still visible through normal command-line argument inspection
 - understand that `--json` output is safe for automation but may contain file paths, archive identifiers, state identifiers, digests, and policy status
 - avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied
+- treat `--force` as permission to replace existing regular output files only;
+  output symlinks, directories, and other non-files remain rejected, and a
+  multi-artifact plan with duplicate or ancestor/descendant destinations is
+  rejected before staging
 - preserve archive-state descriptors, cohort-binding sidecars, lifecycle bundles, detached signatures, signer pins, timestamps, and source-evidence objects alongside shards so future restore policy can be evaluated explicitly
 
 CLI network and policy boundaries:
@@ -441,6 +445,9 @@ Current residual risks include:
 - per-chunk AEAD key reuse within one container: the current `per-chunk-aead` mode derives distinct IVs but uses a single `Kenc` across chunks, which is acceptable for the current size regime but may warrant future hardening for much larger payloads
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
+- multi-file publication is not yet a crash-atomic transaction: sequential
+  `.qvpack` extraction and failures during multi-directory rename, rollback,
+  backup cleanup, or directory `fsync` can still leave partial or residual files
 
 ## 12. Future coverage retained for this document
 

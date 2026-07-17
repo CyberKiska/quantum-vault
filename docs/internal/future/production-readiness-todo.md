@@ -135,11 +135,18 @@ Status values:
 
 ## Stage 3 — bounded processing and late commit
 
-- [ ] **REL-301 (open, high): no output before complete validation.** Pro browser
+- [ ] **REL-301 (partial, high): no output before complete validation.** Pro browser
   restore/decrypt must verify authenticated private fixity and validate every
   output name before triggering any download. CLI multi-file extraction must
   commit as one artifact set or roll back completely under injected write,
   `fsync`, and rename failures.
+  - [x] **REL-301-DESTINATION-GATE (complete):** atomic file helpers reject
+    directories, live or broken symlinks, and other non-file destinations even
+    under `--force`; multi-artifact plans reject duplicate and lexical
+    ancestor/descendant paths before staging. Regression tests preserve existing
+    directory contents and symlink targets and leave no temp/backup artifacts on
+    these preflight failures. This does not establish crash-atomic multi-file
+    publication or close input/output alias races.
 - [ ] **REL-302 (open, high): aggregate resource policy.** Bound file count,
   individual bytes, aggregate bytes, metadata, shard count, reconstructed bytes,
   and allocation arithmetic before reads/allocations. Report local resource-limit

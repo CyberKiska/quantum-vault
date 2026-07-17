@@ -38,6 +38,12 @@ Filesystem notes:
 
 - File modes are requested modes. The operating system umask may make resulting files more restrictive.
 - Small detached and lifecycle artifacts (`.qsig`, `.pqpk`, `.ots`, lifecycle JSON, source-evidence, and key inputs) are capped at 32 MiB before parsing. `.qenc` and `.qcont` are not subject to that small-artifact cap.
+- Output destinations may be absent or existing regular files only. Directories,
+  symbolic links (including broken links), and other non-files are rejected even
+  with `--force`.
+- A multi-artifact write rejects duplicate output paths and lexical
+  ancestor/descendant output pairs before staging any bytes. This preflight does
+  not make publication across multiple directories crash-atomic.
 
 `cliSchemaVersion` (currently `1`) labels the stdout JSON contract for automation:
 
@@ -310,7 +316,9 @@ Exit status:
 Security notes:
 
 - The CLI validates the private key size before split and core verifies the `.qenc` key commitment before shard generation.
-- Output paths are preflighted before any artifact write unless `--force` is supplied.
+- Output paths are preflighted before any artifact write. `--force` permits
+  replacement of an existing regular file only; it does not permit replacing a
+  directory, symbolic link, or other non-file.
 - The loaded private key, input container buffer, and emitted shard byte buffers are zeroized best-effort after write/report construction. Node.js memory zeroization remains best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
 
 ### `qv attach [--shards <glob-or-file> ...] [--bundle <file>] [options]`
