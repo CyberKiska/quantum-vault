@@ -44,7 +44,8 @@ Status values:
 
 ## Stage 1 — release-blocking trust and archive-key isolation
 
-- [ ] **SEC-101 (open, critical): remove mutable-bundle self-authorization.**
+- [x] **SEC-101-JS (complete, critical): remove mutable-bundle
+  self-authorization in JavaScript.**
   Bundled signer material may establish only cryptographic self-consistency. It
   must not be described as pinned/trusted or count toward archive policy without
   an independently supplied signer pin or trust policy. Apply the rule to PQ and
@@ -56,6 +57,11 @@ Status values:
   - Gate: the same signature counts when its identity is supplied independently.
   - Migration: current bytes remain readable; acceptance becomes deliberately
     stricter. No compatibility switch may restore bundle-self-trust.
+- [ ] **SEC-101-RUST (blocked-external, critical): apply the same trust boundary
+  to the co-equal Rust implementation.** Rust baseline `f29f090` still treats a
+  key carried by the lifecycle bundle as archive-policy authority. Until its
+  implementation, negative tests, and migration notes change, SEC-101 is not an
+  ecosystem-wide property and the trust milestone remains open.
 - [ ] **SEC-102 (open, high): fresh Lite ML-KEM keypair per archive.** Remove the
   session-global archive key reuse domain and wipe per-operation private material
   on success, failure, and cancellation.

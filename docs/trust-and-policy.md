@@ -25,7 +25,7 @@ This document defines the current semantics of:
 - detached signatures and signer identity material
 - archive authenticity policy
 - proof counting and strong-PQ evaluation
-- bundled pinning and user-supplied pinning
+- bundled-key cryptographic verification and independently supplied signer pinning
 - restore authorization and result reporting
 - the separation among archive approval, maintenance signatures, source evidence, and OTS evidence
 
@@ -75,8 +75,8 @@ Implemented now:
 - archive authenticity policy levels `integrity-only`, `any-signature`, and `strong-pq-signature`
 - archive-state-centric archive approval
 - `QV-Lifecycle-Bundle` v1 attachment families and their distinct policy roles
-- proof counting by unique detached proof identity
-- separate status channels for archive approval, maintenance signatures, source-evidence signatures, OTS evidence, bundle pinning, and user pinning
+- archive-policy counting by unique verified signer identity, with detached proof identity used to detect duplicate encodings/proofs
+- separate status channels for cryptographic archive-approval verification, policy authorization, maintenance signatures, source-evidence signatures, OTS evidence, bundled-key verification, and external signer pinning
 - fail-closed restore when ambiguity remains in `archiveId`, `stateId`, `cohortId`, or embedded lifecycle-bundle digest; explicit operator selection is a warned override, not an automatic winner selection
 
 Deferred roadmap:
@@ -125,7 +125,7 @@ Quantum Vault distinguishes the following states:
    At least one detached archive-approval signature cryptographically verifies over the exact canonical archive-state descriptor bytes.
 
 3. `signer identity pinned`
-   A verified signature is linked to expected signer identity material supplied either by the lifecycle bundle or by the restore operator.
+   A verified signature is linked to expected signer identity material supplied independently by the restore operator. Signer material inside the mutable lifecycle bundle is not a pin or trust anchor.
 
 4. `archive policy satisfied`
    The archive's declared authenticity policy is satisfied by the available verified archive-approval signatures that count toward policy.
@@ -155,13 +155,18 @@ Current restore reporting uses distinct status fields including:
 
 - `archiveApprovalSignatureVerified`
 - `strongPqSignatureVerified`
+- `archiveApprovalCryptographicallyVerified`
+- `strongPqArchiveApprovalCryptographicallyVerified`
 - `maintenanceSignatureVerified`
 - `sourceEvidenceSignatureVerified`
 - `otsEvidenceLinked`
 - `signerPinned`
-- `bundlePinned`
-- `userPinned`
+- `bundledKeyVerified`
+- `externallyPinned`
+- `authorizedForPolicy`
 - `policySatisfied`
+
+`bundlePinned` remains a deprecated compatibility field and MUST be `false`. `userPinned` and `signerPinned` remain compatibility aliases for `externallyPinned`; unlike their former combined semantics, they never become true from lifecycle-bundle material.
 
 ## 3. Current role model and authority boundary
 
@@ -256,8 +261,8 @@ Current object shape:
 | Policy level | Current minimum requirement | Unsigned restore allowed | Ed25519-only signatures sufficient |
 | --- | --- | --- | --- |
 | `integrity-only` | No detached archive-approval signature required | Yes | Yes, but not required |
-| `any-signature` | `minValidSignatures` valid archive-approval signatures | No | Yes |
-| `strong-pq-signature` | `minValidSignatures` valid archive-approval signatures and at least one valid strong-PQ archive-approval signature | No | No |
+| `any-signature` | `minValidSignatures` cryptographically valid archive-approval signatures whose signers match independent external pins | No | Yes |
+| `strong-pq-signature` | The same externally pinned threshold, including at least one strong-PQ archive-approval signature | No | No |
 
 ### 5.2 Current defaults
 
@@ -272,14 +277,14 @@ Current shipped defaults:
 Current policy semantics:
 
 - `integrity-only` allows recovery but does not provide signer-authenticated archive approval
-- `any-signature` requires at least one valid archive-approval signature but does not require a PQ suite specifically
-- `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature
+- `any-signature` requires at least one cryptographically valid archive-approval signature matched by an independently supplied signer pin, but does not require a PQ suite specifically
+- `strong-pq-signature` requires at least one externally pinned, cryptographically valid strong-PQ archive-approval signature
 
 These meanings are intentionally narrow. Restore authorization is derived from explicit archive-policy rules over archive-approval signatures; auxiliary provenance material may improve reporting, but it does not silently change what the policy itself requires.
 
 Current policy non-claims:
 
-- policy satisfaction does not imply signer pinning
+- policy satisfaction implies that each counted signer matched an independently supplied pin; it does not imply organizational authority beyond that operator-supplied expectation
 - policy satisfaction does not imply timestamp evidence
 - policy satisfaction does not imply maintenance approval
 - policy satisfaction does not imply source-review approval
@@ -293,9 +298,9 @@ They are descriptive guidance, not first-class on-wire `policyId` values.
 | Recommended profile | Current policy object | Typical use | Current consequence |
 | --- | --- | --- | --- |
 | Personal recovery profile | `level = integrity-only`, `minValidSignatures = 1` | Personal or family archival storage where recoverability is primary and signer-authenticated provenance is optional | Restore is allowed if reconstruction integrity holds |
-| Signature-required recovery profile | `level = any-signature`, `minValidSignatures = 1` | Distributed storage where unsigned restore must fail, but Ed25519 interoperability is acceptable | Restore blocks unless at least one valid archive-approval signature verifies over canonical archive-state bytes |
-| Auditor-led archival profile | `level = strong-pq-signature`, `minValidSignatures = 1` | Verified data where long-lived archive approval matters | Restore blocks unless at least one valid strong-PQ archive-approval signature exists |
-| Multi-approver archival profile | `level = strong-pq-signature`, `minValidSignatures > 1` | Dual-control or committee-style archival approval | Restore blocks unless the signature threshold is met and at least one valid strong-PQ archive-approval signature exists |
+| Signature-required recovery profile | `level = any-signature`, `minValidSignatures = 1` | Distributed storage where unsigned restore must fail, but Ed25519 interoperability is acceptable | Restore blocks unless at least one valid archive-approval signature verifies and matches an external signer pin |
+| Auditor-led archival profile | `level = strong-pq-signature`, `minValidSignatures = 1` | Verified data where long-lived archive approval matters | Restore blocks unless at least one valid strong-PQ archive-approval signature matches an external signer pin |
+| Multi-approver archival profile | `level = strong-pq-signature`, `minValidSignatures > 1` | Dual-control or committee-style archival approval | Restore blocks unless the externally pinned signer threshold is met and at least one counted signature is strong PQ |
 
 ### 5.5 Current hard boundary between lifecycle-bundle updates and state changes
 
@@ -311,7 +316,7 @@ The following MUST remain distinct:
 
 An archive satisfies authenticity policy if:
 
-- at least `minValidSignatures` archive-approval detached signatures are cryptographically valid over the exact canonical archive-state descriptor bytes
+- at least `minValidSignatures` unique archive-approval signers have cryptographically valid signatures over the exact canonical archive-state descriptor bytes and match independently supplied signer pins
 - at least one of those valid archive-approval signatures satisfies the policy level's suite requirement when `strong-pq-signature` is selected
 - maintenance signatures and source-evidence signatures are not counted toward `minValidSignatures`
 
@@ -349,44 +354,43 @@ Current wrapper distinction:
 
 Current counting rules are:
 
-- `minValidSignatures` counts unique verified signer identities within the archive-approval family; multiple proofs from one signer count once
+- `minValidSignatures` counts unique, externally pinned signer identities within the archive-approval family; multiple proofs from one signer count once
 - QSIG proof identity is derived from signed TBS fields, signing context, and signature bytes, excluding unauthenticated display metadata
 - semantically equivalent Stellar proofs are deduplicated using decoded signature/XDR bytes even if JSON serialization or base64 spelling differs
 - invalid extra signatures are reported but ignored for archive-policy counting
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself and matched neither bundled nor user-supplied signer material are ignored for trust and policy counting; "self-verified" means the signature was verified exclusively against the public key carried inside the `.qsig` binary wrapper, without corroboration from an externally-anchored identity source; this condition is excluded from policy satisfaction because it provides no binding to an identity established outside the artifact being evaluated
-- `strong-pq-signature` requires at least one valid strong-PQ archive-approval signature in addition to `minValidSignatures`
+- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself are ignored for policy counting
+- signatures verified by signer material found only in the mutable lifecycle bundle remain cryptographically visible but are ignored for policy counting
+- only restore-time `.pqpk` input or a restore-time expected Stellar signer can make a signature policy-eligible in the current implementation
+- `strong-pq-signature` requires at least one externally pinned, policy-eligible strong-PQ archive-approval signature in addition to `minValidSignatures`
 
-This is a trust-boundary rule, not a weaker verifier. An embedded-key-only `.qsig` may still be cryptographically valid as a detached proof artifact, but the current policy model refuses to treat self-contained proof material as externally anchored signer identity.
+This is a trust-boundary rule, not a weaker verifier. Embedded and bundled keys can establish cryptographic consistency, but an attacker who can rewrite the mutable lifecycle bundle can replace both a signature and its bundled key. A bundle therefore cannot bootstrap its own authority.
 
 ## 7. Signer identity and pinning semantics
 
-Pinned signer identity is an additional trust signal.
-It is not the same thing as policy satisfaction.
+An independently pinned signer identity is the current authorization input for signature-required policy.
+A matching pin does not by itself prove organizational authority, and policy evaluation remains a separate threshold-and-suite decision.
 
-### 7.1 Current pin sources
+### 7.1 Current verification and pin sources
 
-Current signer pin sources are:
+Current non-trust verification source:
 
-- `bundlePinned`: a verified signature matched bundled signer material explicitly linked from the lifecycle bundle
-- `userPinned`: signer identity material came from restore-time user input
-- `signerPinned = bundlePinned || userPinned`
+- `bundledKeyVerified`: a signature verified against signer material referenced from the same mutable lifecycle bundle. This proves only internal cryptographic consistency.
 
-Current bundle pin sources include:
-
-- lifecycle-bundle `attachments.publicKeys[]` entries referenced by `publicKeyRef`
-
-Current user pin sources include:
+Current external pin sources are:
 
 - restore-time `.pqpk`
 - restore-time expected Stellar signer input
+- `externallyPinned`, `authorizedForPolicy`, `userPinned`, and `signerPinned` become true only from one of those independent inputs
+
+Lifecycle-bundle `attachments.publicKeys[]` entries referenced by `publicKeyRef` remain mandatory verification constraints when declared, but they are not pins and never authorize policy by themselves.
 
 ### 7.2 Current pinning rules
 
 Current pinning rules are:
 
-- signer pinning is optional unless a specific verification path declares an authoritative `publicKeyRef`
-- a matching pin strengthens provenance reporting
-- lack of pinning does not by itself block restore if archive policy is satisfied
+- a declared `publicKeyRef` is authoritative only for checking that bundle entry's internal signature/key linkage; it is not authoritative for trust
+- a matching external pin is required before a signature can count for `any-signature` or `strong-pq-signature`
+- lack of external pinning blocks signature-required policy even when bundled material verifies cryptographically
 - valid signature and pinned signature are separate states and MUST stay separate
 - if a bundled signature references bundled signer material via `publicKeyRef`, failure of that reference is a verification failure for that bundled signature, not merely an absence of pinning
 - ambiguous user-supplied PQ pin matches fail closed
@@ -395,10 +399,12 @@ Current pinning rules are:
 Current required distinct status fields:
 
 - `archiveApprovalSignatureVerified`
+- `archiveApprovalCryptographicallyVerified`
 - `policySatisfied`
 - `signerPinned`
-- `bundlePinned`
-- `userPinned`
+- `bundledKeyVerified`
+- `externallyPinned`
+- `authorizedForPolicy`
 
 It is forbidden to collapse these into one generic state such as `trusted`.
 
@@ -407,12 +413,12 @@ It is forbidden to collapse these into one generic state such as `trusted`.
 Allowed current status terms include:
 
 - `integrity verified`
-- `archive approval signature verified`
-- `strong PQ signature verified`
+- `archive approval signature verified cryptographically`
+- `strong PQ signature verified cryptographically`
+- `signature verified with bundled key; not a trust anchor`
 - `self-verified signature ignored for archive policy`
 - `archive policy satisfied`
-- `bundle signer pinned`
-- `user signer pinned`
+- `external signer pin matched`
 - `OTS evidence linked to signature`
 - `OTS proof appears complete (heuristic)`
 - `OTS proof incomplete or pending`
@@ -422,6 +428,19 @@ Terms that should not be used loosely:
 
 - `trusted archive`
 - `authenticated cohort`
+- `bundle signer pinned`
+
+### 7.4 Report and workflow migration
+
+This change does not alter `QVqcont-7`, archive-state, cohort-binding, lifecycle-bundle, `.qsig`, `.sig`, or `.pqpk` bytes. It intentionally changes acceptance and report semantics:
+
+- existing bundle-only signatures continue to report cryptographic validity through `ok`, `bundledKeyVerified`, `archiveApprovalCryptographicallyVerified`, and the `cryptographicallyValidArchiveApproval*` counters
+- they no longer set policy-adjacent legacy fields or counters; `bundlePinned` and `bundlePinnedValidTotal` remain `false`/`0`, while `validArchiveApproval*`, `archiveApprovalSignatureVerified`, and `strongPqSignatureVerified` include only externally pinned approvals
+- `externallyPinned`, `authorizedForPolicy`, and `policyEligibleArchiveApproval*` expose the current authorization decision explicitly
+- operators migrating an existing signed archive must independently retain and supply the expected `.pqpk` file or Stellar signer address at verify/restore time
+- there is no normal-mode option to accept a bundle-carried key as trusted
+
+Automation that previously relied on `bundlePinned`, `validArchiveApproval`, or `archiveApprovalSignatureVerified` for bundle-only evidence must migrate to the explicit cryptographic fields for inspection and must supply an external pin for policy authorization.
 
 ## 8. Timestamp and evidence interaction with policy
 
@@ -475,7 +494,7 @@ Current attach behavior:
 
 - validates detached signatures against the correct canonical target bytes
 - exposes archive-approval, maintenance, and source-evidence attach channels
-- imports detached signatures (`.qsig`, `.sig`), `.pqpk` signer pins, and `.ots` proofs for the selected channel
+- imports detached signatures (`.qsig`, `.sig`), `.pqpk` bundle verification keys, and `.ots` proofs for the selected channel; imported keys are not trust pins
 - validates OTS target linkage fail closed during import
 - imports public keys and signer identifiers
 - writes an updated lifecycle bundle
@@ -486,7 +505,7 @@ Current attach channel targets:
 
 | Attach channel | Required target material | Bundle destination | Restore-policy role |
 | --- | --- | --- | --- |
-| `archive-approval` | Selected canonical archive-state descriptor, either embedded in shards/bundle or provided as `*.archive-state.json` | `attachments.archiveApprovalSignatures[]` | Counts toward `any-signature` and `strong-pq-signature` when valid and policy-compatible |
+| `archive-approval` | Selected canonical archive-state descriptor, either embedded in shards/bundle or provided as `*.archive-state.json` | `attachments.archiveApprovalSignatures[]` | Counts toward `any-signature` and `strong-pq-signature` only when valid, policy-compatible, and matched by an independent restore-time signer pin |
 | `maintenance` | Selected lifecycle bundle plus the matching canonical `transition-record.json` already represented in that bundle | `attachments.maintenanceSignatures[]` | Reported separately; never counted toward archive policy |
 | `source-evidence` | Canonical `source-evidence.json`; Attach adds the source-evidence object to the lifecycle bundle if needed | `sourceEvidence[]` and `attachments.sourceEvidenceSignatures[]` | Reported separately; never counted toward archive policy |
 
@@ -495,7 +514,7 @@ Target-binding expectations:
 - archive-approval signatures bind `targetType = archive-state`, `targetRef = state:{stateId}`, and the SHA3-512 digest of the canonical archive-state descriptor
 - maintenance signatures bind `targetType = transition-record`, `targetRef = transition:sha3-512:{transitionRecordDigest}`, and the SHA3-512 digest of the canonical transition record
 - source-evidence signatures bind `targetType = source-evidence`, `targetRef = source-evidence:sha3-512:{sourceEvidenceDigest}`, and the SHA3-512 digest of the canonical source-evidence object
-- `.pqpk` files provide signer public-key material for bundled or user-supplied pinning, but pinning remains separate from archive-policy satisfaction
+- `.pqpk` bytes may be carried in a bundle for cryptographic linkage or supplied independently at restore; only the independently supplied form is a signer pin and policy authorization input
 - `.ots` files target detached signature bytes by `SHA-256(signatureBytes)`, not archive-state, transition-record, source-evidence, or lifecycle-bundle bytes; attach fails closed when a proof matches zero or multiple known detached signatures
 
 ### 9.3 Restore evaluation
@@ -505,8 +524,8 @@ Current restore policy evaluation occurs after structural and reconstruction che
 Restore decision logic:
 
 - `integrity-only`: allow restore if structural and reconstruction integrity holds
-- `any-signature`: allow restore only if at least `minValidSignatures` archive-approval signatures verify over canonical archive-state bytes
-- `strong-pq-signature`: allow restore only if the count threshold is met and at least one valid strong-PQ archive-approval signature is present
+- `any-signature`: allow restore only if at least `minValidSignatures` archive-approval signatures verify over canonical archive-state bytes and their unique signers match external pins
+- `strong-pq-signature`: allow restore only if that externally pinned threshold is met and at least one counted signature is strong PQ
 
 Current ambiguity rule:
 
@@ -515,8 +534,8 @@ Current ambiguity rule:
 
 Current pinning consequence:
 
-- pinning affects provenance reporting
-- pinning does not block restore by default once archive policy is satisfied
+- external pinning is required for signature-required archive-policy counting
+- bundled-key verification remains a separate cryptographic inspection result
 
 Current restore-time OTS consequence:
 
@@ -527,19 +546,20 @@ Current restore-time OTS consequence:
 
 Current handling is:
 
-- valid but unpinned archive-approval signatures may still satisfy policy
+- cryptographically valid but externally unpinned archive-approval signatures do not satisfy signature-required policy
 - invalid extra signatures do not count if another signature satisfies policy
 - self-verified PQ signatures do not count toward trust or policy
 - self-verified PQ signatures should be reported as cryptographically valid but ignored for archive policy, never as trusted or approved
 - no satisfying archive-approval signature blocks restore for `any-signature` and `strong-pq-signature`
-- bundle pinning and user pinning are tracked separately and may both be true
+- bundled-key verification and external pinning are tracked separately; only the latter authorizes policy
 - timestamp evidence does not upgrade an otherwise unsatisfied signature policy
 - malformed or ambiguously linked evidence is rejected rather than silently tolerated
 - Quantum Vault does not auto-select among ambiguous cohorts or lifecycle-bundle variants
 
+For `integrity-only`, absence of an external signer pin is non-blocking. For `any-signature` and `strong-pq-signature`, it is a policy failure by design.
+
 Current restore MUST NOT fail solely because:
 
-- no signer is pinned
 - OTS evidence is absent
 - a non-satisfying signature is present alongside a satisfying one
 

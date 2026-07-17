@@ -510,7 +510,7 @@ test('strong-PQ restore succeeds with valid qsig and matching pqpk pin', async (
   await expect(restoreResult).toContainText('Plaintext released under strong PQ archive-approval policy');
   await expect(restoreResult).toContainText('Strong PQ archive-approval signature verified');
   await expect(restoreResult).toContainText('Archive-approval signer pin');
-  await expect(restoreResult).toContainText('Signer pinned by user input');
+  await expect(restoreResult).toContainText('Signer pinned by external user input');
   await expect(restoreResult).toContainText('User-entered signer pin matched');
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
@@ -560,7 +560,7 @@ test('restore reports unpinned embedded-key qsig as self-verified when another s
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toBeVisible();
   await expect(restoreResult).toContainText('Plaintext released under strong PQ archive-approval policy');
-  await expect(restoreResult).toContainText('Signer pinned by user input');
+  await expect(restoreResult).toContainText('Signer pinned by external user input');
   await expect(restoreResult).toContainText('Self-verified signature');
   await expect(restoreResult).toContainText('Cryptographically self-verified, ignored for archive policy');
   await expect(restoreResult).toContainText('Archive policy satisfied');
@@ -634,7 +634,7 @@ test('self-signed qsig warning is visible and does not satisfy any-signature pol
   await restoreButton.click();
 
   await expect(page.getByTestId('operations-log')).toContainText('self-signed');
-  await expect(page.getByTestId('operations-log')).toContainText('ignored for trust/policy');
+  await expect(page.getByTestId('operations-log')).toContainText('ignored for archive policy');
   await expect(lastToast(page)).toContainText('archive-approval signature');
   const restoreResult = page.getByTestId('restore-result');
   await expect(restoreResult).toContainText('Plaintext not released: archive policy not satisfied');
@@ -714,7 +714,7 @@ test('attach fails closed when OTS does not match any loaded detached signature'
   expect(downloadCount).toBe(0);
 });
 
-test('archive-approval attach imports qsig plus pqpk and restore satisfies strong-PQ policy with the updated bundle', async ({ page }) => {
+test('archive-approval attach imports qsig plus pqpk and restore requires the pqpk again as an external pin', async ({ page }) => {
   await openProTab(page, 'tab-attach');
   await page.getByTestId('attach-channel').selectOption('archive-approval');
   await page.getByTestId('attach-input').setInputFiles(fixtures.archiveApprovalAttachBaseFiles);
@@ -742,6 +742,19 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
 
   const restoreButton = page.getByTestId('restore-button');
   await expect(restoreButton).toBeEnabled();
+  await restoreButton.click();
+  await expect(page.getByTestId('restore-inline-error')).toBeVisible();
+  await expect(page.getByTestId('restore-inline-error')).toContainText('verified archive-approval signatures lack an external signer pin');
+  await expect(page.getByTestId('operations-log')).toContainText('lifecycle-bundle key material is mutable and is not an external trust anchor');
+  await expect(page.getByTestId('restore-result')).toBeHidden();
+
+  await page.getByTestId('restore-input').setInputFiles([
+    ...fixtures.archiveApprovalAttachRestoreShardFiles,
+    updatedBundle,
+    fixtures.archiveApprovalAttachRestorePqpkFile,
+  ]);
+
+  await expect(restoreButton).toBeEnabled();
   await evaluateAndReleaseRestore(page, 'Plaintext release: allowed by strong PQ archive-approval policy');
 
   const restoreResult = page.getByTestId('restore-result');
@@ -749,8 +762,8 @@ test('archive-approval attach imports qsig plus pqpk and restore satisfies stron
   await expect(restoreResult).toContainText('Plaintext released under strong PQ archive-approval policy');
   await expect(restoreResult).toContainText('Strong PQ archive-approval signature verified');
   await expect(restoreResult).toContainText('Archive-approval signer pin');
-  await expect(restoreResult).toContainText('Signer pinned by bundle');
-  await expect(restoreResult).toContainText('Bundle signer pin matched');
+  await expect(restoreResult).toContainText('Signer pinned by external user input');
+  await expect(restoreResult).toContainText('Signature verified with bundled key (not a trust anchor)');
   await expect(restoreResult).toContainText('Archive policy satisfied');
 });
 

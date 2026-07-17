@@ -558,9 +558,9 @@ Options:
 
 - `--bundle <file>`
 - `--sig <file>` repeatable
-- `--pqpk <file>` repeatable
+- `--pqpk <file>` repeatable; each file is an independently supplied PQ signer pin for this verification
 - `--ots <file>` repeatable
-- `--ed25519-signer <address>`
+- `--ed25519-signer <address>` supplies the independently expected Stellar signer
 - `--include-detached-summary` adds a byte-free detached-signature summary for automation
 - `--required-policy-level <integrity-only|any-signature|strong-pq-signature>` fails closed unless the bundle-declared policy is at least that strong and satisfied
 
@@ -570,6 +570,8 @@ Exit status:
 - `1` otherwise
 
 When `--bundle` is present and no extension flags are supplied, `--json` emits the same authenticity object shape produced by browser restore for the same inputs. The extension flags only add fields; they do not remove or weaken existing authenticity data.
+
+Signer material inside `--bundle` can make `bundledKeyVerified` true but cannot satisfy `any-signature` or `strong-pq-signature` by itself. Supply `--pqpk` or `--ed25519-signer` independently. Deprecated `bundlePinned` and bundle-pinned counters remain false/zero so stale automation fails closed.
 
 Stable top-level fields:
 
@@ -598,12 +600,17 @@ Stable top-level fields:
   "warnings": [],
   "status": {
     "integrityVerified": true,
+    "archiveApprovalCryptographicallyVerified": true,
+    "strongPqArchiveApprovalCryptographicallyVerified": false,
     "archiveApprovalSignatureVerified": true,
     "strongPqSignatureVerified": false,
-    "signerPinned": false,
+    "bundledKeyVerified": false,
+    "externallyPinned": true,
+    "authorizedForPolicy": true,
+    "signerPinned": true,
     "bundlePinned": false,
-    "userPinned": false,
-    "userPinProvided": false,
+    "userPinned": true,
+    "userPinProvided": true,
     "transitionRecordPresent": false,
     "transitionChainValid": false,
     "sourceEvidencePresent": false,

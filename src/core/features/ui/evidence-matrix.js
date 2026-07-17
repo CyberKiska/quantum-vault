@@ -170,7 +170,7 @@ function buildSelfVerifiedSignatureRow(authenticity) {
       'Self-verified signature',
       'Cryptographically self-verified, ignored for archive policy',
       'warn',
-      `${selfVerifiedCount} detached PQ signature${selfVerifiedCount === 1 ? '' : 's'} verified only with the public key embedded in the .qsig wrapper. No bundled or user-supplied signer pin corroborated the signer.`
+      `${selfVerifiedCount} detached PQ signature${selfVerifiedCount === 1 ? '' : 's'} verified only with the public key embedded in the .qsig wrapper. No independently supplied signer pin authorized the signer.`
     );
   }
   return evidenceRow('Self-verified signature', 'None reported', 'neutral');
@@ -178,40 +178,39 @@ function buildSelfVerifiedSignatureRow(authenticity) {
 
 function buildSignerPinRows(status, archiveApprovalVerified) {
   const rows = [];
-  const pinSources = [];
-  if (status.bundlePinned === true) pinSources.push('bundle');
-  if (status.userPinned === true) pinSources.push('user input');
+  const bundledKeyVerified = status.bundledKeyVerified === true || status.bundlePinned === true;
+  const externallyPinned = status.externallyPinned === true || status.userPinned === true;
 
-  if (pinSources.length > 0) {
+  if (externallyPinned) {
     rows.push(evidenceRow(
       'Archive-approval signer pin',
-      `Signer pinned by ${pinSources.join(' and ')}`,
+      'Signer pinned by external user input',
       'ok',
-      'Pinning strengthens signer provenance reporting but remains separate from archive-policy evaluation.'
+      'Only independently supplied signer pins currently authorize a verified archive-approval signature for policy counting.'
     ));
   } else if (archiveApprovalVerified) {
     rows.push(evidenceRow(
       'Archive-approval signer pin',
-      'Signer not pinned',
+      'Signer not externally pinned',
       'warn',
-      'A valid archive-approval signature may satisfy policy without pinning; signer pinning remains a separate status.'
+      'The signature may be cryptographically valid, but archive policy will not count it without an independently supplied signer pin.'
     ));
   } else {
     rows.push(evidenceRow('Archive-approval signer pin', 'No verified archive-approval signer to pin', 'neutral'));
   }
 
   rows.push(evidencePolarRow(
-    'Bundle signer pin',
-    status.bundlePinned === true,
-    'Bundle signer pin matched',
-    'No bundle signer pin matched archive approval',
-    archiveApprovalVerified === true && status.bundlePinned !== true ? 'warn' : 'neutral',
+    'Bundled signer material',
+    bundledKeyVerified,
+    'Signature verified with bundled key (not a trust anchor)',
+    'No bundled key verified an archive-approval signature',
+    'neutral',
   ));
 
-  if (status.userPinProvided === true || status.userPinned === true) {
+  if (status.userPinProvided === true || externallyPinned) {
     rows.push(evidencePolarRow(
       'User-entered signer pin',
-      status.userPinned === true,
+      externallyPinned,
       'User-entered signer pin matched',
       status.userPinProvided === true ? 'User-entered signer pin did not match a verifying archive-approval signer' : 'User-entered signer pin not active',
       status.userPinProvided === true && status.userPinned !== true ? 'warn' : 'neutral',
@@ -239,7 +238,14 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
   const { qencOk, qkeyOk, authenticity } = result;
   const status = authenticity?.status || {};
   const { releaseAllowed, policyLevel } = getRestoreReleaseState(result, options);
-  const archiveApprovalVerified = status.archiveApprovalSignatureVerified === true;
+  const archiveApprovalCryptographicallyVerified = (
+    status.archiveApprovalCryptographicallyVerified === true ||
+    status.archiveApprovalSignatureVerified === true
+  );
+  const strongPqCryptographicallyVerified = (
+    status.strongPqArchiveApprovalCryptographicallyVerified === true ||
+    status.strongPqSignatureVerified === true
+  );
   const cohortInspection = result.lifecycleVerification?.cohorts || {};
   const decisionRows = [];
 
@@ -282,17 +288,17 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
     ),
     evidencePolarRow(
       'Archive approval',
-      archiveApprovalVerified,
-      'Archive-approval signature verified',
-      'No verified archive-approval signature over archive-state',
+      archiveApprovalCryptographicallyVerified,
+      'Archive-approval signature verified cryptographically',
+      'No cryptographically verified archive-approval signature over archive-state',
       policyLevel === 'integrity-only' ? 'warn' : 'fail',
     ),
     evidencePolarRow(
       'Strong PQ approval',
-      status.strongPqSignatureVerified === true,
-      'Strong PQ archive-approval signature verified',
+      strongPqCryptographicallyVerified,
+      'Strong PQ archive-approval signature verified cryptographically',
       'Strong PQ archive-approval signature not present',
-      archiveApprovalVerified === true && status.strongPqSignatureVerified !== true ? 'warn' : 'neutral',
+      archiveApprovalCryptographicallyVerified === true && !strongPqCryptographicallyVerified ? 'warn' : 'neutral',
     ),
     ...integrityRows,
   ];
@@ -345,7 +351,7 @@ export function buildRestoreEvidenceMatrixSections(result, options = {}) {
     secondaryRows.push(evidenceRow('Lifecycle bundle selection', 'One lifecycle bundle variant selected for policy evaluation', 'ok'));
   }
 
-  secondaryRows.push(...buildSignerPinRows(status, archiveApprovalVerified));
+  secondaryRows.push(...buildSignerPinRows(status, archiveApprovalCryptographicallyVerified));
 
   const timestampEvidence = Array.isArray(authenticity?.timestampEvidence) ? authenticity.timestampEvidence : [];
   if (timestampEvidence.length > 0) {
@@ -387,7 +393,14 @@ export function buildRestorePolicyFailureEvidenceMatrixSections(error) {
   const reason = String(error?.message || error || 'Archive policy not satisfied');
   const authenticity = error?.authenticity || null;
   const status = authenticity?.status || {};
-  const archiveApprovalVerified = status.archiveApprovalSignatureVerified === true;
+  const archiveApprovalCryptographicallyVerified = (
+    status.archiveApprovalCryptographicallyVerified === true ||
+    status.archiveApprovalSignatureVerified === true
+  );
+  const strongPqCryptographicallyVerified = (
+    status.strongPqArchiveApprovalCryptographicallyVerified === true ||
+    status.strongPqSignatureVerified === true
+  );
 
   return {
     primary: [
@@ -397,15 +410,15 @@ export function buildRestorePolicyFailureEvidenceMatrixSections(error) {
         evidenceRow('Integrity', 'Not evaluated after policy block', 'neutral'),
         evidenceRow(
           'Archive approval',
-          archiveApprovalVerified
-            ? 'Archive-approval signature verified but not policy-satisfying'
+          archiveApprovalCryptographicallyVerified
+            ? 'Archive-approval signature cryptographically verified but not externally authorized'
             : 'No policy-satisfying archive-approval signature verified',
           'fail'
         ),
         evidencePolarRow(
           'Strong PQ approval',
-          status.strongPqSignatureVerified === true,
-          'Strong PQ archive-approval signature verified',
+          strongPqCryptographicallyVerified,
+          'Strong PQ archive-approval signature verified cryptographically',
           'Strong PQ archive-approval signature not present',
           'neutral'
         ),
@@ -414,7 +427,7 @@ export function buildRestorePolicyFailureEvidenceMatrixSections(error) {
     secondary: [
       evidenceSection('Evidence details', [
         buildSelfVerifiedSignatureRow(authenticity),
-        ...buildSignerPinRows(status, archiveApprovalVerified),
+        ...buildSignerPinRows(status, archiveApprovalCryptographicallyVerified),
         evidenceRow('Evidence channels', 'Maintenance, source-evidence, and timestamp evidence cannot satisfy archive policy', 'neutral'),
       ]),
     ],

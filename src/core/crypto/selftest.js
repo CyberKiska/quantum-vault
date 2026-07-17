@@ -1074,7 +1074,7 @@ async function buildStellarDigestFixture(messageBytes) {
   };
 }
 
-async function buildStellarSignatureFixture(messageBytes, signerMaterial = null) {
+export async function buildStellarSignatureFixture(messageBytes, signerMaterial = null) {
   const material = signerMaterial || await createStellarSignerMaterial();
   const { hashes } = await buildStellarDigestFixture(messageBytes);
   const payload = await digestSha256(concatBytes([utf8ToBytes('Stellar Signed Message:\n'), messageBytes]));
@@ -3347,7 +3347,11 @@ function buildCases() {
         });
         const parsedAttached = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
 
-        const restored = await restoreFromShards(parsedAttached, { onLog: () => {}, onError: () => {} });
+        const restored = await restoreFromShards(parsedAttached, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes] },
+        });
         assert(restored.archiveId === sample.split.archiveId, 'successor restore archiveId mismatch');
         assert(restored.stateId === sample.split.stateId, 'successor restore stateId mismatch');
         assert(restored.cohortId === sample.split.cohortId, 'successor restore cohortId mismatch');
@@ -3359,7 +3363,8 @@ function buildCases() {
           'successor restore should report exactly one embedded lifecycle-bundle digest'
         );
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
-        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled key material');
+        assert(restored.authenticity.status.externallyPinned === true, 'expected signer pinning from external .pqpk material');
+        assert(restored.authenticity.status.bundlePinned === false, 'deprecated bundlePinned status must fail closed');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
         assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
         assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
@@ -3414,7 +3419,13 @@ function buildCases() {
         );
 
         await expectFailureWithMessage(
-          () => restoreFromShards(sample.maliciousShards, { onLog: () => {}, onError: () => {} }),
+          () => restoreFromShards(sample.maliciousShards, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              pinnedPqPublicKeyFileBytesList: [sample.signedBundle.fixtures.archiveApproval.pqpkBytes],
+            },
+          }),
           /embedded \.qenc key commitment/i,
           'successor restore unexpectedly accepted a recovered secret key based on shard metadata alone'
         );
@@ -3448,6 +3459,9 @@ function buildCases() {
           () => restoreFromShards(malicious.maliciousShards, {
             onLog: () => {},
             onError: () => {},
+            verification: {
+              pinnedPqPublicKeyFileBytesList: [malicious.signedBundle.fixtures.archiveApproval.pqpkBytes],
+            },
             keyValidationHooks: {
               onFinally: (refs) => {
                 failureRefs = refs;
@@ -3491,7 +3505,10 @@ function buildCases() {
         const restored = await restoreFromShards(mixed, {
           onLog: () => {},
           onError: () => {},
-          verification: { selectedLifecycleBundleDigestHex: secondAttach.lifecycleBundleDigestHex },
+          verification: {
+            selectedLifecycleBundleDigestHex: secondAttach.lifecycleBundleDigestHex,
+            pinnedPqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
+          },
         });
         assert(restored.lifecycleBundleDigestHex === secondAttach.lifecycleBundleDigestHex, 'explicit lifecycle-bundle digest selection picked the wrong bundle');
         assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded lifecycle-bundle digests should be reported honestly');
@@ -3516,7 +3533,10 @@ function buildCases() {
         const restored = await restoreFromShards(parsedAttached, {
           onLog: () => {},
           onError: () => {},
-          verification: { lifecycleBundleBytes: attached.lifecycleBundleBytes },
+          verification: {
+            lifecycleBundleBytes: attached.lifecycleBundleBytes,
+            pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes],
+          },
         });
         assert(restored.selectionSource === 'uploaded-lifecycle-bundle', `unexpected successor selection source: ${restored.selectionSource}`);
         assert(restored.lifecycleBundleDigestHex === attached.lifecycleBundleDigestHex, 'uploaded lifecycle bundle should drive the selected digest');
@@ -3591,7 +3611,17 @@ function buildCases() {
         });
         const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
 
-        const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
+        const restored = await restoreFromShards(rewritten, {
+          onLog: () => {},
+          onError: () => {},
+          verification: {
+            pinnedPqPublicKeyFileBytesList: [
+              bundleVariant.fixtures.archiveApproval.pqpkBytes,
+              bundleVariant.fixtures.maintenance.pqpkBytes,
+              bundleVariant.fixtures.sourceEvidence.pqpkBytes,
+            ],
+          },
+        });
         assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
         assert(restored.authenticity.status.transitionRecordPresent === true, 'expected transition record presence reporting');
@@ -3600,7 +3630,9 @@ function buildCases() {
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
-        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
+        assert(restored.authenticity.status.externallyPinned === true, 'expected signer pinning from external .pqpk material');
+        assert(restored.authenticity.status.bundledKeyVerified === true, 'expected bundled-key cryptographic verification to remain visible');
+        assert(restored.authenticity.status.bundlePinned === false, 'deprecated bundlePinned status must fail closed');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
         assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
         assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
@@ -3657,7 +3689,8 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
         assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
         assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'source-evidence reporting must remain separate from archive approval');
-        assert(restored.authenticity.verification.counts.pinnedValidTotal === 2, 'aggregate detached-signature pinning may still reflect non-archive families');
+        assert(restored.authenticity.verification.counts.pinnedValidTotal === 0, 'bundled maintenance/source keys must not count as external pins');
+        assert(restored.authenticity.verification.counts.bundledKeyVerifiedTotal === 2, 'bundled maintenance/source verification should remain visible');
       },
     },
     {
@@ -3823,7 +3856,7 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.validArchiveApprovalStrongPq === 0, 'selfSigned external detached PQ signature must not count toward strong PQ archive-approval totals');
         assert(restored.authenticity.verification.counts.validTotal === 0, 'selfSigned external detached PQ signature must not count toward trusted detached signature totals');
         assert(
-          restored.authenticity.verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('ignored for archive policy')),
           'selfSigned external detached PQ signature should emit an explicit trust/policy warning'
         );
       },
@@ -3974,9 +4007,12 @@ function buildCases() {
         const restored = await restoreFromShards(sample.parsed, {
           onLog: () => {},
           onError: () => {},
-          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+          verification: {
+            lifecycleBundleBytes: canonicalBundle.bytes,
+            pinnedPqPublicKeyFileBytesList: [validQsig.pqpkBytes],
+          },
         });
-        assert(restored.authenticity.status.policySatisfied === true, 'valid archive-approval signature should still satisfy policy');
+        assert(restored.authenticity.status.policySatisfied === true, 'externally pinned archive-approval signature should satisfy policy');
         assert(restored.authenticity.verification.results.some((item) => item.ok === false), 'expected one invalid archive-approval result');
         assert(
           restored.authenticity.verification.warnings.some((warning) => warning.includes('did not verify and were ignored')),
@@ -4060,7 +4096,10 @@ function buildCases() {
         const restored = await restoreFromShards(sample.parsed, {
           onLog: () => {},
           onError: () => {},
-          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+          verification: {
+            lifecycleBundleBytes: canonicalBundle.bytes,
+            pinnedPqPublicKeyFileBytesList: [qsig.pqpkBytes],
+          },
         });
         assert(restored.authenticity.status.policySatisfied === true, 'mismatched OTS linkage must not block archive policy');
         assert(restored.authenticity.timestampEvidence.length === 0, 'mismatched OTS linkage should be ignored for evidence reporting');
@@ -4750,6 +4789,9 @@ function buildCases() {
         const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
           onLog: () => {},
           onError: () => {},
+          verification: {
+            pinnedPqPublicKeyFileBytesList: [sample.bundleVariant.fixtures.archiveApproval.pqpkBytes],
+          },
         });
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should remain valid after resharing');
         assert(restored.authenticity.status.policySatisfied === true, 'archive policy should still be satisfied after resharing');
@@ -4786,6 +4828,9 @@ function buildCases() {
         const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
           onLog: () => {},
           onError: () => {},
+          verification: {
+            pinnedPqPublicKeyFileBytesList: [sample.bundleVariant.fixtures.archiveApproval.pqpkBytes],
+          },
         });
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should still verify after resharing');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'archive-approval OTS linkage should remain valid after resharing');
@@ -5327,14 +5372,16 @@ function buildCases() {
 
         const message = formatAuthenticityStatusMessage({
           archiveApprovalSignatureVerified: true,
-          strongPqSignatureVerified: verification.strongPq,
+          archiveApprovalCryptographicallyVerified: true,
+          strongPqArchiveApprovalCryptographicallyVerified: verification.strongPq,
+          externallyPinned: true,
           signerPinned: true,
           bundlePinned: false,
           userPinned: false,
         });
 
-        assert(message.includes('strong PQ present'), 'status message should report strong PQ detail');
-        assert(message.includes('signer pin active'), 'status message should preserve signer pin detail when no bundle/user pin flags are present');
+        assert(message.includes('strong PQ cryptographically valid'), 'status message should report strong PQ detail');
+        assert(message.includes('external signer pin matched'), 'status message should preserve external signer pin detail');
       },
     },
     {
@@ -5559,7 +5606,7 @@ function buildCases() {
           messageBytes,
           qsigBytes: matching.qsigBytes,
           bundlePqPublicKeyFileBytes: wrong.pqpkBytes,
-          authoritativeBundlePqPublicKey: true,
+          requireBundledPqKeyMatch: true,
         });
 
         assert(verification.ok === false, 'authoritative bundled key mismatch must fail verification');
@@ -6293,6 +6340,7 @@ function buildCases() {
           parsedShards: attachedBundleShards,
           verification: {
             lifecycleBundleBytes: verificationBundle.bundleBytes,
+            pinnedPqPublicKeyFileBytesList: [verificationBundle.fixtures.archiveApproval.pqpkBytes],
           },
         });
 

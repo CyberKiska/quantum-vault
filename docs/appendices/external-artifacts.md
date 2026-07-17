@@ -79,7 +79,7 @@ Not yet first-class in the current implementation:
 | --- | --- | --- |
 | `.qsig` | binary wrapper with magic `PQSG`, detached PQ signature major version `2`, and context `quantum-signer/v2` | archive-state bytes for archive approval, or declared lifecycle target bytes for bundled lifecycle signatures |
 | `.sig` | JSON document accepted only when it matches the supported `stellar-signature/v2` schema and profile combinations | same target rule as `.qsig` |
-| `.pqpk` | binary wrapper with magic `PQPK` and detached PQ public-key major version `1` | signer pinning and `publicKeyRef` resolution |
+| `.pqpk` | binary wrapper with magic `PQPK` and detached PQ public-key major version `1` | bundle-local `publicKeyRef` verification when attached, or external signer pinning when supplied independently to verify/restore |
 | `.ots` | OpenTimestamps proof with the supported proof header and SHA-256 stamped digest operation | detached signature bytes |
 
 Current detection rules:
@@ -121,12 +121,12 @@ Current `publicKeyRef` rules:
 - a bundled `qsig` `publicKeyRef` must reference a bundled PQ public key with `encoding = "base64"` and a matching PQ suite
 - a bundled `stellar-sig` `publicKeyRef` must reference a bundled Stellar signer with `encoding = "stellar-address"` and suite `ed25519`
 
-Current pinning consequences:
+Current verification and pinning consequences:
 
-- bundled-signature verification against a bundled key contributes to `bundlePinned`
-- verification against user-supplied pin material contributes to `userPinned`
-- a valid signature does not become policy-satisfying solely because a pin is present
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself do not count toward trust or policy when bundled or user-supplied signer material did not verify; an embedded-key-only `.qsig` may still be cryptographically valid, but it does not establish signer identity external to the artifact itself; normative counting and trust semantics are defined in [`trust-and-policy.md#64-counting-rules`](../trust-and-policy.md#64-counting-rules)
+- bundled-signature verification against a bundled key contributes only to `bundledKeyVerified`; mutable bundle material is not a trust anchor
+- verification against independently supplied pin material contributes to `externallyPinned` and can make an archive-approval signature policy-eligible
+- a matching pin does not bypass the signature-family, target, threshold, or suite rules
+- embedded-key-only and bundle-key-only PQ signatures may remain cryptographically valid evidence, but neither establishes signer authority outside the mutable material being evaluated; normative counting and trust semantics are defined in [`trust-and-policy.md#64-counting-rules`](../trust-and-policy.md#64-counting-rules)
 
 ## 4. Proof identity deduplication and ambiguity handling
 

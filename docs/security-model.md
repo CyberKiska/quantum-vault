@@ -325,7 +325,7 @@ Current successor invariants:
 - restore MUST fail closed when archive, state, cohort, or lifecycle-bundle selection remains ambiguous
 - restore MUST NOT auto-select a same-state fork winner or lifecycle-bundle variant by timestamp, attachment count, lexical order, or similar heuristic
 - if an operator explicitly selects a cohort or lifecycle-bundle variant in an otherwise ambiguous case, the result MUST be reported as an explicit operator choice with warning rather than as an automatic winner
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself MUST NOT count toward trust or archive policy unless bundled or user-supplied signer material also verified; a proof that establishes only its own embedded key is not enough to anchor signer identity outside the artifact being checked (counting rationale in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules))
+- signer material carried inside a `.qsig` or the mutable lifecycle bundle MUST NOT count toward archive policy by itself; a counted signature MUST also match independently supplied signer material (counting rationale in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules))
 - same-state resharing is maintenance, not archive re-approval
 
 The key design boundary is that archive approval attaches to one canonical, byte-stable object. Restore may collect additional evidence over time, but it MUST NOT reinterpret mutable lifecycle material as though it were part of the original archive-approval payload.
@@ -375,7 +375,7 @@ Operational warnings emitted by resharing flows are advisory; they are not a sub
 | Threshold secrecy | Fewer than the required shards are available and Shamir invariants hold | Availability or recoverability |
 | Threshold recoverability | A sufficient consistent shard cohort is available and policy permits restore | That every shard source was honest or that provenance is strong |
 | A verified archive-approval signature | The signature cryptographically verifies over canonical archive-state bytes under a supported suite or wrapper | That the signer audited plaintext, approved archive class, or authorized migration |
-| Archive policy satisfied | The required valid archive-approval signature set exists under the current policy semantics | Signer pinning, timestamp evidence, maintenance approval, source-review approval, or broader organizational approval |
+| Archive policy satisfied | The required externally pinned, valid archive-approval signature set exists under the current policy semantics | Organizational authority beyond the supplied pins, timestamp evidence, maintenance approval, source-review approval, or broader institutional approval |
 | OTS evidence linked | The evidence object targets detached signature bytes under the supported linkage checks | A full independent third-party time proof or policy satisfaction by itself |
 
 Current long-horizon qualification:
@@ -391,9 +391,9 @@ Current long-horizon qualification:
 | Structural parse failure, unknown version, bad magic, bad length, or mismatched digest | Reject the artifact or cohort; do not continue as if compatible | Some unrelated external artifacts may still be inspectable, but the failed object is not trusted |
 | Inconsistent shard cohort or insufficient threshold | Do not reconstruct `.qenc` or the private key | Detached signatures or bundles may still be separately inspectable if available |
 | Invalid detached signature | Do not count it toward policy; do not upgrade provenance status | Structural integrity may still be known |
-| Self-verified PQ signature with no bundled or user pin | Do not count it toward trust or policy | The `.qsig` may still be a cryptographically valid self-signature artifact |
+| Signature verified only by embedded or bundled signer material | Do not count it toward policy or external signer authorization | The detached proof may still be cryptographically valid and `bundledKeyVerified` may report internal consistency |
 | Unsatisfied `any-signature` or `strong-pq-signature` policy | Block restore after integrity and reconstruction evaluation | Integrity may still be knowable even though restore is not authorized |
-| Missing signer pin | Report weaker provenance status; do not block restore by default | Signature validity and policy satisfaction may still hold |
+| Missing external signer pin | Block `any-signature` and `strong-pq-signature`; remain non-blocking for `integrity-only` | Cryptographic signature validity and structural integrity may still be reported separately |
 | Absent OTS evidence | Do not fail solely for absence | Integrity and signature validity may still be known |
 | Malformed or ambiguously linked OTS evidence | Reject the evidence path rather than silently trusting it | Other valid signatures or structural checks may still remain knowable |
 

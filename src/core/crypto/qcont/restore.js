@@ -98,6 +98,11 @@ function buildLifecycleVerificationFailureResult({
     format,
     suite,
     type: format === 'stellar-sig' ? 'sig' : format,
+    embeddedKeyVerified: false,
+    bundledKeyVerified: false,
+    externallyPinned: false,
+    authorizedForPolicy: false,
+    // Deprecated compatibility aliases; bundlePinned is not a trust signal.
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -113,7 +118,7 @@ function buildLifecycleVerificationFailureResult({
 
 function buildSelfSignedIgnoredWarning(result) {
   const name = String(result?.name || result?.artifactId || 'detached PQ signature').trim();
-  return `${name}: detached PQ signature verified only with the embedded signer key and was ignored for trust/policy because no bundled or user-pinned signer key verified.`;
+  return `${name}: detached PQ signature verified only with the embedded signer key and was ignored for archive policy because no external signer pin verified.`;
 }
 
 function buildPinnedPqSignerMismatchFailure(verified, mismatchWarning) {
@@ -121,6 +126,10 @@ function buildPinnedPqSignerMismatchFailure(verified, mismatchWarning) {
     ...(verified || {}),
     ok: false,
     selfSigned: false,
+    bundledKeyVerified: false,
+    externallyPinned: false,
+    authorizedForPolicy: false,
+    // Deprecated compatibility aliases; bundlePinned is not a trust signal.
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -150,7 +159,7 @@ function verifySuccessorQsigWithPinnedKeys({
   qsigBytes,
   bundlePqPublicKeyFileBytes = null,
   normalizedPinnedPqPins = [],
-  authoritativeBundlePqPublicKey = false,
+  requireBundledPqKeyMatch = false,
 }) {
   if (normalizedPinnedPqPins.length === 0) {
     return safeVerifySuccessorQsigAgainstBytes({
@@ -158,7 +167,7 @@ function verifySuccessorQsigWithPinnedKeys({
       qsigBytes,
       bundlePqPublicKeyFileBytes,
       pinnedPqPublicKeyFileBytes: null,
-      authoritativeBundlePqPublicKey,
+      requireBundledPqKeyMatch,
     });
   }
 
@@ -168,9 +177,9 @@ function verifySuccessorQsigWithPinnedKeys({
       qsigBytes,
       bundlePqPublicKeyFileBytes,
       pinnedPqPublicKeyFileBytes: normalizedPinnedPqPins[0].bytes,
-      authoritativeBundlePqPublicKey,
+      requireBundledPqKeyMatch,
     });
-    if (!verified.ok || verified.userPinned === true) {
+    if (!verified.ok || verified.externallyPinned === true) {
       return verified;
     }
     const mismatchWarning = bundlePqPublicKeyFileBytes instanceof Uint8Array
@@ -195,7 +204,7 @@ function verifySuccessorQsigWithPinnedKeys({
       qsigBytes,
       bundlePqPublicKeyFileBytes,
       pinnedPqPublicKeyFileBytes: candidatePin.bytes,
-      authoritativeBundlePqPublicKey,
+      requireBundledPqKeyMatch,
     });
     if (!baseline) baseline = result;
     if (!firstOk && result.ok) firstOk = result;
@@ -204,7 +213,7 @@ function verifySuccessorQsigWithPinnedKeys({
         retainedWarnings.push(warning);
       }
     }
-    if (result.ok && result.userPinned === true) {
+    if (result.ok && result.externallyPinned === true) {
       matches.push(result);
     }
   }
@@ -230,7 +239,7 @@ function verifySuccessorQsigWithPinnedKeys({
     qsigBytes,
     bundlePqPublicKeyFileBytes,
     pinnedPqPublicKeyFileBytes: null,
-    authoritativeBundlePqPublicKey,
+    requireBundledPqKeyMatch,
   });
   if (!verified.ok) {
     return {
@@ -502,13 +511,21 @@ function buildSuccessorAuthenticityStatus(report, {
 } = {}) {
   const verificationStatus = report?.verification?.status || {};
   const policySatisfied = report?.policy?.satisfied === true;
+  const bundledKeyVerified = verificationStatus.bundledKeyVerified === true;
+  const externallyPinned = verificationStatus.externallyPinned === true;
   return {
     integrityVerified,
     archiveApprovalSignatureVerified: verificationStatus.archiveApprovalSignatureVerified === true,
     strongPqSignatureVerified: verificationStatus.strongPqSignatureVerified === true,
-    signerPinned: verificationStatus.signerPinned === true,
-    bundlePinned: verificationStatus.bundlePinned === true,
-    userPinned: verificationStatus.userPinned === true,
+    archiveApprovalCryptographicallyVerified: verificationStatus.archiveApprovalCryptographicallyVerified === true,
+    strongPqArchiveApprovalCryptographicallyVerified: verificationStatus.strongPqArchiveApprovalCryptographicallyVerified === true,
+    bundledKeyVerified,
+    externallyPinned,
+    authorizedForPolicy: verificationStatus.authorizedForPolicy === true,
+    // Deprecated compatibility aliases fail closed for stale report consumers.
+    signerPinned: externallyPinned,
+    bundlePinned: false,
+    userPinned: externallyPinned,
     userPinProvided: verificationStatus.userPinProvided === true,
     transitionRecordPresent: verificationStatus.transitionRecordPresent === true,
     transitionChainValid: verificationStatus.transitionChainValid === true,
@@ -537,7 +554,7 @@ function buildLifecycleBundleVerifierInputs(publicKey) {
     return {
       bundlePqPublicKeyFileBytes: null,
       bundleSigner: '',
-      authoritativeBundlePqPublicKey: false,
+      requireBundledPqKeyMatch: false,
     };
   }
   if (publicKey.encoding === 'base64') {
@@ -547,14 +564,14 @@ function buildLifecycleBundleVerifierInputs(publicKey) {
         publicKeyBytes: base64ToBytes(publicKey.value),
       }),
       bundleSigner: '',
-      authoritativeBundlePqPublicKey: true,
+      requireBundledPqKeyMatch: true,
     };
   }
   if (publicKey.encoding === 'stellar-address') {
     return {
       bundlePqPublicKeyFileBytes: null,
       bundleSigner: String(publicKey.value || '').trim(),
-      authoritativeBundlePqPublicKey: false,
+      requireBundledPqKeyMatch: false,
     };
   }
   throw new Error(`Unsupported lifecycle bundled key encoding: ${publicKey.encoding}`);
@@ -594,11 +611,23 @@ function buildLifecycleVerificationCounts(results) {
   const counts = {
     validTotal: 0,
     validStrongPq: 0,
+    bundledKeyVerifiedTotal: 0,
+    externallyPinnedValidTotal: 0,
+    // Deprecated compatibility counters.
     pinnedValidTotal: 0,
     bundlePinnedValidTotal: 0,
     userPinnedValidTotal: 0,
+    cryptographicallyValidArchiveApproval: 0,
+    cryptographicallyValidArchiveApprovalStrongPq: 0,
+    // Legacy policy-adjacent counters now fail closed and include only
+    // externally authorized signatures.
     validArchiveApproval: 0,
     validArchiveApprovalStrongPq: 0,
+    archiveApprovalBundledKeyVerifiedTotal: 0,
+    archiveApprovalExternallyPinnedValidTotal: 0,
+    policyEligibleArchiveApproval: 0,
+    policyEligibleArchiveApprovalStrongPq: 0,
+    // Deprecated compatibility counters.
     archiveApprovalPinnedValidTotal: 0,
     archiveApprovalBundlePinnedValidTotal: 0,
     archiveApprovalUserPinnedValidTotal: 0,
@@ -608,10 +637,12 @@ function buildLifecycleVerificationCounts(results) {
   const duplicateWarnings = [];
   const selfSignedWarnings = [];
   const unidentifiableSignerWarnings = [];
+  const unanchoredArchiveApprovalWarnings = [];
   const uniqueValid = new Map();
 
   for (const result of results) {
     result.countedForPolicy = false;
+    result.policyAuthorization = 'none';
     if (result?.selfSigned === true) {
       selfSignedWarnings.push(buildSelfSignedIgnoredWarning(result));
       continue;
@@ -627,43 +658,65 @@ function buildLifecycleVerificationCounts(results) {
     }
     result.signerIdentity = signerIdentity;
     const dedupeKey = `${family}:${signerIdentity}`;
+    const bundledKeyVerified = result.bundledKeyVerified === true;
+    const externallyPinned = result.externallyPinned === true;
+    const authorizedForPolicy = result.authorizedForPolicy === true && externallyPinned;
     const current = uniqueValid.get(dedupeKey);
     if (!current) {
       uniqueValid.set(dedupeKey, {
         family,
         strongPq: result.strongPq === true,
-        signerPinned: result.signerPinned === true,
-        bundlePinned: result.bundlePinned === true,
-        userPinned: result.userPinned === true,
+        bundledKeyVerified,
+        externallyPinned,
+        authorizedForPolicy,
+        authorizedStrongPq: authorizedForPolicy && result.strongPq === true,
         names: [result.name || result.artifactId || dedupeKey],
         proofIdentities: new Set([result.proofIdentityDigestHex]),
+        results: [result],
       });
-      if (family === 'archive-approval') {
-        result.countedForPolicy = true;
-      }
       continue;
     }
 
     current.strongPq = current.strongPq || result.strongPq === true;
-    current.signerPinned = current.signerPinned || result.signerPinned === true;
-    current.bundlePinned = current.bundlePinned || result.bundlePinned === true;
-    current.userPinned = current.userPinned || result.userPinned === true;
+    current.bundledKeyVerified = current.bundledKeyVerified || bundledKeyVerified;
+    current.externallyPinned = current.externallyPinned || externallyPinned;
+    current.authorizedForPolicy = current.authorizedForPolicy || authorizedForPolicy;
+    current.authorizedStrongPq = (
+      current.authorizedStrongPq ||
+      (authorizedForPolicy && result.strongPq === true)
+    );
     current.names.push(result.name || result.artifactId || dedupeKey);
     current.proofIdentities.add(result.proofIdentityDigestHex);
+    current.results.push(result);
   }
 
   for (const entry of uniqueValid.values()) {
     counts.validTotal += 1;
     if (entry.strongPq) counts.validStrongPq += 1;
-    if (entry.signerPinned) counts.pinnedValidTotal += 1;
-    if (entry.bundlePinned) counts.bundlePinnedValidTotal += 1;
-    if (entry.userPinned) counts.userPinnedValidTotal += 1;
+    if (entry.bundledKeyVerified) counts.bundledKeyVerifiedTotal += 1;
+    if (entry.externallyPinned) counts.externallyPinnedValidTotal += 1;
     if (entry.family === 'archive-approval') {
-      counts.validArchiveApproval += 1;
-      if (entry.strongPq) counts.validArchiveApprovalStrongPq += 1;
-      if (entry.signerPinned) counts.archiveApprovalPinnedValidTotal += 1;
-      if (entry.bundlePinned) counts.archiveApprovalBundlePinnedValidTotal += 1;
-      if (entry.userPinned) counts.archiveApprovalUserPinnedValidTotal += 1;
+      counts.cryptographicallyValidArchiveApproval += 1;
+      if (entry.strongPq) counts.cryptographicallyValidArchiveApprovalStrongPq += 1;
+      if (entry.bundledKeyVerified) counts.archiveApprovalBundledKeyVerifiedTotal += 1;
+      if (entry.externallyPinned) counts.archiveApprovalExternallyPinnedValidTotal += 1;
+      if (entry.authorizedForPolicy) {
+        counts.validArchiveApproval += 1;
+        if (entry.authorizedStrongPq) counts.validArchiveApprovalStrongPq += 1;
+        counts.policyEligibleArchiveApproval += 1;
+        if (entry.authorizedStrongPq) counts.policyEligibleArchiveApprovalStrongPq += 1;
+        const countedResult = entry.results.find((result) => (
+          result.externallyPinned === true && result.authorizedForPolicy === true
+        ));
+        if (countedResult) {
+          countedResult.countedForPolicy = true;
+          countedResult.policyAuthorization = 'external-pin';
+        }
+      } else {
+        unanchoredArchiveApprovalWarnings.push(
+          `${entry.names[0]}: signature verified cryptographically but no externally supplied signer pin matched; ignored for archive policy.`
+        );
+      }
     } else if (entry.family === 'maintenance') {
       counts.validMaintenance += 1;
     } else if (entry.family === 'source-evidence') {
@@ -677,14 +730,36 @@ function buildLifecycleVerificationCounts(results) {
     }
   }
 
-  return { counts, duplicateWarnings, selfSignedWarnings, unidentifiableSignerWarnings };
+  // Deprecated aliases retained for report consumers during migration. They
+  // are never used to evaluate policy.
+  counts.pinnedValidTotal = counts.externallyPinnedValidTotal;
+  counts.bundlePinnedValidTotal = 0;
+  counts.userPinnedValidTotal = counts.externallyPinnedValidTotal;
+  counts.archiveApprovalPinnedValidTotal = counts.archiveApprovalExternallyPinnedValidTotal;
+  counts.archiveApprovalBundlePinnedValidTotal = 0;
+  counts.archiveApprovalUserPinnedValidTotal = counts.archiveApprovalExternallyPinnedValidTotal;
+
+  return {
+    counts,
+    duplicateWarnings,
+    selfSignedWarnings,
+    unidentifiableSignerWarnings,
+    unanchoredArchiveApprovalWarnings,
+  };
 }
 
 function evaluateSuccessorArchivePolicy(authPolicy, verification) {
   const counts = verification?.counts || {
+    cryptographicallyValidArchiveApproval: 0,
+    cryptographicallyValidArchiveApprovalStrongPq: 0,
     validArchiveApproval: 0,
     validArchiveApprovalStrongPq: 0,
+    policyEligibleArchiveApproval: 0,
+    policyEligibleArchiveApprovalStrongPq: 0,
   };
+  const cryptographicallyValid = counts.cryptographicallyValidArchiveApproval || 0;
+  const policyEligible = counts.policyEligibleArchiveApproval || 0;
+  const policyEligibleStrongPq = counts.policyEligibleArchiveApprovalStrongPq || 0;
   const minValidSignatures = ensurePositiveInteger(
     Number(authPolicy.minValidSignatures),
     'authPolicy.minValidSignatures',
@@ -697,48 +772,59 @@ function evaluateSuccessorArchivePolicy(authPolicy, verification) {
       level,
       minValidSignatures,
       satisfied: true,
-      validArchiveApprovals: counts.validArchiveApproval || 0,
+      validArchiveApprovals: policyEligible,
+      cryptographicallyValidArchiveApprovals: cryptographicallyValid,
+      externallyPinnedArchiveApprovals: policyEligible,
       deficits: { missingArchiveApprovals: 0, missingStrongPqApprovals: 0 },
       reason: 'integrity-only policy does not require signatures',
     };
   }
 
   if (level === 'any-signature') {
-    const satisfied = counts.validArchiveApproval >= minValidSignatures;
-    const missingArchiveApprovals = Math.max(0, minValidSignatures - counts.validArchiveApproval);
+    const satisfied = policyEligible >= minValidSignatures;
+    const missingArchiveApprovals = Math.max(0, minValidSignatures - policyEligible);
     return {
       level,
       minValidSignatures,
       satisfied,
-      validArchiveApprovals: counts.validArchiveApproval,
+      validArchiveApprovals: policyEligible,
+      cryptographicallyValidArchiveApprovals: cryptographicallyValid,
+      externallyPinnedArchiveApprovals: policyEligible,
       deficits: { missingArchiveApprovals, missingStrongPqApprovals: 0 },
       reason: satisfied
-        ? 'required archive-approval signature count satisfied'
-        : counts.validArchiveApproval === 0
-          ? 'no verified archive-approval signature satisfies archive policy'
-          : `archive-approval signature threshold not satisfied (${counts.validArchiveApproval}/${minValidSignatures})`,
+        ? 'required externally pinned archive-approval signature count satisfied'
+        : policyEligible === 0 && cryptographicallyValid > 0
+          ? 'verified archive-approval signatures lack an external signer pin'
+          : policyEligible === 0
+            ? 'no verified archive-approval signature satisfies archive policy'
+            : `externally pinned archive-approval signature threshold not satisfied (${policyEligible}/${minValidSignatures})`,
     };
   }
 
   if (level === 'strong-pq-signature') {
     const satisfied = (
-      counts.validArchiveApproval >= minValidSignatures &&
-      counts.validArchiveApprovalStrongPq >= 1
+      policyEligible >= minValidSignatures &&
+      policyEligibleStrongPq >= 1
     );
-    const missingArchiveApprovals = Math.max(0, minValidSignatures - counts.validArchiveApproval);
-    const missingStrongPqApprovals = counts.validArchiveApprovalStrongPq >= 1 ? 0 : 1;
+    const missingArchiveApprovals = Math.max(0, minValidSignatures - policyEligible);
+    const missingStrongPqApprovals = policyEligibleStrongPq >= 1 ? 0 : 1;
     return {
       level,
       minValidSignatures,
       satisfied,
-      validArchiveApprovals: counts.validArchiveApproval,
-      validStrongPqArchiveApprovals: counts.validArchiveApprovalStrongPq,
+      validArchiveApprovals: policyEligible,
+      validStrongPqArchiveApprovals: policyEligibleStrongPq,
+      cryptographicallyValidArchiveApprovals: cryptographicallyValid,
+      cryptographicallyValidStrongPqArchiveApprovals: counts.cryptographicallyValidArchiveApprovalStrongPq || 0,
+      externallyPinnedArchiveApprovals: policyEligible,
       deficits: { missingArchiveApprovals, missingStrongPqApprovals },
       reason: satisfied
-        ? 'required strong PQ archive-approval signature present'
-        : missingArchiveApprovals > 0 && counts.validArchiveApproval > 0
-          ? `archive-approval signature threshold not satisfied (${counts.validArchiveApproval}/${minValidSignatures})`
-          : 'no verified strong PQ archive-approval signature satisfies archive policy',
+        ? 'required externally pinned strong PQ archive-approval signature present'
+        : policyEligible < minValidSignatures
+          ? cryptographicallyValid > 0 && policyEligible === 0
+            ? 'verified archive-approval signatures lack an external signer pin'
+            : `externally pinned archive-approval signature threshold not satisfied (${policyEligible}/${minValidSignatures})`
+          : 'no externally pinned strong PQ archive-approval signature satisfies archive policy',
     };
   }
 
@@ -768,7 +854,7 @@ async function verifySuccessorBundledSignature({
           qsigBytes: baseline.signatureBytes,
           bundlePqPublicKeyFileBytes: verifierInputs.bundlePqPublicKeyFileBytes,
           normalizedPinnedPqPins,
-          authoritativeBundlePqPublicKey: verifierInputs.authoritativeBundlePqPublicKey,
+          requireBundledPqKeyMatch: verifierInputs.requireBundledPqKeyMatch,
         })
       : await verifyStellarSigAgainstBytes({
           messageBytes: baseline.targetBytes,
@@ -1047,6 +1133,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     duplicateWarnings,
     selfSignedWarnings,
     unidentifiableSignerWarnings,
+    unanchoredArchiveApprovalWarnings,
   } = buildLifecycleVerificationCounts(results);
   const warnings = [];
   for (const result of results) {
@@ -1056,6 +1143,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
   warnings.push(...selfSignedWarnings);
   warnings.push(...duplicateWarnings);
   warnings.push(...unidentifiableSignerWarnings);
+  warnings.push(...unanchoredArchiveApprovalWarnings);
 
   const policy = evaluateSuccessorArchivePolicy(lifecycleBundle.authPolicy, { counts });
   const timestampInspection = await inspectSuccessorTimestampEvidence({
@@ -1071,7 +1159,7 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
     normalizedPinnedPqPins.length > 0 ||
     expectedEd25519Signer.length > 0
   );
-  if (policy.level === 'integrity-only' && counts.validArchiveApproval === 0) {
+  if (policy.level === 'integrity-only' && counts.cryptographicallyValidArchiveApproval === 0) {
     warnings.push('Archive policy is integrity-only; archive approval is not bound to a verified signer.');
   }
   const invalidSignatureCount = results.filter((item) => item.ok !== true).length;
@@ -1108,9 +1196,15 @@ async function evaluateSuccessorAuthenticity(candidate, lifecycleBundle, verific
       status: {
         archiveApprovalSignatureVerified: counts.validArchiveApproval > 0,
         strongPqSignatureVerified: counts.validArchiveApprovalStrongPq > 0,
-        signerPinned: counts.archiveApprovalPinnedValidTotal > 0,
-        bundlePinned: counts.archiveApprovalBundlePinnedValidTotal > 0,
-        userPinned: counts.archiveApprovalUserPinnedValidTotal > 0,
+        archiveApprovalCryptographicallyVerified: counts.cryptographicallyValidArchiveApproval > 0,
+        strongPqArchiveApprovalCryptographicallyVerified: counts.cryptographicallyValidArchiveApprovalStrongPq > 0,
+        bundledKeyVerified: counts.archiveApprovalBundledKeyVerifiedTotal > 0,
+        externallyPinned: counts.archiveApprovalExternallyPinnedValidTotal > 0,
+        authorizedForPolicy: counts.policyEligibleArchiveApproval > 0,
+        // Deprecated compatibility aliases.
+        signerPinned: counts.archiveApprovalExternallyPinnedValidTotal > 0,
+        bundlePinned: false,
+        userPinned: counts.archiveApprovalExternallyPinnedValidTotal > 0,
         userPinProvided,
         transitionRecordPresent: transitionReport.present,
         transitionChainValid: transitionReport.chainValid,
@@ -1157,6 +1251,7 @@ async function evaluateBundlelessSuccessorAuthenticity(candidate, verificationOp
     duplicateWarnings,
     selfSignedWarnings,
     unidentifiableSignerWarnings,
+    unanchoredArchiveApprovalWarnings,
   } = buildLifecycleVerificationCounts(results);
   const warnings = [];
   for (const result of results) {
@@ -1166,6 +1261,7 @@ async function evaluateBundlelessSuccessorAuthenticity(candidate, verificationOp
   warnings.push(...selfSignedWarnings);
   warnings.push(...duplicateWarnings);
   warnings.push(...unidentifiableSignerWarnings);
+  warnings.push(...unanchoredArchiveApprovalWarnings);
 
   const timestampInspection = await inspectSuccessorTimestampEvidence({
     bundle: null,
@@ -1218,9 +1314,15 @@ async function evaluateBundlelessSuccessorAuthenticity(candidate, verificationOp
       status: {
         archiveApprovalSignatureVerified: counts.validArchiveApproval > 0,
         strongPqSignatureVerified: counts.validArchiveApprovalStrongPq > 0,
-        signerPinned: counts.archiveApprovalPinnedValidTotal > 0,
-        bundlePinned: counts.archiveApprovalBundlePinnedValidTotal > 0,
-        userPinned: counts.archiveApprovalUserPinnedValidTotal > 0,
+        archiveApprovalCryptographicallyVerified: counts.cryptographicallyValidArchiveApproval > 0,
+        strongPqArchiveApprovalCryptographicallyVerified: counts.cryptographicallyValidArchiveApprovalStrongPq > 0,
+        bundledKeyVerified: counts.archiveApprovalBundledKeyVerifiedTotal > 0,
+        externallyPinned: counts.archiveApprovalExternallyPinnedValidTotal > 0,
+        authorizedForPolicy: counts.policyEligibleArchiveApproval > 0,
+        // Deprecated compatibility aliases.
+        signerPinned: counts.archiveApprovalExternallyPinnedValidTotal > 0,
+        bundlePinned: false,
+        userPinned: counts.archiveApprovalExternallyPinnedValidTotal > 0,
         userPinProvided,
         transitionRecordPresent: false,
         transitionChainValid: false,

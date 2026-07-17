@@ -160,7 +160,7 @@ Conforming parsers MUST enforce all three layers.
 | `QV-Lifecycle-Bundle` v1 | Mutable authenticity bundle | Carries archive-state, cohort binding, policy, transitions, source evidence, and attachments; not the archive-approval signable payload |
 | `.qsig` | Detached PQ signature | Used for archive approval or other declared lifecycle targets |
 | `.sig` | Detached Stellar/Ed25519 signature proof | Used for archive approval or other declared lifecycle targets |
-| `.pqpk` | Detached PQ public key | Used for bundled or user-supplied PQ pinning |
+| `.pqpk` | Detached PQ public key | May be carried as mutable bundle verification material or supplied independently as a PQ signer pin |
 | `.ots` | OpenTimestamps evidence | Targets detached signature bytes, not lifecycle-bundle bytes |
 | `.qvpack` | Multi-file payload bundle | Pre-encryption binary bundle for multiple files |
 
@@ -180,8 +180,8 @@ Conforming implementations MUST preserve the following role boundaries when pars
 | --- | --- | --- |
 | `.qenc` confidentiality path (`cryptoProfileId`, ML-KEM, KMAC derivation, AES-GCM, `keyCommitment`) | Confidentiality, authenticated metadata, and wrong-key rejection within one container | Signer identity, archive approval, or time evidence |
 | `qencHash`, `stateId`, `cohortBindingDigest`, `authPolicyCommitment` | Fixity and binding over canonical bytes | Detached-signature approval, restore authorization by themselves, or timestamp evidence |
-| Detached `.qsig` / `.sig` proofs | Cryptographic evidence that a signer key signed one declared canonical target | Automatic bundled pinning, institutional authorization, or timestamp evidence |
-| `authPolicy` plus restore-time counting and suite evaluation | Restore authorization rule over verified archive-approval signatures | A property carried by AEAD tags, key commitments, or hashes alone |
+| Detached `.qsig` / `.sig` proofs | Cryptographic evidence that a signer key signed one declared canonical target | Automatic trust, institutional authorization, or timestamp evidence |
+| `authPolicy` plus restore-time external signer pins, counting, and suite evaluation | Restore authorization rule over externally pinned, verified archive-approval signatures | A property carried by mutable bundle keys, AEAD tags, key commitments, or hashes alone |
 | `.ots` proofs | Supplementary time-evidence linkage to detached signature bytes | Archive-approval signature validity or archive-policy satisfaction |
 
 ## 4. Archive identity and binding model
@@ -312,7 +312,7 @@ Current lifecycle-bundle rules:
 - `archiveStateDigest` MUST equal `SHA3-512` over the canonical embedded archive-state bytes
 - `currentCohortBindingDigest` MUST equal `SHA3-512` over the canonical embedded cohort-binding bytes
 - lifecycle-bundle mutation MUST NOT mutate canonical archive-state or cohort-binding bytes
-- the shipped browser Attach workflow imports archive-approval, maintenance, and source-evidence detached signatures through an explicit channel selector; `.pqpk` signer pins and `.ots` proofs can be imported with those channels
+- the shipped browser Attach workflow imports archive-approval, maintenance, and source-evidence detached signatures through an explicit channel selector; imported `.pqpk` bytes become bundle verification material, while the operator must supply a pin independently again at verify/restore time
 
 ### 4.4 Detached-signature target mappings
 
@@ -320,7 +320,7 @@ Current detached-signature target mappings are:
 
 | Signature family | Target object | Required `targetType` | Counting role |
 | --- | --- | --- | --- |
-| archive approval | archive-state descriptor | `archive-state` | counts toward archive policy |
+| archive approval | archive-state descriptor | `archive-state` | counts toward archive policy only after its signer matches an independent restore-time pin |
 | maintenance | transition record | `transition-record` | reported separately; does not count toward archive policy |
 | source evidence | source-evidence object | `source-evidence` | reported separately; does not count toward archive policy |
 
@@ -546,7 +546,7 @@ Current accepted external authenticity artifacts are:
 | --- | --- |
 | `.qsig` | Quantum Signer detached signature, major version 2, context `quantum-signer/v2`; accepted for archive-approval, maintenance, or source-evidence channels when the selected target bytes match |
 | `.sig` | Stellar detached signature JSON with schema `stellar-signature/v2`; same channel and target-family rules as `.qsig` |
-| `.pqpk` | Detached PQ public key used for bundled or user-supplied pinning |
+| `.pqpk` | Detached PQ public key; bundle-carried use is non-trust verification material, independently supplied use is a signer pin |
 | `.ots` | OpenTimestamps proof linked to detached signature bytes |
 
 Current acceptance boundaries:
@@ -555,13 +555,13 @@ Current acceptance boundaries:
 - the shipped browser Attach workflow imports `.qsig` / `.sig` through the selected evidence channel: archive approval, maintenance, or source evidence
 - external signatures used at restore are archive-approval signatures over canonical archive-state bytes
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
-- `.pqpk` material may be used for bundled or user-supplied PQ pinning
+- bundle-carried `.pqpk` material can constrain cryptographic verification but is not a trust anchor; only independently supplied `.pqpk` input can authorize policy
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
 - `.ots` timestamps are timestamp evidence only and do not satisfy archive policy
 - archive-approval attach binds signatures to `targetType = archive-state`, `targetRef = state:{stateId}`, and the SHA3-512 digest of the canonical archive-state descriptor
 - maintenance attach requires a canonical transition-record target already present in the selected lifecycle bundle and binds signatures to `targetType = transition-record`, `targetRef = transition:sha3-512:{transitionRecordDigest}`, and that transition-record digest
 - source-evidence attach requires canonical source-evidence JSON, stores that object in `sourceEvidence[]` if needed, and binds signatures to `targetType = source-evidence`, `targetRef = source-evidence:sha3-512:{sourceEvidenceDigest}`, and that source-evidence digest
-- only archive-approval signatures count toward archive policy; maintenance and source-evidence signatures are reported separately
+- only archive-approval signatures whose signers match independent restore-time pins count toward archive policy; maintenance and source-evidence signatures are reported separately
 - OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 - `apparentlyComplete` / `completeProof` are derived by the current implementation from proof-name keywords first (`initial`, `pending`, `incomplete` => incomplete; `complete`, `completed`, `confirmed`, `upgraded` => complete), with proof size `>= 1024` bytes used only as a fallback when no keyword matches
 - the current implementation does not treat `apparentlyComplete` / `completeProof` as validation of a Bitcoin attestation chain
@@ -585,10 +585,10 @@ Verifier and restore order:
 8. reconstruct `.qenc` and the ML-KEM private key from one internally consistent successor cohort
 9. verify that the selected lifecycle bundle matches the selected archive-state and cohort-binding objects
 10. verify detached signatures against the exact canonical target bytes for their declared family
-11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified; the embedded signer public key inside a `.qsig` is a convenience field, not by itself an externally anchored identity, so a proof that verifies only against its own embedded key must not count toward policy; full counting semantics and rationale are defined in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules)
-12. evaluate archive policy using `archiveApprovalSignatures` only
+11. report embedded-key-only and bundle-key-only cryptographic verification separately; neither source is an external trust anchor and neither can make a signature policy-eligible
+12. evaluate archive policy using unique externally pinned `archiveApprovalSignatures` only; current external inputs are restore-time `.pqpk` files and the restore-time expected Stellar signer
 13. link timestamps to detached signature bytes, report linkage failures as timestamp-evidence warnings, and emit separate transition and source-evidence reports
-14. emit distinct status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`
+14. emit distinct status fields including `archiveApprovalCryptographicallyVerified`, `archiveApprovalSignatureVerified` (externally authorized legacy-safe meaning), `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `bundledKeyVerified`, `externallyPinned`, and `authorizedForPolicy`; deprecated `bundlePinned` MUST remain false
 
 Restore selection rules:
 

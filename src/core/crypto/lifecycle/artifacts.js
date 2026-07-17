@@ -1298,9 +1298,9 @@ async function assertDeclaredPublicKeyRefCompatibility(signature, bundle, target
       messageBytes: targetBytes,
       qsigBytes: signatureBytes,
       bundlePqPublicKeyFileBytes: verificationMaterial.bundlePqPublicKeyFileBytes,
-      authoritativeBundlePqPublicKey: true,
+      requireBundledPqKeyMatch: true,
     });
-    if (!verification.ok || verification.bundlePinned !== true) {
+    if (!verification.ok || verification.bundledKeyVerified !== true) {
       throw new Error(`${field} publicKeyRef did not verify detached signature`);
     }
     return { publicKey, verification, signatureBytes };
@@ -1312,7 +1312,7 @@ async function assertDeclaredPublicKeyRefCompatibility(signature, bundle, target
     bundleSigner: verificationMaterial.bundleSigner,
     expectedSigner: expectedEd25519Signer,
   });
-  if (!verification.ok || verification.bundlePinned !== true) {
+  if (!verification.ok || verification.bundledKeyVerified !== true) {
     throw new Error(`${field} publicKeyRef did not verify detached signature`);
   }
   return { publicKey, verification, signatureBytes };

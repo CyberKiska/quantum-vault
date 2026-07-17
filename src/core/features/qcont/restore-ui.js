@@ -374,8 +374,13 @@ export function buildRestoreDecisionViewModel({
 
   const evidenceParts = [
     `${signatureCount} archive-approval signature artifact${signatureCount === 1 ? '' : 's'}`,
-    `${userPinnedPqKeyCount + embeddedPublicKeyCount} signer pin artifact${userPinnedPqKeyCount + embeddedPublicKeyCount === 1 ? '' : 's'}`,
   ];
+  if (userPinnedPqKeyCount > 0) {
+    evidenceParts.push(`${userPinnedPqKeyCount} external PQ signer pin${userPinnedPqKeyCount === 1 ? '' : 's'}`);
+  }
+  if (embeddedPublicKeyCount > 0) {
+    evidenceParts.push(`${embeddedPublicKeyCount} bundled verification key${embeddedPublicKeyCount === 1 ? '' : 's'} (not trust anchors)`);
+  }
   if (expectedEd25519Signer) evidenceParts.push('expected Ed25519 signer entered');
 
   return {
@@ -541,8 +546,8 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   if (status) {
     const signatureStatus = formatAuthenticityStatusMessage(status);
     if (signatureStatus) {
-      if (status.signerPinned) onSuccess(signatureStatus);
-      else onWarn(`${signatureStatus.slice(0, -1)}; no signer pin is active.`);
+      if (status.externallyPinned === true) onSuccess(signatureStatus);
+      else onWarn(`${signatureStatus.slice(0, -1)}; no external signer pin is active.`);
     }
   }
 
@@ -567,7 +572,7 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
 
   const counts = verification.counts || {};
   onLog(
-    `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal ?? 0}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal ?? 0}.`
+    `Archive-approval counts: cryptographically-valid=${counts.cryptographicallyValidArchiveApproval ?? 0}, strong-pq-valid=${counts.cryptographicallyValidArchiveApprovalStrongPq ?? 0}, policy-eligible=${counts.policyEligibleArchiveApproval ?? 0}, bundled-key-verified=${counts.archiveApprovalBundledKeyVerifiedTotal ?? 0}, externally-pinned=${counts.archiveApprovalExternallyPinnedValidTotal ?? 0}.`
   );
   onLog(
     `Maintenance counts: valid=${counts.validMaintenance ?? 0}, transition-records=${authenticity?.status?.transitionRecordPresent === true ? 1 : 0}.`
@@ -576,7 +581,7 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
     `Source-evidence counts: valid=${counts.validSourceEvidence ?? 0}, objects=${sourceEvidenceReport?.count ?? 0}.`
   );
   onLog(
-    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, pinned=${counts.pinnedValidTotal ?? 0}, bundle-pinned=${counts.bundlePinnedValidTotal ?? 0}, user-pinned=${counts.userPinnedValidTotal ?? 0}.`
+    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, bundled-key-verified=${counts.bundledKeyVerifiedTotal ?? 0}, externally-pinned=${counts.externallyPinnedValidTotal ?? 0}.`
   );
   for (const warning of verification.warnings || []) {
     onWarn(warning);

@@ -102,12 +102,13 @@ export function formatSignatureResultSummary(result) {
         result?.signerFingerprintHex ||
         ''
     );
+    const bundledKeyVerified = result?.bundledKeyVerified === true || result?.bundlePinned === true;
+    const externallyPinned = result?.externallyPinned === true || result?.userPinned === true;
     const detailParts = [suite];
     if (signer) detailParts.push(`signer ${signer}`);
     if (result?.selfSigned) detailParts.push('self-signed');
-    if (result?.bundlePinned) detailParts.push('bundle-pinned');
-    if (result?.userPinned) detailParts.push('user-pinned');
-    if (!result?.bundlePinned && !result?.userPinned && result?.signerPinned) detailParts.push('pinned');
+    if (bundledKeyVerified) detailParts.push('bundled key verified (not a trust anchor)');
+    if (externallyPinned) detailParts.push('external signer pin matched');
     const detail = detailParts.join(', ');
 
     const referenceName = typeof result?.name === 'string' ? result.name.trim() : '';
@@ -118,25 +119,31 @@ export function formatSignatureResultSummary(result) {
 }
 
 export function formatAuthenticityStatusMessage(status = {}) {
-    const signatureVerified = status?.archiveApprovalSignatureVerified ?? status?.signatureVerified;
+    const signatureVerified = (
+        status?.archiveApprovalCryptographicallyVerified ??
+        status?.archiveApprovalSignatureVerified ??
+        status?.signatureVerified
+    );
     if (signatureVerified !== true) {
         return '';
     }
     const label = Object.prototype.hasOwnProperty.call(status, 'archiveApprovalSignatureVerified')
-        ? 'Archive-approval signatures verified'
+        ? 'Archive-approval signatures cryptographically verified'
         : 'Signatures verified';
+    const bundledKeyVerified = status?.bundledKeyVerified === true || status?.bundlePinned === true;
+    const externallyPinned = status?.externallyPinned === true || status?.userPinned === true;
     const details = [];
-    if (status?.strongPqSignatureVerified === true) {
-        details.push('strong PQ present');
+    if (
+        status?.strongPqArchiveApprovalCryptographicallyVerified === true ||
+        status?.strongPqSignatureVerified === true
+    ) {
+        details.push('strong PQ cryptographically valid');
     }
-    if (status?.bundlePinned === true) {
-        details.push('bundle pin active');
+    if (bundledKeyVerified) {
+        details.push('bundled key verified; not a trust anchor');
     }
-    if (status?.userPinned === true) {
-        details.push('user pin matched');
-    }
-    if (status?.signerPinned === true && status?.bundlePinned !== true && status?.userPinned !== true) {
-        details.push('signer pin active');
+    if (externallyPinned) {
+        details.push('external signer pin matched');
     }
     return details.length > 0
         ? `${label} (${details.join(', ')}).`

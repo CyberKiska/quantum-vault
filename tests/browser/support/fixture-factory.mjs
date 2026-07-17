@@ -218,6 +218,7 @@ async function buildBrowserFixtureSet() {
       filePayload('archive-approval.pqpk', archiveApprovalAttachSignature.pqpkBytes),
     ],
     archiveApprovalAttachRestoreShardFiles: await shardPayloads(archiveApprovalAttachSample.split.shards, 'archive-approval-restore'),
+    archiveApprovalAttachRestorePqpkFile: filePayload('archive-approval-external-pin.pqpk', archiveApprovalAttachSignature.pqpkBytes),
     reshareExportFiles: await shardPayloads(reshareExportSample.split.shards, 'reshare-export'),
     maintenanceAttachBaseFiles: [
       filePayload('maintenance-base.lifecycle-bundle.json', unsignedMaintenanceBundleCanonical.bytes, 'application/json'),

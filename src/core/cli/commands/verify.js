@@ -23,19 +23,25 @@ function usage(message) {
 }
 
 function formatVerifyStatusMessage(status = {}) {
-  if (status.archiveApprovalSignatureVerified !== true) {
+  const cryptographicallyVerified = (
+    status.archiveApprovalCryptographicallyVerified === true ||
+    status.archiveApprovalSignatureVerified === true
+  );
+  if (!cryptographicallyVerified) {
     return 'Archive-approval signatures not verified.';
   }
+  const bundledKeyVerified = status.bundledKeyVerified === true || status.bundlePinned === true;
+  const externallyPinned = status.externallyPinned === true || status.userPinned === true;
   const details = [];
-  if (status.strongPqSignatureVerified === true) details.push('strong PQ present');
-  if (status.bundlePinned === true) details.push('bundle pin active');
-  if (status.userPinned === true) details.push('user pin matched');
-  if (status.signerPinned === true && status.bundlePinned !== true && status.userPinned !== true) {
-    details.push('signer pin active');
-  }
+  if (
+    status.strongPqArchiveApprovalCryptographicallyVerified === true ||
+    status.strongPqSignatureVerified === true
+  ) details.push('strong PQ cryptographically valid');
+  if (bundledKeyVerified) details.push('bundled key verified; not a trust anchor');
+  if (externallyPinned) details.push('external signer pin matched');
   return details.length > 0
-    ? `Archive-approval signatures verified (${details.join(', ')}).`
-    : 'Archive-approval signatures verified.';
+    ? `Archive-approval signatures cryptographically verified (${details.join(', ')}).`
+    : 'Archive-approval signatures cryptographically verified.';
 }
 
 export function parseVerifyArgs(args) {
@@ -228,7 +234,7 @@ export function renderVerifySummary(authenticity) {
     `Policy: ${policy.level || 'unknown'} (${policy.satisfied ? 'satisfied' : 'not satisfied'})`,
     `Reason: ${policy.reason || 'unknown'}`,
     formatVerifyStatusMessage(authenticity?.status || authenticity?.verification?.status || {}),
-    `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}`,
+    `Archive-approval counts: cryptographically-valid=${counts.cryptographicallyValidArchiveApproval ?? 0}, policy-eligible=${counts.policyEligibleArchiveApproval ?? 0}, policy-eligible-strong-pq=${counts.policyEligibleArchiveApprovalStrongPq ?? 0}, externally-pinned=${counts.archiveApprovalExternallyPinnedValidTotal ?? 0}`,
     `Detached totals: valid=${counts.validTotal ?? 0}, maintenance=${counts.validMaintenance ?? 0}, source-evidence=${counts.validSourceEvidence ?? 0}`,
   ];
   if (authenticity?.requiredPolicy) {

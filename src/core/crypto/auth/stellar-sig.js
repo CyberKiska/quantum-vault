@@ -331,12 +331,17 @@ async function buildDigests(messageBytes) {
   };
 }
 
-function buildSuccessResult({ warnings, signer, bundlePinned, userPinned }) {
+function buildSuccessResult({ warnings, signer, bundledKeyVerified, externallyPinned }) {
   return {
     ok: true,
-    bundlePinned,
-    userPinned,
-    signerPinned: bundlePinned || userPinned,
+    bundledKeyVerified,
+    externallyPinned,
+    authorizedForPolicy: externallyPinned,
+    // Deprecated compatibility aliases fail closed. Use bundledKeyVerified
+    // for cryptographic consistency; bundlePinned never grants authority.
+    bundlePinned: false,
+    userPinned: externallyPinned,
+    signerPinned: externallyPinned,
     type: 'sig',
     format: 'stellar-sig',
     suite: 'ed25519',
@@ -351,6 +356,10 @@ function buildSuccessResult({ warnings, signer, bundlePinned, userPinned }) {
 function buildFailureResult({ error, warnings }) {
   return {
     ok: false,
+    bundledKeyVerified: false,
+    externallyPinned: false,
+    authorizedForPolicy: false,
+    // Deprecated compatibility aliases; do not use bundlePinned for trust.
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -774,10 +783,10 @@ export async function verifyStellarSigAgainstBytes({
   }
 
   const expected = String(expectedSigner || '').trim();
-  let userPinned = false;
+  let externallyPinned = false;
   if (expected) {
     if (expected === signer) {
-      userPinned = true;
+      externallyPinned = true;
     }
   }
 
@@ -834,11 +843,15 @@ export async function verifyStellarSigAgainstBytes({
       return buildExpectedSignerMismatchFailure(expected, signer, warnings);
     }
 
+    const bundledKeyVerified = declaredSigner.length > 0;
+    if (bundledKeyVerified && !externallyPinned) {
+      warnings.push('Bundled Stellar signer identifier matched cryptographically, but lifecycle-bundle signer material is mutable and is not an external trust anchor.');
+    }
     return buildSuccessResult({
       warnings,
       signer,
-      bundlePinned: declaredSigner.length > 0,
-      userPinned,
+      bundledKeyVerified,
+      externallyPinned,
     });
   }
 
@@ -1000,10 +1013,14 @@ export async function verifyStellarSigAgainstBytes({
     return buildExpectedSignerMismatchFailure(expected, signer, warnings);
   }
 
+  const bundledKeyVerified = declaredSigner.length > 0;
+  if (bundledKeyVerified && !externallyPinned) {
+    warnings.push('Bundled Stellar signer identifier matched cryptographically, but lifecycle-bundle signer material is mutable and is not an external trust anchor.');
+  }
   return buildSuccessResult({
     warnings,
     signer,
-    bundlePinned: declaredSigner.length > 0,
-    userPinned,
+    bundledKeyVerified,
+    externallyPinned,
   });
 }

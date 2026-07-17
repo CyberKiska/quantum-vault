@@ -648,13 +648,19 @@ export function verifyQsigAgainstBytes({
   qsigBytes,
   bundlePqPublicKeyFileBytes = null,
   pinnedPqPublicKeyFileBytes = null,
-  authoritativeBundlePqPublicKey = false,
+  requireBundledPqKeyMatch = false,
 }) {
   const parsed = unpackQsig(qsigBytes);
   const warnings = [];
   const fail = (error) => ({
     ok: false,
     selfSigned: false,
+    embeddedKeyVerified: false,
+    bundledKeyVerified: false,
+    externallyPinned: false,
+    authorizedForPolicy: false,
+    // Deprecated compatibility aliases fail closed. bundledKeyVerified is the
+    // separate cryptographic-consistency signal for mutable bundle material.
     bundlePinned: false,
     userPinned: false,
     signerPinned: false,
@@ -697,7 +703,7 @@ export function verifyQsigAgainstBytes({
   const bundleKey = unpackCandidateKey(
     bundlePqPublicKeyFileBytes,
     'Bundled PQ public key',
-    { optional: false, strictSuiteMatch: authoritativeBundlePqPublicKey }
+    { optional: false, strictSuiteMatch: requireBundledPqKeyMatch }
   );
   const pinnedKey = unpackCandidateKey(
     pinnedPqPublicKeyFileBytes,
@@ -729,26 +735,60 @@ export function verifyQsigAgainstBytes({
     return fail('No verification key available (.pqpk not provided and no signer public key embedded in .qsig)');
   }
 
-  const bundlePinned = bundleKey instanceof Object
-    ? verifyBySuite(parsed.suiteId, parsed.signature, parsed.tbs, bundleKey.keyBytes, parsed.ctxBytes)
+  // PQ signature verification is intentionally expensive. Cache by exact key
+  // bytes so a key repeated across bundle, external-pin, and embedded sources is
+  // verified once while each source retains its independent trust semantics.
+  const verificationCache = new Map();
+  const verifyCandidateKey = (keyBytes) => {
+    if (!(keyBytes instanceof Uint8Array)) return false;
+    const keyHex = bytesToHex(keyBytes);
+    if (!verificationCache.has(keyHex)) {
+      verificationCache.set(
+        keyHex,
+        verifyBySuite(parsed.suiteId, parsed.signature, parsed.tbs, keyBytes, parsed.ctxBytes)
+      );
+    }
+    return verificationCache.get(keyHex) === true;
+  };
+
+  const bundledKeyVerified = bundleKey instanceof Object
+    ? verifyCandidateKey(bundleKey.keyBytes)
     : false;
-  const userPinned = pinnedKey instanceof Object
-    ? verifyBySuite(parsed.suiteId, parsed.signature, parsed.tbs, pinnedKey.keyBytes, parsed.ctxBytes)
+  const pinnedKeyVerified = pinnedKey instanceof Object
+    ? verifyCandidateKey(pinnedKey.keyBytes)
+    : false;
+  // A lifecycle publicKeyRef constrains the signer key itself, not merely the
+  // signature bytes. Requiring byte-for-byte identity avoids authorizing a
+  // bundled signer through a distinct key that also happens to verify the same
+  // message/signature pair (key-substitution / multi-key ambiguity).
+  const externallyPinned = requireBundledPqKeyMatch
+    ? (
+        pinnedKeyVerified &&
+        bundledKeyVerified &&
+        bytesEqual(pinnedKey.keyBytes, bundleKey.keyBytes)
+      )
+    : pinnedKeyVerified;
+  const embeddedKeyVerified = embeddedKey instanceof Object
+    ? verifyCandidateKey(embeddedKey.keyBytes)
     : false;
 
-  if (bundleKey && !bundlePinned) {
+  if (bundleKey && !bundledKeyVerified) {
     warnings.push('Bundled PQ public key did not verify this detached PQ signature.');
   }
-  if (pinnedKey && !userPinned) {
+  if (pinnedKey && !externallyPinned) {
     warnings.push(bundleKey ? 'Pinned PQ signer key did not match the bundled signer key.' : 'Pinned PQ signer key did not match this verified signature.');
   }
 
-  if (authoritativeBundlePqPublicKey) {
+  if (requireBundledPqKeyMatch) {
     if (!(bundleKey?.keyBytes instanceof Uint8Array)) {
       return fail('Bundled PQ public key is required for this detached PQ signature');
     }
-    if (!bundlePinned) {
+    if (!bundledKeyVerified) {
       return fail('Bundled PQ public key did not verify this detached PQ signature');
+    }
+
+    if (!externallyPinned) {
+      warnings.push('Bundled PQ key verified cryptographically, but lifecycle-bundle key material is mutable and is not an external trust anchor.');
     }
 
     const suite = suiteInfo(parsed.suiteId);
@@ -758,9 +798,15 @@ export function verifyQsigAgainstBytes({
     return {
       ok: true,
       selfSigned: false,
-      bundlePinned,
-      userPinned,
-      signerPinned: bundlePinned || userPinned,
+      embeddedKeyVerified,
+      bundledKeyVerified,
+      externallyPinned,
+      authorizedForPolicy: externallyPinned,
+      // Deprecated compatibility aliases fail closed. Use bundledKeyVerified
+      // for cryptographic consistency; bundlePinned never grants authority.
+      bundlePinned: false,
+      userPinned: externallyPinned,
+      signerPinned: externallyPinned,
       type: 'qsig',
       format: 'qsig',
       suite: suite.normalizedSuite,
@@ -775,7 +821,7 @@ export function verifyQsigAgainstBytes({
 
   let verifiedCandidate = null;
   for (const candidate of verificationOrder) {
-    if (verifyBySuite(parsed.suiteId, parsed.signature, parsed.tbs, candidate.publicKey, parsed.ctxBytes)) {
+    if (verifyCandidateKey(candidate.publicKey)) {
       verifiedCandidate = candidate;
       break;
     }
@@ -787,18 +833,22 @@ export function verifyQsigAgainstBytes({
 
   if (
     verifiedCandidate.keySource === 'embedded-signature-key' &&
-    !bundlePinned &&
-    !userPinned
+    !bundledKeyVerified &&
+    !externallyPinned
   ) {
-    warnings.push('Detached PQ signature verified only with the signer public key embedded in the .qsig itself; this is cryptographic self-verification, not bundled or user-pinned trust.');
+    warnings.push('Detached PQ signature verified only with the signer public key embedded in the .qsig itself; this is cryptographic self-verification, not externally anchored signer authorization.');
+  }
+
+  if (bundledKeyVerified && !externallyPinned) {
+    warnings.push('Bundled PQ key verified cryptographically, but lifecycle-bundle key material is mutable and is not an external trust anchor.');
   }
 
   const computedFp = appendSignerBindingWarnings(parsed, verifiedCandidate.publicKey, warnings);
   const computedFpHex = bytesToHex(computedFp);
   const selfSigned = (
     verifiedCandidate.keySource === 'embedded-signature-key' &&
-    bundlePinned !== true &&
-    userPinned !== true
+    bundledKeyVerified !== true &&
+    externallyPinned !== true
   );
 
   const suite = suiteInfo(parsed.suiteId);
@@ -806,9 +856,15 @@ export function verifyQsigAgainstBytes({
   return {
     ok: true,
     selfSigned,
-    bundlePinned,
-    userPinned,
-    signerPinned: bundlePinned || userPinned,
+    embeddedKeyVerified,
+    bundledKeyVerified,
+    externallyPinned,
+    authorizedForPolicy: externallyPinned,
+    // Deprecated compatibility aliases fail closed. Use bundledKeyVerified
+    // for cryptographic consistency; bundlePinned never grants authority.
+    bundlePinned: false,
+    userPinned: externallyPinned,
+    signerPinned: externallyPinned,
     type: 'qsig',
     format: 'qsig',
     suite: suite.normalizedSuite,

@@ -165,13 +165,38 @@ test('verify --required-policy-level passes when archive policy satisfies the re
     authPolicyLevel: 'strong-pq-signature',
     archiveIdByte: 'e1',
   });
-  const { bundlePath } = await attachArchiveApproval(baseDir, split);
+  const { bundlePath, pqpkPath } = await attachArchiveApproval(baseDir, split);
+
+  const bundleOnly = await runCli([
+    'verify',
+    split.archiveStateBytesPath,
+    '--bundle',
+    bundlePath,
+    '--required-policy-level',
+    'strong-pq-signature',
+    '--json',
+  ]);
+
+  assert.equal(bundleOnly.exitCode, 1);
+  assert.equal(bundleOnly.json.ok, false);
+  assert.equal(bundleOnly.json.status.archiveApprovalCryptographicallyVerified, true);
+  assert.equal(bundleOnly.json.status.bundledKeyVerified, true);
+  assert.equal(bundleOnly.json.status.externallyPinned, false);
+  assert.equal(bundleOnly.json.status.authorizedForPolicy, false);
+  assert.equal(bundleOnly.json.status.archiveApprovalSignatureVerified, false);
+  assert.equal(bundleOnly.json.status.bundlePinned, false);
+  assert.equal(bundleOnly.json.verification.counts.cryptographicallyValidArchiveApproval, 1);
+  assert.equal(bundleOnly.json.verification.counts.policyEligibleArchiveApproval, 0);
+  assert.equal(bundleOnly.json.policy.satisfied, false);
+  assert.equal(bundleOnly.json.requiredPolicy.satisfied, false);
 
   const result = await runCli([
     'verify',
     split.archiveStateBytesPath,
     '--bundle',
     bundlePath,
+    '--pqpk',
+    pqpkPath,
     '--required-policy-level',
     'strong-pq-signature',
     '--json',
@@ -190,13 +215,15 @@ test('verify --include-detached-summary emits byte-free detached signature metad
     authPolicyLevel: 'strong-pq-signature',
     archiveIdByte: 'e2',
   });
-  const { bundlePath } = await attachArchiveApproval(baseDir, split);
+  const { bundlePath, pqpkPath } = await attachArchiveApproval(baseDir, split);
 
   const result = await runCli([
     'verify',
     split.archiveStateBytesPath,
     '--bundle',
     bundlePath,
+    '--pqpk',
+    pqpkPath,
     '--include-detached-summary',
     '--json',
   ]);
