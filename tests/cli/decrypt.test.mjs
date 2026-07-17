@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -326,6 +326,172 @@ test('decrypt handles authenticated .qvpack payloads and explicit extraction', a
   assert.equal(extractReport.fileCount, 2);
   assert.deepEqual(new Uint8Array(await readFile(join(extractDir, 'a.txt'))), aBytes);
   assert.deepEqual(new Uint8Array(await readFile(join(extractDir, 'b.bin'))), bBytes);
+  assert.equal(modeBits(await stat(join(extractDir, 'a.txt'))), 0o600);
+  assert.equal(modeBits(await stat(join(extractDir, 'b.bin'))), 0o600);
   assert.equal(extractReport.qvpackEntries[0].name, 'a.txt');
   assert.equal(extractReport.qvpackEntries[0].outputPath, join(extractDir, 'a.txt'));
+});
+
+test('qvpack extraction rejects a bad later destination without changing earlier outputs', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const inputDir = join(baseDir, 'pack-inputs');
+  const extractDir = join(baseDir, 'extract');
+  const firstInput = join(inputDir, 'first.txt');
+  const secondInput = join(inputDir, 'second.bin');
+  const qencPath = join(baseDir, 'bad-later-destination.qenc');
+  const firstOutput = join(extractDir, 'first.txt');
+  const secondOutput = join(extractDir, 'second.bin');
+  const markerPath = join(secondOutput, 'keep.txt');
+  const originalFirstOutput = new TextEncoder().encode('existing output must remain unchanged');
+  await mkdir(inputDir);
+  await mkdir(extractDir);
+  await writeFile(firstInput, new TextEncoder().encode('new first payload'));
+  await writeFile(secondInput, Uint8Array.of(1, 2, 3));
+  await writeFile(firstOutput, originalFirstOutput);
+  await mkdir(secondOutput);
+  await writeFile(markerPath, Buffer.from('keep'));
+
+  const encrypted = await runCli([
+    'encrypt',
+    '--pack',
+    firstInput,
+    secondInput,
+    '--public-key',
+    keys.publicKeyPath,
+    '--out',
+    qencPath,
+    '--filename',
+    'bad-later-destination.qvpack',
+    '--json',
+  ]);
+  assert.equal(encrypted.exitCode, 0);
+
+  const result = await runCli([
+    'decrypt',
+    qencPath,
+    '--private-key',
+    keys.privateKeyPath,
+    '--out-dir',
+    extractDir,
+    '--extract-qvpack',
+    '--force',
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 2);
+  assert.equal(JSON.parse(result.stdoutText).qvCode, 'USAGE');
+  assert.deepEqual(new Uint8Array(await readFile(firstOutput)), originalFirstOutput);
+  assert.equal((await stat(secondOutput)).isDirectory(), true);
+  assert.equal(await readFile(markerPath, 'utf8'), 'keep');
+  assert.deepEqual(
+    (await readdir(extractDir)).filter((name) => name.includes('.tmp-') || name.includes('.backup-')),
+    [],
+  );
+});
+
+test('qvpack extraction ignores an unrelated stale legacy temp and publishes the complete set', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const inputDir = join(baseDir, 'pack-inputs');
+  const extractDir = join(baseDir, 'extract');
+  const firstInput = join(inputDir, 'first.txt');
+  const secondInput = join(inputDir, 'second.bin');
+  const qencPath = join(baseDir, 'stale-temp.qenc');
+  const staleTempPath = join(extractDir, 'second.bin.tmp');
+  const staleTempBytes = new TextEncoder().encode('pre-existing unrelated temp');
+  const firstBytes = new TextEncoder().encode('first payload');
+  const secondBytes = Uint8Array.of(4, 5, 6);
+  await mkdir(inputDir);
+  await mkdir(extractDir);
+  await writeFile(firstInput, firstBytes);
+  await writeFile(secondInput, secondBytes);
+  await writeFile(staleTempPath, staleTempBytes);
+
+  const encrypted = await runCli([
+    'encrypt',
+    '--pack',
+    firstInput,
+    secondInput,
+    '--public-key',
+    keys.publicKeyPath,
+    '--out',
+    qencPath,
+    '--filename',
+    'stale-temp.qvpack',
+    '--json',
+  ]);
+  assert.equal(encrypted.exitCode, 0);
+
+  const result = await runCli([
+    'decrypt',
+    qencPath,
+    '--private-key',
+    keys.privateKeyPath,
+    '--out-dir',
+    extractDir,
+    '--extract-qvpack',
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(new Uint8Array(await readFile(join(extractDir, 'first.txt'))), firstBytes);
+  assert.deepEqual(new Uint8Array(await readFile(join(extractDir, 'second.bin'))), secondBytes);
+  assert.deepEqual(new Uint8Array(await readFile(staleTempPath)), staleTempBytes);
+  assert.deepEqual(
+    (await readdir(extractDir)).filter((name) => name.includes('.tmp-') || name.includes('.backup-')),
+    [],
+  );
+});
+
+test('qvpack extraction refuses to overwrite its input QENC path', async () => {
+  const baseDir = await makeTempDir();
+  const keys = await makeKeys(baseDir);
+  const inputDir = join(baseDir, 'pack-inputs');
+  const extractDir = join(baseDir, 'extract');
+  const aliasInput = join(inputDir, 'bundle.qenc');
+  const otherInput = join(inputDir, 'other.bin');
+  const qencPath = join(extractDir, 'bundle.qenc');
+  const otherOutput = join(extractDir, 'other.bin');
+  await mkdir(inputDir);
+  await mkdir(extractDir);
+  await writeFile(aliasInput, new TextEncoder().encode('entry named like the source archive'));
+  await writeFile(otherInput, Uint8Array.of(9, 8, 7));
+
+  const encrypted = await runCli([
+    'encrypt',
+    '--pack',
+    aliasInput,
+    otherInput,
+    '--public-key',
+    keys.publicKeyPath,
+    '--out',
+    qencPath,
+    '--filename',
+    'alias-test.qvpack',
+    '--json',
+  ]);
+  assert.equal(encrypted.exitCode, 0);
+  const originalQencBytes = new Uint8Array(await readFile(qencPath));
+
+  const result = await runCli([
+    'decrypt',
+    qencPath,
+    '--private-key',
+    keys.privateKeyPath,
+    '--out-dir',
+    extractDir,
+    '--extract-qvpack',
+    '--force',
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 2);
+  assert.equal(JSON.parse(result.stdoutText).qvCode, 'USAGE');
+  assert.deepEqual(new Uint8Array(await readFile(qencPath)), originalQencBytes);
+  await assert.rejects(() => stat(otherOutput), { code: 'ENOENT' });
+  assert.deepEqual(
+    (await readdir(extractDir)).filter((name) => name.includes('.tmp-') || name.includes('.backup-')),
+    [],
+  );
 });

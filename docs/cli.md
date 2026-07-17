@@ -186,6 +186,18 @@ Output path selection:
 - By default, a decrypted `.qvpack` payload is written as exact `QVB1` bundle bytes.
 - `--extract-qvpack --out-dir <dir>` requires an authenticated `QVB1` payload and writes each pack entry as a separate `0600` file.
 - Extracted entry names are sanitized again: no path separators, no leading dot, no NUL/control bytes, and no overlong UTF-8 filename.
+- Extraction validates the complete destination set, rejects exact duplicate names
+  and an exact lexical alias of the input `.qenc`, computes every entry and report
+  digest, and stages the complete set before publication begins. A preflight or
+  report-construction failure therefore publishes no entry.
+- Multi-entry publication is a best-effort artifact-set operation, not a
+  crash-atomic directory transaction. Process termination, filesystem aliasing
+  (case/Unicode normalization, hard links, or symlinked parents), rollback
+  failure, or backup-cleanup failure can still leave a partial or residual set.
+
+This hardening does not change `QVB1` bytes or require archive migration. Existing
+packs remain readable; only unsafe or aliased extraction destinations that were
+previously reached during a sequential write are now rejected before publication.
 
 Exit status:
 

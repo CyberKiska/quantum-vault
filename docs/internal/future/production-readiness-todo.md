@@ -162,6 +162,13 @@ Status values:
     directory contents and symlink targets and leave no temp/backup artifacts on
     these preflight failures. This does not establish crash-atomic multi-file
     publication or close input/output alias races.
+  - [x] **REL-301-QVPACK-PREFLIGHT (complete):** CLI extraction plans and
+    sanitizes every direct-child destination, rejects duplicate names and an exact
+    lexical input-QENC alias, builds all hashes and report data, and stages one
+    `0600` artifact set before publication. A bad later destination cannot modify
+    an earlier output. Crash consistency, rollback/cleanup fault tolerance,
+    filesystem-normalized aliases, inode aliases, and parent-directory TOCTOU
+    remain open under REL-301.
 - [ ] **REL-302 (open, high): aggregate resource policy.** Bound file count,
   individual bytes, aggregate bytes, metadata, shard count, reconstructed bytes,
   and allocation arithmetic before reads/allocations. Report local resource-limit

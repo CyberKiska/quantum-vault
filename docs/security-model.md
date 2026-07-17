@@ -455,9 +455,12 @@ Current residual risks include:
 - per-chunk AEAD key reuse within one container: the current `per-chunk-aead` mode derives distinct IVs but uses a single `Kenc` across chunks, which is acceptable for the current size regime but may warrant future hardening for much larger payloads
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
-- multi-file publication is not yet a crash-atomic transaction: sequential
-  `.qvpack` extraction and failures during multi-directory rename, rollback,
-  backup cleanup, or directory `fsync` can still leave partial or residual files
+- multi-file publication is not yet a crash-atomic transaction: `.qvpack`
+  extraction now validates, hashes, stages, and preflights the complete set before
+  publication, but process termination and failures during rename/link, rollback,
+  backup cleanup, or directory `fsync` can still leave partial or residual files;
+  case-insensitive or Unicode-normalizing paths, hard links, and symlinked-parent
+  races also remain outside the exact lexical alias checks
 
 ## 12. Future coverage retained for this document
 
