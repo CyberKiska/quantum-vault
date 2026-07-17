@@ -7,17 +7,29 @@ import {
 
 export async function createBundlePayloadFromFiles(files) {
     const entries = [];
-    for (const file of files) {
-        const bytes = await readFileAsUint8Array(file);
-        entries.push({ name: file.name, bytes });
-    }
+    try {
+        for (const file of files) {
+            const bytes = await readFileAsUint8Array(file);
+            entries.push({ name: file.name, bytes });
+        }
 
-    const bundleName = `bundle-${createFilenameTimestamp()}.qvpack`;
-    return {
-        bundleName,
-        bundleBytes: buildQvpackPayloadBytes(entries),
-        fileCount: entries.length
-    };
+        const bundleName = `bundle-${createFilenameTimestamp()}.qvpack`;
+        return {
+            bundleName,
+            bundleBytes: buildQvpackPayloadBytes(entries),
+            fileCount: entries.length
+        };
+    } catch {
+        throw new Error('Bundle payload preparation failed.');
+    } finally {
+        for (const entry of entries) {
+            try {
+                entry.bytes.fill(0);
+            } catch {
+                // Best-effort cleanup must continue across detached views.
+            }
+        }
+    }
 }
 
 export function isBundlePayload(bytes) {
