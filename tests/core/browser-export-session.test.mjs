@@ -392,6 +392,72 @@ test('Blob hashing is streaming-compatible with byte hashing', async () => {
   assert.deepEqual(blobDigest, sha3_512(source));
 });
 
+test('Blob hashing rejects a cumulative stream overrun and cancels after bounded pulls', async () => {
+  let pullCount = 0;
+  let readerCancelled = false;
+  const chunks = [new Uint8Array([1]), new Uint8Array([2])];
+  const source = new Blob([new Uint8Array([9])]);
+  source.stream = () => new ReadableStream({
+    pull(controller) {
+      const chunk = chunks[pullCount];
+      pullCount += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      readerCancelled = true;
+      return new Promise(() => {});
+    },
+  }, { highWaterMark: 0 });
+
+  await assert.rejects(
+    () => digestBrowserExportSourceSha3_512(source),
+    (error) => assertFixedError(error, 'BROWSER_EXPORT_PLAN_INVALID'),
+  );
+  assert.equal(pullCount, 2);
+  assert.equal(readerCancelled, true);
+  assert.deepEqual(chunks, [new Uint8Array([0]), new Uint8Array([0])]);
+});
+
+test('Blob hashing rejects a stream that ends before its declared length', async () => {
+  const streamedChunk = new Uint8Array([1]);
+  const source = new Blob([new Uint8Array([9, 8])]);
+  source.stream = () => new ReadableStream({
+    start(controller) {
+      controller.enqueue(streamedChunk);
+      controller.close();
+    },
+  });
+
+  await assert.rejects(
+    () => digestBrowserExportSourceSha3_512(source),
+    (error) => assertFixedError(error, 'BROWSER_EXPORT_PLAN_INVALID'),
+  );
+  assert.deepEqual(streamedChunk, new Uint8Array([0]));
+});
+
+test('Blob hashing rejects a non-EOF empty chunk without unbounded pulls', async () => {
+  let pullCount = 0;
+  let readerCancelled = false;
+  const emptyChunk = new Uint8Array(0);
+  const source = new Blob([new Uint8Array([9])]);
+  source.stream = () => new ReadableStream({
+    pull(controller) {
+      pullCount += 1;
+      controller.enqueue(emptyChunk);
+    },
+    cancel() {
+      readerCancelled = true;
+    },
+  }, { highWaterMark: 0 });
+
+  await assert.rejects(
+    () => digestBrowserExportSourceSha3_512(source),
+    (error) => assertFixedError(error, 'BROWSER_EXPORT_PLAN_INVALID'),
+  );
+  assert.equal(pullCount, 1);
+  assert.equal(readerCancelled, true);
+});
+
 test('Blob hashing aborts with a fixed error and cancels the active reader', async () => {
   const abortController = new AbortController();
   let readerCancelled = false;

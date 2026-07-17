@@ -198,6 +198,8 @@ export async function digestBrowserExportSourceSha3_512(source, { signal } = {})
 
   const hasher = sha3_512.create();
   const reader = source.stream().getReader();
+  let streamedByteLength = 0;
+  let reachedEndOfStream = false;
   const abortReader = () => {
     void reader.cancel().catch(() => {});
   };
@@ -206,19 +208,36 @@ export async function digestBrowserExportSourceSha3_512(source, { signal } = {})
     while (true) {
       throwIfAborted(signal);
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        reachedEndOfStream = true;
+        break;
+      }
       if (!(value instanceof Uint8Array)) planInvalid();
       try {
         throwIfAborted(signal);
+        // A non-EOF empty chunk makes no progress and permits an attacker-
+        // controlled Blob stream to consume unbounded pulls within a bounded
+        // declared length. Native Blob streams do not require empty chunks.
+        if (value.byteLength === 0) planInvalid();
+        if (value.byteLength > byteLength - streamedByteLength) planInvalid();
+        streamedByteLength += value.byteLength;
         hasher.update(value);
       } finally {
         value.fill(0);
       }
     }
     throwIfAborted(signal);
+    if (streamedByteLength !== byteLength) planInvalid();
     return hasher.digest();
   } finally {
     signal?.removeEventListener('abort', abortReader);
+    if (!reachedEndOfStream) {
+      try {
+        void reader.cancel().catch(() => {});
+      } catch {
+        // Cancellation is best-effort and must not replace the fixed failure.
+      }
+    }
     reader.releaseLock();
     if (typeof hasher.destroy === 'function') hasher.destroy();
   }
