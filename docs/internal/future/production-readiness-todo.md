@@ -1,0 +1,168 @@
+# Production-hardening TODO
+
+Status date: 2026-07-17
+
+JavaScript baseline: `improvementV3` at `70c6eca7238a70deb2e4bd6ba1c3202697b33422`
+
+Rust comparison baseline: external `CyberKiska/qv-rs` at `f29f0905d88118858b44a6c71a355291544f3e97`
+
+This file turns `analysis.md` into an evidence-ranked implementation queue. It is
+not a production-readiness claim. A task is complete only when its stated gate is
+covered by implementation, negative tests, current specifications, and migration
+notes. Passing regression tests do not substitute for cryptographic review,
+independent implementation review, or an operational security assessment.
+
+Status values:
+
+- **open** — the required property is absent;
+- **partial** — some required behavior exists, but the acceptance gate is not met;
+- **blocked-external** — evidence or changes are required outside this checkout;
+- **complete** — the recorded acceptance gate passed on the named baseline.
+
+## Stage 0 — evidence baseline and compatibility boundary
+
+- [x] **BASE-001 (complete): clean branch baseline.** `npm run check` passed:
+  40 core tests, 79 CLI tests, 5 same-implementation parity tests, 190 self-test
+  checks, 27 schema fixtures, 59 corpus entries, CLI self-test, and production
+  build. Browser and Rust release checks are separate gates below.
+- [ ] **FMT-000 (open): machine-readable active-format and domain registry.**
+  Record every magic value, suite identifier, exact size, byte order, domain
+  string, critical field, resource limit, and lifecycle state. CI must compare
+  implementation constants with the registry.
+- [ ] **CLAIM-001 (partial): claims ledger.** Reconcile security, format, trust,
+  preservation, CLI, and UI claims with executable behavior. Current confirmed
+  corrections to `analysis.md` are:
+  - standalone JavaScript `.qenc` parsing now derives and checks exact ciphertext
+    geometry;
+  - restore already exposes exact state and cohort selectors, although it still
+    lacks a restore-time policy floor;
+  - `tests/parity` compares the Node CLI with the shared JavaScript core, not Rust.
+- [ ] **RUST-001 (blocked-external): co-equal Rust conformance changes.** The Rust
+  repository is not part of this branch. Audit it at the pinned commit, keep shared
+  corpus changes portable, and require a coordinated Rust change before declaring
+  a cross-language gate complete.
+
+## Stage 1 — release-blocking trust and archive-key isolation
+
+- [ ] **SEC-101 (open, critical): remove mutable-bundle self-authorization.**
+  Bundled signer material may establish only cryptographic self-consistency. It
+  must not be described as pinned/trusted or count toward archive policy without
+  an independently supplied signer pin or trust policy. Apply the rule to PQ and
+  classical signature paths. Preserve inspection of cryptographically valid but
+  unauthorized evidence.
+  - Gate: an attacker-created key, signature, and rewritten lifecycle bundle can
+    verify but contributes zero authorized approvals and cannot satisfy
+    `any-signature` or `strong-pq-signature`.
+  - Gate: the same signature counts when its identity is supplied independently.
+  - Migration: current bytes remain readable; acceptance becomes deliberately
+    stricter. No compatibility switch may restore bundle-self-trust.
+- [ ] **SEC-102 (open, high): fresh Lite ML-KEM keypair per archive.** Remove the
+  session-global archive key reuse domain and wipe per-operation private material
+  on success, failure, and cancellation.
+  - Gate: two consecutive Lite creations have distinct keys and key commitments;
+    recovery material from either archive cannot decrypt the other.
+  - Migration: previously reused-key archives require fresh-key re-encryption;
+    resharing does not isolate them.
+- [ ] **SEC-103 (partial, high): explicit threshold-bypass accounting.** Raw
+  private-key export is a 1-of-1 recovery root. Separate it from threshold-only
+  creation, require an explicit acknowledgement, and record the choice without
+  recording secret material.
+- [ ] **SEC-104 (partial): secret-boundary regression suite.** Add canaries proving
+  private keys, shared secrets, derived keys, plaintext, private filenames, and
+  stable private-key fingerprints never enter JSON reports, errors, logs, DOM,
+  storage, output filenames, or telemetry.
+- [ ] **SEC-105 (open): restore-time external constraints.** Add a minimum policy
+  floor and explicit expectation terminology for the existing archive/state/cohort
+  selectors. Define a versioned, independently supplied trust-policy artifact
+  before supporting signer roles or allowlists.
+
+## Stage 2 — fail-closed current formats and recoverability
+
+- [ ] **FMT-201 (partial, high): strict `.qenc` metadata profile.** Exact KEM, KDF,
+  AEAD, payload, crypto-profile, nonce, AAD, domain, and geometry values must be
+  mandatory. Reject unknown fields and nested unknown fields. Align the writer's
+  metadata bound with every reader and validate required private metadata after
+  authentication.
+  - Gate: JavaScript and Rust make the same accept/reject decision for every
+    canonical and malformed corpus item.
+  - Migration: canonical current output is unchanged; noncanonical artifacts are
+    inspection/quarantine-only and are never silently reinterpreted.
+- [ ] **REL-201 (open, high): authenticated shard reconstruction geometry.** Select
+  and quarantine shards individually using the archive-state `containerId` and
+  authenticated `.qenc` header. Derive ciphertext and RS fragment geometry from
+  that header, require exact fragment lengths, checked safe arithmetic, input caps,
+  and exact stream exhaustion.
+  - Gate: a malformed or poisoned non-quorum extra shard cannot deny recovery of a
+    valid quorum.
+  - Gate: short, long, duplicate-index, out-of-range, oversized, and trailing-byte
+    shards fail closed without large attacker-driven allocations.
+- [ ] **FMT-202 (open, high): normative Shamir and erasure-code specification.**
+  Freeze field polynomials, coordinate encodings, generator matrices, shortening,
+  padding, fragment geometry, corruption semantics, and known-answer vectors.
+- [ ] **INT-201 (blocked-external): live JS↔Rust interoperability and differential
+  malformed-input testing.** Each implementation must generate artifacts consumed
+  by the other in CI; copied fixtures and JS-core parity are insufficient.
+
+## Stage 3 — bounded processing and late commit
+
+- [ ] **REL-301 (open, high): no output before complete validation.** Pro browser
+  restore/decrypt must verify authenticated private fixity and validate every
+  output name before triggering any download. CLI multi-file extraction must
+  commit as one artifact set or roll back completely under injected write,
+  `fsync`, and rename failures.
+- [ ] **REL-302 (open, high): aggregate resource policy.** Bound file count,
+  individual bytes, aggregate bytes, metadata, shard count, reconstructed bytes,
+  and allocation arithmetic before reads/allocations. Report local resource-limit
+  failures distinctly from invalid-format failures.
+- [ ] **REL-303 (open, large): streaming encryption, decryption, RS, hashing, and
+  private temporary output.** Peak memory must be a documented bounded function of
+  chunk size and shard profile. Publication occurs only after AEAD, length, private
+  metadata, and final digest checks pass.
+- [ ] **REL-304 (open): localized fixity and scrub/repair tooling.** Detached,
+  versioned per-chunk fixity may augment current whole-shard hashes without changing
+  existing shard meaning.
+
+## Stage 4 — operational custody and digital preservation
+
+- [ ] **SEC-401 (open): signed active-cohort checkpoints.** Independently trusted,
+  monotonic, PQ-authorized checkpoints bind archive, state, active cohort, epoch,
+  predecessor, and policy. Offline freshness limits remain explicit.
+- [ ] **ARC-401 (open): deterministic preservation pack.** Package public artifacts,
+  schemas, KATs, malformed corpus, trust material, SBOM, source/build provenance,
+  and PREMIS-compatible events without secret keys. Packaging is not OAIS or ISO
+  16363 certification.
+- [ ] **ARC-402 (open): renewable evidence and operations.** Define scrub, repair,
+  media-refresh, hash/signature/timestamp renewal, dependency escrow, migration,
+  rollback, and representation-information schedules.
+- [ ] **SUP-401 (open): release/supply-chain evidence.** Reproducible build recipe,
+  pinned toolchain, SBOM, signed release artifacts, browser security headers, and
+  an independent cryptographic/security review.
+
+## Stage 5 — successor-format research and migration
+
+- [ ] **NEXT-501 (deferred): reserve, specify, and prototype successor formats.** A
+  successor may split a per-archive recovery secret wrapping a random payload DEK,
+  separate immutable payload from replaceable access state, localize shard damage,
+  and offer explicit privacy profiles. It must use new magic/version identifiers.
+- [ ] **MIG-501 (deferred): dual-read, full-reencrypt migration.** Never convert in
+  place. Verify old and new anchors, issue a signed continuity record, preserve
+  rollback material, and never delete legacy artifacts automatically.
+- [ ] **RESEARCH-501 (deferred): PQ VSS/DKG/threshold KEM, PoR, and ZK.** These remain
+  optional research until exact security statements, PQ assumptions, corruption
+  bounds, formal analysis, and independent implementations exist. Classical
+  ECC/pairings must not become a confidentiality or authorization root.
+
+## Milestone release gates
+
+1. **Trust gate:** Stage 1 attacker/regression tests pass; no mutable evidence can
+   bootstrap its own authorization; Lite archive keys are isolated.
+2. **Format gate:** Stage 2 strict corpus and live bidirectional JS↔Rust tests pass;
+   malformed extras cannot poison a valid quorum.
+3. **Reliability gate:** Stage 3 resource and fault-injection tests pass; corrupt or
+   partial plaintext is never published.
+4. **Preservation gate:** Stage 4 artifacts and recurring procedures are executable,
+   independently anchored, and tested through a migration/repair exercise.
+5. **Production claim gate:** all earlier gates plus independent security review,
+   deployment review, cryptographic dependency review, reproducible release
+   evidence, and an explicit residual-risk acceptance are complete. Until then,
+   Quantum Vault remains experimental.
