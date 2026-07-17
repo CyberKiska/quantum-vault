@@ -20,6 +20,7 @@ Current values in this appendix are traced to:
 - `src/core/crypto/aead.js`
 - `src/core/crypto/policy.js`
 - `src/core/crypto/kdf.js`
+- `src/core/crypto/qenc/format.js`
 - `src/core/crypto/lifecycle/artifacts.js`
 - `src/core/crypto/qcont/lifecycle-shard.js`
 - `src/core/crypto/auth/qsig.js`
@@ -33,7 +34,10 @@ Current values in this appendix are traced to:
 | Identifier class | Current value | Source |
 | --- | --- | --- |
 | `.qenc` container magic | `QVv1` | `src/core/crypto/constants.js` |
-| `.qenc` metadata format identifier | `QVv1-5-0` | `src/core/crypto/constants.js` |
+| `.qenc` metadata format identifier | `QVv1-5-0` | `src/core/crypto/constants.js`, `src/core/crypto/qenc/format.js` |
+| `.qenc` ML-KEM-1024 encapsulated-key length | `1568` bytes | `src/core/crypto/mlkem.js`, `src/core/crypto/qenc/format.js` |
+| `.qenc` public metadata hard limit | `4096` bytes | `src/core/crypto/qenc/format.js` |
+| `.qenc` AES-GCM tag length | `16` bytes per chunk | `src/core/crypto/qenc/format.js` |
 | `.qcont` shard magic | `QVC1` | `src/core/crypto/qcont/lifecycle-shard.js` |
 | `.qcont` shard format identifier | `QVqcont-7` | `src/core/crypto/qcont/lifecycle-shard.js` |
 | `.qcont` artifact family | `successor-lifecycle-v1` | `src/core/crypto/qcont/lifecycle-shard.js` |

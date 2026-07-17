@@ -341,22 +341,31 @@ This separation is one of the current format family's core invariants. Archive-a
 | Data | Length | Description |
 | --- | --- | --- |
 | MAGIC | 4 bytes | ASCII `QVv1` |
-| keyLen | 4 bytes (Uint32 BE) | length of `encapsulatedKey` |
-| encapsulatedKey | keyLen bytes | ML-KEM ciphertext |
+| keyLen | 4 bytes (Uint32 BE) | MUST be `1568` for the current ML-KEM-1024 profile |
+| encapsulatedKey | exactly 1568 bytes | ML-KEM-1024 ciphertext |
 | containerNonce | 12 bytes | container nonce / IV root |
 | kdfSalt | 16 bytes | random salt for KMAC |
-| metaLen | 2 bytes (Uint16 BE) | length of `metaJSON` |
+| metaLen | 2 bytes (Uint16 BE) | length of `metaJSON`; MUST be in `1..4096` for current writers and readers |
 | metaJSON | metaLen bytes UTF-8 | metadata |
 | keyCommitment | 32 bytes | required `SHA3-256(Kenc)` |
 | ciphertext | remaining bytes | AES-GCM ciphertext stream |
 
 ### 5.2 Current metadata contract
 
+For `fmt = "QVv1-5-0"`, `metaJSON` is a closed object with exactly these 19
+members: `KEM`, `KDF`, `AEAD`, `aead_mode`, `iv_strategy`, `fmt`,
+`hasKeyCommitment`, `payloadFormat`, `payloadLength`, `chunkSize`, `chunkCount`,
+`cryptoProfileId`, `kdfTreeId`, `noncePolicyId`, `nonceMode`, `counterBits`,
+`maxChunkCount`, `aadPolicyId`, and `domainStrings`. `domainStrings` is itself a
+closed object with exactly `kdf`, `iv`, `kenc`, and `kiv`. Missing or unknown
+members at either level MUST be rejected. Algorithm and profile labels are
+normative dispatch constraints, not descriptive annotations.
+
 | Field | Current emitted value or shape | Current acceptance note |
 | --- | --- | --- |
-| `KEM` | `ML-KEM-1024` | descriptive algorithm label |
-| `KDF` | `KMAC256` | descriptive algorithm label |
-| `AEAD` | `AES-256-GCM` | descriptive algorithm label |
+| `KEM` | `ML-KEM-1024` | MUST equal this exact value |
+| `KDF` | `KMAC256` | MUST equal this exact value |
+| `AEAD` | `AES-256-GCM` | MUST equal this exact value |
 | `fmt` | `QVv1-5-0` | MUST match the supported container metadata format |
 | `cryptoProfileId` | `QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2` | required by current validation |
 | `kdfTreeId` | `QV-KDF-TREE-v2` | required by current validation |
@@ -368,7 +377,7 @@ This separation is one of the current format family's core invariants. Archive-a
 | `maxChunkCount` | `1` or `4294967295` | MUST match `aead_mode` |
 | `aadPolicyId` | `QV-AAD-HEADER-CHUNK-v1` | required by current validation |
 | `hasKeyCommitment` | `true` | current containers require a key commitment |
-| `payloadFormat` | `wrapped-v1` | current payload wrapper |
+| `payloadFormat` | `wrapped-v1` | MUST equal this exact value |
 | `payloadLength` | positive safe integer | wrapped cleartext payload length |
 | `chunkSize` | `8388608` | fixed runtime chunk size for the current format |
 | `chunkCount` | positive safe integer | MUST equal `ceil(payloadLength / chunkSize)` for per-chunk mode and `1` for single-container mode |
@@ -392,7 +401,22 @@ Current `wrapped-v1` payload format is:
 [uint32be privateMetaLen][privateMetaJSON][fileBytes]
 ```
 
-Both public and private metadata are decoded with fatal UTF-8 and duplicate-key rejection. The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one AES-GCM tag per chunk.
+Both public and private metadata are decoded with fatal UTF-8 and duplicate-key rejection. The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one AES-GCM tag per chunk. Implementations MUST reject unsafe-integer overflow before this calculation and MUST reject both truncated ciphertext and trailing bytes.
+
+The current public metadata schema above is closed. The authenticated private
+metadata object is not yet a closed schema: current JavaScript requires valid
+strict JSON and enforces `originalLength` only when it is a safe integer. Closing
+and making every private field mandatory is a separate compatibility change and
+remains an open hardening task.
+
+Strict-current migration note: canonical output from the shipped JavaScript and
+Rust writers remains valid. Artifacts using false algorithm/profile labels,
+missing or unknown public members, a non-1568-byte encapsulated key, or public
+metadata larger than 4096 bytes are now invalid for normal decrypt, split, and
+restore processing. They MUST NOT be reinterpreted or accepted through a larger
+caller-supplied limit. Any future inspection-only legacy path must be explicitly
+named, byte-preserving, non-decrypting, and separate from current-format
+acceptance.
 
 When multiple files are archived, the payload bytes are a `.qvpack` bundle detected by magic `QVB1`, not by filename.
 

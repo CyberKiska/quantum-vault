@@ -93,6 +93,19 @@ Status values:
     canonical and malformed corpus item.
   - Migration: canonical current output is unchanged; noncanonical artifacts are
     inspection/quarantine-only and are never silently reinterpreted.
+  - [x] **FMT-201-JS-PUBLIC (complete):** JavaScript now requires the exact closed
+    19-member public metadata schema and four-member domain map, fixed current
+    algorithms/profile/nonce contracts, exact 1568-byte ML-KEM ciphertext, one
+    non-bypassable 4096-byte metadata cap, safe ciphertext arithmetic, and exact
+    ciphertext exhaustion. Golden and malformed vectors cover the boundary.
+  - [ ] **FMT-201-JS-PRIVATE (open):** make authenticated `wrapped-v1` private
+    metadata a closed required schema without accepting ambiguous historical
+    meanings.
+  - [ ] **FMT-201-RUST (blocked-external):** Rust baseline `f29f090` already
+    denies unknown public fields but still permits omitted algorithm/profile
+    labels, lets its low-level writer exceed its 4096-byte reader cap, and defers
+    the 1568-byte KEM-ciphertext check until decapsulation. Parser parity remains
+    unproved until mirrored changes and live differential tests land externally.
 - [ ] **REL-201 (open, high): authenticated shard reconstruction geometry.** Select
   and quarantine shards individually using the archive-state `containerId` and
   authenticated `.qenc` header. Derive ciphertext and RS fragment geometry from

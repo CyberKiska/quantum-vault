@@ -301,6 +301,8 @@ Current runtime invariants:
 Current confidentiality and AEAD invariants:
 
 - parsers and decryptors MUST use explicit algorithm and profile identifiers, not heuristic inference
+- the current `.qenc` public metadata object and its `domainStrings` child are closed schemas; missing, unknown, or false-label fields MUST be rejected before decapsulation
+- the current ML-KEM-1024 encapsulated key is exactly 1568 bytes and current public metadata is capped at 4096 bytes by both writer and reader; caller options may only lower that cap
 - AES-GCM nonce size MUST remain 96 bits in the current format family
 - a `(key, nonce)` pair MUST NOT be reused
 - security-relevant header fields MUST remain inside the authenticated boundary
@@ -309,6 +311,7 @@ Current confidentiality and AEAD invariants:
 - key commitment is mandatory and MUST be verified before decryption
 - KMAC domain strings for KDF and IV derivation MUST remain explicit, non-colliding, and stable for the artifact instance
 - parsers MUST NOT interpret ciphertext or plaintext content based on unauthenticated metadata fields
+- authenticated ciphertext geometry MUST use checked safe-integer arithmetic and reject truncation and trailing bytes exactly
 
 These are hard invariants because AES-GCM authenticates only what the implementation actually binds. If a future variant moved security-relevant interpretation fields outside the authenticated boundary or allowed heuristic algorithm dispatch, a ciphertext could be structurally accepted under the wrong security interpretation.
 
