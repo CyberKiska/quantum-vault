@@ -1630,8 +1630,6 @@ async function restoreSuccessorFromShards(shards, options = {}) {
   const privKey = reconstructed.privKey;
   const recoveredQencHash = normalizeHexString(await hashBytes(qencBytes));
   const expectedQencHash = normalizeHexString(qenc.qencHash);
-  const recoveredPrivHash = normalizeHexString(await hashBytes(privKey));
-  const privateKeyHash = normalizeHexString(group[0]?.metaJSON?.privateKeyHash || '');
   const qkeyOk = reconstructed.recoveredKeyCommitmentValidated === true;
 
   const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
@@ -1653,10 +1651,8 @@ async function restoreSuccessorFromShards(shards, options = {}) {
     cohortId: candidate.cohortId,
     containerId,
     containerHash: expectedQencHash,
-    privateKeyHash: privateKeyHash || null,
     privateKeyHashMatchesMetadata: reconstructed.privateKeyHashMatchesMetadata,
     recoveredQencHash,
-    recoveredPrivHash,
     rejectedShardIndices,
     ignoredQencHeaderIndices: [...reconstructed.ignoredQencHeaderIndices],
     invalidShareIndices: [...reconstructed.invalidShareIndices],

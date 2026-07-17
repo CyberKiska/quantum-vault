@@ -26,6 +26,40 @@ export function peekSuccessorSelectionState(prefix) {
   return successorSelectionState.get(prefix) || null;
 }
 
+export function buildSuccessorSelectionChangeDetail(prefix, state) {
+  return {
+    prefix,
+    selection: {
+      mode: String(state?.mode || 'none'),
+      selectionRequired: state?.selectionRequired === true,
+      selectionComplete: state?.selectionComplete === true,
+      successorSelectionUiMode: String(state?.successorSelectionUiMode || 'none'),
+      selectedArchiveId: state?.selectedArchiveId || null,
+      selectedStateId: state?.selectedStateId || null,
+      selectedCohortId: state?.selectedCohortId || null,
+      selectedLifecycleBundleDigestHex: state?.selectedLifecycleBundleDigestHex || null,
+    },
+  };
+}
+
+export function buildSuccessorInspectorShard(shard) {
+  return {
+    sourceFileName: shard.sourceFileName,
+    archiveState: shard.archiveState,
+    stateId: shard.stateId,
+    cohortId: shard.cohortId,
+    lifecycleBundleDigestHex: shard.lifecycleBundleDigestHex,
+    lifecycleBundle: shard.lifecycleBundle,
+    metaJSON: {
+      archiveId: shard.metaJSON?.archiveId,
+      stateId: shard.metaJSON?.stateId,
+      cohortId: shard.metaJSON?.cohortId,
+      n: shard.metaJSON?.n,
+      t: shard.metaJSON?.t,
+    },
+  };
+}
+
 function getSuccessorSelectionElements(prefix = 'restore') {
   return {
     container: document.getElementById(`${prefix}SuccessorSelection`),
@@ -614,15 +648,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const stateForRestore = stateChoiceRequired && selectedState
       ? { selectedArchiveId: selectedState.archiveId, selectedStateId: selectedState.stateId }
       : { selectedArchiveId: null, selectedStateId: null };
-    const inspectorShards = successorShards.map((shard) => ({
-      sourceFileName: shard.sourceFileName,
-      archiveState: shard.archiveState,
-      stateId: shard.stateId,
-      cohortId: shard.cohortId,
-      lifecycleBundleDigestHex: shard.lifecycleBundleDigestHex,
-      lifecycleBundle: shard.lifecycleBundle,
-      metaJSON: shard.metaJSON,
-    }));
+    const inspectorShards = successorShards.map(buildSuccessorInspectorShard);
     successorSelectionState.set(prefix, {
       ...nextState,
       mode: 'successor',
@@ -655,11 +681,12 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
 
   const current = successorSelectionState.get(prefix);
   const onSelectionChange = () => {
+    const detail = buildSuccessorSelectionChangeDetail(prefix, successorSelectionState.get(prefix));
     document.dispatchEvent(new CustomEvent('qv:successor-selection-change', {
-      detail: { prefix, state: successorSelectionState.get(prefix) },
+      detail,
     }));
     if (typeof options.onSelectionChange === 'function') {
-      options.onSelectionChange({ prefix, state: successorSelectionState.get(prefix) });
+      options.onSelectionChange(detail);
     }
     const latest = successorSelectionState.get(prefix);
     void refreshSelectionAndPreflight({

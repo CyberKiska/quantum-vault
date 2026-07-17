@@ -773,9 +773,12 @@ export function initQcontRestoreUI() {
       logRestoreSelectionSummary(result, log);
       logVerificationSummary(result.authenticity, log, logWarning, logSuccess);
 
-      const { containerHash, privateKeyHash, recoveredQencHash, recoveredPrivHash, qencOk, qkeyOk } = result;
-      log(`Recovered .qenc SHA3-512=${recoveredQencHash} (expected ${containerHash})`);
-      log(`Recovered .qkey SHA3-512=${recoveredPrivHash}${privateKeyHash ? ` (expected ${privateKeyHash})` : ''}`);
+      const { qencOk, qkeyOk } = result;
+      log('Recovered container matched the committed archive-state digest.');
+      log('Recovered ML-KEM private key satisfied the authenticated QENC key commitment.');
+      if (result.privateKeyHashMatchesMetadata === false) {
+        logWarning('Unauthenticated shard key-fingerprint metadata did not match; QENC key commitment remained authoritative.');
+      }
 
       if (qencOk && qkeyOk && result.authenticity?.status?.policySatisfied) {
         proRestoreEvaluation = { result };

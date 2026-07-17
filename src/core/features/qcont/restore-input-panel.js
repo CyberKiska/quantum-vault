@@ -31,7 +31,7 @@ import { refreshSelectionAndPreflight } from './successor-selection-ui.js';
  * @property {('restore'|'lite-restore'|'reshare'|'attach')} intakeWorkflow
  * @property {string|null} [preflightContainerId] - id of preflight decision card; null skips it
  * @property {HTMLInputElement|null} [expectedSignerInput]
- * @property {(event: { prefix: string, state: object|null }) => void} [onSelectionChange]
+ * @property {(event: { prefix: string, selection: object }) => void} [onSelectionChange]
  * @property {() => boolean} [isCurrent] - re-entrancy guard; defaults to always true
  */
 

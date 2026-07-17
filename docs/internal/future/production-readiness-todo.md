@@ -91,8 +91,14 @@ Status values:
   - [x] **SEC-104-BROWSER-KEY-FINGERPRINT-UI (complete):** generated private/public
     key hashes were removed from browser logs and sidebar DOM; state is now
     loaded/not-loaded only, and the Lite cross-archive test checks the full page
-    body for the current key fingerprints. QCONT wire metadata, restore UI,
-    filenames, general errors, CLI schema v1, and Rust remain open.
+    body for the current key fingerprints.
+  - [x] **SEC-104-RESTORE-PRESENTATION (complete):** restore results no longer
+    return expected/recovered private-key digests; Pro Restore logs commitment and
+    integrity outcomes only; successor selection events use an allowlisted summary;
+    retained inspector metadata omits the fingerprint. Core allowlist/self-tests
+    and a browser canary cover result, event, log, console, DOM text, and HTML
+    sinks. QCONT wire metadata, filenames, general errors, CLI schema v1, and Rust
+    remain open.
 - [ ] **SEC-105 (partial): restore-time external constraints.** Add a minimum policy
   floor and explicit expectation terminology for the existing archive/state/cohort
   selectors. Define a versioned, independently supplied trust-policy artifact

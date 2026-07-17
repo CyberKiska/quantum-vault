@@ -3381,6 +3381,8 @@ function buildCases() {
         const restored = await restoreFromShards(sample.parsed, { onLog: () => {}, onError: () => {} });
         assert(restored.qkeyOk === true, 'honest successor restore should report qkeyOk=true');
         assert(restored.privateKeyHashMatchesMetadata === true, 'honest successor restore should report matching privateKeyHash metadata');
+        assert(!Object.hasOwn(restored, 'privateKeyHash'), 'restore result must not expose expected private-key fingerprints');
+        assert(!Object.hasOwn(restored, 'recoveredPrivHash'), 'restore result must not expose recovered private-key fingerprints');
       },
     },
     {
@@ -3398,8 +3400,10 @@ function buildCases() {
         assert(baseline.qkeyOk === true, 'baseline successor restore should report qkeyOk=true');
         assert(restored.qkeyOk === true, 'privateKeyHash tampering must not clear qkeyOk on an honest recovery');
         assert(restored.privateKeyHashMatchesMetadata === false, 'privateKeyHash tampering should be reported separately');
-        assert(restored.recoveredPrivHash === baseline.recoveredPrivHash, 'privateKeyHash tampering must not change the recovered private key');
+        assert(timingSafeEqual(restored.privKey, baseline.privKey), 'privateKeyHash tampering must not change the recovered private key');
         assert(restored.recoveredQencHash === baseline.recoveredQencHash, 'privateKeyHash tampering must not change the recovered .qenc hash');
+        assert(!Object.hasOwn(restored, 'privateKeyHash'), 'tampered restore result must not expose expected private-key fingerprints');
+        assert(!Object.hasOwn(restored, 'recoveredPrivHash'), 'tampered restore result must not expose recovered private-key fingerprints');
       },
     },
     {

@@ -298,6 +298,10 @@ Current runtime invariants:
   failure, cancellation, a late key-generation result after cancellation,
   supersession, and session wipe MUST attempt to erase the owned arrays
 - cryptographic operations MUST stay in the core or service layer rather than the UI layer
+- restore results, selection events, inspector state, logs, and DOM MUST NOT carry
+  expected or recovered private-key digest values; the authenticated QENC key
+  commitment remains the correctness root, while current QCONT fingerprint
+  metadata may contribute only a boolean diagnostic
 
 The current Lite backup bridge retains the most recently successful pair in
 memory so the operator can trigger a one-time raw `.qkey` backup, then wipes its
@@ -311,6 +315,13 @@ readable, but archives made with a reused Lite key remain linkable and share one
 failure domain. Resharing the old private key does not isolate them. Isolation
 requires authorized decryption followed by full fresh-key re-encryption and new
 shards; preservation copies must not be silently deleted.
+
+`QVqcont-7` itself still stores a clear `privateKeyHash`, so suppressing that value
+at presentation boundaries does not make existing shard sets unlinkable. A new
+shard format and dual-language migration are required to remove the wire-level
+identifier. JavaScript callers that previously consumed raw fingerprint fields
+from `restoreFromShards()` must migrate to `qkeyOk` and
+`privateKeyHashMatchesMetadata`.
 
 ### 7.2 Encryption invariants for `.qenc`
 

@@ -580,6 +580,18 @@ Current shard metadata rules:
 - `archiveId`, `stateId`, and `cohortId` MUST match the embedded archive-state and cohort-binding objects
 - `keyCommitmentHex` MUST match the embedded key-commitment bytes
 - `stateId` and `cohortId` are summary copies; the canonical sources of truth are the embedded archive-state and cohort-binding bytes and their derived digests
+- `privateKeyHash` is clear, unauthenticated diagnostic metadata in the current
+  `QVqcont-7` wire format. It MUST NOT override the authenticated QENC key
+  commitment, and normal restore result/UI/event surfaces MUST expose only the
+  boolean comparison outcome, never the expected or recovered digest value.
+
+Presentation-boundary migration note: `QVqcont-7` bytes are unchanged and remain
+linkable by their clear `privateKeyHash`. The JavaScript `restoreFromShards()`
+result no longer returns `privateKeyHash` or `recoveredPrivHash`; callers must use
+`qkeyOk` for authoritative QENC commitment validation and
+`privateKeyHashMatchesMetadata` for the non-authoritative diagnostic. Removing
+the field from stored shards requires an explicit successor format and coordinated
+JavaScript/Rust migration rather than silent reinterpretation.
 
 ### 6.3 Embedded artifact invariants
 
