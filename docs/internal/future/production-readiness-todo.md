@@ -77,10 +77,16 @@ Status values:
   private keys, shared secrets, derived keys, plaintext, private filenames, and
   stable private-key fingerprints never enter JSON reports, errors, logs, DOM,
   storage, output filenames, or telemetry.
-- [ ] **SEC-105 (open): restore-time external constraints.** Add a minimum policy
+- [ ] **SEC-105 (partial): restore-time external constraints.** Add a minimum policy
   floor and explicit expectation terminology for the existing archive/state/cohort
   selectors. Define a versioned, independently supplied trust-policy artifact
   before supporting signer roles or allowlists.
+  - [x] **SEC-105-POLICY-FLOOR (complete):** CLI verify and restore accept the
+    same fail-closed `--required-policy-level`; dry-run reports the comparison and
+    write mode rejects a weaker archive before any output creation.
+  - [ ] **SEC-105-TRUST-POLICY (open):** define the versioned external artifact,
+    roles/fingerprints, freshness expectations, and browser workflow. Existing
+    exact archive/state/cohort selectors remain the current expectation inputs.
 
 ## Stage 2 — fail-closed current formats and recoverability
 

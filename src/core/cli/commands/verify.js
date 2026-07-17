@@ -181,7 +181,7 @@ function buildDetachedSummary(authenticity) {
   }));
 }
 
-function evaluateRequiredPolicy(authenticity, requiredPolicyLevel) {
+export function evaluateRequiredPolicy(authenticity, requiredPolicyLevel) {
   if (!requiredPolicyLevel) return null;
   const declaredLevel = String(authenticity?.policy?.level || '');
   const declaredStrength = POLICY_STRENGTH[declaredLevel];

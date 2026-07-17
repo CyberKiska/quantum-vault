@@ -422,7 +422,7 @@ CLI network and policy boundaries:
 - the CLI performs no hidden network use; timestamp evidence is read from disk and is not fetched or upgraded by the CLI
 - `qv verify` and `qv restore --dry-run` are the preferred automation gates before write-mode restore
 - `qv restore` blocks writes when `policy.satisfied !== true`; `--accept-policy-warnings` can acknowledge warnings but cannot override an unsatisfied policy
-- `qv verify --required-policy-level <level>` only tightens the bundle-declared policy requirement
+- `qv verify --required-policy-level <level>` and `qv restore --required-policy-level <level>` only tighten the bundle-declared policy requirement; a restore floor is checked before output creation
 
 These responsibilities do not weaken the browser model. They make explicit that the CLI host and filesystem become part of the operator's local security perimeter.
 

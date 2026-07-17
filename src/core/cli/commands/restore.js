@@ -11,13 +11,14 @@ import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../crypto/q
 import {
   normalizeExpectedEd25519Signer,
   normalizeLowerHex,
+  normalizeRequiredPolicyLevel,
   takeValue,
 } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
 import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
-import { readVerificationInputsFromPaths } from './verify.js';
+import { evaluateRequiredPolicy, readVerificationInputsFromPaths } from './verify.js';
 import { FILE_MODE } from '../lib/artifact-policy.js';
 
 function requiresRestoreLifecycleVariantAcknowledgement(result) {
@@ -127,6 +128,7 @@ export function parseRestoreArgs(args) {
     selectedStateId: '',
     selectedCohortId: '',
     selectedLifecycleBundleDigestHex: '',
+    requiredPolicyLevel: '',
     outDir: 'restored',
     outQencPath: '',
     outKeyPath: '',
@@ -183,6 +185,10 @@ export function parseRestoreArgs(args) {
         break;
       case '--bundle-digest':
         options.selectedLifecycleBundleDigestHex = normalizeLowerHex(takeValue(args, index, arg), arg, 128);
+        index += 1;
+        break;
+      case '--required-policy-level':
+        options.requiredPolicyLevel = normalizeRequiredPolicyLevel(takeValue(args, index, arg), arg);
         index += 1;
         break;
       case '--out':
@@ -245,11 +251,14 @@ export function parseRestoreArgs(args) {
 export function buildRestoreDryRunSummary(result, {
   acceptPolicyWarnings = false,
   dryRun = true,
+  requiredPolicyLevel = '',
 } = {}) {
+  const requiredPolicy = evaluateRequiredPolicy(result?.authenticity, requiredPolicyLevel);
   const baseSatisfied = (
     result?.qencOk === true &&
     result?.qkeyOk === true &&
-    result?.authenticity?.status?.policySatisfied === true
+    result?.authenticity?.status?.policySatisfied === true &&
+    requiredPolicy?.satisfied !== false
   );
   const variantAckRequired = requiresRestoreLifecycleVariantAcknowledgement(result);
   const variantAckOk = !variantAckRequired || acceptPolicyWarnings === true;
@@ -258,6 +267,7 @@ export function buildRestoreDryRunSummary(result, {
     dryRun,
     wouldSucceed: baseSatisfied && variantAckOk,
     policyWarningsAcknowledged: acceptPolicyWarnings === true,
+    ...(requiredPolicy ? { requiredPolicy } : {}),
     lifecycleBundleVariantAcknowledgementRequired: variantAckRequired,
     archiveId: result.archiveId,
     stateId: result.stateId,
@@ -367,6 +377,7 @@ export async function restoreDryRunFromInputs({
   parsedShards,
   verification = {},
   acceptPolicyWarnings = false,
+  requiredPolicyLevel = '',
 } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
@@ -374,7 +385,11 @@ export async function restoreDryRunFromInputs({
   let result = null;
   try {
     result = await assessRestoreFromShards(parsedShards, { verification });
-    return buildRestoreDryRunSummary(result, { acceptPolicyWarnings, dryRun: true });
+    return buildRestoreDryRunSummary(result, {
+      acceptPolicyWarnings,
+      dryRun: true,
+      requiredPolicyLevel,
+    });
   } finally {
     await zeroizeRestoreMaterial(result);
   }
@@ -391,6 +406,7 @@ export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } =
       parsedShards,
       verification,
       acceptPolicyWarnings: options.acceptPolicyWarnings,
+      requiredPolicyLevel: options.requiredPolicyLevel,
     });
   } finally {
     for (const shard of parsedShards) {
@@ -461,9 +477,19 @@ async function decryptRestoredPlaintext(result) {
   return { plaintextBytes, metadata, fileHashHex };
 }
 
-function buildRestoreWriteSummary({ result, plan, plaintextReport = null, acceptPolicyWarnings = false }) {
+function buildRestoreWriteSummary({
+  result,
+  plan,
+  plaintextReport = null,
+  acceptPolicyWarnings = false,
+  requiredPolicyLevel = '',
+}) {
   return {
-    ...buildRestoreDryRunSummary(result, { acceptPolicyWarnings, dryRun: false }),
+    ...buildRestoreDryRunSummary(result, {
+      acceptPolicyWarnings,
+      dryRun: false,
+      requiredPolicyLevel,
+    }),
     dryRun: false,
     wouldSucceed: true,
     outputs: {
@@ -475,6 +501,12 @@ function buildRestoreWriteSummary({ result, plan, plaintextReport = null, accept
     },
     plaintext: plaintextReport,
   };
+}
+
+function assertRequiredRestorePolicy(result, requiredPolicyLevel) {
+  const requiredPolicy = evaluateRequiredPolicy(result?.authenticity, requiredPolicyLevel);
+  if (requiredPolicy?.satisfied !== false) return;
+  throw policyNotSatisfied(requiredPolicy.reason);
 }
 
 export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
@@ -492,6 +524,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
     const verification = await readRestoreVerification(options);
     result = await restoreFromShards(parsedShards, { verification });
     assertRestoredIntegrity(result);
+    assertRequiredRestorePolicy(result, options.requiredPolicyLevel);
     assertRestoreLifecycleVariantAcknowledged(result, options.acceptPolicyWarnings);
 
     const outDir = await ensureOutputDirectory(path.resolve(cwd, options.outDir));
@@ -523,6 +556,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
       plan,
       plaintextReport,
       acceptPolicyWarnings: options.acceptPolicyWarnings,
+      requiredPolicyLevel: options.requiredPolicyLevel,
     });
   } catch (error) {
     throw classifyRestoreError(error);
@@ -549,6 +583,9 @@ export function renderRestoreSummary(summary) {
     `Policy: ${summary.authenticity?.policy?.level || 'unknown'} (${summary.authenticity?.policy?.satisfied ? 'satisfied' : 'not satisfied'})`,
     `qencOk=${summary.qencOk} qkeyOk=${summary.qkeyOk}`,
   ];
+  if (summary.requiredPolicy) {
+    lines.push(`Required policy: ${summary.requiredPolicy.level} (${summary.requiredPolicy.satisfied ? 'satisfied' : 'not satisfied'})`);
+  }
   if (!summary.dryRun) {
     lines.push(`Recovered key: ${summary.outputs?.keyPath}`);
     if (summary.outputs?.plaintextPath) {

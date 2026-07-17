@@ -701,6 +701,9 @@ Verification options match `qv verify` and add explicit selection flags:
 - `--state-id <hex>`
 - `--cohort-id <hex>`
 - `--bundle-digest <hex>`
+- `--required-policy-level <integrity-only|any-signature|strong-pq-signature>`
+  applies an operator minimum in addition to the archive-declared policy; it can
+  only tighten restore and never changes archive bytes
 
 Write options:
 
@@ -721,6 +724,10 @@ Exit status:
 - `9` for ambiguous archive/state/cohort or lifecycle-bundle selection
 - `11` for restored `.qenc`, private-key, or plaintext integrity failure
 - `12` when restore is otherwise policy-satisfied but the selected cohort embeds multiple lifecycle-bundle digests and `--accept-policy-warnings` was not supplied
+
+When `--required-policy-level` is stronger than the selected archive's declared
+and satisfied policy, dry-run returns `wouldSucceed: false` and write mode fails
+with `POLICY_NOT_SATISFIED` before creating the output directory or files.
 
 `--dry-run --json` output shape remains:
 
@@ -749,6 +756,11 @@ Exit status:
   "outputs": null
 }
 ```
+
+When `--required-policy-level` is present, both dry-run and successful write-mode
+reports add a `requiredPolicy` object with the requested level, declared level,
+comparison result, archive-policy result, final `satisfied` decision, and reason.
+The field is absent when no operator floor was requested.
 
 Write-mode `--json` output includes the same fields with `dryRun: false` and an `outputs` block:
 
@@ -799,6 +811,9 @@ Dry-run guarantees:
 Write-mode security notes:
 
 - Core `restoreFromShards` enforces restore authenticity policy before reconstructing material. Policy failure writes no artifacts.
+- The CLI enforces `--required-policy-level` after core authenticity evaluation
+  and before any output preflight or directory creation. It cannot downgrade the
+  archive-declared policy and `--accept-policy-warnings` cannot override it.
 - The CLI writes recovered `.qenc` first with mode `0644` best-effort, then recovered private key with mode `0600` best-effort, then public sidecars with mode `0644`, then optional plaintext with mode `0600`.
 - Recovered `qencBytes`, `privKey`, optional plaintext bytes, and parsed shard share buffers are zeroized best-effort in `finally` blocks. Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
 - `--decrypt` decrypts with the recovered key still in memory and verifies the authenticated private metadata plaintext hash before writing plaintext.

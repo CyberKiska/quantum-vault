@@ -571,6 +571,7 @@ CLI policy rules:
 
 - `qv verify` exits `0` only when the effective archive policy is satisfied.
 - `qv verify --required-policy-level <level>` compares the selected policy against a caller-required minimum and exits non-zero when the requested level is stricter than the archive's satisfied policy.
+- `qv restore --required-policy-level <level>` applies the same caller-required minimum to dry-run and write mode; a weaker archive returns `wouldSucceed = false` in dry-run and write mode creates no outputs.
 - `qv restore --dry-run --json` writes nothing and reports `wouldSucceed`; successful dry-runs include `outputs: null`.
 - `qv restore` write mode exits non-zero and writes no recovered artifacts when `policy.satisfied !== true`.
 - `--accept-policy-warnings` does not override `policy.satisfied === false`; it is only an operator acknowledgement channel for warnings when policy is otherwise satisfied.

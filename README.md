@@ -259,7 +259,7 @@ Typical archive-approval flow:
 ```bash
 npm run cli -- attach --shards './cohort/*.qcont' --sig ./archive.qsig --pqpk ./signer.pqpk --out-bundle ./attached.lifecycle-bundle.json --out-shards ./attached-cohort --json
 npm run cli -- verify ./cohort/payload.bin.archive-state.json --bundle ./attached.lifecycle-bundle.json --pqpk ./signer.pqpk --required-policy-level strong-pq-signature --json
-npm run cli -- restore --shards './attached-cohort/*.qcont' --bundle ./attached.lifecycle-bundle.json --pqpk ./signer.pqpk --out ./recovered --json
+npm run cli -- restore --shards './attached-cohort/*.qcont' --bundle ./attached.lifecycle-bundle.json --pqpk ./signer.pqpk --required-policy-level strong-pq-signature --out ./recovered --json
 ```
 
 Scriptable exit-code pattern:

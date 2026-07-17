@@ -145,6 +145,10 @@ test('CLI parsers fail closed on ambiguous selector and policy shapes', async ()
     { qvCode: 'USAGE' },
   );
   assert.throws(
+    () => parseRestoreArgs(['--shards', 'cohort/*.qcont', '--required-policy-level', 'weaker-than-known']),
+    { qvCode: 'USAGE' },
+  );
+  assert.throws(
     () => parseVerifyArgs(['archive-state.json', '--required-policy-level', 'weaker-than-known']),
     { qvCode: 'USAGE' },
   );

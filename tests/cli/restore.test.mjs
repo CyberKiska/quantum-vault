@@ -269,3 +269,64 @@ test('restore --accept-policy-warnings does not override failed authenticity pol
   const error = JSON.parse(result.stdoutText);
   assert.equal(error.qvCode, 'POLICY_NOT_SATISFIED');
 });
+
+test('restore --required-policy-level blocks a weaker declared policy before any output', async () => {
+  const baseDir = await makeTempDir();
+  const fixture = await makeSplitFixture(baseDir, {
+    authPolicyLevel: 'integrity-only',
+    archiveIdByte: 'dd',
+  });
+  const outDir = join(baseDir, 'required-policy-blocked');
+
+  const matchingDryRun = await runCli([
+    'restore',
+    '--shards',
+    join(fixture.split.outDir, '*.qcont'),
+    '--dry-run',
+    '--required-policy-level',
+    'integrity-only',
+    '--json',
+  ]);
+  assert.equal(matchingDryRun.exitCode, 0);
+  const matchingReport = JSON.parse(matchingDryRun.stdoutText);
+  assert.equal(matchingReport.wouldSucceed, true);
+  assert.equal(matchingReport.requiredPolicy.satisfied, true);
+
+  const dryRun = await runCli([
+    'restore',
+    '--shards',
+    join(fixture.split.outDir, '*.qcont'),
+    '--dry-run',
+    '--required-policy-level',
+    'strong-pq-signature',
+    '--json',
+  ]);
+  assert.equal(dryRun.exitCode, 1);
+  const dryReport = JSON.parse(dryRun.stdoutText);
+  assert.equal(dryReport.ok, false);
+  assert.equal(dryReport.wouldSucceed, false);
+  assert.deepEqual(dryReport.requiredPolicy, {
+    level: 'strong-pq-signature',
+    declaredPolicyLevel: 'integrity-only',
+    declaredPolicySatisfiesRequired: false,
+    archivePolicySatisfied: true,
+    satisfied: false,
+    reason: 'Archive policy level integrity-only is weaker than required policy level strong-pq-signature.',
+  });
+
+  const writeMode = await runCli([
+    'restore',
+    '--shards',
+    join(fixture.split.outDir, '*.qcont'),
+    '--out',
+    outDir,
+    '--required-policy-level',
+    'strong-pq-signature',
+    '--json',
+  ]);
+  assert.equal(writeMode.exitCode, 1);
+  assert.equal(await exists(outDir), false);
+  const error = JSON.parse(writeMode.stdoutText);
+  assert.equal(error.qvCode, 'POLICY_NOT_SATISFIED');
+  assert.match(error.error, /weaker than required policy level strong-pq-signature/);
+});
