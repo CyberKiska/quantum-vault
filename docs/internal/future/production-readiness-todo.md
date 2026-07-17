@@ -170,10 +170,14 @@ Status values:
     now explicit: 3168 evaluation bytes followed by one distinct coordinate in
     `1..255`. JavaScript rejects coordinate `0` before interpolation, matching the
     pinned Rust reader; current writers and canonical bytes are unchanged.
-  - [ ] **FMT-202-CODEC-KATS (open):** freeze the full Shamir random-consumption
-    order and systematic RS polynomial/block construction in independently
-    generated exact vectors. Current Rust properties and one RS vector do not
-    replace shared JavaScript/Rust KATs or live bidirectional CI.
+  - [ ] **FMT-202-CODEC-KATS (partial):** the current dependency-copy profile now
+    freezes Shamir field/coordinate/random-consumption behavior and the systematic
+    RS polynomial/block/framing construction. A fixed independently derived
+    Shamir combine vector is accepted by JavaScript and the pinned Rust library;
+    JavaScript also reproduces the pinned Rust `n=5,k=3` RS fragment hashes and
+    failure boundary. Deterministic dealer-output vectors, all supported tuples,
+    an independent third implementation, differential fuzzing, and live
+    bidirectional CI remain open.
 - [ ] **INT-201 (blocked-external): live JS↔Rust interoperability and differential
   malformed-input testing.** Each implementation must generate artifacts consumed
   by the other in CI; copied fixtures and JS-core parity are insufficient.
