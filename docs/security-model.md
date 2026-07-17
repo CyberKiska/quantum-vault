@@ -294,7 +294,23 @@ Current runtime invariants:
 - secret material MUST remain in runtime memory only and MUST NOT be stored in `localStorage`, `sessionStorage`, `IndexedDB`, or cookies
 - zeroization is best-effort but MUST still be attempted for secret buffers as soon as practical
 - session-level wiping on unload or `pagehide` remains part of the current security posture
+- each Lite archive creation MUST generate a fresh operation-local ML-KEM pair;
+  failure, cancellation, a late key-generation result after cancellation,
+  supersession, and session wipe MUST attempt to erase the owned arrays
 - cryptographic operations MUST stay in the core or service layer rather than the UI layer
+
+The current Lite backup bridge retains the most recently successful pair in
+memory so the operator can trigger a one-time raw `.qkey` backup, then wipes its
+owned arrays. That retained 1-of-1 recovery root is not threshold custody and is
+not yet default-off behind an explicit pre-creation acknowledgement. Therefore
+the stricter wipe-on-success and threshold-bypass gates remain open even though
+cross-archive key reuse has been removed.
+
+Migration note: no artifact format changed. Previously created archives remain
+readable, but archives made with a reused Lite key remain linkable and share one
+failure domain. Resharing the old private key does not isolate them. Isolation
+requires authorized decryption followed by full fresh-key re-encryption and new
+shards; preservation copies must not be silently deleted.
 
 ### 7.2 Encryption invariants for `.qenc`
 
@@ -457,6 +473,10 @@ Current residual risks include:
   aggregate, and encoded-size limits with checked framing, but browser and CLI
   adapters still read whole source files before core rejection and the 1 GiB
   boundary is not a streaming-memory guarantee
+- browser automatic-download quotas can suppress later files across repeated
+  multi-artifact exports without a reliable completion signal; tests use an
+  in-page capture harness for same-session key-domain assertions, while a
+  user-verifiable explicit export queue or directory-write flow remains required
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
 - multi-file publication is not yet a crash-atomic transaction: `.qvpack`

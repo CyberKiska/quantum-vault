@@ -77,11 +77,11 @@
         </div>
         <div class="context-row">
           <span>Public Key</span>
-          <span id="ctx-pub-fp" class="context-val">Not Loaded</span>
+          <span id="ctx-pub-status" class="context-val">Not Loaded</span>
         </div>
         <div class="context-row">
           <span>Private Key</span>
-          <span id="ctx-sec-fp" class="context-val">Not Loaded</span>
+          <span id="ctx-sec-status" class="context-val">Not Loaded</span>
         </div>
         <button id="sidebar-selftest" class="sidebar-selftest" type="button">Run Self-test</button>
         <div class="sidebar-note">
@@ -135,11 +135,11 @@
               <div class="config-area">
                 <div class="key-status-row">
                    <div id="keyStatus" class="status-badge">
-                     <span class="status-icon">🔑</span>
-                     <span class="status-text">Generating keys...</span>
+                     <span class="status-icon">🛡️</span>
+                     <span class="status-text">Fresh keys are generated per archive</span>
                    </div>
                    <button id="liteDownloadKeysBtn" class="button secondary small initially-hidden" type="button" aria-describedby="liteCustodyGuidanceSummary">
-                     📥 Backup Keys
+                     📥 Optional 1-of-1 Key Backup
                    </button>
                 </div>
 
@@ -191,7 +191,7 @@
                   <li>Store <code>QVqcont-7</code> shards across separate locations or custodians.</li>
                   <li>Retain the archive-state descriptor and lifecycle bundle JSON; Review, Pro Attach, and Restore depend on them.</li>
                   <li>Archive approval happens outside the browser: sign archive-state bytes, then use Pro Attach for signatures and evidence.</li>
-                  <li><strong>Backup Keys</strong> is optional convenience; skip it when custody policy forbids retaining ML-KEM keys.</li>
+                  <li><strong>Optional 1-of-1 Key Backup</strong> bypasses the shard threshold; skip it when custody policy forbids retaining a unilateral ML-KEM recovery key.</li>
                 </ul>
               </div>
 

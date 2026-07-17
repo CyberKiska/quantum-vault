@@ -1,9 +1,18 @@
+import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { getBrowserFixtureSet } from './support/fixture-factory.mjs';
 import { buildQsigFixture } from '../../src/core/crypto/selftest.js';
+import {
+  decryptFile,
+  hashBytes,
+  parseLifecycleShard,
+  restoreFromShards,
+  zeroizeParsedLifecycleShard,
+} from '../../src/app/crypto-service.js';
+import { wipeRestoreResult } from '../../src/core/crypto/zeroize.js';
 import { lastToast, openArchiveReviewHub, openProMode, openProTab, evaluateAndReleaseRestore } from './support/ui-helpers.mjs';
 import { expectNoHorizontalOverflow } from './support/visual-assertions.mjs';
 
@@ -28,6 +37,87 @@ async function payloadFromDownload(download, overrideName = '') {
     mimeType: mimeTypeForFilename(name),
     buffer: await readFile(path),
   };
+}
+
+async function captureDownloads(page, expectedCount, action) {
+  const downloads = [];
+  const onDownload = (download) => downloads.push(download);
+  page.on('download', onDownload);
+  try {
+    await action();
+    await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(expectedCount);
+    return await Promise.all(downloads.map((download) => payloadFromDownload(download)));
+  } finally {
+    page.off('download', onDownload);
+  }
+}
+
+async function installSyntheticDownloadCapture(page) {
+  await page.addInitScript(() => {
+    const blobs = new Map();
+    let nextId = 1;
+    window.__qvSyntheticDownloads = [];
+
+    URL.createObjectURL = (blob) => {
+      const value = `blob:qv-playwright-capture/${nextId}`;
+      nextId += 1;
+      blobs.set(value, blob);
+      return value;
+    };
+    URL.revokeObjectURL = () => {};
+
+    HTMLAnchorElement.prototype.click = function captureDownloadClick() {
+      const href = this.getAttribute('href') || this.href;
+      const blob = blobs.get(href);
+      if (!blob || !this.download) return;
+      const name = this.download;
+      void blob.arrayBuffer().then((buffer) => {
+        window.__qvSyntheticDownloads.push({
+          name,
+          bytes: Array.from(new Uint8Array(buffer)),
+        });
+      });
+    };
+  });
+}
+
+async function captureSyntheticDownloads(page, expectedCount, action) {
+  const start = await page.evaluate(() => window.__qvSyntheticDownloads.length);
+  await action();
+  await expect.poll(
+    () => page.evaluate(() => window.__qvSyntheticDownloads.length),
+    { timeout: 60_000 },
+  ).toBe(start + expectedCount);
+  const captured = await page.evaluate(
+    ({ offset, count }) => window.__qvSyntheticDownloads.slice(offset, offset + count),
+    { offset: start, count: expectedCount },
+  );
+  return captured.map(({ name, bytes }) => ({
+    name,
+    mimeType: mimeTypeForFilename(name),
+    buffer: Buffer.from(bytes),
+  }));
+}
+
+async function createLiteArchiveAndCapture(page, name, plaintext, capture = captureDownloads) {
+  await page.locator('#liteFilesInput').setInputFiles({
+    name,
+    mimeType: 'text/plain',
+    buffer: Buffer.from(plaintext),
+  });
+  const createButton = page.locator('#liteCreateShardsBtn');
+  await expect(createButton).toBeEnabled();
+  const payloads = await capture(page, 7, () => createButton.click());
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Last archive key backup available');
+  return payloads;
+}
+
+async function parseDownloadedLiteShards(payloads) {
+  const shardPayloads = payloads.filter((payload) => /\.qcont$/i.test(payload.name));
+  expect(shardPayloads).toHaveLength(5);
+  return Promise.all(shardPayloads.map((payload) => (
+    parseLifecycleShard(new Uint8Array(payload.buffer), { strict: true })
+  )));
 }
 
 test('advanced entropy collection shows heuristic progress and success copy without bit estimates', async ({ page }) => {
@@ -209,15 +299,17 @@ test('lite custody guidance appears when ready and export checklist updates afte
   await page.goto('/');
   await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
 
-  await expect(page.locator('#keyStatus .status-text')).toContainText('Keys ready', { timeout: 30000 });
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
 
   const custody = page.getByTestId('lite-custody-guidance');
   await expect(custody).toBeVisible();
   await expect(custody).toContainText('independent shard custody');
   await expect(custody).toContainText('Retain the archive-state descriptor');
   await expect(custody).toContainText('Pro Attach');
-  await expect(custody).toContainText('Backup Keys');
-  await expect(custody).toContainText('optional');
+  await expect(custody).toContainText('Optional 1-of-1 Key Backup');
+  await expect(custody).toContainText('bypasses the shard threshold');
+  await expect(custody).toContainText(/optional/i);
 
   const createBtn = page.locator('#liteCreateShardsBtn');
   await expect(createBtn).toBeDisabled();
@@ -230,15 +322,7 @@ test('lite custody guidance appears when ready and export checklist updates afte
 
   await expect(createBtn).toBeEnabled();
 
-  const shardDownloads = 5;
-  const bundleDownloads = 2;
-  const downloadWaiters = [];
-  for (let i = 0; i < shardDownloads + bundleDownloads; i++) {
-    downloadWaiters.push(page.waitForEvent('download'));
-  }
-
-  await createBtn.click();
-  await Promise.all(downloadWaiters);
+  await captureDownloads(page, 7, () => createBtn.click());
 
   const checklist = page.getByTestId('lite-export-checklist');
   await expect(checklist).toBeVisible();
@@ -247,11 +331,90 @@ test('lite custody guidance appears when ready and export checklist updates afte
   await expect(checklist).toContainText('Lifecycle bundle exported');
   await expect(checklist).toContainText('Optional key backup not exported');
 
-  const keyBackupWaiters = [page.waitForEvent('download'), page.waitForEvent('download')];
-  await page.locator('#liteDownloadKeysBtn').click();
-  await Promise.all(keyBackupWaiters);
+  await captureDownloads(page, 2, () => page.locator('#liteDownloadKeysBtn').click());
 
   await expect(checklist).toContainText('Optional key backup exported');
+  await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  await expect(page.locator('#keyStatus .status-text')).toContainText('Fresh keys are generated per archive');
+});
+
+test('consecutive Lite creations use isolated archive keys and retain only the latest pair for optional backup', async ({ page }) => {
+  test.setTimeout(120_000);
+  await installSyntheticDownloadCapture(page);
+  await page.goto('/');
+  await expect(page.locator('script[type="module"][src*="assets/main.js"]')).toHaveAttribute('integrity', /.+/);
+
+  const firstPayloads = await createLiteArchiveAndCapture(
+    page,
+    'lite-key-domain-one.txt',
+    'first Lite archive key domain',
+    captureSyntheticDownloads,
+  );
+  const secondPayloads = await createLiteArchiveAndCapture(
+    page,
+    'lite-key-domain-two.txt',
+    'second Lite archive key domain',
+    captureSyntheticDownloads,
+  );
+
+  const firstShards = await parseDownloadedLiteShards(firstPayloads);
+  const secondShards = await parseDownloadedLiteShards(secondPayloads);
+  let firstRestore = null;
+  let secondRestore = null;
+
+  try {
+    const firstMetadata = firstShards[0].metaJSON;
+    const secondMetadata = secondShards[0].metaJSON;
+    expect(firstMetadata.privateKeyHash).toMatch(/^[0-9a-f]{128}$/);
+    expect(secondMetadata.privateKeyHash).toMatch(/^[0-9a-f]{128}$/);
+    expect(firstMetadata.keyCommitmentHex).toMatch(/^[0-9a-f]{64}$/);
+    expect(secondMetadata.keyCommitmentHex).toMatch(/^[0-9a-f]{64}$/);
+    expect(firstMetadata.privateKeyHash).not.toBe(secondMetadata.privateKeyHash);
+    expect(firstMetadata.keyCommitmentHex).not.toBe(secondMetadata.keyCommitmentHex);
+
+    firstRestore = await restoreFromShards(firstShards, { onLog: () => {}, onError: () => {} });
+    secondRestore = await restoreFromShards(secondShards, { onLog: () => {}, onError: () => {} });
+    expect(firstRestore.qkeyOk).toBe(true);
+    expect(secondRestore.qkeyOk).toBe(true);
+
+    await assert.rejects(() => decryptFile(firstRestore.qencBytes, secondRestore.privKey));
+    await assert.rejects(() => decryptFile(secondRestore.qencBytes, firstRestore.privKey));
+
+    await expect(page.locator('#ctx-pub-status')).toHaveText('Loaded');
+    await expect(page.locator('#ctx-sec-status')).toHaveText('Loaded');
+
+    const backupPayloads = await captureSyntheticDownloads(
+      page,
+      2,
+      () => page.locator('#liteDownloadKeysBtn').click(),
+    );
+    const privateBackup = backupPayloads.find((payload) => /privateKey\.qkey$/i.test(payload.name));
+    const publicBackup = backupPayloads.find((payload) => /publicKey\.qkey$/i.test(payload.name));
+    assert.ok(privateBackup, 'latest Lite private-key backup was not downloaded');
+    assert.ok(publicBackup, 'latest Lite public-key backup was not downloaded');
+
+    const backedUpPrivateKeyHash = await hashBytes(new Uint8Array(privateBackup.buffer));
+    const backedUpPublicKeyHash = await hashBytes(new Uint8Array(publicBackup.buffer));
+    expect(backedUpPrivateKeyHash).toBe(secondMetadata.privateKeyHash);
+    expect(backedUpPrivateKeyHash).not.toBe(firstMetadata.privateKeyHash);
+
+    const operationsLog = page.getByTestId('operations-log');
+    await expect(operationsLog).not.toContainText(firstMetadata.privateKeyHash);
+    await expect(operationsLog).not.toContainText(secondMetadata.privateKeyHash);
+    await expect(operationsLog).not.toContainText(backedUpPublicKeyHash);
+    const bodyText = await page.locator('body').innerText();
+    expect(bodyText).not.toContain(firstMetadata.privateKeyHash);
+    expect(bodyText).not.toContain(secondMetadata.privateKeyHash);
+    expect(bodyText).not.toContain(backedUpPublicKeyHash);
+    await expect(page.locator('#ctx-pub-status')).toHaveText('Not Loaded');
+    await expect(page.locator('#ctx-sec-status')).toHaveText('Not Loaded');
+    await expect(page.locator('#liteDownloadKeysBtn')).toBeHidden();
+  } finally {
+    wipeRestoreResult(firstRestore);
+    wipeRestoreResult(secondRestore);
+    firstShards.forEach(zeroizeParsedLifecycleShard);
+    secondShards.forEach(zeroizeParsedLifecycleShard);
+  }
 });
 
 test('narrow layouts do not horizontally overflow with long filenames and digest details', async ({ page }) => {

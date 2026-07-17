@@ -62,21 +62,37 @@ Status values:
   key carried by the lifecycle bundle as archive-policy authority. Until its
   implementation, negative tests, and migration notes change, SEC-101 is not an
   ecosystem-wide property and the trust milestone remains open.
-- [ ] **SEC-102 (open, high): fresh Lite ML-KEM keypair per archive.** Remove the
+- [ ] **SEC-102 (partial, high): fresh Lite ML-KEM keypair per archive.** Remove the
   session-global archive key reuse domain and wipe per-operation private material
   on success, failure, and cancellation.
   - Gate: two consecutive Lite creations have distinct keys and key commitments;
     recovery material from either archive cannot decrypt the other.
   - Migration: previously reused-key archives require fresh-key re-encryption;
     resharing does not isolate them.
+  - [x] **SEC-102-KEY-DOMAIN (complete):** every Lite Create now owns a fresh
+    operation-local pair. Same-session browser tests prove distinct private-key
+    diagnostics and QENC key commitments, successful independent recovery, and
+    cross-decryption failure. Cancellation tokens wipe adopted and late-arriving
+    pairs; failure, supersession, session wipe, and one-time backup transfer have
+    lifecycle tests. Key fingerprints no longer enter browser key-generation logs
+    or sidebar state. The optional backup bridge still retains a successful pair,
+    so default wipe-on-success remains open with SEC-103.
 - [ ] **SEC-103 (partial, high): explicit threshold-bypass accounting.** Raw
   private-key export is a 1-of-1 recovery root. Separate it from threshold-only
   creation, require an explicit acknowledgement, and record the choice without
   recording secret material.
+  Current copy labels the bypass and the backup transfer is one-time, but every
+  successful Lite operation is still retained automatically; this is not the
+  required acknowledgement or threshold-only default.
 - [ ] **SEC-104 (partial): secret-boundary regression suite.** Add canaries proving
   private keys, shared secrets, derived keys, plaintext, private filenames, and
   stable private-key fingerprints never enter JSON reports, errors, logs, DOM,
   storage, output filenames, or telemetry.
+  - [x] **SEC-104-BROWSER-KEY-FINGERPRINT-UI (complete):** generated private/public
+    key hashes were removed from browser logs and sidebar DOM; state is now
+    loaded/not-loaded only, and the Lite cross-archive test checks the full page
+    body for the current key fingerprints. QCONT wire metadata, restore UI,
+    filenames, general errors, CLI schema v1, and Rust remain open.
 - [ ] **SEC-105 (partial): restore-time external constraints.** Add a minimum policy
   floor and explicit expectation terminology for the existing archive/state/cohort
   selectors. Define a versioned, independently supplied trust-policy artifact
@@ -169,6 +185,12 @@ Status values:
     an earlier output. Crash consistency, rollback/cleanup fault tolerance,
     filesystem-normalized aliases, inode aliases, and parent-directory TOCTOU
     remain open under REL-301.
+  - [ ] **REL-301-BROWSER-EXPORT (open):** repeated multi-file browser exports can
+    hit automatic-download quotas (a same-page two-archive run accepted only the
+    first ten of fourteen triggered files in Chromium). Replace fire-and-forget
+    anchor clicks with a user-verifiable per-artifact queue or an explicitly
+    authorized directory-write flow; never package all threshold shares into one
+    retained 1-of-1 archive merely to reduce the download count.
 - [ ] **REL-302 (open, high): aggregate resource policy.** Bound file count,
   individual bytes, aggregate bytes, metadata, shard count, reconstructed bytes,
   and allocation arithmetic before reads/allocations. Report local resource-limit

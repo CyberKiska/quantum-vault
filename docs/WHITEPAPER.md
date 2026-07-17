@@ -122,7 +122,7 @@ Quantum Vault produces and consumes the following artifacts:
 
 The archive lifecycle proceeds through the following stages:
 
-1. **Key generation.** An ML-KEM-1024 keypair is generated client-side using the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`, with optional best-effort mixing of user interaction events.
+1. **Key generation.** An ML-KEM-1024 keypair is generated client-side using the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`, with optional best-effort mixing of user interaction events. Lite Create generates a fresh operation-local pair for each archive rather than reusing one session pair; existing archives created under an older reused pair remain cryptographically coupled until fully decrypted and re-encrypted under fresh keys.
 2. **Encryption.** The payload is encrypted into a `.qenc` container. ML-KEM encapsulates a shared secret; KMAC256 derives encryption and IV-derivation keys; AES-256-GCM provides authenticated encryption. A key commitment (`SHA3-256(Kenc)`) is embedded in the header.
 3. **Split.** The `.qenc` container is split into `QVqcont-7` shards. The ML-KEM private key is split using Shamir secret sharing; the ciphertext is split using Reed-Solomon erasure coding. Split also emits an archive-state descriptor, cohort binding, and lifecycle bundle.
 4. **Sign (external).** An external signer tool produces detached signatures (`.qsig` or `.sig`) over canonical archive-state bytes for archive approval, or over other declared lifecycle targets when maintenance or source-evidence signatures are created.

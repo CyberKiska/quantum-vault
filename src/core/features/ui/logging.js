@@ -157,25 +157,6 @@ export function logHash(label, hash, options = {}) {
     log(`${label}: ${displayHash}`, { elementId, isLiteMode });
 }
 
-// Log key generation event
-export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, options = {}) {
-    const { isLiteMode = true, elementId = 'log' } = options;
-    
-    if (isLiteMode) {
-        log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
-        logHash('Private Key', privateKeyHash, { isLiteMode, elementId });
-        logHash('Public Key', publicKeyHash, { isLiteMode, elementId });
-    } else {
-        log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
-        log(`Entropy source: ${seedInfo.source}`, { elementId, isLiteMode });
-        if (seedInfo.hasUserEntropy) {
-            log('User entropy successfully collected and mixed.', { elementId, isLiteMode });
-        }
-        logHash('Private Key Hash', privateKeyHash, { isLiteMode, elementId });
-        logHash('Public Key Hash', publicKeyHash, { isLiteMode, elementId });
-    }
-}
-
 // Log file encryption progress
 export function logFileEncryption(filename, fileSize, fileHash, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;

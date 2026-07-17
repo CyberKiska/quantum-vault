@@ -29,13 +29,17 @@ import {
     log,
     logError,
     logSuccess,
-    logKeyGeneration,
     logFileEncryption,
     logShardCreation,
     logRestoration,
     logRestorationSuccess,
     logWarning,
 } from './ui/logging.js';
+import {
+    createLiteArchiveKeyLifecycle,
+    LiteArchiveCreationCancelledError,
+    wipeLiteArchiveKeyPair,
+} from './lite-key-lifecycle.js';
 import { showToast } from './ui/toast.js';
 import { clearInlineError, showInlineError, summarizeFileList } from './ui/inline-error.js';
 import { initRovingTablist } from './ui/tabs.js';
@@ -43,10 +47,12 @@ import { updateSidebarStatus } from './ui/ui.js';
 import { describeAuthPolicyHelp, renderAuthPolicyConsequence } from './qcont/auth-policy-help.js';
 import { buildRestoreRecoveryAction } from './qcont/restore-recovery-action.js';
 
-// Global state for Lite mode
-let liteKeys = null;
+// Lite retains at most the most recently successful archive keypair, solely so
+// the operator can choose an immediate raw-key backup. Archive creation always
+// uses a fresh operation-local keypair.
+const liteArchiveKeys = createLiteArchiveKeyLifecycle();
+let liteCreateInProgress = false;
 let isLiteMode = true; // Default to Lite mode
-let originalFileNames = new Map(); // Track original file names for restoration
 const liteRestoreShardRefresh = createSuccessorShardInputRefreshController({
   prefix: 'liteRestore',
   inputId: 'liteShardsInput',
@@ -81,7 +87,7 @@ function isLiteShardConfigurationValid() {
 function refreshLiteCustodyGuidanceVisibility() {
     const panel = document.getElementById('liteCustodyGuidance');
     if (!panel) return;
-    const show = liteKeys !== null && isLiteShardConfigurationValid();
+    const show = isLiteShardConfigurationValid();
     panel.classList.toggle('initially-hidden', !show);
 }
 
@@ -152,26 +158,12 @@ function liteRestoreRecoveryAction(error) {
     return buildRestoreRecoveryAction(error, { verb: 'Lite Restore' });
 }
 
-function wipeLiteKeyPair(keyPair) {
-    if (keyPair?.privateKey instanceof Uint8Array) {
-        keyPair.privateKey.fill(0);
-    }
-    if (keyPair?.publicKey instanceof Uint8Array) {
-        keyPair.publicKey.fill(0);
-    }
-}
-
-function wipeLiteKeys() {
-    wipeLiteKeyPair(liteKeys);
-    liteKeys = null;
-}
-
 function wipeLiteModeSessionSecrets() {
-    wipeLiteKeys();
-    originalFileNames.clear();
+    liteArchiveKeys.wipeAll();
     liteKeyBackupAfterLastCreate = false;
     liteLastCreateShardCount = 0;
     hideLiteExportChecklist();
+    refreshLiteKeyAvailability();
     refreshLiteCustodyGuidanceVisibility();
 }
 
@@ -331,55 +323,32 @@ function updateThresholdDisplay() {
     updateCreateShardsButton();
 }
 
-// Generate keys automatically for Lite mode
-async function generateLiteKeys() {
-    try {
-        const previousKeys = liteKeys;
+function refreshLiteKeyAvailability() {
+    const backupAvailable = liteArchiveKeys.hasRetainedKeyPair() && !liteCreateInProgress;
+    const statusText = document.getElementById('keyStatus')?.querySelector('.status-text');
+    const statusIcon = document.getElementById('keyStatus')?.querySelector('.status-icon');
+    const downloadBtn = document.getElementById('liteDownloadKeysBtn');
 
-        const keyStatus = document.getElementById('keyStatus');
-        const statusText = keyStatus?.querySelector('.status-text');
-        const statusIcon = keyStatus?.querySelector('.status-icon');
-
-        document.getElementById('liteCustodyGuidance')?.classList.add('initially-hidden');
-        
-        if (statusText) statusText.textContent = 'Generating keys...';
-        if (statusIcon) statusIcon.textContent = '🔄';
-        
-        // Generate keys with default entropy (no user collection in Lite mode)
-        const keyPair = await generateKeyPair({ collectUserEntropy: false });
-        liteKeys = keyPair;
-        if (previousKeys && previousKeys !== keyPair) {
-            wipeLiteKeyPair(previousKeys);
+    if (statusText) {
+        if (liteCreateInProgress) {
+            statusText.textContent = 'Generating a fresh key for this archive...';
+        } else if (backupAvailable) {
+            statusText.textContent = 'Last archive key backup available';
+        } else {
+            statusText.textContent = 'Fresh keys are generated per archive';
         }
-        
-        const skHash = await hashBytes(liteKeys.privateKey);
-        const pkHash = await hashBytes(liteKeys.publicKey);
-        
-        // Log with Lite mode formatting
-        logKeyGeneration(skHash, pkHash, keyPair.seedInfo, { isLiteMode: true });
-        updateSidebarStatus(pkHash, skHash);
-        
-        if (statusText) statusText.textContent = 'Keys ready ✓';
-        if (statusIcon) statusIcon.textContent = '🔑';
-        
-        // Enable file input once keys are ready
-        const liteFilesInput = document.getElementById('liteFilesInput');
-        if (liteFilesInput) liteFilesInput.disabled = false;
-        
-        // Show download keys button
-        const downloadBtn = document.getElementById('liteDownloadKeysBtn');
-        if (downloadBtn) downloadBtn.style.display = 'inline-flex';
-        
-        updateCreateShardsButton();
-        refreshLiteCustodyGuidanceVisibility();
-        
-    } catch (error) {
-        logError(`Failed to generate keys: ${error.message}`, { isLiteMode: true });
-        const statusText = document.getElementById('keyStatus')?.querySelector('.status-text');
-        const statusIcon = document.getElementById('keyStatus')?.querySelector('.status-icon');
-        if (statusText) statusText.textContent = 'Key generation failed ✗';
-        if (statusIcon) statusIcon.textContent = '❌';
-        refreshLiteCustodyGuidanceVisibility();
+    }
+    if (statusIcon) {
+        statusIcon.textContent = liteCreateInProgress ? '🔄' : (backupAvailable ? '🔑' : '🛡️');
+    }
+    if (downloadBtn) {
+        downloadBtn.disabled = !backupAvailable;
+        downloadBtn.classList.toggle('initially-hidden', !backupAvailable);
+        downloadBtn.style.display = backupAvailable ? 'inline-flex' : '';
+    }
+
+    if (isLiteMode) {
+        updateSidebarStatus(backupAvailable, backupAvailable);
     }
 }
 
@@ -428,7 +397,6 @@ function updateCreateShardsButton() {
     
     if (!btn || !filesInput) return;
     
-    const hasKeys = liteKeys !== null;
     const hasFiles = filesInput.files && filesInput.files.length > 0;
     
     // Check if configuration is valid
@@ -442,30 +410,39 @@ function updateCreateShardsButton() {
         }
     }
     
-    btn.disabled = !hasKeys || !hasFiles || !validConfig;
+    btn.disabled = liteCreateInProgress || !hasFiles || !validConfig;
 
     refreshLiteCustodyGuidanceVisibility();
 }
 
 // Download keys backup
 function downloadLiteKeys() {
-    if (!liteKeys) {
+    const retainedKeyPair = liteArchiveKeys.takeRetainedKeyPair();
+    if (!retainedKeyPair) {
         showToast('No keys available to download.', 'warning');
         return;
     }
-    
-    const timestamp = createFilenameTimestamp();
-    // Download private key first (most important)
-    download(new Blob([liteKeys.privateKey]), `quantum-vault-${timestamp}-privateKey.qkey`);
-    
-    // Small delay to prevent browser from blocking the second download
-    setTimeout(() => {
-        download(new Blob([liteKeys.publicKey]), `quantum-vault-${timestamp}-publicKey.qkey`);
-    }, 500);
-    
-    log('✅ Backup keys downloaded', { isLiteMode: true });
-    liteKeyBackupAfterLastCreate = true;
-    refreshLiteExportChecklistAfterKeyBackup();
+
+    try {
+        const timestamp = createFilenameTimestamp();
+        // Blob construction snapshots the bytes. The owned Uint8Arrays are wiped
+        // immediately afterward and are never captured by the delayed callback.
+        const privateKeyBlob = new Blob([retainedKeyPair.privateKey]);
+        const publicKeyBlob = new Blob([retainedKeyPair.publicKey]);
+        download(privateKeyBlob, `quantum-vault-${timestamp}-privateKey.qkey`);
+
+        // Small delay to prevent browser from blocking the second download.
+        setTimeout(() => {
+            download(publicKeyBlob, `quantum-vault-${timestamp}-publicKey.qkey`);
+        }, 500);
+
+        log('✅ Optional 1-of-1 key backup downloads started', { isLiteMode: true });
+        liteKeyBackupAfterLastCreate = true;
+        refreshLiteExportChecklistAfterKeyBackup();
+    } finally {
+        wipeLiteArchiveKeyPair(retainedKeyPair);
+        refreshLiteKeyAvailability();
+    }
 }
 
 // Pipeline Visualization Helper
@@ -496,11 +473,6 @@ async function createLiteShards() {
         return;
     }
     
-    if (!liteKeys) {
-        showToast('Keys not ready', 'warning');
-        return;
-    }
-    
     const n = parseInt(nInput.value, 10);
     const thresholdPercent = parseInt(thresholdInput.value, 10);
     
@@ -509,13 +481,24 @@ async function createLiteShards() {
         return;
     }
     
+    let keyOperation;
+    try {
+        keyOperation = liteArchiveKeys.beginOperation();
+    } catch (error) {
+        logError(error, { isLiteMode: true });
+        return;
+    }
+
+    liteCreateInProgress = true;
     hideLiteExportChecklist();
 
     setWorkflowBusy('liteViewProtect', true);
+    refreshLiteKeyAvailability();
     updateLitePipeline('liteViewProtect', 'step-lock'); // Start: Encrypting
 
     let payloadBytes = null;
     let encBytes = null;
+    let generatedKeyPair = null;
     
     try {
         const params = calculateParametersFromThreshold(n, thresholdPercent);
@@ -543,11 +526,22 @@ async function createLiteShards() {
             payloadLabel = file.name;
         }
 
+        liteArchiveKeys.assertActive(keyOperation);
+
+        // A fresh ML-KEM keypair belongs only to this archive operation.
+        generatedKeyPair = await generateKeyPair({ collectUserEntropy: false });
+        liteArchiveKeys.adoptKeyPair(keyOperation, generatedKeyPair);
+        generatedKeyPair = null;
+        log('Fresh ML-KEM keypair generated for this archive operation.', { isLiteMode: true });
+        const operationKeyPair = liteArchiveKeys.getOperationKeyPair(keyOperation);
+
         // 1. Encrypt payload (single file or multi-file bundle)
-        const encBlob = await encryptFile(payloadBytes, liteKeys.publicKey, payloadName);
+        const encBlob = await encryptFile(payloadBytes, operationKeyPair.publicKey, payloadName);
+        liteArchiveKeys.assertActive(keyOperation);
         encBytes = await readFileAsUint8Array(encBlob);
+        liteArchiveKeys.assertActive(keyOperation);
         const encHash = await hashBytes(encBytes);
-        originalFileNames.set(encHash, payloadName);
+        liteArchiveKeys.assertActive(keyOperation);
 
         // Log encryption
         logFileEncryption(payloadLabel, payloadBytes.length, encHash, { isLiteMode: true });
@@ -556,10 +550,11 @@ async function createLiteShards() {
         
         // 2. Create shards from encrypted container + private key
         const authPolicyLevel = String(authPolicyInput?.value || LITE_DEFAULT_AUTH_POLICY_LEVEL);
-        const splitResult = await buildQcontShards(encBytes, liteKeys.privateKey, {
+        const splitResult = await buildQcontShards(encBytes, operationKeyPair.privateKey, {
             n: params.n,
             k: params.k
         }, { authPolicyLevel });
+        liteArchiveKeys.assertActive(keyOperation);
         const qconts = splitResult.shards;
         
         // 3. Download shards
@@ -572,6 +567,12 @@ async function createLiteShards() {
         download(new Blob([splitResult.archiveStateBytes], { type: 'application/json' }), archiveStateName);
         const lifecycleBundleName = `${baseName}.lifecycle-bundle.json`;
         download(new Blob([splitResult.lifecycleBundleBytes], { type: 'application/json' }), lifecycleBundleName);
+
+        // Only a fully successful creation may replace the optional backup pair.
+        // This also wipes the previously retained pair, if any.
+        liteArchiveKeys.retainAfterSuccess(keyOperation);
+        keyOperation = null;
+        refreshLiteKeyAvailability();
         
         // Log shard creation
         logShardCreation(qconts.length, params, payloadLabel, { isLiteMode: true });
@@ -594,10 +595,18 @@ async function createLiteShards() {
         renderLiteExportChecklistAfterCreate(qconts.length);
         
     } catch (error) {
-        logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
+        if (error instanceof LiteArchiveCreationCancelledError) {
+            logWarning('Lite archive creation cancelled; operation key material was discarded.', { isLiteMode: true });
+        } else {
+            logError(`Failed to create shards: ${error.message}`, { isLiteMode: true });
+        }
     } finally {
+        wipeLiteArchiveKeyPair(generatedKeyPair);
+        liteArchiveKeys.discardOperation(keyOperation);
         wipeBytes(payloadBytes, encBytes);
+        liteCreateInProgress = false;
         setWorkflowBusy('liteViewProtect', false);
+        refreshLiteKeyAvailability();
         updateCreateShardsButton();
         setTimeout(() => updateLitePipeline('liteViewProtect', null), 2000); // Reset after delay
     }
@@ -693,7 +702,7 @@ async function restoreLiteShards() {
             (message) => logSuccess(message, { isLiteMode: true }),
         );
 
-        const { qencBytes, privKey, containerHash, qencOk, qkeyOk } = result;
+        const { qencBytes, privKey, qencOk, qkeyOk } = result;
         
         if (!qencOk || !qkeyOk) {
             showInlineError(LITE_RESTORE_INLINE_ERROR_ID, {
@@ -736,16 +745,7 @@ async function restoreLiteShards() {
             }
             restoredLabel = `${entries.length} files bundle`;
         } else {
-            const qencHash = await hashBytes(qencBytes);
-            let originalName = originalFileNames.get(qencHash);
-            
-            if (!originalName) {
-                originalName = originalFileNames.get(containerHash);
-            }
-            
-            if (!originalName) {
-                originalName = metadata.originalFilename || `restored-${result.containerId.slice(0, 8)}.file`;
-            }
+            const originalName = metadata.originalFilename || `restored-${result.containerId.slice(0, 8)}.file`;
 
             download(new Blob([decBytes]), originalName);
             restoredLabel = originalName;
@@ -831,44 +831,21 @@ function toggleMode() {
         if (liteNav) liteNav.classList.remove('initially-hidden');
         if (proNav) proNav.classList.add('initially-hidden');
         log('Switched to Lite Mode', { isLiteMode: true });
-        
-        // Generate keys automatically if not already done
-        if (!liteKeys) {
-            generateLiteKeys();
-        } else {
-            // Restore lite keys status to sidebar if previously generated
-            hashBytes(liteKeys.publicKey).then(pk => {
-                hashBytes(liteKeys.privateKey).then(sk => updateSidebarStatus(pk, sk));
-            });
-        }
+        refreshLiteKeyAvailability();
     } else {
+        // Mode changes are the Lite workflow's user-visible cancellation path.
+        // The operation token ensures any keypair returned by an in-flight await
+        // is rejected and wiped before it can be used or retained.
+        liteArchiveKeys.cancelActiveOperation();
         liteSection.style.display = 'none';
         proSection.style.display = 'block';
         if (liteNav) liteNav.classList.add('initially-hidden');
         if (proNav) proNav.classList.remove('initially-hidden');
         log('Switched to Pro Mode', { isLiteMode: false });
         
-        // Restore sidebar context from currently selected Pro keys if present.
-        void (async () => {
-            const pubFile = document.getElementById('pubKeyInput')?.files?.[0];
-            const secFile = document.getElementById('privKeyInput')?.files?.[0];
-            let pubHash = null;
-            let secHash = null;
-            try {
-                if (pubFile) {
-                    const pubBytes = await readFileAsUint8Array(pubFile);
-                    pubHash = await hashBytes(pubBytes);
-                }
-                if (secFile) {
-                    const secBytes = await readFileAsUint8Array(secFile);
-                    secHash = await hashBytes(secBytes);
-                }
-            } catch {
-                pubHash = pubFile ? 'Loaded' : null;
-                secHash = secFile ? 'Loaded' : null;
-            }
-            updateSidebarStatus(pubHash, secHash);
-        })();
+        const pubFile = document.getElementById('pubKeyInput')?.files?.[0];
+        const secFile = document.getElementById('privKeyInput')?.files?.[0];
+        updateSidebarStatus(Boolean(pubFile), Boolean(secFile));
     }
 
     updateOperationsLogVisibility();
@@ -923,7 +900,7 @@ export function initLiteMode() {
             updateFileListDisplay();
             updateCreateShardsButton();
         });
-        liteFilesInput.disabled = true; // Disabled until keys are ready
+        liteFilesInput.disabled = false;
     }
     
     // Set up shard input monitoring
@@ -972,6 +949,7 @@ export function initLiteMode() {
         modeToggle.checked = false;
     }
     toggleMode();
+    refreshLiteKeyAvailability();
     
     log('Lite Mode initialized - toggle to switch to Pro mode', { isLiteMode: true });
 }

@@ -1,7 +1,7 @@
 import { BrowserEntropyCollector } from '../../../app/browser-entropy-collector.js';
 import { encryptFile, decryptFile, hashBytes, generateKeyPair, runSelfTest } from '../../../app/crypto-service.js';
 import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
-import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
+import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
 import { renderSuccessCallout, renderWarningCallout } from './callout.js';
@@ -35,40 +35,32 @@ function wipeProSessionSecrets() {
     entropyCollector = null;
 }
 
-function shortFingerprint(value) {
-    if (typeof value !== 'string') return 'Loaded';
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return 'Loaded';
-    if (normalized === 'loaded') return 'Loaded';
-    return shortenHash(normalized);
-}
-
-export function updateSidebarStatus(pubHash, secHash) {
+export function updateSidebarStatus(publicKeyLoaded, privateKeyLoaded) {
     const sysDot = document.getElementById('sys-status-dot');
     const sysText = document.getElementById('sys-status-text');
-    const pubFp = document.getElementById('ctx-pub-fp');
-    const secFp = document.getElementById('ctx-sec-fp');
+    const pubStatus = document.getElementById('ctx-pub-status');
+    const secStatus = document.getElementById('ctx-sec-status');
 
-    const hasPub = !!pubHash;
-    const hasSec = !!secHash;
+    const hasPub = Boolean(publicKeyLoaded);
+    const hasSec = Boolean(privateKeyLoaded);
 
-    if (pubFp) {
+    if (pubStatus) {
         if (hasPub) {
-            pubFp.textContent = shortFingerprint(pubHash);
-            pubFp.className = 'context-val status-success';
+            pubStatus.textContent = 'Loaded';
+            pubStatus.className = 'context-val status-success';
         } else {
-            pubFp.textContent = 'Not Loaded';
-            pubFp.className = 'context-val status-muted';
+            pubStatus.textContent = 'Not Loaded';
+            pubStatus.className = 'context-val status-muted';
         }
     }
 
-    if (secFp) {
+    if (secStatus) {
         if (hasSec) {
-            secFp.textContent = shortFingerprint(secHash);
-            secFp.className = 'context-val status-warning';
+            secStatus.textContent = 'Loaded';
+            secStatus.className = 'context-val status-warning';
         } else {
-            secFp.textContent = 'Not Loaded';
-            secFp.className = 'context-val status-muted';
+            secStatus.textContent = 'Not Loaded';
+            secStatus.className = 'context-val status-muted';
         }
     }
 
@@ -323,33 +315,13 @@ export function initUI() {
         syncArchiveReviewHub('review');
     }
 
-    async function updateSidebarFingerprintsFromInputs() {
-        let pubHash = null;
-        let secHash = null;
-        try {
-            if (pubKeyInput?.files?.[0]) {
-                const pubBytes = await readFileAsUint8Array(pubKeyInput.files[0]);
-                pubHash = await hashBytes(pubBytes);
-            }
-            if (privKeyInput?.files?.[0]) {
-                const secBytes = await readFileAsUint8Array(privKeyInput.files[0]);
-                secHash = await hashBytes(secBytes);
-            }
-        } catch {
-            // Fall back to loaded/not-loaded state when fingerprint hashing fails.
-            pubHash = pubKeyInput?.files?.[0] ? 'Loaded' : null;
-            secHash = privKeyInput?.files?.[0] ? 'Loaded' : null;
-        }
-        updateSidebarStatus(pubHash, secHash);
-    }
-
     function updateProEncryptionControls() {
         const hasPublicKey = Boolean(pubKeyInput?.files?.[0]);
         const hasPrivateKey = Boolean(privKeyInput?.files?.[0]);
 
         if (encBtn) encBtn.disabled = !hasPublicKey;
         if (decBtn) decBtn.disabled = !hasPrivateKey;
-        void updateSidebarFingerprintsFromInputs();
+        updateSidebarStatus(hasPublicKey, hasPrivateKey);
 
         if (!proEncryptionWarning) return;
 
@@ -541,6 +513,8 @@ export function initUI() {
             }
         }
         
+        let generatedPrivateKey = null;
+        let generatedPublicKey = null;
         setWorkflowBusy('proViewIdentity', true);
         try {
             log('Generating ML-KEM-1024 keypair...');
@@ -556,24 +530,22 @@ export function initUI() {
             const { privateKey, publicKey, seedInfo } = await generateKeyPair({
                 userEntropyBytes: hasCollectedEntropy ? collectedUserEntropy : null
             });
+            generatedPrivateKey = privateKey;
+            generatedPublicKey = publicKey;
             wipeCollectedUserEntropy();
-            
-            const skHash = await hashBytes(privateKey);
-            const pkHash = await hashBytes(publicKey);
-            
+
             log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (supplemental user-event mixing applied)' : ''}`);
-            log(`Private Key: privateKey.qkey (${privateKey.length} B) SHA3-512=${skHash}`);
-            log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
+            log(`Generated privateKey.qkey (${privateKey.length} B) and publicKey.qkey (${publicKey.length} B).`);
             
             download(new Blob([privateKey]), 'privateKey.qkey');
             download(new Blob([publicKey]), 'publicKey.qkey');
             logSuccess('Keys generated and downloaded successfully.');
-            showToast('New keypair generated in memory.', 'success');
+            showToast('New keypair generated and downloaded.', 'success');
             
             // Clear inputs if they had files
             if (privKeyInput) privKeyInput.value = '';
             if (pubKeyInput) pubKeyInput.value = '';
-            updateSidebarStatus(pkHash, skHash);
+            updateSidebarStatus(true, true);
             
             // Reset entropy collection UI state
             if (advancedEntropyBtn) {
@@ -587,6 +559,8 @@ export function initUI() {
             el('entropyHeuristicNote')?.classList.add('initially-hidden');
             
         } catch (e) { logError(e); } finally {
+            generatedPrivateKey?.fill(0);
+            generatedPublicKey?.fill(0);
             setWorkflowBusy('proViewIdentity', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
