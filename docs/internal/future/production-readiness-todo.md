@@ -173,6 +173,13 @@ Status values:
   individual bytes, aggregate bytes, metadata, shard count, reconstructed bytes,
   and allocation arithmetic before reads/allocations. Report local resource-limit
   failures distinctly from invalid-format failures.
+  - [x] **REL-302-QVPACK-CORE (complete):** QVPACK v1 reader and writer share
+    non-raiseable limits of 4096 entries, 255 UTF-8 name bytes, and 1 GiB for each
+    entry, aggregate payload, and encoded bundle. Fatal UTF-8, duplicate names,
+    truncation, trailing bytes, and checked pre-allocation arithmetic have negative
+    and deterministic property coverage; canonical in-profile bytes are unchanged.
+    Adapter pre-read bounds, streaming, distinct CLI resource `qvCode`,
+    filesystem-normalized aliases, and physical boundary tests remain open.
 - [ ] **REL-303 (open, large): streaming encryption, decryption, RS, hashing, and
   private temporary output.** Peak memory must be a documented bounded function of
   chunk size and shard profile. Publication occurs only after AEAD, length, private

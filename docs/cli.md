@@ -119,7 +119,7 @@ Multi-file payloads:
 qv encrypt --pack <file-a> <file-b> [...] --public-key publicKey.qkey --out bundle.qenc --filename bundle.qvpack
 ```
 
-`--pack` builds a pre-encryption `.qvpack` payload with magic `QVB1`, then encrypts that payload into a normal `.qenc` container. Pack entry names are `basename()` values only, duplicate basenames are rejected, and `--filename` must end with `.qvpack`. An existing `.qvpack` file can also be passed as the single input; the CLI recognizes it by `QVB1` magic for reporting. Restore tooling must detect a decrypted pack by `QVB1` magic, not by filename alone.
+`--pack` builds a pre-encryption `.qvpack` payload with magic `QVB1`, then encrypts that payload into a normal `.qenc` container. Pack entry names are `basename()` values only, duplicate basenames are rejected, and `--filename` must end with `.qvpack`. An existing `.qvpack` file can also be passed as the single input; the CLI recognizes it by `QVB1` magic for reporting. Restore tooling must detect a decrypted pack by `QVB1` magic, not by filename alone. The shared current profile permits at most 4096 entries, 255 UTF-8 bytes per name, and 1 GiB each for an individual payload, aggregate payload bytes, and the complete encoded bundle; encoded framing means the complete-bundle cap is normally the tighter aggregate bound. Fatal UTF-8, checked lengths, exact framing, and exact duplicate-name rejection apply to both pack creation and parsing.
 
 Exit status:
 

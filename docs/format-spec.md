@@ -427,7 +427,54 @@ accepted through a larger caller-supplied limit. Any future inspection-only lega
 path must be explicitly named, byte-preserving, non-decrypting, and separate from
 current-format acceptance. Canonical current JavaScript writer bytes are unchanged.
 
-When multiple files are archived, the payload bytes are a `.qvpack` bundle detected by magic `QVB1`, not by filename.
+When multiple files are archived, the payload bytes are a `.qvpack` bundle detected
+by magic `QVB1`, not by filename.
+
+#### 5.3.1 QVPACK v1 binary profile
+
+All integers are unsigned and big-endian:
+
+```text
+magic        4 bytes   ASCII "QVB1"
+version      1 byte    0x01
+entryCount   2 bytes
+entries      entryCount repetitions of:
+  nameLen    2 bytes
+  name       nameLen bytes of strict UTF-8
+  dataLen    4 bytes
+  data       dataLen bytes
+```
+
+The current reader and writer MUST enforce one non-raiseable resource profile:
+
+- `entryCount` is in `1..4096`;
+- each name is in `1..255` encoded UTF-8 bytes;
+- each entry payload is at most 1,073,741,824 bytes;
+- the sum of entry payload bytes is at most 1,073,741,824 bytes; and
+- the complete encoded QVPACK, including framing and names, is at most
+  1,073,741,824 bytes.
+
+Names MUST decode as fatal UTF-8, MUST be non-empty, and MUST NOT contain `/`,
+`\\`, or NUL. Writers MUST reject unpaired UTF-16 surrogates before encoding.
+Because each name is already length-delimited, an initial UTF-8 BOM is filename
+data and MUST decode to U+FEFF rather than being stripped as a transport marker.
+Exact duplicate decoded names are forbidden. Filesystem case folding and Unicode
+normalization are not part of QVPACK name equality; extraction code must address
+those platform alias risks separately. Empty entry payloads are permitted.
+
+Readers MUST check lengths with safe arithmetic before slicing or allocating,
+consume exactly `entryCount` entries, and reject truncation and trailing bytes.
+Resource-limit rejection is distinct at the core API from malformed-format
+rejection. Callers MUST NOT widen this current profile.
+
+Strict-current migration note: canonical QVPACK v1 output within this profile is
+byte-for-byte unchanged. Previously accepted bundles with invalid UTF-8 names,
+exact duplicate names, more than 4096 entries, names longer than 255 UTF-8 bytes,
+or any 1 GiB limit violation are now invalid rather than reinterpreted. Writer
+input containing an unpaired surrogate is rejected instead of being silently
+serialized with a Unicode replacement character. No wire-version migration is
+required for conforming existing bundles; an inspection-only legacy path, if ever
+added, must remain separate from normal decrypt/extract acceptance.
 
 ### 5.4 AEAD, KDF, and key commitment rules
 

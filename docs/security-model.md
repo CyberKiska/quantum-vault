@@ -453,6 +453,10 @@ Current residual risks include:
 - incomplete long-term time-proof and evidence-renewal architecture
 - future ambiguity in trust roots, governance, or migration authority
 - per-chunk AEAD key reuse within one container: the current `per-chunk-aead` mode derives distinct IVs but uses a single `Kenc` across chunks, which is acceptable for the current size regime but may warrant future hardening for much larger payloads
+- QVPACK parsing and writing now share immutable count, name, per-entry,
+  aggregate, and encoded-size limits with checked framing, but browser and CLI
+  adapters still read whole source files before core rejection and the 1 GiB
+  boundary is not a streaming-memory guarantee
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
 - multi-file publication is not yet a crash-atomic transaction: `.qvpack`
