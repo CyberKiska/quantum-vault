@@ -483,17 +483,17 @@ After `metaJSON`, the byte stream embeds three canonical JSON artifacts with fix
 | `lifecycleBundleLen` | 4 bytes (Uint32 BE) | length of embedded lifecycle-bundle JSON bytes |
 | `lifecycleBundleBytes` | `lifecycleBundleLen` bytes | canonical `QV-Lifecycle-Bundle` v1 bytes |
 | `lifecycleBundleDigest` | 64 bytes | `SHA3-512(lifecycleBundleBytes)` |
-| `encapBlobLen` | 4 bytes (Uint32 BE) | length of encapsulated key blob |
-| `encapBlob` | `encapBlobLen` bytes | ML-KEM ciphertext |
+| `encapBlobLen` | 4 bytes (Uint32 BE) | MUST be `1568` for the current profile during reconstruction |
+| `encapBlob` | exactly 1568 bytes | copied ML-KEM-1024 ciphertext |
 | `containerNonce` | 12 bytes | copied from `.qenc` |
 | `kdfSalt` | 16 bytes | copied from `.qenc` |
-| `qencMetaLen` | 2 bytes (Uint16 BE) | length of duplicated `.qenc` metadata |
+| `qencMetaLen` | 2 bytes (Uint16 BE) | length of duplicated `.qenc` metadata; MUST be in `1..4096` |
 | `qencMetaBytes` | `qencMetaLen` bytes UTF-8 | duplicated `.qenc` metadata |
 | `keyCommitLen` | 1 byte | key commitment length |
 | `keyCommitBytes` | `keyCommitLen` bytes | required `SHA3-256(Kenc)` |
 | `shardIndex` | 2 bytes (Uint16 BE) | 0-based shard index |
-| `shareLen` | 2 bytes (Uint16 BE) | length of Shamir share |
-| `shareBytes` | `shareLen` bytes | one Shamir share |
+| `shareLen` | 2 bytes (Uint16 BE) | MUST be `3169` for a current ML-KEM-1024 private-key share |
+| `shareBytes` | exactly 3169 bytes | one dependency-compatible Shamir share: one coordinate byte plus 3168 secret bytes |
 | `fragments stream` | variable | RS fragment stream encoded as repeated `[len32 | fragmentBytes]` |
 
 ### 6.2 Successor shard metadata contract
@@ -552,7 +552,57 @@ Important current distinction:
 - that condition does not create a new `cohortId`
 - restore MUST treat it as lifecycle-bundle ambiguity and require explicit operator selection
 
-### 6.4 Split and same-state resharing semantics
+### 6.4 Authenticated reconstruction geometry
+
+Outer shard `metaJSON` geometry fields are redundant presentation copies and MUST
+NOT drive allocation, ciphertext length, or Reed-Solomon decoding. Reconstruction
+uses these sources in order:
+
+1. the selected canonical archive-state and cohort-binding bytes define the
+   `containerId`, `qencHash`, `n`, `k`, parity, threshold, share commitments, and
+   fragment-body hashes;
+2. at least one copied QENC header MUST rebuild to exact bytes whose
+   `SHA3-512(header)` equals the archive-state `containerId`;
+3. that header's metadata MUST pass the same closed `QVv1-5-0` validator as a
+   standalone `.qenc` parser and MUST match the archive-state profile and
+   geometry;
+4. the reconstructed full container MUST strict-parse and match both
+   `containerId` and `qencHash` before it is returned.
+
+A copied header that fails these checks is ignored as a separate invalid facet;
+it does not invalidate an independently committed share or fragment body. At
+least one valid header copy is required. Two different exact header byte strings
+claiming the same `containerId` are an ambiguity and MUST fail closed.
+
+For current Reed-Solomon framing, let:
+
+```text
+encodeSize = floor(255 / n) * n
+inputSize  = encodeSize * k / n
+symbolSize = inputSize / k
+fragLen_i  = ceil(cipherLen_i / inputSize) * symbolSize
+```
+
+`cipherLen_i` is `payloadLength + 16` in single-container mode. In per-chunk
+mode it is `min(chunkSize, remainingPayload) + 16`. Each shard fragment stream
+MUST contain exactly `chunkCount` records, each `[uint32be fragLen_i][fragment]`,
+and MUST end exactly after the final record. Short records are not padded and
+long records are not truncated. The exact total stream length is derived before
+body hashing so an oversized extra can be quarantined without attacker-directed
+allocation.
+
+An invalid share length or share commitment is skipped for Shamir purposes. An
+invalid fragment-stream length, fragment record, or body commitment is an RS
+erasure. Recovery MAY continue only while at least `t` valid shares exist and
+the number of missing/invalid fragment bodies is at most `parity / 2`. Duplicate
+or out-of-range shard indices are cohort ambiguity errors and fail closed.
+
+Current JavaScript reconstruction enforces a non-raiseable ciphertext ceiling of
+`1074790400` bytes (1 GiB + 1 MiB); an internal caller may only lower it. Checked
+safe-integer arithmetic precedes every derived length and allocation. Canonical
+current shard and QENC bytes are unchanged by these reader rules.
+
+### 6.5 Split and same-state resharing semantics
 
 Current split behavior:
 

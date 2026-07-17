@@ -117,7 +117,7 @@ Status values:
     labels, lets its low-level writer exceed its 4096-byte reader cap, and defers
     the 1568-byte KEM-ciphertext check until decapsulation. Parser parity remains
     unproved until mirrored changes and live differential tests land externally.
-- [ ] **REL-201 (open, high): authenticated shard reconstruction geometry.** Select
+- [ ] **REL-201 (partial, high): authenticated shard reconstruction geometry.** Select
   and quarantine shards individually using the archive-state `containerId` and
   authenticated `.qenc` header. Derive ciphertext and RS fragment geometry from
   that header, require exact fragment lengths, checked safe arithmetic, input caps,
@@ -126,6 +126,21 @@ Status values:
     valid quorum.
   - Gate: short, long, duplicate-index, out-of-range, oversized, and trailing-byte
     shards fail closed without large attacker-driven allocations.
+  - [x] **REL-201-JS (complete):** JavaScript selects only a strict QENC header
+    whose exact bytes match the archive-state `containerId`; treats outer geometry
+    as non-authoritative; derives exact ciphertext and fragment-stream lengths;
+    enforces exact 3169-byte shares, commitments, checked arithmetic, a
+    non-raiseable 1 GiB + 1 MiB ciphertext ceiling, and exact stream exhaustion;
+    reuses one bounded erasure buffer; and strict-parses and hashes the completed
+    QENC. Header, share, and body faults are independently quarantined within the
+    committed budget. Adversarial and injected-runtime tests cover poisoned first
+    headers, short/long/overflow/trailing/oversized bodies, bad share size,
+    duplicate/out-of-range indices, resource ceilings, and wrong RS output size.
+  - [ ] **REL-201-RUST (blocked-external):** Rust baseline `f29f090` already uses
+    committed header geometry and exact fragment lengths, but an exact-length
+    mismatch in a parse-valid extra aborts the selected cohort rather than being
+    quarantined within the erasure budget, and it lacks the same explicit
+    reconstruction ceiling. Ecosystem recovery parity remains unproved.
 - [ ] **FMT-202 (open, high): normative Shamir and erasure-code specification.**
   Freeze field polynomials, coordinate encodings, generator matrices, shortening,
   padding, fragment geometry, corruption semantics, and known-answer vectors.

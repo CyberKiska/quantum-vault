@@ -341,6 +341,16 @@ Current threshold and shard invariants:
 - threshold semantics MUST remain deterministic, with current threshold derived as `t = k + (n-k)/2`
 - Shamir share commitments MUST bind raw share bytes
 - fragment integrity validation MUST remain mandatory
+- allocation and RS geometry MUST come from a closed QENC header whose exact
+  bytes match the archive-state `containerId`, never from redundant outer shard
+  metadata
+- copied QENC-header validity, Shamir-share validity, and fragment-body validity
+  are independent facets; a malformed extra facet is quarantined within the
+  committed threshold/erasure budget rather than poisoning an otherwise valid
+  quorum
+- current fragment records MUST have their exact authenticated-derived lengths;
+  restore MUST NOT pad short fragments, truncate long fragments, or accept
+  trailing records
 - conflicting archive-state bytes, cohort-binding bytes, lifecycle-bundle digests, or incompatible cohorts MUST fail closed
 - fewer than threshold shards MUST NOT reconstruct the ML-KEM private key
 
