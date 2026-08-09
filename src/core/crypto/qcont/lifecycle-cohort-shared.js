@@ -644,6 +644,7 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
   const sortedShares = validShareShards.slice().sort((a, b) => a.shardIndex - b.shardIndex);
   const { secret: privKey, shareCopiesCleared } = await combineSharesFromCopiedSlices(sortedShares, t);
   let materialReturned = false;
+  let qencBytes = null;
   try {
     const recoveredKeyCommitmentValidated = await validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privKey, {
       messages,
@@ -655,7 +656,7 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
       ciphertextLength,
       'Reconstructed QENC length'
     );
-    const qencBytes = allocateBytes(qencLength, 'reconstructed QENC');
+    qencBytes = allocateBytes(qencLength, 'reconstructed QENC');
     qencBytes.set(selectedHeader.header, 0);
     let ciphertextOffset = 0;
     for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
@@ -765,7 +766,7 @@ export async function reconstructLifecycleCohortMaterial(candidate, options = {}
     return result;
   } finally {
     if (!materialReturned) {
-      clearKeys(privKey);
+      clearKeys(privKey, qencBytes);
     }
   }
 }

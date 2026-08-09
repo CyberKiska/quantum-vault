@@ -1628,75 +1628,85 @@ async function restoreSuccessorFromShards(shards, options = {}) {
 
   const qencBytes = reconstructed.qencBytes;
   const privKey = reconstructed.privKey;
-  const recoveredQencHash = normalizeHexString(await hashBytes(qencBytes));
-  const expectedQencHash = normalizeHexString(qenc.qencHash);
-  const qkeyOk = reconstructed.recoveredKeyCommitmentValidated === true;
+  let materialReturned = false;
+  try {
+    const recoveredQencHash = normalizeHexString(await hashBytes(qencBytes));
+    const expectedQencHash = normalizeHexString(qenc.qencHash);
+    const qkeyOk = reconstructed.recoveredKeyCommitmentValidated === true;
 
-  const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
-  const mixedBundleWarning = buildMixedLifecycleBundleVariantWarning(
-    embeddedLifecycleBundleDigestsUsed,
-    lifecycleBundleDigestHex
-  );
-  if (mixedBundleWarning) {
-    authenticityWarnings.push(mixedBundleWarning);
-  }
+    const authenticityWarnings = [...(archiveContext.authenticity.warnings || [])];
+    const mixedBundleWarning = buildMixedLifecycleBundleVariantWarning(
+      embeddedLifecycleBundleDigestsUsed,
+      lifecycleBundleDigestHex
+    );
+    if (mixedBundleWarning) {
+      authenticityWarnings.push(mixedBundleWarning);
+    }
 
-  const transitionReport = archiveContext.authenticity.transitionReport;
-  const sourceEvidenceReport = archiveContext.authenticity.sourceEvidenceReport;
-  return {
-    qencBytes,
-    privKey,
-    archiveId: candidate.archiveId,
-    stateId: candidate.stateId,
-    cohortId: candidate.cohortId,
-    containerId,
-    containerHash: expectedQencHash,
-    privateKeyHashMatchesMetadata: reconstructed.privateKeyHashMatchesMetadata,
-    recoveredQencHash,
-    rejectedShardIndices,
-    ignoredQencHeaderIndices: [...reconstructed.ignoredQencHeaderIndices],
-    invalidShareIndices: [...reconstructed.invalidShareIndices],
-    corruptedShardIndices: [...reconstructed.corruptedShardIndices],
-    missingShardIndices: [...reconstructed.missingShardIndices],
-    qencOk: true,
-    qkeyOk,
-    archiveState,
-    archiveStateBytes: candidate.archiveStateBytes,
-    archiveStateDigestHex: candidate.archiveStateDigestHex,
-    cohortBinding,
-    cohortBindingBytes: candidate.cohortBindingBytes,
-    cohortBindingDigestHex: candidate.cohortBindingDigestHex,
-    lifecycleBundle,
-    lifecycleBundleBytes: archiveContext.lifecycleBundleBytes,
-    lifecycleBundleDigestHex,
-    bundleDigestHex: lifecycleBundleDigestHex,
-    embeddedLifecycleBundleDigestsUsed,
-    manifestSource: archiveContext.selectionSource,
-    selectionSource: archiveContext.selectionSource,
-    lifecycleBundleSource: archiveContext.lifecycleBundleSource,
-    lifecycleVerification: {
-      transitions: transitionReport,
-      sourceEvidence: sourceEvidenceReport,
-      cohorts: {
-        forkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
-        knownCohortIdsForState: [...archiveContext.cohortSelection.knownCohortIdsForState],
-        mixedLifecycleBundleVariantsWithinSelectedCohort: bundleCohortMixed,
-        mixedLifecycleBundleVariantCohorts: [...archiveContext.cohortSelection.mixedLifecycleBundleVariantCohorts],
-        availableLifecycleBundleDigests: [...archiveContext.availableLifecycleBundleDigests],
+    const transitionReport = archiveContext.authenticity.transitionReport;
+    const sourceEvidenceReport = archiveContext.authenticity.sourceEvidenceReport;
+    const result = {
+      qencBytes,
+      privKey,
+      archiveId: candidate.archiveId,
+      stateId: candidate.stateId,
+      cohortId: candidate.cohortId,
+      containerId,
+      containerHash: expectedQencHash,
+      privateKeyHashMatchesMetadata: reconstructed.privateKeyHashMatchesMetadata,
+      recoveredQencHash,
+      rejectedShardIndices,
+      ignoredQencHeaderIndices: [...reconstructed.ignoredQencHeaderIndices],
+      invalidShareIndices: [...reconstructed.invalidShareIndices],
+      corruptedShardIndices: [...reconstructed.corruptedShardIndices],
+      missingShardIndices: [...reconstructed.missingShardIndices],
+      qencOk: true,
+      qkeyOk,
+      archiveState,
+      archiveStateBytes: candidate.archiveStateBytes,
+      archiveStateDigestHex: candidate.archiveStateDigestHex,
+      cohortBinding,
+      cohortBindingBytes: candidate.cohortBindingBytes,
+      cohortBindingDigestHex: candidate.cohortBindingDigestHex,
+      lifecycleBundle,
+      lifecycleBundleBytes: archiveContext.lifecycleBundleBytes,
+      lifecycleBundleDigestHex,
+      bundleDigestHex: lifecycleBundleDigestHex,
+      embeddedLifecycleBundleDigestsUsed,
+      manifestSource: archiveContext.selectionSource,
+      selectionSource: archiveContext.selectionSource,
+      lifecycleBundleSource: archiveContext.lifecycleBundleSource,
+      lifecycleVerification: {
+        transitions: transitionReport,
+        sourceEvidence: sourceEvidenceReport,
+        cohorts: {
+          forkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
+          knownCohortIdsForState: [...archiveContext.cohortSelection.knownCohortIdsForState],
+          mixedLifecycleBundleVariantsWithinSelectedCohort: bundleCohortMixed,
+          mixedLifecycleBundleVariantCohorts: [...archiveContext.cohortSelection.mixedLifecycleBundleVariantCohorts],
+          availableLifecycleBundleDigests: [...archiveContext.availableLifecycleBundleDigests],
+        },
       },
-    },
-    authenticity: finalizeSuccessorAuthenticityReport({
-      ...archiveContext.authenticity,
-      transitionReport,
-      sourceEvidenceReport,
-      warnings: authenticityWarnings,
-    }, {
-      integrityVerified: true,
-      cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
-      bundleCohortMixed,
-      mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,
-    }),
-  };
+      authenticity: finalizeSuccessorAuthenticityReport({
+        ...archiveContext.authenticity,
+        transitionReport,
+        sourceEvidenceReport,
+        warnings: authenticityWarnings,
+      }, {
+        integrityVerified: true,
+        cohortForkDetected: archiveContext.cohortSelection.sameStateForkDetected === true,
+        bundleCohortMixed,
+        mixedLifecycleBundleVariantsWithinCohort: bundleCohortMixed,
+      }),
+    };
+    materialReturned = true;
+    return result;
+  } finally {
+    if (!materialReturned) {
+      qencBytes.fill(0);
+      privKey.fill(0);
+    }
+  }
 }
 
 function prepareRestoreShardInputs(shards, options = {}) {

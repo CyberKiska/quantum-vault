@@ -517,3 +517,30 @@ test('reconstruction rejects a fault-injected RS chunk with the wrong exact leng
   assert.equal(trace.calls.length, 1);
   assert.equal(keyValidationFinallyCalls, 1, 'key-validation cleanup hook must run before post-Shamir failure');
 });
+
+test('post-reconstruction validation failure wipes the allocated QENC buffer', async () => {
+  const trace = tracedRuntime();
+  let allocatedQenc = null;
+
+  await assert.rejects(
+    reconstructLifecycleCohortMaterial(buildCandidate(sample.parsed), {
+      erasureRuntime: trace.runtime,
+      digestHex: async (bytes) => {
+        if (
+          bytes.length === sample.qencBytes.length
+          && bytes[0] === sample.qencBytes[0]
+          && bytes[1] === sample.qencBytes[1]
+        ) {
+          allocatedQenc = bytes;
+          throw new Error('injected final QENC digest failure');
+        }
+        return digestHex(bytes);
+      },
+      onWarn: () => {},
+    }),
+    /injected final QENC digest failure/
+  );
+
+  assert.ok(allocatedQenc instanceof Uint8Array);
+  assert.equal(allocatedQenc.every((byte) => byte === 0), true);
+});
