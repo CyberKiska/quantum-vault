@@ -3008,16 +3008,12 @@ test('restore rejects an uploaded lifecycle bundle that belongs to a different a
   await page.getByTestId('restore-input').setInputFiles(fixtures.lifecycleBundleMismatchFiles);
 
   const restoreButton = page.getByTestId('restore-button');
-  await expect(restoreButton).toBeEnabled();
-
-  let downloadCount = 0;
-  page.on('download', () => {
-    downloadCount += 1;
-  });
-
-  await restoreButton.click();
-
-  await expect(lastToast(page)).toContainText('Provided lifecycle bundle does not match');
+  await expect(restoreButton).toBeDisabled();
+  await expect(page.getByTestId('restore-selection-summary')).toContainText(
+    'Successor restore selection could not be derived'
+  );
+  await expect(page.getByTestId('restore-selection-help')).toContainText(
+    'Uploaded lifecycle bundle does not match any loaded successor shard'
+  );
   await expect(page.getByTestId('restore-result')).toBeHidden();
-  expect(downloadCount).toBe(0);
 });

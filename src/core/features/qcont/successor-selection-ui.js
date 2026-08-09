@@ -1,5 +1,8 @@
 import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../../app/crypto-service.js';
-import { parseArchiveStateViewBytes } from '../../../app/artifact-intake-service.js';
+import {
+  parseArchiveStateViewBytes,
+  parseLifecycleBundleArchiveStateViewBytes,
+} from '../../../app/artifact-intake-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { readFileAsUint8Array } from '../../../utils.js';
 import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
@@ -476,6 +479,38 @@ export function buildSuccessorSelectionModel(parsedShards = []) {
   };
 }
 
+/** Resolve optional external selectors only after proving model membership. */
+export function resolveExternallyFixedSuccessorSelection(model, {
+  uploadedArchiveState = null,
+  uploadedLifecycleBundle = null,
+} = {}) {
+  const archiveStateKey = uploadedArchiveState
+    ? buildStateSelectionKey(uploadedArchiveState.archiveState.archiveId, uploadedArchiveState.digest.value)
+    : null;
+  const lifecycleStateKey = uploadedLifecycleBundle
+    ? buildStateSelectionKey(uploadedLifecycleBundle.archiveState.archiveId, uploadedLifecycleBundle.digest.value)
+    : null;
+
+  if (archiveStateKey && !model.states.some((state) => state.key === archiveStateKey)) {
+    throw new Error('Uploaded archive-state descriptor does not match any loaded successor shard archive/state.');
+  }
+  if (lifecycleStateKey && !model.states.some((state) => state.key === lifecycleStateKey)) {
+    throw new Error('Uploaded lifecycle bundle does not match any loaded successor shard archive/state.');
+  }
+  if (archiveStateKey && lifecycleStateKey && archiveStateKey !== lifecycleStateKey) {
+    throw new Error('Uploaded lifecycle bundle and archive-state descriptor select different archive states.');
+  }
+
+  const stateKey = lifecycleStateKey || archiveStateKey;
+  const selectedState = model.states.find((state) => state.key === stateKey) || null;
+  const cohortId = uploadedLifecycleBundle?.cohortId || null;
+  if (cohortId && !selectedState?.cohorts.some((cohort) => cohort.cohortId === cohortId)) {
+    throw new Error('Uploaded lifecycle bundle does not match any loaded successor shard cohort.');
+  }
+
+  return { stateKey, cohortId };
+}
+
 export async function refreshSuccessorSelectionUi(prefix = 'restore', files = [], actionButton = null, assessment = null, options = {}) {
   const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   const elements = getSuccessorSelectionElements(prefix);
@@ -553,10 +588,14 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
       ? parseArchiveStateViewBytes(classified.archiveStateBytes)
       : null;
-    const lifecycleBundleProvided = classified.lifecycleBundleBytes instanceof Uint8Array;
-    const uploadedStateKey = uploadedArchiveState
-      ? buildStateSelectionKey(uploadedArchiveState.archiveState.archiveId, uploadedArchiveState.digest.value)
+    const uploadedLifecycleBundle = classified.lifecycleBundleBytes instanceof Uint8Array
+      ? await parseLifecycleBundleArchiveStateViewBytes(classified.lifecycleBundleBytes)
       : null;
+    const lifecycleBundleProvided = uploadedLifecycleBundle !== null;
+    const externalSelection = resolveExternallyFixedSuccessorSelection(model, {
+      uploadedArchiveState,
+      uploadedLifecycleBundle,
+    });
 
     const pickFirstAvailable = (candidates, isMember) => {
       for (const candidate of candidates) {
@@ -565,7 +604,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       return null;
     };
 
-    const selectedStateKey = uploadedStateKey || pickFirstAvailable(
+    const selectedStateKey = externalSelection.stateKey || pickFirstAvailable(
       [
         model.states.length === 1 ? model.states[0].key : null,
         previous.selectedStateKey,
@@ -576,7 +615,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const selectedState = model.states.find((state) => state.key === selectedStateKey) || null;
 
     const selectedCohortId = lifecycleBundleProvided
-      ? null
+      ? externalSelection.cohortId
       : pickFirstAvailable(
           [
             selectedState?.cohorts.length === 1 ? selectedState.cohorts[0].cohortId : null,
