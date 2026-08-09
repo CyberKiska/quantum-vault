@@ -101,6 +101,16 @@ test('CLI hardening boundary keeps Node APIs out of core crypto and UI modules o
   }
 });
 
+test('top-level CLI keeps the self-test dependency lazy', async () => {
+  const source = await readFile('src/core/cli/qv.js', 'utf8');
+  assert.equal(
+    /from\s+['"]\.\/commands\/selftest\.js['"]/.test(source),
+    false,
+    'qv.js must not statically import the self-test graph',
+  );
+  assert.match(source, /await import\(['"]\.\/commands\/selftest\.js['"]\)/);
+});
+
 test('CLI exit registry maps explicit qvCode values', async () => {
   const { EXIT, QV_CODE, makeQvError, mapErrorToExitCode } = await import('../../src/core/cli/lib/exit.js');
   assert.equal(mapErrorToExitCode(makeQvError('bad args', QV_CODE.USAGE)), EXIT.USAGE);

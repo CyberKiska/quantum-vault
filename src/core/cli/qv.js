@@ -54,11 +54,6 @@ import {
   verifyArchiveInputs,
 } from './commands/verify.js';
 import {
-  parseSelftestArgs,
-  renderSelftestSummary,
-  runSelftestCommand,
-} from './commands/selftest.js';
-import {
   parseVersionArgs,
   renderVersionSummary,
   runVersionCommand,
@@ -84,13 +79,18 @@ export {
   runReshareCommand,
   runRestoreCommand,
   runRestoreDryRunCommand,
-  runSelftestCommand,
   runSplitCommand,
   runVersionCommand,
   runVerifyCommand,
   verifyReportSatisfied,
   verifyArchiveInputs,
 };
+
+/** Preserve the programmatic API without loading the large self-test graph eagerly. */
+export async function runSelftestCommand(options = {}) {
+  const selftest = await import('./commands/selftest.js');
+  return selftest.runSelftestCommand(options);
+}
 
 const COMMAND_HELP = Object.freeze({
   keygen: 'qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
@@ -394,14 +394,15 @@ export async function runQvCli(argv, {
     }
 
     if (command === 'selftest') {
-      const options = parseSelftestArgs(args);
-      const report = await runSelftestCommand(options);
+      const selftest = await import('./commands/selftest.js');
+      const options = selftest.parseSelftestArgs(args);
+      const report = await selftest.runSelftestCommand(options);
       if (options.json) {
         writeJson(stdout, withCliJsonEnvelope(report, {
           ok: report.ok === true,
         }));
       } else {
-        writeText(stdout, renderSelftestSummary(report));
+        writeText(stdout, selftest.renderSelftestSummary(report));
       }
       return report.ok === true ? EXIT.OK : EXIT.ERROR;
     }
