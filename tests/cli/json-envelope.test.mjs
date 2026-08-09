@@ -124,7 +124,7 @@ test('verify --json preserves policy exit semantics inside the envelope', async 
 
 test('JSON errors include schema version and qvCode', async () => {
   const result = await runJsonCommand(['inspect', '--json']);
-  assert.equal(result.exitCode, 1);
+  assert.equal(result.exitCode, 2);
   assert.equal(result.stderrText, '');
   assertStableEnvelopePrefix(result.json, false);
   assert.deepEqual(result.json, {
@@ -132,7 +132,7 @@ test('JSON errors include schema version and qvCode', async () => {
     ok: false,
     cliSchemaVersion: 1,
     error: 'inspect requires <artifact-file>',
-    qvCode: 'UNEXPECTED',
+    qvCode: 'USAGE',
   });
 });
 
@@ -161,7 +161,7 @@ test('non-JSON errors use the centralized CLI formatter', async () => {
   const stdout = createCaptureStream();
   const stderr = createCaptureStream();
   const exitCode = await runQvCli(['inspect'], { stdout, stderr });
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(stdout.text(), '');
   assert.equal(stderr.text(), 'qv: inspect: inspect requires <artifact-file>\n');
 });

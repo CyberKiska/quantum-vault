@@ -54,6 +54,7 @@ Filesystem notes:
 
 - Schema **v1** may add new object fields. It must not remove or rename fields, and must not change a field's type incompatibly (for example `string` → `number`, widening or narrowing arrays in ways that break parsers). Any incompatible change requires incrementing the schema version.
 - Error JSON from failed commands includes `command`, `ok: false`, `cliSchemaVersion`, `error`, and `qvCode` only (no success-only payload fields).
+- Missing operands, missing option values, and unknown options use `qvCode: "USAGE"` and exit status `2` consistently.
 - Filesystem failures that are not command-usage errors use `qvCode: "INPUT_IO_FAILED"` and exit status `1`; they are never reclassified by path or working-directory text.
 - Local QVPACK count/length/aggregate limit failures use
   `qvCode: "RESOURCE_LIMIT"` with the fixed, non-reflective message
