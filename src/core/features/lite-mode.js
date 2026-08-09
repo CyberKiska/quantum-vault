@@ -25,7 +25,7 @@ import {
 import { createSuccessorShardInputRefreshController } from './qcont/successor-workflow-input.js';
 import { resetSuccessorSelectionSession } from './qcont/successor-selection-ui.js';
 import { registerSessionWipeHandler } from '../../app/session-wipe.js';
-import { validateRsParams, calculateShamirThreshold, readFileAsUint8Array, setWorkflowBusy } from '../../utils.js';
+import { readFileAsUint8Array, setWorkflowBusy } from '../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from './bundle-payload.js';
 import {
     log,
@@ -57,6 +57,15 @@ import {
     createBrowserExportSession,
     digestBrowserExportSourceSha3_512,
 } from '../export/browser-export-session.js';
+import {
+    LITE_MAX_SHARDS,
+    LITE_MAX_THRESHOLD_PERCENT,
+    LITE_MIN_SHARDS,
+    LITE_MIN_THRESHOLD_PERCENT,
+    calculateParametersFromThreshold,
+    getAchievableThresholdsForN,
+    getAlternativeNRecommendations,
+} from './lite-threshold-params.js';
 
 // Lite retains at most one explicitly authorized successful archive keypair,
 // solely for an immediate custody decision. It must be exported or explicitly
@@ -80,10 +89,6 @@ let liteLogCollapsed = true;
 let unregisterLiteSessionWipe = null;
 const LITE_RESTORE_INLINE_ERROR_ID = 'liteRestoreInlineError';
 const LITE_EXPORT_RANDOM_BYTES = 16;
-const LITE_MIN_SHARDS = 5;
-const LITE_MAX_SHARDS = 25;
-const LITE_MIN_THRESHOLD_PERCENT = 50;
-const LITE_MAX_THRESHOLD_PERCENT = 90;
 const LITE_MAX_INPUT_FILES = 256;
 // With the worst supported n/k expansion (24/2 = 12), this leaves at least
 // 32 MiB inside the immutable 128 MiB browser-export aggregate profile for
@@ -1484,86 +1489,6 @@ function wipeLiteModeSessionSecrets() {
     runLiteUiBestEffort(refreshLiteKeyAvailability);
     runLiteUiBestEffort(refreshLiteCustodyGuidanceVisibility);
     runLiteUiBestEffort(updateCreateShardsButton);
-}
-
-// Compute RS/SSS params from desired threshold percent
-function calculateParametersFromThreshold(n, thresholdPercent) {
-    // Validate inputs first
-    if (!Number.isInteger(n) || n < LITE_MIN_SHARDS || n > LITE_MAX_SHARDS) {
-        return { error: `Total shards must be an integer from ${LITE_MIN_SHARDS} to ${LITE_MAX_SHARDS}` };
-    }
-
-    if (
-        !Number.isInteger(thresholdPercent) ||
-        thresholdPercent < LITE_MIN_THRESHOLD_PERCENT ||
-        thresholdPercent > LITE_MAX_THRESHOLD_PERCENT
-    ) {
-        return { error: `Threshold percent must be an integer from ${LITE_MIN_THRESHOLD_PERCENT} to ${LITE_MAX_THRESHOLD_PERCENT}` };
-    }
-
-    // Target threshold as number of shards (rounded up for safety)
-    const targetT = Math.ceil((thresholdPercent / 100) * n);
-
-    // Search all valid k with a safety-first policy:
-    // prefer the smallest achievable threshold that is >= requested.
-    let bestAtOrAbove = null;
-    for (let k = 2; k < n; k++) {
-        if (!validateRsParams(n, k)) continue;
-        const m = n - k;
-        const t = calculateShamirThreshold(n, k);
-        if (!Number.isInteger(t)) continue;
-        const actualThresholdPercent = Math.round((t / n) * 100);
-        const candidate = { n, k, m, t, actualThresholdPercent };
-
-        if (t >= targetT) {
-            if (!bestAtOrAbove || t < bestAtOrAbove.t) {
-                bestAtOrAbove = candidate;
-            }
-        }
-    }
-
-    const best = bestAtOrAbove;
-
-    if (!best) {
-        return { error: 'No supported configuration meets or exceeds the requested threshold' };
-    }
-
-    return {
-        n: best.n,
-        k: best.k,
-        m: best.m,
-        t: best.t,
-        actualThresholdPercent: best.actualThresholdPercent
-    };
-}
-
-function getAchievableThresholdsForN(n) {
-    const thresholdsByPercent = new Map();
-    for (let k = 2; k < n; k++) {
-        if (!validateRsParams(n, k)) continue;
-        const m = n - k;
-        const t = calculateShamirThreshold(n, k);
-        if (!Number.isInteger(t)) continue;
-        const actualThresholdPercent = Math.round((t / n) * 100);
-        thresholdsByPercent.set(actualThresholdPercent, { n, k, m, t, actualThresholdPercent });
-    }
-    return [...thresholdsByPercent.values()].sort((a, b) => a.actualThresholdPercent - b.actualThresholdPercent);
-}
-
-function getAlternativeNRecommendations(requestedPercent, currentN, limit = 2) {
-    const candidates = [];
-    for (let n = LITE_MIN_SHARDS; n <= LITE_MAX_SHARDS; n++) {
-        if (n === currentN) continue;
-        const params = calculateParametersFromThreshold(n, requestedPercent);
-        if (params.error) continue;
-        candidates.push({
-            n,
-            actualThresholdPercent: params.actualThresholdPercent,
-            diff: Math.abs(params.actualThresholdPercent - requestedPercent)
-        });
-    }
-    candidates.sort((a, b) => a.diff - b.diff || a.n - b.n);
-    return candidates.slice(0, limit);
 }
 
 // Update threshold display logic

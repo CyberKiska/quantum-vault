@@ -145,6 +145,12 @@ test('keygen usage errors return qvCode USAGE', async () => {
   });
 });
 
+test('keygen missing option values return the usage exit code', async () => {
+  const result = await runCli(['keygen', '--out']);
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stderrText, /--out requires a value/);
+});
+
 test('keygen refuses missing --out parent and path-like --name', async () => {
   const baseDir = await makeTempDir();
   const missingParent = join(baseDir, 'missing', 'keys');

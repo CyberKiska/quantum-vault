@@ -31,8 +31,9 @@
     "test:browser": "node scripts/test-browser.mjs",
     "schema:fixtures": "node scripts/schema-fixtures.mjs",
     "corpus:verify": "node scripts/corpus-verify.mjs",
+    "dependencies:check": "npm ls --all",
     "check": "npm run test:core && npm run test:cli && npm run test:parity && npm run selftest && npm run cli:selftest && npm run schema:fixtures && npm run corpus:verify && npm run build",
-    "release:check": "npm run check && npm run test:browser",
+    "release:check": "npm run dependencies:check && npm run check && npm run test:browser",
     "deploy": "npm run build"
   },
   "dependencies": {
