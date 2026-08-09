@@ -18,6 +18,7 @@ import {
   parseLifecycleBundleBytes,
   parseSourceEvidenceBytes,
   parseTransitionRecordBytes,
+  validateRuntimeSupportedCohortTuple,
 } from '../../src/core/crypto/lifecycle/artifacts.js';
 
 const schemaDir = path.resolve('docs/schema');
@@ -51,6 +52,51 @@ const artifactHandlers = {
     valueField: 'lifecycleBundle',
   },
 };
+
+test('current Shamir/RS profile enforces normative shard-count bounds', () => {
+  assert.deepEqual(
+    validateRuntimeSupportedCohortTuple({
+      n: 5,
+      k: 3,
+      parity: 2,
+      threshold: 4,
+      shareCount: 5,
+      codecId: 'QV-RS-ErasureCodes-v1',
+    }),
+    {
+      n: 5,
+      k: 3,
+      parity: 2,
+      threshold: 4,
+      shareCount: 5,
+      codecId: 'QV-RS-ErasureCodes-v1',
+      derivedThreshold: 4,
+      allowedFailures: 1,
+    },
+  );
+  assert.throws(
+    () => validateRuntimeSupportedCohortTuple({
+      n: 4,
+      k: 2,
+      parity: 2,
+      threshold: 3,
+      shareCount: 4,
+      codecId: 'QV-RS-ErasureCodes-v1',
+    }),
+    /n >= 5/,
+  );
+  assert.throws(
+    () => validateRuntimeSupportedCohortTuple({
+      n: 256,
+      k: 254,
+      parity: 2,
+      threshold: 255,
+      shareCount: 256,
+      codecId: 'QV-RS-ErasureCodes-v1',
+    }),
+    /n <= 255/,
+  );
+});
 
 async function loadFixtureIndex() {
   return JSON.parse(await readFile(fixturesIndexPath, 'utf8'));

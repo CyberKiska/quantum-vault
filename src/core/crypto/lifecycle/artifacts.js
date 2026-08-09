@@ -542,8 +542,8 @@ export function validateRuntimeSupportedCohortTuple(tuple, field = 'cohort param
   const shareCount = Number(tuple?.shareCount);
   const codecId = String(tuple?.codecId || '');
 
-  if (!Number.isInteger(n) || n < 2 || !Number.isInteger(k) || k < 2 || k >= n) {
-    throw new Error(`Invalid ${normalizedField}: require 2 <= k < n`);
+  if (!Number.isInteger(n) || n < 5 || n > 255 || !Number.isInteger(k) || k < 2 || k >= n) {
+    throw new Error(`Invalid ${normalizedField}: require 2 <= k < n <= 255 and n >= 5`);
   }
   if (!Number.isInteger(shareCount) || shareCount < 2 || shareCount !== n) {
     throw new Error(`Unsupported ${normalizedField}: shareCount must equal n`);

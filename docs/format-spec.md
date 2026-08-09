@@ -519,6 +519,10 @@ Parsers MUST use the format identifier and embedded lengths to interpret the byt
 Successor shards use `QVC1` magic and a UTF-8 `metaJSON` prefix.
 After `metaJSON`, the byte stream embeds three canonical JSON artifacts with fixed-length digest anchors:
 
+Each embedded JSON artifact length MUST be in `1..16777216` bytes. Core restore
+and browser preview use the same prefix parser and therefore enforce the same
+length, digest, canonicalization, cohort-geometry, and QENC-header checks.
+
 | Data | Length | Description |
 | --- | --- | --- |
 | `archiveStateLen` | 4 bytes (Uint32 BE) | length of embedded archive-state JSON bytes |
@@ -530,7 +534,7 @@ After `metaJSON`, the byte stream embeds three canonical JSON artifacts with fix
 | `lifecycleBundleLen` | 4 bytes (Uint32 BE) | length of embedded lifecycle-bundle JSON bytes |
 | `lifecycleBundleBytes` | `lifecycleBundleLen` bytes | canonical `QV-Lifecycle-Bundle` v1 bytes |
 | `lifecycleBundleDigest` | 64 bytes | `SHA3-512(lifecycleBundleBytes)` |
-| `encapBlobLen` | 4 bytes (Uint32 BE) | MUST be `1568` for the current profile during reconstruction |
+| `encapBlobLen` | 4 bytes (Uint32 BE) | MUST be `1568` for the current profile during parsing |
 | `encapBlob` | exactly 1568 bytes | copied ML-KEM-1024 ciphertext |
 | `containerNonce` | 12 bytes | copied from `.qenc` |
 | `kdfSalt` | 16 bytes | copied from `.qenc` |
@@ -591,6 +595,12 @@ submitted to one reconstruction MUST have distinct coordinates. Coordinate `0`
 is the secret intercept, not a valid emitted share coordinate, and MUST be
 rejected before interpolation. The JavaScript wrapper enforces this rule even
 though `shamir-secret-sharing@0.0.4` does not enforce it in its low-level reader.
+
+The current reader and writer reject cohort values outside the normative
+`2 <= k < n <= 255`, `n >= 5` profile. Earlier JavaScript builds could emit
+`n < 5` despite the published profile; those shards are nonconforming and require
+an explicitly isolated legacy recovery tool rather than acceptance in production
+Restore or Reshare.
 
 Reader-hardening migration note: current writers already emit only distinct
 coordinates in `1..255`, and the pinned Rust reader already rejects `0`, so
