@@ -9,6 +9,7 @@ import { sha3_512 } from '@noble/hashes/sha3.js';
 import { hashBytes } from '../index.js';
 import { asciiBytes, base64ToBytes, bytesEqual, digestSha256, toHex } from '../bytes.js';
 import {
+  dedupeTimestampEvidenceForPresentation,
   resolveOpenTimestampTarget,
 } from '../auth/opentimestamps.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../auth/signature-identity.js';
@@ -947,39 +948,6 @@ async function verifySuccessorExternalSignature({
   });
 }
 
-/**
- * Presentation-only: when multiple OTS evidence rows describe the same stamped digest
- * (or share a fallback key), keep a single row for UI/reporting. Verification and
- * archive policy are computed before this step from full signature results; this
- * function MUST NOT influence policy outcomes.
- */
-function dedupePresentationOnlyTimestampEvidence(entries) {
-  const bestByDigest = new Map();
-  for (const entry of entries) {
-    const key = String(entry?.stampedDigestHex || entry?.targetRef || entry?.id || '').trim();
-    if (!key) continue;
-    const current = bestByDigest.get(key);
-    const score = [
-      entry?.completeProof === true || entry?.apparentlyComplete === true ? 1 : 0,
-      String(entry?.linkLabel || '').startsWith('External ') ? 0 : 1,
-    ];
-    const currentScore = current
-      ? [
-          current?.completeProof === true || current?.apparentlyComplete === true ? 1 : 0,
-          String(current?.linkLabel || '').startsWith('External ') ? 0 : 1,
-        ]
-      : [-1, -1];
-    const replace = (
-      score[0] > currentScore[0] ||
-      (score[0] === currentScore[0] && score[1] > currentScore[1])
-    );
-    if (!current || replace) {
-      bestByDigest.set(key, entry);
-    }
-  }
-  return [...bestByDigest.values()];
-}
-
 async function inspectSuccessorTimestampEvidence({
   bundle,
   externalTimestamps = [],
@@ -1077,7 +1045,7 @@ async function inspectSuccessorTimestampEvidence({
   }
 
   return {
-    evidence: dedupePresentationOnlyTimestampEvidence([...embeddedEvidence, ...externalEvidence]),
+    evidence: dedupeTimestampEvidenceForPresentation([...embeddedEvidence, ...externalEvidence]),
     warnings: dedupeWarnings(warnings),
   };
 }

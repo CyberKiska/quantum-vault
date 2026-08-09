@@ -187,7 +187,8 @@ function compareTimestampEvidencePreference(left, right) {
   return 0;
 }
 
-function dedupeTimestampEvidence(entries) {
+/** Presentation-only dedupe; archive policy is evaluated before this projection. */
+export function dedupeTimestampEvidenceForPresentation(entries) {
   const bestByStampedDigest = new Map();
   for (const entry of entries) {
     const dedupeKey = String(entry?.stampedDigestHex || entry?.targetRef || entry?.id || '').trim();
@@ -230,5 +231,5 @@ export async function inspectLifecycleTimestampEvidence({
     };
   }));
 
-  return dedupeTimestampEvidence([...embeddedEvidence, ...externalEvidence]);
+  return dedupeTimestampEvidenceForPresentation([...embeddedEvidence, ...externalEvidence]);
 }

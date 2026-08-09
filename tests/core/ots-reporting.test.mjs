@@ -11,6 +11,7 @@ import {
 } from '../../src/core/crypto/selftest.js';
 import { digestSha256, toHex } from '../../src/core/crypto/bytes.js';
 import {
+  dedupeTimestampEvidenceForPresentation,
   inspectLifecycleTimestampEvidence,
   parseOpenTimestampProof,
   resolveOpenTimestampTarget,
@@ -25,6 +26,19 @@ function wipeRestoreResult(result) {
 test.before(async () => {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
+});
+
+test('shipped OTS presentation dedupe prefers completion then embedded linkage', () => {
+  const rows = [
+    { id: 'external-incomplete', stampedDigestHex: 'aa', apparentlyComplete: false, linkLabel: 'External OTS evidence linked to signature' },
+    { id: 'external-complete', stampedDigestHex: 'aa', apparentlyComplete: true, linkLabel: 'External OTS evidence linked to signature' },
+    { id: 'embedded-complete', stampedDigestHex: 'aa', apparentlyComplete: true, linkLabel: 'OTS evidence linked to signature' },
+    { id: 'other', stampedDigestHex: 'bb', apparentlyComplete: false, linkLabel: 'OTS evidence linked to signature' },
+  ];
+  assert.deepEqual(
+    dedupeTimestampEvidenceForPresentation(rows).map((entry) => entry.id),
+    ['embedded-complete', 'other'],
+  );
 });
 
 test('OpenTimestamps parser reports SHA-256 target digest and apparent completion only', async () => {
