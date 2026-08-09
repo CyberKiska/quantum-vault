@@ -41,6 +41,7 @@ import {
   rehydrateLifecycleBundleForCohort,
   reconstructLifecycleCohortMaterial,
 } from './lifecycle-cohort-shared.js';
+import { ensureEqual } from './validation.js';
 
 export const LIFECYCLE_QCONT_MAGIC = 'QVC1';
 export const LIFECYCLE_QCONT_FORMAT_VERSION = 'QVqcont-7';
@@ -113,12 +114,6 @@ function ensurePositiveInteger(value, field, min = 1) {
     throw new Error(`Invalid ${field}`);
   }
   return value;
-}
-
-function ensureEqual(actual, expected, field) {
-  if (actual !== expected) {
-    throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
-  }
 }
 
 export function isLifecycleParsedShard(shard) {

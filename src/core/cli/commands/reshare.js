@@ -1,7 +1,6 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import {
   parseLifecycleShard,
   reshareSameState,
@@ -60,10 +59,6 @@ function reshareContract(message, cause) {
 
 function signatureImportFailed(message, cause) {
   return makeQvError(message, QV_CODE.SIGNATURE_IMPORT_FAILED, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 async function blobToBytes(blob) {

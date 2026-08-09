@@ -1,8 +1,7 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
 import { encryptFile } from '../../crypto/index.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import { parseQencHeader } from '../../crypto/qenc/format.js';
 import {
   buildQvpackPayloadBytes,
@@ -34,10 +33,6 @@ function resourceLimit(cause) {
 
 function keyRejected(message, cause) {
   return makeQvError(message, QV_CODE.KEY_REJECTED, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 function basenameOnly(filePath) {

@@ -23,6 +23,7 @@ import {
   parseQencMetadataBytes,
 } from '../qenc/format.js';
 import { combineSharesFromCopiedSlices } from './shamir-share-combine.js';
+import { ensureEqual } from './validation.js';
 
 const AES_GCM_TAG_SIZE = 16;
 const RS_MAX_CODEWORD = 255;
@@ -142,12 +143,6 @@ function expectedFragmentStreamLength(geometry, n, k) {
     total = checkedAdd(total, fragmentLength, 'Fragment stream length');
   }
   return total;
-}
-
-function ensureEqual(actual, expected, field) {
-  if (actual !== expected) {
-    throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
-  }
 }
 
 export function assertArchiveStateMatchesQencMetadata(archiveState, qencMetaJSON) {

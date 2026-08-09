@@ -47,12 +47,6 @@ function ensurePositiveInteger(value, field, min = 1) {
   return value;
 }
 
-function ensureEqual(actual, expected, field) {
-  if (actual !== expected) {
-    throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
-  }
-}
-
 function dedupeWarnings(warnings) {
   return [...new Set((Array.isArray(warnings) ? warnings : []).filter(Boolean))];
 }

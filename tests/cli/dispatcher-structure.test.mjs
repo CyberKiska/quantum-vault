@@ -111,6 +111,17 @@ test('top-level CLI keeps the self-test dependency lazy', async () => {
   assert.match(source, /await import\(['"]\.\/commands\/selftest\.js['"]\)/);
 });
 
+test('CLI commands use the shared SHA3-512 report digest helper', async () => {
+  for (const filePath of await listSourceFiles('src/core/cli/commands')) {
+    const source = await readFile(filePath, 'utf8');
+    assert.equal(
+      /function\s+digestSha3_512Hex\s*\(/.test(source),
+      false,
+      `${filePath} redeclares digestSha3_512Hex`,
+    );
+  }
+});
+
 test('CLI exit registry maps explicit qvCode values', async () => {
   const { EXIT, QV_CODE, makeQvError, mapErrorToExitCode } = await import('../../src/core/cli/lib/exit.js');
   assert.equal(mapErrorToExitCode(makeQvError('bad args', QV_CODE.USAGE)), EXIT.USAGE);

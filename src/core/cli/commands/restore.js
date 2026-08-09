@@ -1,8 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
 import { decryptFile } from '../../crypto/index.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import {
   assessRestoreFromShards,
   restoreFromShards,
@@ -52,10 +51,6 @@ function restoredIntegrityFailed(message, cause) {
 
 function policyNotSatisfied(message, cause) {
   return makeQvError(message, QV_CODE.POLICY_NOT_SATISFIED, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 async function blobToBytes(blob) {

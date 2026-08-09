@@ -1,4 +1,5 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
+import { wipeBytes } from '../crypto/zeroize.js';
 
 // This is an operational browser profile, not a wire-format limit. It covers
 // the Lite UI maximum (25 shards plus metadata) while keeping whole-buffer
@@ -243,16 +244,8 @@ export async function digestBrowserExportSourceSha3_512(source, { signal } = {})
   }
 }
 
-function cloneOwnedSource(source) {
+function cloneByteSource(source) {
   return source instanceof Uint8Array ? source.slice() : source;
-}
-
-function cloneRequestSource(source) {
-  return source instanceof Uint8Array ? source.slice() : source;
-}
-
-function wipeBytes(value) {
-  if (value instanceof Uint8Array) value.fill(0);
 }
 
 function publicRow(artifact) {
@@ -371,7 +364,7 @@ export class BrowserExportSession {
     artifact.busy = true;
     let requestSource = null;
     try {
-      requestSource = cloneRequestSource(artifact.source);
+      requestSource = cloneByteSource(artifact.source);
       await requester(Object.freeze({
         name: artifact.name,
         source: requestSource,
@@ -468,7 +461,7 @@ export async function createBrowserExportSession(rawArtifacts) {
     name: artifact.name,
     role: artifact.role,
     byteLength: artifact.byteLength,
-    source: cloneOwnedSource(artifact.source),
+    source: cloneByteSource(artifact.source),
     expectedDigest: artifact.expectedDigest ? artifact.expectedDigest.slice() : null,
     dispose: artifact.dispose,
     disposed: false,
