@@ -1,18 +1,13 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
 import { generateKeyPair } from '../../crypto/index.js';
 import { ML_KEM_1024_PRIVATE_KEY_SIZE, ML_KEM_1024_PUBLIC_KEY_SIZE } from '../../crypto/mlkem.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
 import { FILE_MODE } from '../lib/artifact-policy.js';
 import { takeValue } from '../lib/args.js';
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
-}
 
 function usage(message) {
   return makeQvError(message, QV_CODE.USAGE);

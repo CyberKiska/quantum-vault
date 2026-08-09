@@ -1,8 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
 import { decryptFile } from '../../crypto/index.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import {
   assessRestoreFromShards,
   restoreFromShards,
@@ -11,13 +10,14 @@ import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../crypto/q
 import {
   normalizeExpectedEd25519Signer,
   normalizeLowerHex,
+  normalizeRequiredPolicyLevel,
   takeValue,
 } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
 import { dedupeSorted, expandFilePattern } from '../lib/glob.js';
 import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
-import { readVerificationInputsFromPaths } from './verify.js';
+import { evaluateRequiredPolicy, readVerificationInputsFromPaths } from './verify.js';
 import { FILE_MODE } from '../lib/artifact-policy.js';
 
 function requiresRestoreLifecycleVariantAcknowledgement(result) {
@@ -51,10 +51,6 @@ function restoredIntegrityFailed(message, cause) {
 
 function policyNotSatisfied(message, cause) {
   return makeQvError(message, QV_CODE.POLICY_NOT_SATISFIED, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 async function blobToBytes(blob) {
@@ -127,6 +123,7 @@ export function parseRestoreArgs(args) {
     selectedStateId: '',
     selectedCohortId: '',
     selectedLifecycleBundleDigestHex: '',
+    requiredPolicyLevel: '',
     outDir: 'restored',
     outQencPath: '',
     outKeyPath: '',
@@ -183,6 +180,10 @@ export function parseRestoreArgs(args) {
         break;
       case '--bundle-digest':
         options.selectedLifecycleBundleDigestHex = normalizeLowerHex(takeValue(args, index, arg), arg, 128);
+        index += 1;
+        break;
+      case '--required-policy-level':
+        options.requiredPolicyLevel = normalizeRequiredPolicyLevel(takeValue(args, index, arg), arg);
         index += 1;
         break;
       case '--out':
@@ -245,11 +246,14 @@ export function parseRestoreArgs(args) {
 export function buildRestoreDryRunSummary(result, {
   acceptPolicyWarnings = false,
   dryRun = true,
+  requiredPolicyLevel = '',
 } = {}) {
+  const requiredPolicy = evaluateRequiredPolicy(result?.authenticity, requiredPolicyLevel);
   const baseSatisfied = (
     result?.qencOk === true &&
     result?.qkeyOk === true &&
-    result?.authenticity?.status?.policySatisfied === true
+    result?.authenticity?.status?.policySatisfied === true &&
+    requiredPolicy?.satisfied !== false
   );
   const variantAckRequired = requiresRestoreLifecycleVariantAcknowledgement(result);
   const variantAckOk = !variantAckRequired || acceptPolicyWarnings === true;
@@ -258,6 +262,7 @@ export function buildRestoreDryRunSummary(result, {
     dryRun,
     wouldSucceed: baseSatisfied && variantAckOk,
     policyWarningsAcknowledged: acceptPolicyWarnings === true,
+    ...(requiredPolicy ? { requiredPolicy } : {}),
     lifecycleBundleVariantAcknowledgementRequired: variantAckRequired,
     archiveId: result.archiveId,
     stateId: result.stateId,
@@ -344,11 +349,12 @@ async function readRestoreVerification(options) {
 
 function classifyRestoreError(error) {
   if (typeof error?.qvCode === 'string') return error;
+  if (typeof error?.code === 'string') return error;
   const message = error?.message || String(error);
   if (error?.authenticity?.policy?.satisfied === false) {
     return policyNotSatisfied(message, error);
   }
-  if (/Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|RS|erasure|quorum/i.test(message)) {
+  if (/Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|\bRS\b|Reed-Solomon|erasure|quorum/i.test(message)) {
     return quorumRejected(message, error);
   }
   if (/multiple|fork|ambiguous|exactly one|Selected .* not present|bundle digest/i.test(message)) {
@@ -367,6 +373,7 @@ export async function restoreDryRunFromInputs({
   parsedShards,
   verification = {},
   acceptPolicyWarnings = false,
+  requiredPolicyLevel = '',
 } = {}) {
   await ensureRuntimeCrypto();
   await ensureErasureRuntime();
@@ -374,7 +381,11 @@ export async function restoreDryRunFromInputs({
   let result = null;
   try {
     result = await assessRestoreFromShards(parsedShards, { verification });
-    return buildRestoreDryRunSummary(result, { acceptPolicyWarnings, dryRun: true });
+    return buildRestoreDryRunSummary(result, {
+      acceptPolicyWarnings,
+      dryRun: true,
+      requiredPolicyLevel,
+    });
   } finally {
     await zeroizeRestoreMaterial(result);
   }
@@ -391,6 +402,7 @@ export async function runRestoreDryRunCommand(options, { cwd = process.cwd() } =
       parsedShards,
       verification,
       acceptPolicyWarnings: options.acceptPolicyWarnings,
+      requiredPolicyLevel: options.requiredPolicyLevel,
     });
   } finally {
     for (const shard of parsedShards) {
@@ -461,9 +473,19 @@ async function decryptRestoredPlaintext(result) {
   return { plaintextBytes, metadata, fileHashHex };
 }
 
-function buildRestoreWriteSummary({ result, plan, plaintextReport = null, acceptPolicyWarnings = false }) {
+function buildRestoreWriteSummary({
+  result,
+  plan,
+  plaintextReport = null,
+  acceptPolicyWarnings = false,
+  requiredPolicyLevel = '',
+}) {
   return {
-    ...buildRestoreDryRunSummary(result, { acceptPolicyWarnings, dryRun: false }),
+    ...buildRestoreDryRunSummary(result, {
+      acceptPolicyWarnings,
+      dryRun: false,
+      requiredPolicyLevel,
+    }),
     dryRun: false,
     wouldSucceed: true,
     outputs: {
@@ -475,6 +497,12 @@ function buildRestoreWriteSummary({ result, plan, plaintextReport = null, accept
     },
     plaintext: plaintextReport,
   };
+}
+
+function assertRequiredRestorePolicy(result, requiredPolicyLevel) {
+  const requiredPolicy = evaluateRequiredPolicy(result?.authenticity, requiredPolicyLevel);
+  if (requiredPolicy?.satisfied !== false) return;
+  throw policyNotSatisfied(requiredPolicy.reason);
 }
 
 export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
@@ -492,6 +520,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
     const verification = await readRestoreVerification(options);
     result = await restoreFromShards(parsedShards, { verification });
     assertRestoredIntegrity(result);
+    assertRequiredRestorePolicy(result, options.requiredPolicyLevel);
     assertRestoreLifecycleVariantAcknowledged(result, options.acceptPolicyWarnings);
 
     const outDir = await ensureOutputDirectory(path.resolve(cwd, options.outDir));
@@ -523,6 +552,7 @@ export async function runRestoreCommand(options, { cwd = process.cwd() } = {}) {
       plan,
       plaintextReport,
       acceptPolicyWarnings: options.acceptPolicyWarnings,
+      requiredPolicyLevel: options.requiredPolicyLevel,
     });
   } catch (error) {
     throw classifyRestoreError(error);
@@ -549,6 +579,9 @@ export function renderRestoreSummary(summary) {
     `Policy: ${summary.authenticity?.policy?.level || 'unknown'} (${summary.authenticity?.policy?.satisfied ? 'satisfied' : 'not satisfied'})`,
     `qencOk=${summary.qencOk} qkeyOk=${summary.qkeyOk}`,
   ];
+  if (summary.requiredPolicy) {
+    lines.push(`Required policy: ${summary.requiredPolicy.level} (${summary.requiredPolicy.satisfied ? 'satisfied' : 'not satisfied'})`);
+  }
   if (!summary.dryRun) {
     lines.push(`Recovered key: ${summary.outputs?.keyPath}`);
     if (summary.outputs?.plaintextPath) {

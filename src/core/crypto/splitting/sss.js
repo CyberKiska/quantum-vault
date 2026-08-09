@@ -2,6 +2,27 @@
 
 import { validateRsParams, calculateShamirThreshold } from './rs-params.js';
 
+function assertCanonicalShareSet(shares, { expectedSecretLength = null } = {}) {
+    const seenCoordinates = new Set();
+    for (const share of shares) {
+        if (!(share instanceof Uint8Array) || share.length < 2) {
+            throw new Error('Invalid Shamir share encoding');
+        }
+        if (expectedSecretLength !== null && share.length !== expectedSecretLength + 1) {
+            throw new Error('Invalid Shamir share encoding');
+        }
+        // shamir-secret-sharing@0.0.4 serializes the evaluation coordinate as
+        // the final byte. Its writer emits a permutation of 1..255, but its
+        // reader does not itself reject zero. Enforce the actual wire domain at
+        // our boundary so JavaScript and Rust do not reinterpret x=0.
+        const coordinate = share[share.length - 1];
+        if (coordinate === 0 || seenCoordinates.has(coordinate)) {
+            throw new Error('Invalid Shamir share coordinates');
+        }
+        seenCoordinates.add(coordinate);
+    }
+}
+
 // Split secret into n shares with threshold t
 export async function splitSecret(secret, n, t) {
     // Validate
@@ -36,7 +57,7 @@ export async function splitSecret(secret, n, t) {
         }
         
         // Normalize to Uint8Array
-        return shares.map(share => {
+        const normalized = shares.map(share => {
             if (share instanceof Uint8Array) {
                 return share;
             }
@@ -48,6 +69,8 @@ export async function splitSecret(secret, n, t) {
             }
             throw new Error('Invalid share format returned by SSS library');
         });
+        assertCanonicalShareSet(normalized, { expectedSecretLength: secret.length });
+        return normalized;
         
     } catch (error) {
         throw new Error(`Shamir Secret Sharing failed: ${error.message}`);
@@ -84,6 +107,7 @@ export async function combineShares(shares) {
             throw new Error(`Share length mismatch: share 0 has ${shareLength} bytes, share ${i} has ${shares[i].length} bytes`);
         }
     }
+    assertCanonicalShareSet(shares);
 
     // Import lib dynamically
     const sss = await import('shamir-secret-sharing');
@@ -173,6 +197,15 @@ export function validateShares(shares) {
                 error: `Share length mismatch: expected ${firstLength}, got ${shares[i].length} at index ${i}` 
             };
         }
+    }
+
+    try {
+        assertCanonicalShareSet(shares);
+    } catch {
+        return {
+            valid: false,
+            error: 'Invalid Shamir share coordinates',
+        };
     }
     
     return { 

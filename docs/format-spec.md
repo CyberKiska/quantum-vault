@@ -160,7 +160,7 @@ Conforming parsers MUST enforce all three layers.
 | `QV-Lifecycle-Bundle` v1 | Mutable authenticity bundle | Carries archive-state, cohort binding, policy, transitions, source evidence, and attachments; not the archive-approval signable payload |
 | `.qsig` | Detached PQ signature | Used for archive approval or other declared lifecycle targets |
 | `.sig` | Detached Stellar/Ed25519 signature proof | Used for archive approval or other declared lifecycle targets |
-| `.pqpk` | Detached PQ public key | Used for bundled or user-supplied PQ pinning |
+| `.pqpk` | Detached PQ public key | May be carried as mutable bundle verification material or supplied independently as a PQ signer pin |
 | `.ots` | OpenTimestamps evidence | Targets detached signature bytes, not lifecycle-bundle bytes |
 | `.qvpack` | Multi-file payload bundle | Pre-encryption binary bundle for multiple files |
 
@@ -180,8 +180,8 @@ Conforming implementations MUST preserve the following role boundaries when pars
 | --- | --- | --- |
 | `.qenc` confidentiality path (`cryptoProfileId`, ML-KEM, KMAC derivation, AES-GCM, `keyCommitment`) | Confidentiality, authenticated metadata, and wrong-key rejection within one container | Signer identity, archive approval, or time evidence |
 | `qencHash`, `stateId`, `cohortBindingDigest`, `authPolicyCommitment` | Fixity and binding over canonical bytes | Detached-signature approval, restore authorization by themselves, or timestamp evidence |
-| Detached `.qsig` / `.sig` proofs | Cryptographic evidence that a signer key signed one declared canonical target | Automatic bundled pinning, institutional authorization, or timestamp evidence |
-| `authPolicy` plus restore-time counting and suite evaluation | Restore authorization rule over verified archive-approval signatures | A property carried by AEAD tags, key commitments, or hashes alone |
+| Detached `.qsig` / `.sig` proofs | Cryptographic evidence that a signer key signed one declared canonical target | Automatic trust, institutional authorization, or timestamp evidence |
+| `authPolicy` plus restore-time external signer pins, counting, and suite evaluation | Restore authorization rule over externally pinned, verified archive-approval signatures | A property carried by mutable bundle keys, AEAD tags, key commitments, or hashes alone |
 | `.ots` proofs | Supplementary time-evidence linkage to detached signature bytes | Archive-approval signature validity or archive-policy satisfaction |
 
 ## 4. Archive identity and binding model
@@ -312,7 +312,7 @@ Current lifecycle-bundle rules:
 - `archiveStateDigest` MUST equal `SHA3-512` over the canonical embedded archive-state bytes
 - `currentCohortBindingDigest` MUST equal `SHA3-512` over the canonical embedded cohort-binding bytes
 - lifecycle-bundle mutation MUST NOT mutate canonical archive-state or cohort-binding bytes
-- the shipped browser Attach workflow imports archive-approval, maintenance, and source-evidence detached signatures through an explicit channel selector; `.pqpk` signer pins and `.ots` proofs can be imported with those channels
+- the shipped browser Attach workflow imports archive-approval, maintenance, and source-evidence detached signatures through an explicit channel selector; imported `.pqpk` bytes become bundle verification material, while the operator must supply a pin independently again at verify/restore time
 
 ### 4.4 Detached-signature target mappings
 
@@ -320,7 +320,7 @@ Current detached-signature target mappings are:
 
 | Signature family | Target object | Required `targetType` | Counting role |
 | --- | --- | --- | --- |
-| archive approval | archive-state descriptor | `archive-state` | counts toward archive policy |
+| archive approval | archive-state descriptor | `archive-state` | counts toward archive policy only after its signer matches an independent restore-time pin |
 | maintenance | transition record | `transition-record` | reported separately; does not count toward archive policy |
 | source evidence | source-evidence object | `source-evidence` | reported separately; does not count toward archive policy |
 
@@ -341,22 +341,31 @@ This separation is one of the current format family's core invariants. Archive-a
 | Data | Length | Description |
 | --- | --- | --- |
 | MAGIC | 4 bytes | ASCII `QVv1` |
-| keyLen | 4 bytes (Uint32 BE) | length of `encapsulatedKey` |
-| encapsulatedKey | keyLen bytes | ML-KEM ciphertext |
+| keyLen | 4 bytes (Uint32 BE) | MUST be `1568` for the current ML-KEM-1024 profile |
+| encapsulatedKey | exactly 1568 bytes | ML-KEM-1024 ciphertext |
 | containerNonce | 12 bytes | container nonce / IV root |
 | kdfSalt | 16 bytes | random salt for KMAC |
-| metaLen | 2 bytes (Uint16 BE) | length of `metaJSON` |
+| metaLen | 2 bytes (Uint16 BE) | length of `metaJSON`; MUST be in `1..4096` for current writers and readers |
 | metaJSON | metaLen bytes UTF-8 | metadata |
 | keyCommitment | 32 bytes | required `SHA3-256(Kenc)` |
 | ciphertext | remaining bytes | AES-GCM ciphertext stream |
 
 ### 5.2 Current metadata contract
 
+For `fmt = "QVv1-5-0"`, `metaJSON` is a closed object with exactly these 19
+members: `KEM`, `KDF`, `AEAD`, `aead_mode`, `iv_strategy`, `fmt`,
+`hasKeyCommitment`, `payloadFormat`, `payloadLength`, `chunkSize`, `chunkCount`,
+`cryptoProfileId`, `kdfTreeId`, `noncePolicyId`, `nonceMode`, `counterBits`,
+`maxChunkCount`, `aadPolicyId`, and `domainStrings`. `domainStrings` is itself a
+closed object with exactly `kdf`, `iv`, `kenc`, and `kiv`. Missing or unknown
+members at either level MUST be rejected. Algorithm and profile labels are
+normative dispatch constraints, not descriptive annotations.
+
 | Field | Current emitted value or shape | Current acceptance note |
 | --- | --- | --- |
-| `KEM` | `ML-KEM-1024` | descriptive algorithm label |
-| `KDF` | `KMAC256` | descriptive algorithm label |
-| `AEAD` | `AES-256-GCM` | descriptive algorithm label |
+| `KEM` | `ML-KEM-1024` | MUST equal this exact value |
+| `KDF` | `KMAC256` | MUST equal this exact value |
+| `AEAD` | `AES-256-GCM` | MUST equal this exact value |
 | `fmt` | `QVv1-5-0` | MUST match the supported container metadata format |
 | `cryptoProfileId` | `QV-MLKEM1024-KMAC256-AES256GCM-SHA3_512-v2` | required by current validation |
 | `kdfTreeId` | `QV-KDF-TREE-v2` | required by current validation |
@@ -368,7 +377,7 @@ This separation is one of the current format family's core invariants. Archive-a
 | `maxChunkCount` | `1` or `4294967295` | MUST match `aead_mode` |
 | `aadPolicyId` | `QV-AAD-HEADER-CHUNK-v1` | required by current validation |
 | `hasKeyCommitment` | `true` | current containers require a key commitment |
-| `payloadFormat` | `wrapped-v1` | current payload wrapper |
+| `payloadFormat` | `wrapped-v1` | MUST equal this exact value |
 | `payloadLength` | positive safe integer | wrapped cleartext payload length |
 | `chunkSize` | `8388608` | fixed runtime chunk size for the current format |
 | `chunkCount` | positive safe integer | MUST equal `ceil(payloadLength / chunkSize)` for per-chunk mode and `1` for single-container mode |
@@ -379,12 +388,16 @@ This separation is one of the current format family's core invariants. Archive-a
 
 ### 5.3 Payload and private metadata
 
-Current private payload metadata for `wrapped-v1` contains:
+Current private payload metadata for `wrapped-v1` is a closed object with exactly
+four members. Missing, duplicate, or unknown members MUST be rejected after AEAD
+authentication and before plaintext is returned or published.
 
-- `originalFilename`
-- `timestamp`
-- `fileHash`
-- `originalLength`
+| Field | Current required value or shape | Validation rule |
+| --- | --- | --- |
+| `originalFilename` | `null` or a well-formed Unicode string | The complete encoded private object, including this value, MUST remain within the shared byte limit below |
+| `timestamp` | canonical UTC ISO-8601 with exactly millisecond precision, for example `2026-07-17T12:34:56.789Z` | MUST be exactly 24 ASCII bytes and round-trip through calendar validation without normalization |
+| `fileHash` | 128 lowercase hexadecimal characters | MUST equal `SHA3-512(fileBytes)` |
+| `originalLength` | positive safe integer no greater than the current 1 GiB plaintext limit | MUST equal the recovered `fileBytes` length exactly |
 
 Current `wrapped-v1` payload format is:
 
@@ -392,9 +405,76 @@ Current `wrapped-v1` payload format is:
 [uint32be privateMetaLen][privateMetaJSON][fileBytes]
 ```
 
-Both public and private metadata are decoded with fatal UTF-8 and duplicate-key rejection. The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one AES-GCM tag per chunk.
+`privateMetaLen` MUST be in `1..4096`; writers and readers MUST enforce the same
+non-bypassable upper bound. Both public and private metadata are decoded with
+fatal UTF-8 and duplicate-key rejection. After authentication, readers MUST
+validate the closed private schema, compare `originalLength`, recompute
+`SHA3-512(fileBytes)`, and reject on either mismatch before returning plaintext.
+The ciphertext length MUST equal `payloadLength + 16 * chunkCount`, including one
+AES-GCM tag per chunk. Implementations MUST reject unsafe-integer overflow before
+this calculation and MUST reject both truncated ciphertext and trailing bytes.
 
-When multiple files are archived, the payload bytes are a `.qvpack` bundle detected by magic `QVB1`, not by filename.
+Strict-current migration note: canonical output from the shipped JavaScript and
+Rust writers remains valid. Artifacts using false algorithm/profile labels,
+missing or unknown public members, a non-1568-byte encapsulated key, or public
+metadata larger than 4096 bytes are now invalid for normal decrypt, split, and
+restore processing. Authenticated private objects with missing or extra members,
+noncanonical timestamps, non-lowercase or incorrect hashes, mismatched lengths,
+or more than 4096 encoded bytes are likewise invalid. This includes Rust artifacts
+created with a noncanonical custom timestamp override; default canonical Rust
+writer timestamps remain compatible. These artifacts MUST NOT be reinterpreted or
+accepted through a larger caller-supplied limit. Any future inspection-only legacy
+path must be explicitly named, byte-preserving, non-decrypting, and separate from
+current-format acceptance. Canonical current JavaScript writer bytes are unchanged.
+
+When multiple files are archived, the payload bytes are a `.qvpack` bundle detected
+by magic `QVB1`, not by filename.
+
+#### 5.3.1 QVPACK v1 binary profile
+
+All integers are unsigned and big-endian:
+
+```text
+magic        4 bytes   ASCII "QVB1"
+version      1 byte    0x01
+entryCount   2 bytes
+entries      entryCount repetitions of:
+  nameLen    2 bytes
+  name       nameLen bytes of strict UTF-8
+  dataLen    4 bytes
+  data       dataLen bytes
+```
+
+The current reader and writer MUST enforce one non-raiseable resource profile:
+
+- `entryCount` is in `1..4096`;
+- each name is in `1..255` encoded UTF-8 bytes;
+- each entry payload is at most 1,073,741,824 bytes;
+- the sum of entry payload bytes is at most 1,073,741,824 bytes; and
+- the complete encoded QVPACK, including framing and names, is at most
+  1,073,741,824 bytes.
+
+Names MUST decode as fatal UTF-8, MUST be non-empty, and MUST NOT contain `/`,
+`\\`, or NUL. Writers MUST reject unpaired UTF-16 surrogates before encoding.
+Because each name is already length-delimited, an initial UTF-8 BOM is filename
+data and MUST decode to U+FEFF rather than being stripped as a transport marker.
+Exact duplicate decoded names are forbidden. Filesystem case folding and Unicode
+normalization are not part of QVPACK name equality; extraction code must address
+those platform alias risks separately. Empty entry payloads are permitted.
+
+Readers MUST check lengths with safe arithmetic before slicing or allocating,
+consume exactly `entryCount` entries, and reject truncation and trailing bytes.
+Resource-limit rejection is distinct at the core API from malformed-format
+rejection. Callers MUST NOT widen this current profile.
+
+Strict-current migration note: canonical QVPACK v1 output within this profile is
+byte-for-byte unchanged. Previously accepted bundles with invalid UTF-8 names,
+exact duplicate names, more than 4096 entries, names longer than 255 UTF-8 bytes,
+or any 1 GiB limit violation are now invalid rather than reinterpreted. Writer
+input containing an unpaired surrogate is rejected instead of being silently
+serialized with a Unicode replacement character. No wire-version migration is
+required for conforming existing bundles; an inspection-only legacy path, if ever
+added, must remain separate from normal decrypt/extract acceptance.
 
 ### 5.4 AEAD, KDF, and key commitment rules
 
@@ -424,7 +504,9 @@ Current decrypt/verify order is:
 5. verify `keyCommitment`
 6. decrypt with AES-GCM using the required AAD
 7. unpack `wrapped-v1`
-8. optionally compare `privateMeta.fileHash` with a fresh `SHA3-512` over recovered file bytes
+8. require the exact `wrapped-v1` private schema, compare `originalLength`, and
+   compare `privateMeta.fileHash` with a fresh `SHA3-512` over recovered file
+   bytes before returning plaintext
 
 ## 6. `.qcont` shard format
 
@@ -437,6 +519,10 @@ Parsers MUST use the format identifier and embedded lengths to interpret the byt
 Successor shards use `QVC1` magic and a UTF-8 `metaJSON` prefix.
 After `metaJSON`, the byte stream embeds three canonical JSON artifacts with fixed-length digest anchors:
 
+Each embedded JSON artifact length MUST be in `1..16777216` bytes. Core restore
+and browser preview use the same prefix parser and therefore enforce the same
+length, digest, canonicalization, cohort-geometry, and QENC-header checks.
+
 | Data | Length | Description |
 | --- | --- | --- |
 | `archiveStateLen` | 4 bytes (Uint32 BE) | length of embedded archive-state JSON bytes |
@@ -448,17 +534,17 @@ After `metaJSON`, the byte stream embeds three canonical JSON artifacts with fix
 | `lifecycleBundleLen` | 4 bytes (Uint32 BE) | length of embedded lifecycle-bundle JSON bytes |
 | `lifecycleBundleBytes` | `lifecycleBundleLen` bytes | canonical `QV-Lifecycle-Bundle` v1 bytes |
 | `lifecycleBundleDigest` | 64 bytes | `SHA3-512(lifecycleBundleBytes)` |
-| `encapBlobLen` | 4 bytes (Uint32 BE) | length of encapsulated key blob |
-| `encapBlob` | `encapBlobLen` bytes | ML-KEM ciphertext |
+| `encapBlobLen` | 4 bytes (Uint32 BE) | MUST be `1568` for the current profile during parsing |
+| `encapBlob` | exactly 1568 bytes | copied ML-KEM-1024 ciphertext |
 | `containerNonce` | 12 bytes | copied from `.qenc` |
 | `kdfSalt` | 16 bytes | copied from `.qenc` |
-| `qencMetaLen` | 2 bytes (Uint16 BE) | length of duplicated `.qenc` metadata |
+| `qencMetaLen` | 2 bytes (Uint16 BE) | length of duplicated `.qenc` metadata; MUST be in `1..4096` |
 | `qencMetaBytes` | `qencMetaLen` bytes UTF-8 | duplicated `.qenc` metadata |
 | `keyCommitLen` | 1 byte | key commitment length |
 | `keyCommitBytes` | `keyCommitLen` bytes | required `SHA3-256(Kenc)` |
 | `shardIndex` | 2 bytes (Uint16 BE) | 0-based shard index |
-| `shareLen` | 2 bytes (Uint16 BE) | length of Shamir share |
-| `shareBytes` | `shareLen` bytes | one Shamir share |
+| `shareLen` | 2 bytes (Uint16 BE) | MUST be `3169` for a current ML-KEM-1024 private-key share |
+| `shareBytes` | exactly 3169 bytes | one dependency-compatible Shamir share: 3168 evaluation bytes followed by one nonzero coordinate byte |
 | `fragments stream` | variable | RS fragment stream encoded as repeated `[len32 | fragmentBytes]` |
 
 ### 6.2 Successor shard metadata contract
@@ -498,6 +584,36 @@ Current shard metadata rules:
 - `archiveId`, `stateId`, and `cohortId` MUST match the embedded archive-state and cohort-binding objects
 - `keyCommitmentHex` MUST match the embedded key-commitment bytes
 - `stateId` and `cohortId` are summary copies; the canonical sources of truth are the embedded archive-state and cohort-binding bytes and their derived digests
+- `privateKeyHash` is clear, unauthenticated diagnostic metadata in the current
+  `QVqcont-7` wire format. It MUST NOT override the authenticated QENC key
+  commitment, and normal restore result/UI/event surfaces MUST expose only the
+  boolean comparison outcome, never the expected or recovered digest value.
+
+Current Shamir share encoding places the GF(256) evaluation coordinate in the
+final byte of `shareBytes`. That coordinate MUST be in `1..255`, and all shares
+submitted to one reconstruction MUST have distinct coordinates. Coordinate `0`
+is the secret intercept, not a valid emitted share coordinate, and MUST be
+rejected before interpolation. The JavaScript wrapper enforces this rule even
+though `shamir-secret-sharing@0.0.4` does not enforce it in its low-level reader.
+
+The current reader and writer reject cohort values outside the normative
+`2 <= k < n <= 255`, `n >= 5` profile. Earlier JavaScript builds could emit
+`n < 5` despite the published profile; those shards are nonconforming and require
+an explicitly isolated legacy recovery tool rather than acceptance in production
+Restore or Reshare.
+
+Reader-hardening migration note: current writers already emit only distinct
+coordinates in `1..255`, and the pinned Rust reader already rejects `0`, so
+canonical artifacts are unchanged. A stored shard set containing coordinate `0`
+is noncanonical and is quarantine-only; it is never silently reinterpreted.
+
+Presentation-boundary migration note: `QVqcont-7` bytes are unchanged and remain
+linkable by their clear `privateKeyHash`. The JavaScript `restoreFromShards()`
+result no longer returns `privateKeyHash` or `recoveredPrivHash`; callers must use
+`qkeyOk` for authoritative QENC commitment validation and
+`privateKeyHashMatchesMetadata` for the non-authoritative diagnostic. Removing
+the field from stored shards requires an explicit successor format and coordinated
+JavaScript/Rust migration rather than silent reinterpretation.
 
 ### 6.3 Embedded artifact invariants
 
@@ -517,7 +633,57 @@ Important current distinction:
 - that condition does not create a new `cohortId`
 - restore MUST treat it as lifecycle-bundle ambiguity and require explicit operator selection
 
-### 6.4 Split and same-state resharing semantics
+### 6.4 Authenticated reconstruction geometry
+
+Outer shard `metaJSON` geometry fields are redundant presentation copies and MUST
+NOT drive allocation, ciphertext length, or Reed-Solomon decoding. Reconstruction
+uses these sources in order:
+
+1. the selected canonical archive-state and cohort-binding bytes define the
+   `containerId`, `qencHash`, `n`, `k`, parity, threshold, share commitments, and
+   fragment-body hashes;
+2. at least one copied QENC header MUST rebuild to exact bytes whose
+   `SHA3-512(header)` equals the archive-state `containerId`;
+3. that header's metadata MUST pass the same closed `QVv1-5-0` validator as a
+   standalone `.qenc` parser and MUST match the archive-state profile and
+   geometry;
+4. the reconstructed full container MUST strict-parse and match both
+   `containerId` and `qencHash` before it is returned.
+
+A copied header that fails these checks is ignored as a separate invalid facet;
+it does not invalidate an independently committed share or fragment body. At
+least one valid header copy is required. Two different exact header byte strings
+claiming the same `containerId` are an ambiguity and MUST fail closed.
+
+For current Reed-Solomon framing, let:
+
+```text
+encodeSize = floor(255 / n) * n
+inputSize  = encodeSize * k / n
+symbolSize = inputSize / k
+fragLen_i  = ceil(cipherLen_i / inputSize) * symbolSize
+```
+
+`cipherLen_i` is `payloadLength + 16` in single-container mode. In per-chunk
+mode it is `min(chunkSize, remainingPayload) + 16`. Each shard fragment stream
+MUST contain exactly `chunkCount` records, each `[uint32be fragLen_i][fragment]`,
+and MUST end exactly after the final record. Short records are not padded and
+long records are not truncated. The exact total stream length is derived before
+body hashing so an oversized extra can be quarantined without attacker-directed
+allocation.
+
+An invalid share length or share commitment is skipped for Shamir purposes. An
+invalid fragment-stream length, fragment record, or body commitment is an RS
+erasure. Recovery MAY continue only while at least `t` valid shares exist and
+the number of missing/invalid fragment bodies is at most `parity / 2`. Duplicate
+or out-of-range shard indices are cohort ambiguity errors and fail closed.
+
+Current JavaScript reconstruction enforces a non-raiseable ciphertext ceiling of
+`1074790400` bytes (1 GiB + 1 MiB); an internal caller may only lower it. Checked
+safe-integer arithmetic precedes every derived length and allocation. Canonical
+current shard and QENC bytes are unchanged by these reader rules.
+
+### 6.5 Split and same-state resharing semantics
 
 Current split behavior:
 
@@ -546,7 +712,7 @@ Current accepted external authenticity artifacts are:
 | --- | --- |
 | `.qsig` | Quantum Signer detached signature, major version 2, context `quantum-signer/v2`; accepted for archive-approval, maintenance, or source-evidence channels when the selected target bytes match |
 | `.sig` | Stellar detached signature JSON with schema `stellar-signature/v2`; same channel and target-family rules as `.qsig` |
-| `.pqpk` | Detached PQ public key used for bundled or user-supplied pinning |
+| `.pqpk` | Detached PQ public key; bundle-carried use is non-trust verification material, independently supplied use is a signer pin |
 | `.ots` | OpenTimestamps proof linked to detached signature bytes |
 
 Current acceptance boundaries:
@@ -555,13 +721,13 @@ Current acceptance boundaries:
 - the shipped browser Attach workflow imports `.qsig` / `.sig` through the selected evidence channel: archive approval, maintenance, or source evidence
 - external signatures used at restore are archive-approval signatures over canonical archive-state bytes
 - bundled lifecycle signatures may target archive-state, transition-record, or source-evidence bytes according to their declared family
-- `.pqpk` material may be used for bundled or user-supplied PQ pinning
+- bundle-carried `.pqpk` material can constrain cryptographic verification but is not a trust anchor; only independently supplied `.pqpk` input can authorize policy
 - `.ots` timestamps target detached signature bytes, not lifecycle-bundle bytes
 - `.ots` timestamps are timestamp evidence only and do not satisfy archive policy
 - archive-approval attach binds signatures to `targetType = archive-state`, `targetRef = state:{stateId}`, and the SHA3-512 digest of the canonical archive-state descriptor
 - maintenance attach requires a canonical transition-record target already present in the selected lifecycle bundle and binds signatures to `targetType = transition-record`, `targetRef = transition:sha3-512:{transitionRecordDigest}`, and that transition-record digest
 - source-evidence attach requires canonical source-evidence JSON, stores that object in `sourceEvidence[]` if needed, and binds signatures to `targetType = source-evidence`, `targetRef = source-evidence:sha3-512:{sourceEvidenceDigest}`, and that source-evidence digest
-- only archive-approval signatures count toward archive policy; maintenance and source-evidence signatures are reported separately
+- only archive-approval signatures whose signers match independent restore-time pins count toward archive policy; maintenance and source-evidence signatures are reported separately
 - OTS acceptance and linkage do not require `apparentlyComplete` / `completeProof` to be true; those fields are reporting outputs, not acceptance preconditions
 - `apparentlyComplete` / `completeProof` are derived by the current implementation from proof-name keywords first (`initial`, `pending`, `incomplete` => incomplete; `complete`, `completed`, `confirmed`, `upgraded` => complete), with proof size `>= 1024` bytes used only as a fallback when no keyword matches
 - the current implementation does not treat `apparentlyComplete` / `completeProof` as validation of a Bitcoin attestation chain
@@ -585,10 +751,10 @@ Verifier and restore order:
 8. reconstruct `.qenc` and the ML-KEM private key from one internally consistent successor cohort
 9. verify that the selected lifecycle bundle matches the selected archive-state and cohort-binding objects
 10. verify detached signatures against the exact canonical target bytes for their declared family
-11. ignore self-verified PQ signatures for trust and policy counting when they verified only via the key embedded inside the `.qsig` itself and no bundled or user-supplied pin verified; the embedded signer public key inside a `.qsig` is a convenience field, not by itself an externally anchored identity, so a proof that verifies only against its own embedded key must not count toward policy; full counting semantics and rationale are defined in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules)
-12. evaluate archive policy using `archiveApprovalSignatures` only
+11. report embedded-key-only and bundle-key-only cryptographic verification separately; neither source is an external trust anchor and neither can make a signature policy-eligible
+12. evaluate archive policy using unique externally pinned `archiveApprovalSignatures` only; current external inputs are restore-time `.pqpk` files and the restore-time expected Stellar signer
 13. link timestamps to detached signature bytes, report linkage failures as timestamp-evidence warnings, and emit separate transition and source-evidence reports
-14. emit distinct status fields including `archiveApprovalSignatureVerified`, `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `signerPinned`, `bundlePinned`, and `userPinned`
+14. emit distinct status fields including `archiveApprovalCryptographicallyVerified`, `archiveApprovalSignatureVerified` (externally authorized legacy-safe meaning), `maintenanceSignatureVerified`, `sourceEvidenceSignatureVerified`, `otsEvidenceLinked`, `bundledKeyVerified`, `externallyPinned`, and `authorizedForPolicy`; deprecated `bundlePinned` MUST remain false
 
 Restore selection rules:
 
@@ -638,7 +804,7 @@ The Node.js CLI is a non-browser adapter over the same successor lifecycle parse
 - `qv restore --dry-run` and write-mode `qv restore` MUST apply the same archiveId, stateId, cohortId, exact archive-state bytes, exact cohort-binding bytes, lifecycle-bundle selection, signature target, and authenticity-policy checks.
 - `qv restore` write mode MUST write no output when archive policy is not satisfied.
 - `qv reshare` MUST preserve exact archive-state bytes and stateId; same-state resharing is not archive re-approval.
-- Direct symlink input paths MUST be rejected unless the operator explicitly supplies `--allow-symlink`.
+- Direct symlink input paths MUST be rejected unless the operator explicitly supplies `--allow-symlink` before the command. Security-sensitive global flags MUST NOT be inferred from command option values.
 - CLI JSON errors MUST preserve a stable `qvCode` so automation can distinguish usage errors, quorum failures, ambiguity, policy failure, and restored-integrity failure without parsing prose.
 
 ## 10. Compatibility and version policy

@@ -1,13 +1,13 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
 import { encryptFile } from '../../crypto/index.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import { parseQencHeader } from '../../crypto/qenc/format.js';
 import {
   buildQvpackPayloadBytes,
   isQvpackPayload,
   parseQvpackPayload,
+  QvpackResourceLimitError,
 } from '../../crypto/qvpack.js';
 import { validatePublicKey } from '../../crypto/mlkem.js';
 import { MAX_FILE_SIZE } from '../../crypto/constants.js';
@@ -27,12 +27,12 @@ function formatPolicy(message, cause) {
   return makeQvError(message, QV_CODE.FORMAT_POLICY_REJECT, { cause });
 }
 
-function keyRejected(message, cause) {
-  return makeQvError(message, QV_CODE.KEY_REJECTED, { cause });
+function resourceLimit(cause) {
+  return makeQvError('QVPACK resource limit exceeded', QV_CODE.RESOURCE_LIMIT, { cause });
 }
 
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
+function keyRejected(message, cause) {
+  return makeQvError(message, QV_CODE.KEY_REJECTED, { cause });
 }
 
 function basenameOnly(filePath) {
@@ -100,6 +100,9 @@ async function readPublicKeyBytes(publicKeyPath) {
 }
 
 function classifyEncryptError(error) {
+  if (error instanceof QvpackResourceLimitError || error?.code === 'QVPACK_RESOURCE_LIMIT') {
+    return resourceLimit(error);
+  }
   const message = error?.message || String(error);
   if (/Invalid ML-KEM-1024 public key length|Public key must be Uint8Array/.test(message)) {
     return keyRejected(message, error);
@@ -107,7 +110,7 @@ function classifyEncryptError(error) {
   if (/Refusing to overwrite existing file/.test(message)) {
     return usage(message);
   }
-  if (/exceeds maximum allowed size|fileBytes must be a non-empty Uint8Array|QVPACK/.test(message)) {
+  if (/exceeds maximum allowed size|fileBytes must be a non-empty Uint8Array|Invalid private metadata|QVPACK/.test(message)) {
     return formatPolicy(message, error);
   }
   return error;

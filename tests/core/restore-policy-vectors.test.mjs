@@ -4,6 +4,7 @@ import {
   blobToBytes,
   buildOtsFixture,
   buildQsigFixture,
+  buildStellarSignatureFixture,
   buildSuccessorRestoreSample,
   buildSuccessorVerificationBundle,
   ensureErasureRuntime,
@@ -14,6 +15,7 @@ import { parseLifecycleShard, reshareSameState } from '../../src/core/crypto/qco
 import { assessRestoreFromShards, restoreFromShards } from '../../src/core/crypto/qcont/restore.js';
 import { canonicalizeLifecycleBundle } from '../../src/core/crypto/lifecycle/artifacts.js';
 import { computeDetachedSignatureIdentityDigestHex } from '../../src/core/crypto/auth/signature-identity.js';
+import { bytesToBase64 } from '../../src/core/crypto/bytes.js';
 
 async function parseShardSet(result) {
   return Promise.all(result.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
@@ -92,7 +94,7 @@ test('restore policy vectors keep integrity-only separate from signature-require
   }
 });
 
-test('restore policy vectors require strong PQ archive approval for strong-pq-signature policy', async () => {
+test('attacker-controlled bundled PQ signer material verifies but cannot satisfy policy without an external pin', async () => {
   const sample = await buildSuccessorRestoreSample({
     payloadBytes: textBytes('core-policy-strong-pq'),
     authPolicyLevel: 'strong-pq-signature',
@@ -120,19 +122,131 @@ test('restore policy vectors require strong PQ archive approval for strong-pq-si
     includeSourceEvidence: false,
   });
   const signedShards = withLifecycleBundle(sample.parsed, signedBundle.bundle, signedBundle.bundleBytes, signedBundle.digestHex);
-  const signedAssessment = await assessRestoreFromShards(signedShards, {
+  const bundleOnlyAssessment = await assessRestoreFromShards(signedShards, {
     verification: { lifecycleBundleBytes: signedBundle.bundleBytes },
     onLog: () => {},
     onError: () => {},
   });
   try {
-    assert.equal(signedAssessment.authenticity.verification.counts.validArchiveApproval, 1);
-    assert.equal(signedAssessment.authenticity.verification.counts.validArchiveApprovalStrongPq, 1);
-    assert.equal(signedAssessment.authenticity.status.strongPqSignatureVerified, true);
-    assert.equal(signedAssessment.authenticity.status.bundlePinned, true);
-    assert.equal(signedAssessment.authenticity.policy.satisfied, true);
+    assert.equal(bundleOnlyAssessment.authenticity.verification.counts.cryptographicallyValidArchiveApproval, 1);
+    assert.equal(bundleOnlyAssessment.authenticity.verification.counts.cryptographicallyValidArchiveApprovalStrongPq, 1);
+    assert.equal(bundleOnlyAssessment.authenticity.verification.counts.validArchiveApproval, 0);
+    assert.equal(bundleOnlyAssessment.authenticity.verification.counts.validArchiveApprovalStrongPq, 0);
+    assert.equal(bundleOnlyAssessment.authenticity.verification.counts.policyEligibleArchiveApproval, 0);
+    assert.equal(bundleOnlyAssessment.authenticity.status.archiveApprovalSignatureVerified, false);
+    assert.equal(bundleOnlyAssessment.authenticity.status.strongPqSignatureVerified, false);
+    assert.equal(bundleOnlyAssessment.authenticity.status.archiveApprovalCryptographicallyVerified, true);
+    assert.equal(bundleOnlyAssessment.authenticity.status.strongPqArchiveApprovalCryptographicallyVerified, true);
+    assert.equal(bundleOnlyAssessment.authenticity.status.bundledKeyVerified, true);
+    assert.equal(bundleOnlyAssessment.authenticity.status.bundlePinned, false);
+    assert.equal(bundleOnlyAssessment.authenticity.status.externallyPinned, false);
+    assert.equal(bundleOnlyAssessment.authenticity.status.signerPinned, false);
+    assert.equal(bundleOnlyAssessment.authenticity.policy.satisfied, false);
+    assert(bundleOnlyAssessment.authenticity.verification.results.some((result) => (
+      result.ok === true &&
+      result.bundledKeyVerified === true &&
+      result.externallyPinned === false &&
+      result.countedForPolicy === false
+    )));
+    assert(bundleOnlyAssessment.authenticity.warnings.some((warning) => /ignored for archive policy/.test(warning)));
   } finally {
-    wipeRestoreResult(signedAssessment);
+    wipeRestoreResult(bundleOnlyAssessment);
+  }
+
+  const externallyPinnedAssessment = await assessRestoreFromShards(signedShards, {
+    verification: {
+      lifecycleBundleBytes: signedBundle.bundleBytes,
+      pinnedPqPublicKeyFileBytesList: [signedBundle.fixtures.archiveApproval.pqpkBytes],
+    },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(externallyPinnedAssessment.authenticity.verification.counts.policyEligibleArchiveApproval, 1);
+    assert.equal(externallyPinnedAssessment.authenticity.verification.counts.policyEligibleArchiveApprovalStrongPq, 1);
+    assert.equal(externallyPinnedAssessment.authenticity.status.bundledKeyVerified, true);
+    assert.equal(externallyPinnedAssessment.authenticity.status.externallyPinned, true);
+    assert.equal(externallyPinnedAssessment.authenticity.status.signerPinned, true);
+    assert.equal(externallyPinnedAssessment.authenticity.policy.satisfied, true);
+    assert(externallyPinnedAssessment.authenticity.verification.results.some((result) => (
+      result.ok === true &&
+      result.externallyPinned === true &&
+      result.countedForPolicy === true &&
+      result.policyAuthorization === 'external-pin'
+    )));
+  } finally {
+    wipeRestoreResult(externallyPinnedAssessment);
+    sample.pair.privateKey.fill(0);
+  }
+});
+
+test('bundled Stellar signer material cannot satisfy policy without an external expected signer', async () => {
+  const sample = await buildSuccessorRestoreSample({
+    payloadBytes: textBytes('core-policy-stellar-external-anchor'),
+    authPolicyLevel: 'any-signature',
+    minValidSignatures: 1,
+  });
+  const stellar = await buildStellarSignatureFixture(sample.split.archiveStateBytes);
+  const bundle = cloneJson(sample.split.lifecycleBundle);
+  bundle.attachments.publicKeys = [{
+    id: 'pk-stellar-attacker',
+    kty: 'ed25519-public-key',
+    suite: 'ed25519',
+    encoding: 'stellar-address',
+    value: stellar.signer,
+  }];
+  bundle.attachments.archiveApprovalSignatures = [{
+    id: 'archive-approval-stellar-attacker',
+    signatureFamily: 'archive-approval',
+    format: 'stellar-sig',
+    suite: 'ed25519',
+    targetType: 'archive-state',
+    targetRef: `state:${sample.split.stateId}`,
+    targetDigest: { alg: 'SHA3-512', value: sample.split.stateId },
+    signatureEncoding: 'base64',
+    signature: bytesToBase64(stellar.bytes),
+    publicKeyRef: 'pk-stellar-attacker',
+  }];
+  const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+  const shards = withLifecycleBundle(
+    sample.parsed,
+    canonicalBundle.lifecycleBundle,
+    canonicalBundle.bytes,
+    canonicalBundle.digest.value,
+  );
+
+  const bundleOnly = await assessRestoreFromShards(shards, {
+    verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(bundleOnly.authenticity.verification.counts.cryptographicallyValidArchiveApproval, 1);
+    assert.equal(bundleOnly.authenticity.verification.counts.validArchiveApproval, 0);
+    assert.equal(bundleOnly.authenticity.verification.counts.policyEligibleArchiveApproval, 0);
+    assert.equal(bundleOnly.authenticity.status.bundledKeyVerified, true);
+    assert.equal(bundleOnly.authenticity.status.bundlePinned, false);
+    assert.equal(bundleOnly.authenticity.status.externallyPinned, false);
+    assert.equal(bundleOnly.authenticity.policy.satisfied, false);
+  } finally {
+    wipeRestoreResult(bundleOnly);
+  }
+
+  const externallyExpected = await assessRestoreFromShards(shards, {
+    verification: {
+      lifecycleBundleBytes: canonicalBundle.bytes,
+      expectedEd25519Signer: stellar.signer,
+    },
+    onLog: () => {},
+    onError: () => {},
+  });
+  try {
+    assert.equal(externallyExpected.authenticity.verification.counts.policyEligibleArchiveApproval, 1);
+    assert.equal(externallyExpected.authenticity.status.bundledKeyVerified, true);
+    assert.equal(externallyExpected.authenticity.status.externallyPinned, true);
+    assert.equal(externallyExpected.authenticity.policy.satisfied, true);
+  } finally {
+    wipeRestoreResult(externallyExpected);
     sample.pair.privateKey.fill(0);
   }
 });
@@ -171,7 +285,7 @@ test('restore derives lifecycle policy from canonical bundle bytes rather than m
     assert.equal(assessment.authenticity.policy.satisfied, false);
     await assert.rejects(
       async () => restoreFromShards(mutated, { onLog: () => {}, onError: () => {} }),
-      /strong PQ archive-approval signature/,
+      /externally pinned archive-approval signature threshold/,
     );
   } finally {
     sample.pair.privateKey.fill(0);

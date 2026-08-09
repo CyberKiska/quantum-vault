@@ -5,11 +5,9 @@ import {
   classifyArtifactBytes,
   classifyArtifactPreviewBytes,
 } from '../core/crypto/artifact-classification.js';
-import { parseLifecycleBundleBytes } from '../core/crypto/lifecycle/artifacts.js';
-import { parseJsonBytesStrict } from '../core/crypto/manifest/strict-json.js';
 import {
-  LIFECYCLE_ARTIFACT_FAMILY,
-  LIFECYCLE_QCONT_FORMAT_VERSION,
+  isLifecycleShardPrefixRequirement,
+  parseLifecycleShardPreviewPrefix,
 } from '../core/crypto/qcont/lifecycle-shard.js';
 
 const MAX_ATTACHMENT_PREVIEW_CLASSIFY_BYTES = 256 * 1024;
@@ -29,109 +27,36 @@ function isSmallEnoughForFullPreviewClassification(file) {
 }
 
 export async function parseQcontShardPreviewFile(file) {
-  const decoder = new TextDecoder();
-  const MAX_MANIFEST_LEN = 1024 * 1024;
-  const MAX_BUNDLE_LEN = 4 * 1024 * 1024;
-  const DIGEST_LEN = 64;
-  let bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 16384)).arrayBuffer());
-  let dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (!Number.isSafeInteger(file?.size) || file.size <= 0 || typeof file?.slice !== 'function') {
+    throw new Error('Shard preview requires a non-empty sliceable file');
+  }
 
-  const ensureBytes = async (requiredLength) => {
-    if (bytes.length >= requiredLength) return;
-    const toRead = Math.min(file.size, requiredLength);
-    bytes = new Uint8Array(await file.slice(0, toRead).arrayBuffer());
-    dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (bytes.length < requiredLength) {
-      throw new Error('Shard header is truncated');
+  let bytesToRead = Math.min(file.size, 16 * 1024);
+  let parsed = null;
+  while (!parsed) {
+    const bytes = new Uint8Array(await file.slice(0, bytesToRead).arrayBuffer());
+    try {
+      parsed = await parseLifecycleShardPreviewPrefix(bytes);
+    } catch (error) {
+      if (!isLifecycleShardPrefixRequirement(error)) throw error;
+      if (error.requiredBytes > file.size || error.requiredBytes <= bytes.length) {
+        throw new Error('Shard header is truncated');
+      }
+      bytesToRead = Math.min(file.size, Math.max(error.requiredBytes, bytes.length * 2));
     }
-  };
-
-  await ensureBytes(6);
-  const magic = decoder.decode(bytes.subarray(0, 4));
-  if (magic !== 'QVC1') throw new Error('Invalid shard file');
-
-  let offset = 4;
-  const metaLen = dv.getUint16(offset, false);
-  if (metaLen <= 0) throw new Error('Invalid shard metadata length');
-  offset += 2;
-  await ensureBytes(offset + metaLen);
-  const metaJSON = parseJsonBytesStrict(bytes.subarray(offset, offset + metaLen));
-  if (metaJSON?.alg?.fmt !== LIFECYCLE_QCONT_FORMAT_VERSION) {
-    throw new Error(`Unsupported shard format: expected ${LIFECYCLE_QCONT_FORMAT_VERSION}`);
-  }
-  if (metaJSON?.artifactFamily !== LIFECYCLE_ARTIFACT_FAMILY) {
-    throw new Error(`Unsupported shard artifactFamily: expected ${LIFECYCLE_ARTIFACT_FAMILY}`);
-  }
-  if (metaJSON?.hasKeyCommitment !== true) {
-    throw new Error('Shard metadata must indicate hasKeyCommitment=true');
-  }
-  offset += metaLen;
-
-  const archiveId = String(metaJSON.archiveId || '');
-  const stateId = String(metaJSON.stateId || '');
-  const cohortId = String(metaJSON.cohortId || '');
-
-  await ensureBytes(offset + 4);
-  const archiveStateLen = dv.getUint32(offset, false);
-  if (archiveStateLen <= 0 || archiveStateLen > MAX_MANIFEST_LEN) {
-    throw new Error('Invalid embedded archive-state length');
-  }
-  offset += 4 + archiveStateLen + DIGEST_LEN;
-
-  await ensureBytes(offset + 4);
-  const cohortBindingLen = dv.getUint32(offset, false);
-  if (cohortBindingLen <= 0 || cohortBindingLen > MAX_MANIFEST_LEN) {
-    throw new Error('Invalid embedded cohort-binding length');
-  }
-  offset += 4 + cohortBindingLen + DIGEST_LEN;
-
-  await ensureBytes(offset + 4);
-  const lifecycleBundleLen = dv.getUint32(offset, false);
-  if (lifecycleBundleLen <= 0 || lifecycleBundleLen > MAX_BUNDLE_LEN) {
-    throw new Error('Invalid embedded lifecycle-bundle length');
-  }
-  offset += 4;
-  await ensureBytes(offset + lifecycleBundleLen + DIGEST_LEN + 4);
-  const lifecycleBundleBytes = bytes.subarray(offset, offset + lifecycleBundleLen);
-  const parsedLifecycleBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
-  const authPolicyLevel = parsedLifecycleBundle.lifecycleBundle.authPolicy.level;
-  const lifecycleBundleDigestHex = parsedLifecycleBundle.digest.value;
-  offset += lifecycleBundleLen + DIGEST_LEN;
-
-  await ensureBytes(offset + 4);
-  const encapLen = dv.getUint32(offset, false);
-  if (encapLen <= 0) throw new Error('Invalid encapsulated key length');
-  offset += 4 + encapLen + 12 + 16;
-
-  await ensureBytes(offset + 2);
-  const qencMetaLen = dv.getUint16(offset, false);
-  offset += 2 + qencMetaLen;
-
-  await ensureBytes(offset + 1);
-  const keyCommitLen = bytes[offset];
-  offset += 1;
-  if (keyCommitLen !== 32) {
-    throw new Error(`Invalid key commitment length ${keyCommitLen}; expected 32`);
-  }
-  offset += keyCommitLen;
-  await ensureBytes(offset + 2);
-  const shardIndex = dv.getUint16(offset, false);
-
-  if (!Number.isInteger(metaJSON?.t) || !Number.isInteger(metaJSON?.n)) {
-    throw new Error('Shard metadata is missing n/t');
   }
 
   return {
     sourceFileName: String(file?.name || ''),
-    containerId: metaJSON.containerId,
-    archiveId,
-    stateId,
-    cohortId,
-    lifecycleBundleDigestHex,
-    n: metaJSON.n,
-    t: metaJSON.t,
-    shardIndex,
-    authPolicyLevel,
+    containerId: parsed.metaJSON.containerId,
+    archiveId: parsed.metaJSON.archiveId,
+    stateId: parsed.stateId,
+    cohortId: parsed.cohortId,
+    lifecycleBundleDigestHex: parsed.lifecycleBundleDigestHex,
+    n: parsed.metaJSON.n,
+    t: parsed.metaJSON.t,
+    shardIndex: parsed.shardIndex,
+    authPolicyLevel: parsed.lifecycleBundle.authPolicy.level,
     hasEmbeddedBundle: true,
   };
 }

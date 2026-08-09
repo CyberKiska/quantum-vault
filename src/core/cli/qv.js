@@ -54,11 +54,6 @@ import {
   verifyArchiveInputs,
 } from './commands/verify.js';
 import {
-  parseSelftestArgs,
-  renderSelftestSummary,
-  runSelftestCommand,
-} from './commands/selftest.js';
-import {
   parseVersionArgs,
   renderVersionSummary,
   runVersionCommand,
@@ -84,13 +79,18 @@ export {
   runReshareCommand,
   runRestoreCommand,
   runRestoreDryRunCommand,
-  runSelftestCommand,
   runSplitCommand,
   runVersionCommand,
   runVerifyCommand,
   verifyReportSatisfied,
   verifyArchiveInputs,
 };
+
+/** Preserve the programmatic API without loading the large self-test graph eagerly. */
+export async function runSelftestCommand(options = {}) {
+  const selftest = await import('./commands/selftest.js');
+  return selftest.runSelftestCommand(options);
+}
 
 const COMMAND_HELP = Object.freeze({
   keygen: 'qv keygen --out <dir> [--name <prefix>] [--force] [--print-public] [--json]',
@@ -102,7 +102,7 @@ const COMMAND_HELP = Object.freeze({
   inspect: 'qv inspect <artifact-file> [--json]',
   canonicalize: 'qv canonicalize <artifact-file> [--json]',
   verify: 'qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--include-detached-summary] [--required-policy-level <level>] [--json]',
-  restore: 'qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
+  restore: 'qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--required-policy-level <level>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
   selftest: 'qv selftest [--filter <substring>] [--json]',
   version: 'qv version [--json]',
 });
@@ -110,6 +110,7 @@ const COMMAND_HELP = Object.freeze({
 function globalHelpText() {
   return [
     'Global flags:',
+    '  Global flags must precede the command, except --help / -h.',
     '  --json             Emit a single stable JSON document on stdout.',
     '  --no-color         Disable ANSI color. This is the default.',
     '  --color            Opt in to color only when stderr is a TTY. Current output remains plain.',
@@ -144,7 +145,7 @@ function helpText() {
     '  qv inspect <artifact-file> [--json]',
     '  qv canonicalize <artifact-file> [--json]',
     '  qv verify <archive-state.json> [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--include-detached-summary] [--required-policy-level <level>] [--json]',
-    '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
+    '  qv restore --shards <glob-or-file> [--shards <glob-or-file>] [--archive-state <file>] [--bundle <file>] [--sig <file>] [--pqpk <file>] [--ots <file>] [--ed25519-signer <address>] [--archive-id <hex>] [--state-id <hex>] [--cohort-id <hex>] [--bundle-digest <hex>] [--required-policy-level <level>] [--out <dir>] [--out-qenc <file>] [--out-key <file>] [--decrypt --out-plaintext <file>] [--dry-run] [--accept-policy-warnings] [--force] [--json]',
     '  qv selftest [--filter <substring>] [--json]',
     '  qv version [--json]',
     '',
@@ -170,33 +171,40 @@ function parseGlobalFlags(rawArgs, stderr) {
   const args = [];
   const options = {
     help: false,
+    json: false,
     quiet: false,
     color: false,
     allowSymlink: false,
   };
 
+  let commandSeen = false;
   for (const arg of rawArgs) {
     if (arg === '--help' || arg === '-h') {
       options.help = true;
       continue;
     }
-    if (arg === '--quiet') {
+    if (!commandSeen && arg === '--json') {
+      options.json = true;
+      continue;
+    }
+    if (!commandSeen && arg === '--quiet') {
       options.quiet = true;
       continue;
     }
-    if (arg === '--no-color') {
+    if (!commandSeen && arg === '--no-color') {
       options.color = false;
       continue;
     }
-    if (arg === '--color') {
+    if (!commandSeen && arg === '--color') {
       options.color = stderr?.isTTY === true;
       continue;
     }
-    if (arg === '--allow-symlink') {
+    if (!commandSeen && arg === '--allow-symlink') {
       options.allowSymlink = true;
       continue;
     }
     args.push(arg);
+    commandSeen = true;
   }
   return { ...options, args };
 }
@@ -216,6 +224,9 @@ export async function runQvCli(argv, {
   const globalOptions = parseGlobalFlags([...argv], stderr);
   const args = [...globalOptions.args];
   const command = String(args.shift() || '').trim();
+  if (globalOptions.json && !args.includes('--json')) {
+    args.push('--json');
+  }
 
   if (!command) {
     writeText(stdout, `${helpText()}\n`);
@@ -383,14 +394,15 @@ export async function runQvCli(argv, {
     }
 
     if (command === 'selftest') {
-      const options = parseSelftestArgs(args);
-      const report = await runSelftestCommand(options);
+      const selftest = await import('./commands/selftest.js');
+      const options = selftest.parseSelftestArgs(args);
+      const report = await selftest.runSelftestCommand(options);
       if (options.json) {
         writeJson(stdout, withCliJsonEnvelope(report, {
           ok: report.ok === true,
         }));
       } else {
-        writeText(stdout, renderSelftestSummary(report));
+        writeText(stdout, selftest.renderSelftestSummary(report));
       }
       return report.ok === true ? EXIT.OK : EXIT.ERROR;
     }

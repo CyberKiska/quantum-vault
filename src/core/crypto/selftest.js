@@ -30,17 +30,12 @@ import {
   parseLifecycleBundleBytes,
   verifyLifecycleSignatureEntry,
 } from './lifecycle/artifacts.js';
-import { formatAuthenticityStatusMessage } from '../features/ui/logging.js';
 import {
   canonicalizeJson,
   canonicalizeJsonToBytes,
 } from './manifest/jcs.js';
-import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../features/bundle-payload.js';
-import { buildAttachedArtifactExports, classifyAttachFiles } from '../features/qcont/attach-ui.js';
-import { buildSuccessorSelectionModel } from '../features/qcont/successor-selection-ui.js';
-import { classifyRestoreInputFiles } from '../../app/restore-inputs.js';
-import { buildQcontShards as buildRegularUserShardSet } from '../../app/crypto-service.js';
-import { assessShardSelection as assessShardSelectionPreview } from '../../app/shard-preview.js';
+import { buildQvpackPayloadBytes, isQvpackPayload, parseQvpackPayload } from './qvpack.js';
+import { buildSuccessorSelectionModel } from './qcont/successor-selection-model.js';
 import { unpackPqpk, unpackQsig, verifyQsigAgainstBytes } from './auth/qsig.js';
 import { verifyStellarSigAgainstBytes } from './auth/stellar-sig.js';
 import { computeDetachedSignatureIdentityDigestHex } from './auth/signature-identity.js';
@@ -391,7 +386,7 @@ function rewriteSuccessorPrivateKeyHash(parsedShards, privateKeyHash) {
 
 function assertZeroizedRecoveredKeyValidationMaterial(refs, label) {
   const entries = Object.entries(refs || {});
-  assert(entries.length === 4, `${label} should expose all temporary validation buffers`);
+  assert(entries.length === 3, `${label} should expose all caller-owned temporary validation buffers`);
   for (const [field, value] of entries) {
     assert(value instanceof Uint8Array, `${label} missing ${field} buffer`);
     assert(value.every((byte) => byte === 0), `${label} did not zeroize ${field}`);
@@ -1074,7 +1069,7 @@ async function buildStellarDigestFixture(messageBytes) {
   };
 }
 
-async function buildStellarSignatureFixture(messageBytes, signerMaterial = null) {
+export async function buildStellarSignatureFixture(messageBytes, signerMaterial = null) {
   const material = signerMaterial || await createStellarSignerMaterial();
   const { hashes } = await buildStellarDigestFixture(messageBytes);
   const payload = await digestSha256(concatBytes([utf8ToBytes('Stellar Signed Message:\n'), messageBytes]));
@@ -1440,12 +1435,12 @@ function buildCases() {
     {
       name: 'multi files -> .qenc container encrypt',
       fn: async () => {
-        const files = [
-          fileLike('a.txt', textBytes('alpha payload')),
-          fileLike('b.bin', createLargeDeterministicPayload(2048)),
+        const entries = [
+          { name: 'a.txt', bytes: textBytes('alpha payload') },
+          { name: 'b.bin', bytes: createLargeDeterministicPayload(2048) },
         ];
-        const { bundleBytes, bundleName, fileCount } = await createBundlePayloadFromFiles(files);
-        assert(fileCount === 2, `expected 2 files in bundle, got ${fileCount}`);
+        const bundleBytes = buildQvpackPayloadBytes(entries);
+        const bundleName = 'selftest-bundle.qvpack';
 
         const { publicKey, privateKey } = await generateKeyPair({ collectUserEntropy: false });
         const encrypted = await encryptFile(bundleBytes, publicKey, bundleName);
@@ -1454,13 +1449,13 @@ function buildCases() {
         const decrypted = await blobToBytes(decryptedBlob);
 
         assert(metadata.originalFilename === bundleName, 'bundle original filename mismatch');
-        assert(isBundlePayload(decrypted), 'decrypted multi-file payload is not a bundle');
+        assert(isQvpackPayload(decrypted), 'decrypted multi-file payload is not a bundle');
 
-        const entries = parseBundlePayload(decrypted);
-        assert(entries.length === 2, `expected 2 entries after decrypt, got ${entries.length}`);
-        assert(entries[0].name === 'a.txt', `unexpected first entry name: ${entries[0].name}`);
-        assert(entries[1].name === 'b.bin', `unexpected second entry name: ${entries[1].name}`);
-        assert((await hashBytes(entries[0].bytes)) === (await hashBytes(textBytes('alpha payload'))), 'entry a.txt hash mismatch');
+        const parsedEntries = parseQvpackPayload(decrypted);
+        assert(parsedEntries.length === 2, `expected 2 entries after decrypt, got ${parsedEntries.length}`);
+        assert(parsedEntries[0].name === 'a.txt', `unexpected first entry name: ${parsedEntries[0].name}`);
+        assert(parsedEntries[1].name === 'b.bin', `unexpected second entry name: ${parsedEntries[1].name}`);
+        assert((await hashBytes(parsedEntries[0].bytes)) === (await hashBytes(textBytes('alpha payload'))), 'entry a.txt hash mismatch');
       },
     },
     {
@@ -2272,15 +2267,12 @@ function buildCases() {
         assert(parsed.lifecycleBundle.attachments.archiveApprovalSignatures.length === 1, 'expected one archive-approval signature');
         assert(parsed.lifecycleBundle.attachments.timestamps.length === 1, 'expected one exact OTS attachment');
 
-        const exports = buildAttachedArtifactExports(parsed.lifecycleBundle, 'archive');
-        const pqpkExport = exports.find((entry) => entry.filename.endsWith('.pqpk'));
-        assert(pqpkExport, 'expected successor export to emit a .pqpk file for bundled PQ keys');
-        const unpacked = unpackPqpk(pqpkExport.bytes);
-        assert(timingSafeEqual(unpacked.keyBytes, qsig.signerPublicKey), 'successor PQ export did not preserve the bundled raw public key');
+        const bundledKey = base64ToBytes(parsed.lifecycleBundle.attachments.publicKeys[0].value);
+        assert(timingSafeEqual(bundledKey, qsig.signerPublicKey), 'successor bundle did not preserve the raw public key');
       },
     },
     {
-      name: 'successor archive-approval verification rejects invalid family mappings',
+      name: 'successor archive-approval parser rejects invalid family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2299,15 +2291,14 @@ function buildCases() {
           },
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
-          'archive-approval verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
+          () => canonicalizeLifecycleBundle(mutated),
+          'archive-approval parser unexpectedly accepted an invalid signatureFamily / targetType mapping'
         );
       },
     },
     {
-      name: 'successor archive-approval verification rejects targetRef mismatches',
+      name: 'successor archive-approval parser rejects targetRef mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2326,15 +2317,14 @@ function buildCases() {
           },
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
-          'archive-approval verification unexpectedly accepted a mismatched targetRef'
+          () => canonicalizeLifecycleBundle(mutated),
+          'archive-approval parser unexpectedly accepted a mismatched targetRef'
         );
       },
     },
     {
-      name: 'successor archive-approval verification rejects targetDigest mismatches',
+      name: 'successor archive-approval parser rejects targetDigest mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const qsig = buildQsigFixture(sample.canonicalArchiveState.bytes);
@@ -2353,10 +2343,9 @@ function buildCases() {
           },
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'archiveApprovalSignatures'),
-          'archive-approval verification unexpectedly accepted a mismatched targetDigest'
+          () => canonicalizeLifecycleBundle(mutated),
+          'archive-approval parser unexpectedly accepted a mismatched targetDigest'
         );
       },
     },
@@ -2519,7 +2508,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor maintenance verification rejects invalid family mappings',
+      name: 'successor maintenance parser rejects invalid family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2536,15 +2525,14 @@ function buildCases() {
           }),
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
-          'maintenance verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
+          () => canonicalizeLifecycleBundle(mutated),
+          'maintenance parser unexpectedly accepted an invalid signatureFamily / targetType mapping'
         );
       },
     },
     {
-      name: 'successor maintenance verification rejects targetRef mismatches',
+      name: 'successor maintenance parser rejects targetRef mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2561,15 +2549,14 @@ function buildCases() {
           }),
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
-          'maintenance verification unexpectedly accepted a mismatched targetRef'
+          () => canonicalizeLifecycleBundle(mutated),
+          'maintenance parser unexpectedly accepted a mismatched targetRef'
         );
       },
     },
     {
-      name: 'successor maintenance verification rejects targetDigest mismatches',
+      name: 'successor maintenance parser rejects targetDigest mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalTransition = canonicalizeTransitionRecord(sample.transitionRecord);
@@ -2586,10 +2573,9 @@ function buildCases() {
           }),
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'maintenanceSignatures'),
-          'maintenance verification unexpectedly accepted a mismatched targetDigest'
+          () => canonicalizeLifecycleBundle(mutated),
+          'maintenance parser unexpectedly accepted a mismatched targetDigest'
         );
       },
     },
@@ -2783,7 +2769,7 @@ function buildCases() {
       },
     },
     {
-      name: 'successor source-evidence verification rejects invalid family mappings',
+      name: 'successor source-evidence parser rejects invalid family mappings',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2800,15 +2786,14 @@ function buildCases() {
           }),
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
-          'source-evidence verification unexpectedly accepted an invalid signatureFamily / targetType mapping'
+          () => canonicalizeLifecycleBundle(mutated),
+          'source-evidence parser unexpectedly accepted an invalid signatureFamily / targetType mapping'
         );
       },
     },
     {
-      name: 'successor source-evidence verification rejects targetRef mismatches',
+      name: 'successor source-evidence parser rejects targetRef mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2825,15 +2810,14 @@ function buildCases() {
           }),
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
-          'source-evidence verification unexpectedly accepted a mismatched targetRef'
+          () => canonicalizeLifecycleBundle(mutated),
+          'source-evidence parser unexpectedly accepted a mismatched targetRef'
         );
       },
     },
     {
-      name: 'successor source-evidence verification rejects targetDigest mismatches',
+      name: 'successor source-evidence parser rejects targetDigest mismatches',
       fn: async () => {
         const sample = await buildLifecycleSampleArtifacts();
         const canonicalSourceEvidence = canonicalizeSourceEvidence(sample.sourceEvidence);
@@ -2850,10 +2834,9 @@ function buildCases() {
           }),
         ];
 
-        const canonicalBundle = await canonicalizeLifecycleBundle(mutated);
         await expectFailure(
-          () => verifyLifecycleSignatureInAttachmentField(canonicalBundle.lifecycleBundle, 'sourceEvidenceSignatures'),
-          'source-evidence verification unexpectedly accepted a mismatched targetDigest'
+          () => canonicalizeLifecycleBundle(mutated),
+          'source-evidence parser unexpectedly accepted a mismatched targetDigest'
         );
       },
     },
@@ -3347,7 +3330,11 @@ function buildCases() {
         });
         const parsedAttached = await Promise.all(attached.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
 
-        const restored = await restoreFromShards(parsedAttached, { onLog: () => {}, onError: () => {} });
+        const restored = await restoreFromShards(parsedAttached, {
+          onLog: () => {},
+          onError: () => {},
+          verification: { pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes] },
+        });
         assert(restored.archiveId === sample.split.archiveId, 'successor restore archiveId mismatch');
         assert(restored.stateId === sample.split.stateId, 'successor restore stateId mismatch');
         assert(restored.cohortId === sample.split.cohortId, 'successor restore cohortId mismatch');
@@ -3359,7 +3346,8 @@ function buildCases() {
           'successor restore should report exactly one embedded lifecycle-bundle digest'
         );
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
-        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled key material');
+        assert(restored.authenticity.status.externallyPinned === true, 'expected signer pinning from external .pqpk material');
+        assert(restored.authenticity.status.bundlePinned === false, 'deprecated bundlePinned status must fail closed');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
         assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
         assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
@@ -3376,6 +3364,8 @@ function buildCases() {
         const restored = await restoreFromShards(sample.parsed, { onLog: () => {}, onError: () => {} });
         assert(restored.qkeyOk === true, 'honest successor restore should report qkeyOk=true');
         assert(restored.privateKeyHashMatchesMetadata === true, 'honest successor restore should report matching privateKeyHash metadata');
+        assert(!Object.hasOwn(restored, 'privateKeyHash'), 'restore result must not expose expected private-key fingerprints');
+        assert(!Object.hasOwn(restored, 'recoveredPrivHash'), 'restore result must not expose recovered private-key fingerprints');
       },
     },
     {
@@ -3393,8 +3383,10 @@ function buildCases() {
         assert(baseline.qkeyOk === true, 'baseline successor restore should report qkeyOk=true');
         assert(restored.qkeyOk === true, 'privateKeyHash tampering must not clear qkeyOk on an honest recovery');
         assert(restored.privateKeyHashMatchesMetadata === false, 'privateKeyHash tampering should be reported separately');
-        assert(restored.recoveredPrivHash === baseline.recoveredPrivHash, 'privateKeyHash tampering must not change the recovered private key');
+        assert(timingSafeEqual(restored.privKey, baseline.privKey), 'privateKeyHash tampering must not change the recovered private key');
         assert(restored.recoveredQencHash === baseline.recoveredQencHash, 'privateKeyHash tampering must not change the recovered .qenc hash');
+        assert(!Object.hasOwn(restored, 'privateKeyHash'), 'tampered restore result must not expose expected private-key fingerprints');
+        assert(!Object.hasOwn(restored, 'recoveredPrivHash'), 'tampered restore result must not expose recovered private-key fingerprints');
       },
     },
     {
@@ -3414,7 +3406,13 @@ function buildCases() {
         );
 
         await expectFailureWithMessage(
-          () => restoreFromShards(sample.maliciousShards, { onLog: () => {}, onError: () => {} }),
+          () => restoreFromShards(sample.maliciousShards, {
+            onLog: () => {},
+            onError: () => {},
+            verification: {
+              pinnedPqPublicKeyFileBytesList: [sample.signedBundle.fixtures.archiveApproval.pqpkBytes],
+            },
+          }),
           /embedded \.qenc key commitment/i,
           'successor restore unexpectedly accepted a recovered secret key based on shard metadata alone'
         );
@@ -3448,6 +3446,9 @@ function buildCases() {
           () => restoreFromShards(malicious.maliciousShards, {
             onLog: () => {},
             onError: () => {},
+            verification: {
+              pinnedPqPublicKeyFileBytesList: [malicious.signedBundle.fixtures.archiveApproval.pqpkBytes],
+            },
             keyValidationHooks: {
               onFinally: (refs) => {
                 failureRefs = refs;
@@ -3491,7 +3492,10 @@ function buildCases() {
         const restored = await restoreFromShards(mixed, {
           onLog: () => {},
           onError: () => {},
-          verification: { selectedLifecycleBundleDigestHex: secondAttach.lifecycleBundleDigestHex },
+          verification: {
+            selectedLifecycleBundleDigestHex: secondAttach.lifecycleBundleDigestHex,
+            pinnedPqPublicKeyFileBytesList: [sigA.pqpkBytes, sigB.pqpkBytes],
+          },
         });
         assert(restored.lifecycleBundleDigestHex === secondAttach.lifecycleBundleDigestHex, 'explicit lifecycle-bundle digest selection picked the wrong bundle');
         assert(restored.authenticity.status.bundleCohortMixed === true, 'mixed embedded lifecycle-bundle digests should be reported honestly');
@@ -3516,7 +3520,10 @@ function buildCases() {
         const restored = await restoreFromShards(parsedAttached, {
           onLog: () => {},
           onError: () => {},
-          verification: { lifecycleBundleBytes: attached.lifecycleBundleBytes },
+          verification: {
+            lifecycleBundleBytes: attached.lifecycleBundleBytes,
+            pinnedPqPublicKeyFileBytesList: [sig.pqpkBytes],
+          },
         });
         assert(restored.selectionSource === 'uploaded-lifecycle-bundle', `unexpected successor selection source: ${restored.selectionSource}`);
         assert(restored.lifecycleBundleDigestHex === attached.lifecycleBundleDigestHex, 'uploaded lifecycle bundle should drive the selected digest');
@@ -3591,7 +3598,17 @@ function buildCases() {
         });
         const rewritten = await rewriteLifecycleBundleSubset(sample.parsed, bundleVariant.bundleBytes);
 
-        const restored = await restoreFromShards(rewritten, { onLog: () => {}, onError: () => {} });
+        const restored = await restoreFromShards(rewritten, {
+          onLog: () => {},
+          onError: () => {},
+          verification: {
+            pinnedPqPublicKeyFileBytesList: [
+              bundleVariant.fixtures.archiveApproval.pqpkBytes,
+              bundleVariant.fixtures.maintenance.pqpkBytes,
+              bundleVariant.fixtures.sourceEvidence.pqpkBytes,
+            ],
+          },
+        });
         assert(restored.authenticity.status.integrityVerified === true, 'expected integrityVerified');
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'expected archive-approval signature verification');
         assert(restored.authenticity.status.transitionRecordPresent === true, 'expected transition record presence reporting');
@@ -3600,7 +3617,9 @@ function buildCases() {
         assert(restored.authenticity.status.maintenanceSignatureVerified === true, 'expected maintenance signature verification');
         assert(restored.authenticity.status.sourceEvidenceSignatureVerified === true, 'expected source-evidence signature verification');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'expected exact OTS linkage state');
-        assert(restored.authenticity.status.signerPinned === true, 'expected signer pinning from bundled keys');
+        assert(restored.authenticity.status.externallyPinned === true, 'expected signer pinning from external .pqpk material');
+        assert(restored.authenticity.status.bundledKeyVerified === true, 'expected bundled-key cryptographic verification to remain visible');
+        assert(restored.authenticity.status.bundlePinned === false, 'deprecated bundlePinned status must fail closed');
         assert(restored.authenticity.status.policySatisfied === true, 'expected archive policy satisfaction');
         assertNoSignerIdentityPinned(restored.authenticity.verification.status, 'successor verification status');
         assertNoSignerIdentityPinned(restored.authenticity.status, 'successor restore authenticity status');
@@ -3657,7 +3676,8 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.validMaintenance === 1, 'expected one valid maintenance signature');
         assert(restored.authenticity.verification.counts.validSourceEvidence === 1, 'expected one valid source-evidence signature');
         assert(restored.lifecycleVerification.sourceEvidence.signatureVerified === true, 'source-evidence reporting must remain separate from archive approval');
-        assert(restored.authenticity.verification.counts.pinnedValidTotal === 2, 'aggregate detached-signature pinning may still reflect non-archive families');
+        assert(restored.authenticity.verification.counts.pinnedValidTotal === 0, 'bundled maintenance/source keys must not count as external pins');
+        assert(restored.authenticity.verification.counts.bundledKeyVerifiedTotal === 2, 'bundled maintenance/source verification should remain visible');
       },
     },
     {
@@ -3823,7 +3843,7 @@ function buildCases() {
         assert(restored.authenticity.verification.counts.validArchiveApprovalStrongPq === 0, 'selfSigned external detached PQ signature must not count toward strong PQ archive-approval totals');
         assert(restored.authenticity.verification.counts.validTotal === 0, 'selfSigned external detached PQ signature must not count toward trusted detached signature totals');
         assert(
-          restored.authenticity.verification.warnings.some((warning) => warning.includes('ignored for trust/policy')),
+          restored.authenticity.verification.warnings.some((warning) => warning.includes('ignored for archive policy')),
           'selfSigned external detached PQ signature should emit an explicit trust/policy warning'
         );
       },
@@ -3974,9 +3994,12 @@ function buildCases() {
         const restored = await restoreFromShards(sample.parsed, {
           onLog: () => {},
           onError: () => {},
-          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+          verification: {
+            lifecycleBundleBytes: canonicalBundle.bytes,
+            pinnedPqPublicKeyFileBytesList: [validQsig.pqpkBytes],
+          },
         });
-        assert(restored.authenticity.status.policySatisfied === true, 'valid archive-approval signature should still satisfy policy');
+        assert(restored.authenticity.status.policySatisfied === true, 'externally pinned archive-approval signature should satisfy policy');
         assert(restored.authenticity.verification.results.some((item) => item.ok === false), 'expected one invalid archive-approval result');
         assert(
           restored.authenticity.verification.warnings.some((warning) => warning.includes('did not verify and were ignored')),
@@ -4060,7 +4083,10 @@ function buildCases() {
         const restored = await restoreFromShards(sample.parsed, {
           onLog: () => {},
           onError: () => {},
-          verification: { lifecycleBundleBytes: canonicalBundle.bytes },
+          verification: {
+            lifecycleBundleBytes: canonicalBundle.bytes,
+            pinnedPqPublicKeyFileBytesList: [qsig.pqpkBytes],
+          },
         });
         assert(restored.authenticity.status.policySatisfied === true, 'mismatched OTS linkage must not block archive policy');
         assert(restored.authenticity.timestampEvidence.length === 0, 'mismatched OTS linkage should be ignored for evidence reporting');
@@ -4750,6 +4776,9 @@ function buildCases() {
         const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
           onLog: () => {},
           onError: () => {},
+          verification: {
+            pinnedPqPublicKeyFileBytesList: [sample.bundleVariant.fixtures.archiveApproval.pqpkBytes],
+          },
         });
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should remain valid after resharing');
         assert(restored.authenticity.status.policySatisfied === true, 'archive policy should still be satisfied after resharing');
@@ -4786,6 +4815,9 @@ function buildCases() {
         const restored = await restoreFromShards(await parseResharedShardSet(reshared), {
           onLog: () => {},
           onError: () => {},
+          verification: {
+            pinnedPqPublicKeyFileBytesList: [sample.bundleVariant.fixtures.archiveApproval.pqpkBytes],
+          },
         });
         assert(restored.authenticity.status.archiveApprovalSignatureVerified === true, 'archive-approval signature should still verify after resharing');
         assert(restored.authenticity.status.otsEvidenceLinked === true, 'archive-approval OTS linkage should remain valid after resharing');
@@ -5140,7 +5172,7 @@ function buildCases() {
         const payload = textBytes('phase7-regular-user-successor-build');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-regular-user-successor-build.bin'));
 
-        const split = await buildRegularUserShardSet(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           authPolicyLevel: 'strong-pq-signature',
         });
 
@@ -5161,7 +5193,7 @@ function buildCases() {
         const payload = textBytes('phase7-explicit-legacy-build');
         const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-explicit-legacy-build.bin'));
 
-        const split = await buildRegularUserShardSet(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
+        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, {
           legacyMode: true,
           authPolicyLevel: 'integrity-only',
         });
@@ -5205,46 +5237,6 @@ function buildCases() {
       },
     },
     {
-      name: 'successor shard assessment reports lifecycle-bundle selection requirements for mixed embedded bundle variants',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 4096);
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-selection-status.bin'));
-        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const parsedOriginal = await Promise.all(split.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
-
-        const sigA = buildQsigFixture(split.archiveStateBytes);
-        const firstAttach = await attachLifecycleBundleToShards(parsedOriginal, {
-          signatures: [{ name: 'phase7-a.qsig', bytes: sigA.qsigBytes }],
-          pqPublicKeyFileBytesList: [sigA.pqpkBytes],
-        });
-        const parsedFirstAttach = await Promise.all(firstAttach.shards.map(async (item) => parseLifecycleShard(await blobToBytes(item.blob))));
-
-        const sigB = buildQsigFixture(firstAttach.archiveStateBytes);
-        const secondAttach = await attachLifecycleBundleToShards(parsedFirstAttach.slice(0, 2), {
-          lifecycleBundleBytes: firstAttach.lifecycleBundleBytes,
-          signatures: [{ name: 'phase7-b.qsig', bytes: sigB.qsigBytes }],
-          pqPublicKeyFileBytesList: [sigB.pqpkBytes],
-        });
-
-        const mixedFiles = [
-          ...await Promise.all(secondAttach.shards.map(async (item, index) => (
-            fileLike(`phase7-mixed-${index + 1}.qcont`, await blobToBytes(item.blob))
-          ))),
-          ...await Promise.all(firstAttach.shards.slice(2).map(async (item, index) => (
-            fileLike(`phase7-original-${index + 3}.qcont`, await blobToBytes(item.blob))
-          ))),
-        ];
-
-        const assessment = await assessShardSelectionPreview(mixedFiles);
-        assert(assessment.ready === true, 'mixed bundle-variant assessment should still report threshold readiness');
-        assert(
-          assessment.message.includes('Explicit lifecycle-bundle selection is still required below.'),
-          'successor shard assessment should report explicit lifecycle-bundle selection requirements'
-        );
-      },
-    },
-    {
       name: 'container policy metadata defaults to requiring cryptoProfileId',
       fn: async () => {
         const metadata = {
@@ -5277,64 +5269,6 @@ function buildCases() {
           legacyCompatible.cryptoProfileId === DEFAULT_CRYPTO_PROFILE.cryptoProfileId,
           'explicit legacy opt-in should still resolve the default successor profile'
         );
-      },
-    },
-    {
-      name: 'successor shard assessment treats .qvmanifest sidecars as unrecognized files',
-      fn: async () => {
-        const pair = await generateKeyPair({ collectUserEntropy: false });
-        const payload = createLargeDeterministicPayload(CHUNK_SIZE + 2048);
-        const qencBytes = await blobToBytes(await encryptFile(payload, pair.publicKey, 'phase7-preview-sidecar.bin'));
-        const split = await buildLifecycleQcontShards(qencBytes, pair.privateKey, { n: 5, k: 3 }, { authPolicyLevel: 'integrity-only' });
-        const detached = buildQsigFixture(split.archiveStateBytes);
-        const files = [
-          ...await Promise.all(split.shards.map(async (item, index) => (
-            fileLike(`phase7-preview-${index + 1}.qcont`, await blobToBytes(item.blob))
-          ))),
-          fileLike('archive.qvmanifest.json', textBytes('{"schema":"quantum-vault-archive-manifest/v3","version":3}')),
-          fileLike('renamed-signature.bin', detached.qsigBytes),
-          fileLike('renamed-public-key.bin', detached.pqpkBytes),
-        ];
-
-        const assessment = await assessShardSelectionPreview(files);
-        assert(assessment.ready === true, 'preview should still accept valid successor shards');
-        assert(
-          assessment.message.includes('1 unrecognized file(s) skipped.'),
-          'legacy .qvmanifest sidecars should be treated as unrecognized files'
-        );
-        assert(
-          !assessment.message.includes('manifest'),
-          'preview status should not advertise legacy manifest attachments'
-        );
-        assert(
-          assessment.message.includes('Attachments: 1 signature(s), 1 public key(s).'),
-          'preview attachment counts should use core byte classification instead of filename heuristics'
-        );
-      },
-    },
-    {
-      name: 'authenticity status message keeps signer pin detail alongside strong PQ detail',
-      fn: async () => {
-        const messageBytes = textBytes('auth-status-signer-pin-detail');
-        const { qsigBytes, pqpkBytes } = buildQsigFixture(messageBytes);
-        const verification = verifyQsigAgainstBytes({
-          messageBytes,
-          qsigBytes,
-          pinnedPqPublicKeyFileBytes: pqpkBytes,
-        });
-        assert(verification.ok === true, 'matching .pqpk should preserve detached PQ verification');
-        assertNoSignerIdentityPinned(verification, 'qsig verification result');
-
-        const message = formatAuthenticityStatusMessage({
-          archiveApprovalSignatureVerified: true,
-          strongPqSignatureVerified: verification.strongPq,
-          signerPinned: true,
-          bundlePinned: false,
-          userPinned: false,
-        });
-
-        assert(message.includes('strong PQ present'), 'status message should report strong PQ detail');
-        assert(message.includes('signer pin active'), 'status message should preserve signer pin detail when no bundle/user pin flags are present');
       },
     },
     {
@@ -5420,16 +5354,6 @@ function buildCases() {
         });
         assert(validVerification.ok === true, 'valid current-format Stellar .sig should still verify');
 
-        const validRestoreClassified = await classifyRestoreInputFiles([
-          fileLike('valid.sig', fixture.bytes),
-        ]);
-        assert(validRestoreClassified.signatures.length === 1, 'restore input classifier should still recognize a valid Stellar .sig');
-
-        const validAttachClassified = await classifyAttachFiles([
-          fileLike('valid.sig', fixture.bytes),
-        ]);
-        assert(validAttachClassified.signatures.length === 1, 'attach classifier should still recognize a valid Stellar .sig');
-
         const validText = new TextDecoder().decode(fixture.bytes);
         const duplicateBytes = textBytes(`{"schema":"stellar-signature/v2",${validText.slice(1)}`);
         const duplicateVerification = await verifyStellarSigAgainstBytes({
@@ -5443,16 +5367,6 @@ function buildCases() {
           'duplicate-key Stellar .sig should report strict JSON duplicate-key rejection'
         );
 
-        const duplicateRestoreClassified = await classifyRestoreInputFiles([
-          fileLike('duplicate.sig', duplicateBytes),
-        ]);
-        assert(duplicateRestoreClassified.signatures.length === 0, 'restore input classifier must reject duplicate-key Stellar .sig files');
-        assert(duplicateRestoreClassified.ignoredFileNames.includes('duplicate.sig'), 'restore input classifier should ignore duplicate-key Stellar .sig files');
-
-        const duplicateAttachClassified = await classifyAttachFiles([
-          fileLike('duplicate.sig', duplicateBytes),
-        ]);
-        assert(duplicateAttachClassified.signatures.length === 0, 'attach classifier must reject duplicate-key Stellar .sig files');
       },
     },
     {
@@ -5559,7 +5473,7 @@ function buildCases() {
           messageBytes,
           qsigBytes: matching.qsigBytes,
           bundlePqPublicKeyFileBytes: wrong.pqpkBytes,
-          authoritativeBundlePqPublicKey: true,
+          requireBundledPqKeyMatch: true,
         });
 
         assert(verification.ok === false, 'authoritative bundled key mismatch must fail verification');
@@ -6293,6 +6207,7 @@ function buildCases() {
           parsedShards: attachedBundleShards,
           verification: {
             lifecycleBundleBytes: verificationBundle.bundleBytes,
+            pinnedPqPublicKeyFileBytesList: [verificationBundle.fixtures.archiveApproval.pqpkBytes],
           },
         });
 

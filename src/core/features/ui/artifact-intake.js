@@ -11,12 +11,21 @@ import {
 export { classifyArtifactFile, classifyArtifactIntakeRows } from './artifact-classifier.js';
 export { groupArtifactRows } from './artifact-table-ui.js';
 
+const artifactIntakeEpochs = new Map();
+
+function nextArtifactIntakeEpoch(containerId) {
+  const epoch = (artifactIntakeEpochs.get(containerId) || 0) + 1;
+  artifactIntakeEpochs.set(containerId, epoch);
+  return epoch;
+}
+
 export function clearArtifactIntakeTable(containerId) {
+  nextArtifactIntakeEpoch(containerId);
   const host = document.getElementById(containerId);
   if (!host) return;
-  host.replaceChildren();
-  host.classList.add('initially-hidden');
-  host.style.display = 'none';
+  try { host.style.display = 'none'; } catch { /* Keep clearing independently. */ }
+  try { host.classList.add('initially-hidden'); } catch { /* Keep clearing independently. */ }
+  try { host.replaceChildren(); } catch { /* Hidden stale content is non-actionable. */ }
 }
 
 /**
@@ -36,9 +45,13 @@ export async function renderArtifactIntakeTable({
   channel = 'archive-approval',
   label = DEFAULT_ARTIFACT_INTAKE_TABLE_LABEL,
   error = null,
+  isCurrent: externalIsCurrent = () => true,
 } = {}) {
   const host = document.getElementById(containerId);
   if (!host) return [];
+  const renderEpoch = nextArtifactIntakeEpoch(containerId);
+  const isCurrent = () => artifactIntakeEpochs.get(containerId) === renderEpoch &&
+    externalIsCurrent() && host.isConnected && document.getElementById(containerId) === host;
 
   const fileList = Array.from(files || []);
   if (fileList.length === 0) {
@@ -55,6 +68,7 @@ export async function renderArtifactIntakeTable({
   host.appendChild(loading);
 
   const rows = await classifyArtifactIntakeRows(fileList, { workflow, channel, error });
+  if (!isCurrent()) return [];
   renderArtifactIntakePanel(host, rows, label);
   return rows;
 }

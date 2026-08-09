@@ -31,7 +31,7 @@ import { refreshSelectionAndPreflight } from './successor-selection-ui.js';
  * @property {('restore'|'lite-restore'|'reshare'|'attach')} intakeWorkflow
  * @property {string|null} [preflightContainerId] - id of preflight decision card; null skips it
  * @property {HTMLInputElement|null} [expectedSignerInput]
- * @property {(event: { prefix: string, state: object|null }) => void} [onSelectionChange]
+ * @property {(event: { prefix: string, selection: object }) => void} [onSelectionChange]
  * @property {() => boolean} [isCurrent] - re-entrancy guard; defaults to always true
  */
 
@@ -73,6 +73,7 @@ export async function refreshRestoreInputPanel(options) {
     files: list,
     workflow: intakeWorkflow,
     label: intakeLabel,
+    isCurrent,
   });
   if (!isCurrent()) return { assessment: assessment || null };
 
@@ -85,6 +86,7 @@ export async function refreshRestoreInputPanel(options) {
     expectedSignerInput,
     renderPreflightForFiles: renderRestorePreflightForFiles,
     onSelectionChange: options.onSelectionChange,
+    isCurrent,
   });
   if (!isCurrent()) return { assessment: assessment || null };
   return { assessment: assessment || null };

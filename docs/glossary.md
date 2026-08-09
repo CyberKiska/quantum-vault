@@ -82,14 +82,17 @@ Current grounding for this glossary comes from the active owner docs and the imp
 | Term | Current definition | Detailed owner |
 | --- | --- | --- |
 | integrity verified | Structural, digest, commitment, and reconstruction checks are internally consistent. | [`trust-and-policy.md`](trust-and-policy.md) |
-| archive approval signature verified | At least one detached archive-approval signature cryptographically verifies over canonical archive-state descriptor bytes. | [`trust-and-policy.md`](trust-and-policy.md) |
+| archive approval signature verified cryptographically | At least one detached archive-approval signature cryptographically verifies over canonical archive-state descriptor bytes, without implying trust or policy authorization. | [`trust-and-policy.md`](trust-and-policy.md) |
 | archive authenticity policy | The restore and verify rule committed in the archive-state descriptor and carried concretely in the lifecycle bundle as `authPolicy`. | [`trust-and-policy.md`](trust-and-policy.md) |
-| archive policy satisfied | The available verified archive-approval signatures satisfy the archive authenticity policy. | [`trust-and-policy.md`](trust-and-policy.md) |
-| signer pinning | Binding a valid signature to expected signer material from the lifecycle bundle or from restore-time user input; distinct from policy satisfaction. | [`trust-and-policy.md`](trust-and-policy.md) |
-| `bundlePinned` | At least one verified signature matched bundled signer material explicitly linked from the lifecycle bundle. | [`trust-and-policy.md`](trust-and-policy.md) |
-| `userPinned` | At least one verified signature matched restore-time user-supplied signer material. | [`trust-and-policy.md`](trust-and-policy.md) |
-| `signerPinned` | The combined status `bundlePinned || userPinned`. | [`trust-and-policy.md`](trust-and-policy.md) |
-| archive approval | The signature family that signs canonical archive-state descriptor bytes and is the only family counted toward archive policy. | [`trust-and-policy.md`](trust-and-policy.md) |
+| archive policy satisfied | The required unique archive-approval signers match independent external pins, their signatures verify, and the threshold/suite rule is satisfied. | [`trust-and-policy.md`](trust-and-policy.md) |
+| signer pinning | Binding a valid signature to expected signer material supplied independently at verify/restore time; mutable lifecycle-bundle material is not a pin. | [`trust-and-policy.md`](trust-and-policy.md) |
+| `bundledKeyVerified` | A signature verified against key material referenced from the same mutable lifecycle bundle; cryptographic consistency only, not trust. | [`trust-and-policy.md`](trust-and-policy.md) |
+| `externallyPinned` | At least one verified signature matched restore-time user-supplied `.pqpk` material or an expected Stellar signer. | [`trust-and-policy.md`](trust-and-policy.md) |
+| `authorizedForPolicy` | A verified signature is eligible for archive-policy counting under the current external-pin rule. | [`trust-and-policy.md`](trust-and-policy.md) |
+| `bundlePinned` | Deprecated fail-closed compatibility field; always `false`. Use `bundledKeyVerified` for non-trust cryptographic reporting. | [`trust-and-policy.md`](trust-and-policy.md) |
+| `userPinned` | Deprecated compatibility alias for `externallyPinned`. | [`trust-and-policy.md`](trust-and-policy.md) |
+| `signerPinned` | Deprecated compatibility alias for `externallyPinned`; bundle material never sets it. | [`trust-and-policy.md`](trust-and-policy.md) |
+| archive approval | The signature family that signs canonical archive-state descriptor bytes and is eligible for policy only when the signer is independently pinned. | [`trust-and-policy.md`](trust-and-policy.md) |
 | maintenance signature | A detached signature over a transition record; reported separately from archive policy. | [`trust-and-policy.md`](trust-and-policy.md) |
 | source-evidence signature | A detached signature over a source-evidence object; reported separately from archive policy. | [`trust-and-policy.md`](trust-and-policy.md) |
 | evidence | Supplementary material linked to detached signatures that may improve reporting or future time and provenance interpretation, but does not satisfy archive signature policy by itself. | [`trust-and-policy.md`](trust-and-policy.md) |

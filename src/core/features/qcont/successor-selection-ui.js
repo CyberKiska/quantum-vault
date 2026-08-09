@@ -1,8 +1,14 @@
 import { parseLifecycleShard, zeroizeParsedLifecycleShard } from '../../../app/crypto-service.js';
-import { parseArchiveStateViewBytes } from '../../../app/artifact-intake-service.js';
+import {
+  parseArchiveStateViewBytes,
+  parseLifecycleBundleArchiveStateViewBytes,
+} from '../../../app/artifact-intake-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { readFileAsUint8Array } from '../../../utils.js';
-import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
+import {
+  buildSuccessorSelectionModel,
+  collectLifecycleAttachmentCounts,
+} from '../../crypto/qcont/successor-selection-model.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 import {
   createDigestDetailEntry,
@@ -14,6 +20,13 @@ import { clearArchiveInspector, renderArchiveInspectorPanel } from './archive-in
 import { buildSuccessorSelectionUiMode } from './successor-selection-view-model.js';
 
 const successorSelectionState = new Map();
+const successorRefreshEpochs = new Map();
+
+export { buildSuccessorSelectionModel, collectLifecycleAttachmentCounts };
+
+function presentationBestEffort(action) {
+  try { action(); } catch { /* State invalidation must survive mutable DOM faults. */ }
+}
 
 const ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX = Object.freeze({
   restore: 'restoreArchiveInspector',
@@ -24,6 +37,40 @@ const ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX = Object.freeze({
 /** Read-only snapshot for hub / tests (no mutation guarantees on nested fields). */
 export function peekSuccessorSelectionState(prefix) {
   return successorSelectionState.get(prefix) || null;
+}
+
+export function buildSuccessorSelectionChangeDetail(prefix, state) {
+  return {
+    prefix,
+    selection: {
+      mode: String(state?.mode || 'none'),
+      selectionRequired: state?.selectionRequired === true,
+      selectionComplete: state?.selectionComplete === true,
+      successorSelectionUiMode: String(state?.successorSelectionUiMode || 'none'),
+      selectedArchiveId: state?.selectedArchiveId || null,
+      selectedStateId: state?.selectedStateId || null,
+      selectedCohortId: state?.selectedCohortId || null,
+      selectedLifecycleBundleDigestHex: state?.selectedLifecycleBundleDigestHex || null,
+    },
+  };
+}
+
+export function buildSuccessorInspectorShard(shard) {
+  return {
+    sourceFileName: shard.sourceFileName,
+    archiveState: shard.archiveState,
+    stateId: shard.stateId,
+    cohortId: shard.cohortId,
+    lifecycleBundleDigestHex: shard.lifecycleBundleDigestHex,
+    lifecycleBundle: shard.lifecycleBundle,
+    metaJSON: {
+      archiveId: shard.metaJSON?.archiveId,
+      stateId: shard.metaJSON?.stateId,
+      cohortId: shard.metaJSON?.cohortId,
+      n: shard.metaJSON?.n,
+      t: shard.metaJSON?.t,
+    },
+  };
 }
 
 function getSuccessorSelectionElements(prefix = 'restore') {
@@ -66,24 +113,6 @@ function uniqueStrings(values) {
 
 function describePolicyLevels(policyLevels = []) {
   return policyLevels.length > 0 ? policyLevels.join(', ') : 'unknown';
-}
-
-export function collectLifecycleAttachmentCounts(lifecycleBundles = []) {
-  const archiveApprovalIds = new Set();
-  const publicKeyIds = new Set();
-  for (const bundle of lifecycleBundles) {
-    const attachments = bundle?.attachments || {};
-    for (const signature of attachments.archiveApprovalSignatures || []) {
-      archiveApprovalIds.add(String(signature?.id || signature?.signature || archiveApprovalIds.size));
-    }
-    for (const publicKey of attachments.publicKeys || []) {
-      publicKeyIds.add(String(publicKey?.id || publicKey?.value || publicKeyIds.size));
-    }
-  }
-  return {
-    archiveApprovalSignatureCount: archiveApprovalIds.size,
-    publicKeyCount: publicKeyIds.size,
-  };
 }
 
 function syncArchiveInspectorForPrefix(prefix, files = []) {
@@ -318,16 +347,6 @@ function renderSelectionInfoUi(prefix, actionButton, nextState, summaryText, hel
 
 function clearSuccessorSelectionUi(prefix, actionButton) {
   const elements = getSuccessorSelectionElements(prefix);
-  if (elements.container) {
-    elements.container.style.display = 'none';
-    elements.container.className = 'verification-section initially-hidden';
-  }
-  if (elements.summary) elements.summary.textContent = '';
-  if (elements.help) elements.help.textContent = '';
-  [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
-    if (group) group.style.display = 'none';
-  });
-  clearSelectionDetails(prefix);
   successorSelectionState.set(prefix, {
     mode: 'none',
     assessment: successorSelectionState.get(prefix)?.assessment || null,
@@ -341,73 +360,83 @@ function clearSuccessorSelectionUi(prefix, actionButton) {
     selectedCohortId: null,
     selectedLifecycleBundleDigestHex: null,
   });
-  setRestoreActionAvailability(prefix, actionButton);
+  if (elements.container) {
+    presentationBestEffort(() => { elements.container.style.display = 'none'; });
+    presentationBestEffort(() => { elements.container.className = 'verification-section initially-hidden'; });
+  }
+  if (elements.summary) presentationBestEffort(() => { elements.summary.textContent = ''; });
+  if (elements.help) presentationBestEffort(() => { elements.help.textContent = ''; });
+  [elements.stateGroup, elements.cohortGroup, elements.bundleGroup].forEach((group) => {
+    if (group) presentationBestEffort(() => { group.style.display = 'none'; });
+  });
+  for (const select of [elements.stateSelect, elements.cohortSelect, elements.bundleSelect]) {
+    if (select) {
+      presentationBestEffort(() => { select.onchange = null; });
+      presentationBestEffort(() => select.replaceChildren());
+    }
+  }
+  presentationBestEffort(() => clearSelectionDetails(prefix));
+  presentationBestEffort(() => setRestoreActionAvailability(prefix, actionButton));
 }
 
-export function buildSuccessorSelectionModel(parsedShards = []) {
-  const byIdentity = new Map();
-  for (const shard of parsedShards) {
-    mergeLifecycleShardIntoCohortGroups(byIdentity, shard, {
-      groupLabel: 'restore candidate set',
-      missingIdentityMessage: 'Successor shard is missing archive/state/cohort identity',
-    });
+/** Synchronously revoke File/state/DOM ownership for a workflow session boundary. */
+export function resetSuccessorSelectionSession(prefix = 'restore', actionButton = null) {
+  successorRefreshEpochs.set(prefix, (successorRefreshEpochs.get(prefix) || 0) + 1);
+  successorSelectionState.set(prefix, {
+    mode: 'none',
+    assessment: null,
+    actionButton,
+    files: [],
+    selectionRequired: false,
+    selectionComplete: true,
+    successorSelectionUiMode: 'none',
+    selectedArchiveId: null,
+    selectedStateId: null,
+    selectedCohortId: null,
+    selectedLifecycleBundleDigestHex: null,
+  });
+  presentationBestEffort(() => clearArchiveInspector(ARCHIVE_INSPECTOR_CONTAINER_BY_PREFIX[prefix]));
+  presentationBestEffort(() => clearSuccessorSelectionUi(prefix, actionButton));
+  presentationBestEffort(() => {
+    syncArchiveReviewHub(prefix, successorSelectionState.get(prefix), { collapseWhenClear: true });
+  });
+  return successorSelectionState.get(prefix);
+}
+
+/** Resolve optional external selectors only after proving model membership. */
+export function resolveExternallyFixedSuccessorSelection(model, {
+  uploadedArchiveState = null,
+  uploadedLifecycleBundle = null,
+} = {}) {
+  const archiveStateKey = uploadedArchiveState
+    ? buildStateSelectionKey(uploadedArchiveState.archiveState.archiveId, uploadedArchiveState.digest.value)
+    : null;
+  const lifecycleStateKey = uploadedLifecycleBundle
+    ? buildStateSelectionKey(uploadedLifecycleBundle.archiveState.archiveId, uploadedLifecycleBundle.digest.value)
+    : null;
+
+  if (archiveStateKey && !model.states.some((state) => state.key === archiveStateKey)) {
+    throw new Error('Uploaded archive-state descriptor does not match any loaded successor shard archive/state.');
+  }
+  if (lifecycleStateKey && !model.states.some((state) => state.key === lifecycleStateKey)) {
+    throw new Error('Uploaded lifecycle bundle does not match any loaded successor shard archive/state.');
+  }
+  if (archiveStateKey && lifecycleStateKey && archiveStateKey !== lifecycleStateKey) {
+    throw new Error('Uploaded lifecycle bundle and archive-state descriptor select different archive states.');
   }
 
-  const statesByKey = new Map();
-  for (const candidate of byIdentity.values()) {
-    const key = buildStateSelectionKey(candidate.archiveId, candidate.stateId);
-    if (!statesByKey.has(key)) {
-      statesByKey.set(key, {
-        key,
-        archiveId: candidate.archiveId,
-        stateId: candidate.stateId,
-        cohorts: [],
-      });
-    }
-    const firstShard = candidate.shards[0];
-    const sourceFileNames = uniqueStrings(candidate.shards.map((shard) => shard.sourceFileName));
-    const policyLevels = uniqueStrings(candidate.shards.map((shard) => shard.lifecycleBundle?.authPolicy?.level));
-    const attachmentCounts = collectLifecycleAttachmentCounts(candidate.shards.map((shard) => shard.lifecycleBundle));
-    const bundleSourceFileNamesByDigest = {};
-    for (const digestHex of candidate.embeddedLifecycleBundles.keys()) {
-      bundleSourceFileNamesByDigest[digestHex] = uniqueStrings(
-        candidate.shards
-          .filter((shard) => shard.lifecycleBundleDigestHex === digestHex)
-          .map((shard) => shard.sourceFileName)
-      );
-    }
-    statesByKey.get(key).cohorts.push({
-      archiveId: candidate.archiveId,
-      stateId: candidate.stateId,
-      cohortId: candidate.cohortId,
-      bundleDigests: [...candidate.embeddedLifecycleBundles.keys()].sort(),
-      bundleSourceFileNamesByDigest,
-      sourceFileNames,
-      policyLevels,
-      archiveApprovalSignatureCount: attachmentCounts.archiveApprovalSignatureCount,
-      publicKeyCount: attachmentCounts.publicKeyCount,
-      shardCount: candidate.shards.length,
-      n: Number(firstShard?.metaJSON?.n || 0),
-      t: Number(firstShard?.metaJSON?.t || 0),
-    });
+  const stateKey = lifecycleStateKey || archiveStateKey;
+  const selectedState = model.states.find((state) => state.key === stateKey) || null;
+  const cohortId = uploadedLifecycleBundle?.cohortId || null;
+  if (cohortId && !selectedState?.cohorts.some((cohort) => cohort.cohortId === cohortId)) {
+    throw new Error('Uploaded lifecycle bundle does not match any loaded successor shard cohort.');
   }
 
-  const states = [...statesByKey.values()]
-    .map((state) => ({
-      ...state,
-      cohorts: state.cohorts.sort((a, b) => a.cohortId.localeCompare(b.cohortId)),
-    }))
-    .sort((a, b) => a.key.localeCompare(b.key));
-
-  return {
-    states,
-    hasAmbiguity: states.length > 1 || states.some((state) => (
-      state.cohorts.length > 1 || state.cohorts.some((cohort) => cohort.bundleDigests.length > 1)
-    )),
-  };
+  return { stateKey, cohortId };
 }
 
 export async function refreshSuccessorSelectionUi(prefix = 'restore', files = [], actionButton = null, assessment = null, options = {}) {
+  const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   const elements = getSuccessorSelectionElements(prefix);
   const previous = successorSelectionState.get(prefix) || {};
   const nextState = {
@@ -441,6 +470,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
   let successorShards = [];
   try {
     const classified = await classifyRestoreInputFiles(files);
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
     if (!classified.shardFiles.length) {
       const out = renderSelectionInfoUi(
         prefix,
@@ -455,6 +485,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }
 
     shardBytes = await Promise.all(classified.shardFiles.map(readFileAsUint8Array));
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
     successorShards = await Promise.all(shardBytes.map(async (bytes, index) => {
       const shard = await parseLifecycleShard(bytes, { strict: true });
       return {
@@ -462,6 +493,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
         sourceFileName: classified.shardFiles[index]?.name || `selected-shard-${index + 1}.qcont`,
       };
     }));
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
 
     if (!successorShards.length) {
       const out = renderSelectionInfoUi(
@@ -480,10 +512,14 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const uploadedArchiveState = classified.archiveStateBytes instanceof Uint8Array
       ? parseArchiveStateViewBytes(classified.archiveStateBytes)
       : null;
-    const lifecycleBundleProvided = classified.lifecycleBundleBytes instanceof Uint8Array;
-    const uploadedStateKey = uploadedArchiveState
-      ? buildStateSelectionKey(uploadedArchiveState.archiveState.archiveId, uploadedArchiveState.digest.value)
+    const uploadedLifecycleBundle = classified.lifecycleBundleBytes instanceof Uint8Array
+      ? await parseLifecycleBundleArchiveStateViewBytes(classified.lifecycleBundleBytes)
       : null;
+    const lifecycleBundleProvided = uploadedLifecycleBundle !== null;
+    const externalSelection = resolveExternallyFixedSuccessorSelection(model, {
+      uploadedArchiveState,
+      uploadedLifecycleBundle,
+    });
 
     const pickFirstAvailable = (candidates, isMember) => {
       for (const candidate of candidates) {
@@ -492,7 +528,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       return null;
     };
 
-    const selectedStateKey = uploadedStateKey || pickFirstAvailable(
+    const selectedStateKey = externalSelection.stateKey || pickFirstAvailable(
       [
         model.states.length === 1 ? model.states[0].key : null,
         previous.selectedStateKey,
@@ -503,7 +539,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const selectedState = model.states.find((state) => state.key === selectedStateKey) || null;
 
     const selectedCohortId = lifecycleBundleProvided
-      ? null
+      ? externalSelection.cohortId
       : pickFirstAvailable(
           [
             selectedState?.cohorts.length === 1 ? selectedState.cohorts[0].cohortId : null,
@@ -614,15 +650,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     const stateForRestore = stateChoiceRequired && selectedState
       ? { selectedArchiveId: selectedState.archiveId, selectedStateId: selectedState.stateId }
       : { selectedArchiveId: null, selectedStateId: null };
-    const inspectorShards = successorShards.map((shard) => ({
-      sourceFileName: shard.sourceFileName,
-      archiveState: shard.archiveState,
-      stateId: shard.stateId,
-      cohortId: shard.cohortId,
-      lifecycleBundleDigestHex: shard.lifecycleBundleDigestHex,
-      lifecycleBundle: shard.lifecycleBundle,
-      metaJSON: shard.metaJSON,
-    }));
+    const inspectorShards = successorShards.map(buildSuccessorInspectorShard);
     successorSelectionState.set(prefix, {
       ...nextState,
       mode: 'successor',
@@ -638,6 +666,7 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
       successorSelectionUiMode,
     });
   } catch (error) {
+    if (!isCurrent()) return successorSelectionState.get(prefix) || null;
     renderSelectionInfoUi(
       prefix,
       actionButton,
@@ -653,13 +682,15 @@ export async function refreshSuccessorSelectionUi(prefix = 'restore', files = []
     }
   }
 
+  if (!isCurrent()) return successorSelectionState.get(prefix) || null;
   const current = successorSelectionState.get(prefix);
   const onSelectionChange = () => {
+    const detail = buildSuccessorSelectionChangeDetail(prefix, successorSelectionState.get(prefix));
     document.dispatchEvent(new CustomEvent('qv:successor-selection-change', {
-      detail: { prefix, state: successorSelectionState.get(prefix) },
+      detail,
     }));
     if (typeof options.onSelectionChange === 'function') {
-      options.onSelectionChange({ prefix, state: successorSelectionState.get(prefix) });
+      options.onSelectionChange(detail);
     }
     const latest = successorSelectionState.get(prefix);
     void refreshSelectionAndPreflight({
@@ -691,13 +722,21 @@ export async function refreshSelectionAndPreflight({
   expectedSignerInput = null,
   renderPreflightForFiles = null,
   onSelectionChange = null,
+  isCurrent: externalIsCurrent = () => true,
 }) {
+  const refreshEpoch = (successorRefreshEpochs.get(prefix) || 0) + 1;
+  successorRefreshEpochs.set(prefix, refreshEpoch);
+  const isCurrent = () => (
+    successorRefreshEpochs.get(prefix) === refreshEpoch && externalIsCurrent()
+  );
   await refreshSuccessorSelectionUi(prefix, files, actionButton, assessment, {
     preflightContainerId,
     expectedSignerInput,
     renderPreflightForFiles,
     onSelectionChange,
+    isCurrent,
   });
+  if (!isCurrent()) return;
   if (!preflightContainerId || typeof renderPreflightForFiles !== 'function') return;
   await renderPreflightForFiles({
     prefix,
@@ -705,5 +744,6 @@ export async function refreshSelectionAndPreflight({
     files,
     expectedSignerInput,
     actionButton,
+    isCurrent,
   });
 }

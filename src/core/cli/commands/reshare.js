@@ -1,7 +1,6 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import {
   parseLifecycleShard,
   reshareSameState,
@@ -60,10 +59,6 @@ function reshareContract(message, cause) {
 
 function signatureImportFailed(message, cause) {
   return makeQvError(message, QV_CODE.SIGNATURE_IMPORT_FAILED, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 async function blobToBytes(blob) {
@@ -348,6 +343,7 @@ async function readReshareInputs(options, cwd) {
 
 function classifyReshareError(error) {
   if (typeof error?.qvCode === 'string') return error;
+  if (typeof error?.code === 'string') return error;
   const message = error?.message || String(error);
   if (/Same-state resharing forbids overriding|must preserve|changed archiveId|changed stateId|changed archive-state|bodyDefinition|new maintenance/i.test(message)) {
     return reshareContract(message, error);
@@ -355,7 +351,7 @@ function classifyReshareError(error) {
   if (/multiple embedded lifecycle-bundle digests|exactly one predecessor archive\/state\/cohort|Selected predecessor|Selected lifecycle-bundle digest|does not match the predecessor/i.test(message)) {
     return ambiguity(message, error);
   }
-  if (/Invalid params\.[nk]|Invalid params\.t|Invalid reshare|Unsupported|Need at least|Not enough valid predecessor shards|Too many missing\/corrupted|RS|Shamir|threshold|codec/i.test(message)) {
+  if (/Invalid params\.[nk]|Invalid params\.t|Invalid reshare|Unsupported|Need at least|Not enough valid predecessor shards|Too many missing\/corrupted|\bRS\b|Reed-Solomon|Shamir|threshold|codec/i.test(message)) {
     return quorumRejected(message, error);
   }
   if (/signature|\.pqpk|timestamp|OpenTimestamps|ots/i.test(message)) {

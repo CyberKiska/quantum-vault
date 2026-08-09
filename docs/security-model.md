@@ -294,13 +294,149 @@ Current runtime invariants:
 - secret material MUST remain in runtime memory only and MUST NOT be stored in `localStorage`, `sessionStorage`, `IndexedDB`, or cookies
 - zeroization is best-effort but MUST still be attempted for secret buffers as soon as practical
 - session-level wiping on unload or `pagehide` remains part of the current security posture
+- Pro encryption and decryption MUST wipe application-owned plaintext, decrypted
+  plaintext, and imported ML-KEM key byte arrays in `finally` paths; browser-owned
+  `File`, `Blob`, and already-requested download storage remain outside that guarantee
+- supplemental browser entropy collection MUST cancel listeners and scheduled work
+  on session wipe, erase queued summaries and hash/KMAC intermediates, and reject any
+  completion whose session epoch is no longer current
+- each Lite archive creation MUST generate a fresh operation-local ML-KEM pair;
+  failure, cancellation, a late key-generation result after cancellation,
+  and session wipe MUST attempt to erase the owned arrays; attempted supersession
+  MUST be rejected before another operation starts and MUST leave the pending pair
+  unchanged
 - cryptographic operations MUST stay in the core or service layer rather than the UI layer
+- restore results, selection events, inspector state, logs, and DOM MUST NOT carry
+  expected or recovered private-key digest values; the authenticated QENC key
+  commitment remains the correctness root, while current QCONT fingerprint
+  metadata may contribute only a boolean diagnostic
+
+Lite Create MUST default to threshold-only custody and MUST NOT request any
+download automatically. Before key generation or plaintext reads, it accepts
+only exact integer `n=5..25`, an exact requested threshold percentage of
+`50..90`, and `1..256` plaintext inputs totalling at most 8 MiB. These are
+non-raiseable operational browser bounds, not wire-format limits. The complete
+bound `n`, threshold, and authenticity-policy controls MUST be present and
+supported; missing or same-ID replacements MUST NOT change custody geometry or
+fall back to `integrity-only`. The raw-key bypass checkbox MUST be the exact
+initialized node, MUST be reset default-off at initialization, and grants a
+single create attempt only after a trusted user change event. Restored form state,
+programmatic `.checked`, and same-ID replacements are not authorization. The complete
+primary plan is the `n` shards plus archive-state and lifecycle-bundle artifacts.
+Every row MUST receive an individual request and MUST return through exact-name,
+exact-size, and SHA3-512-digest re-import verification before the operation may
+settle. Re-import verification proves equality to the bytes held by that browser
+session; it does not prove durable storage, independent custody, or deletion of
+other copies.
+
+The raw-key acknowledgement is default-off, captured and reset for one create
+attempt, and disabled while preparation or either export session is active. Only
+an acknowledged operation may retain its fresh pair after primary verification.
+The optional private/public raw-key transfer is a separate two-artifact verified
+session and remains a unilateral 1-of-1 threshold bypass. While an acknowledged
+pair is pending, the browser MUST block another Lite Create and a mode switch
+until the operator either completes that transfer or explicitly discards the
+pair. A later operation MUST NOT silently supersede pending recovery material.
+Failure before the optional key-export controller is handed off MUST return the
+pair to pending lifecycle ownership; merely starting export is not a discard
+decision.
+The export and discard buttons MUST be the exact initialized, connected controls.
+If they are unavailable or not visibly reachable, optional retention MUST be
+suppressed or the retained pair discarded rather than stranded in memory.
+Any active Lite preparation or export MUST also block a mode switch until
+completion or explicit cancellation so that external-copy warnings and custody
+state cannot be suppressed by navigation. Create custody state MUST disable Lite
+Restore, and an active or cancellation-settling Lite Restore token MUST disable
+Create and block tab/mode navigation. Restore MUST revalidate that token after
+every asynchronous boundary, faultable logging, native download click, and URL
+cleanup, and immediately before plaintext publication; a
+session wipe cancels the token but keeps the lock until the restore `finally`
+boundary has attempted to wipe parsed shards, reconstructed results, and
+plaintext buffers. Restore MUST require the exact connected signer-constraint
+input and preflight root wired at initialization, snapshot the optional external
+signer constraint at token acquisition, and carry that immutable value through
+preflight and core verification. Missing/replaced controls or a null/stale
+preflight decision MUST block rather than weaken the constraint. Restore MUST
+also accept only the exact initialized file input and MUST clear that bound input
+even if it is detached and replaced by a same-ID node.
+Default completion, error, cancellation, explicit discard, and session wipe MUST
+attempt best-effort release of owned buffers and capabilities. If a private-key
+request was attempted
+before cancellation, the warning that an external copy may exist is monotonic;
+the browser cannot delete that copy. Cancellation after any archive-artifact
+request likewise warns that requested shards or descriptors may remain outside
+the page and that a threshold set is a complete recovery root. These nonsecret
+hazard facts MUST remain monotonic for the live document across explicit cleanup,
+mode changes, and persisted `pagehide`/back-forward-cache transitions; memory
+wiping is not evidence of external deletion. The warning surface remains outside
+Lite tab and mode-specific subtrees. Session wipe synchronously invalidates the
+outer refresh and inner subsystem generations, clears the exact bound Restore
+FileList, resets File-backed selection state, and independently hides/scrubs the
+intake, preflight, selection options, inspector, result/error DOM, and review
+disclosure. Stale classifier/parser/inspector/preflight promises cannot repopulate
+the invalidated state or archive metadata.
+Restore plaintext publication MUST use the fixed object-URL count/byte profile,
+track a created capability before click, and preserve a monotonic plaintext-copy
+warning. Failed revocation or accounting poisons later Lite publication in that
+document and MUST NOT be reported as Restore success.
+
+The shared browser-export state machine accepts at most 64 artifacts, 64 MiB per
+artifact, and 128 MiB aggregate. It exposes only row index, role, and state;
+exact output names, lengths, source bytes, and digests remain in session-private
+memory. Re-import intake applies the same aggregate bound and permits only one
+hashing flight at a time. Cancellation aborts its Blob reader, invalidates the
+controller, and blocks a new Lite workflow until the aborted task releases its
+File references. Stream hashing MUST consume exactly the validated declared Blob
+length and reject overrun, underrun, wrong chunk types, and non-EOF empty chunks;
+the latter makes pull count a bounded function of declared bytes. Lite output
+names use a random 128-bit per-operation basename.
+The download adapter tracks at most one live object URL per row and accounts all
+live URL Blob bytes against the same 128 MiB aggregate; a retry fails closed when
+the prior row URL cannot be revoked. Before archive operation ownership or an
+optional key-custody transfer, every critical export node MUST be the exact
+connected instance wired during initialization and remain inside the exact
+panel. An active publication surface and its cancellation path MUST be reachable.
+Missing, moved, hidden, inert, or same-ID replacement controls fail before
+handoff/publication. The exact connected monotonic external-copy warning panel
+and summary are a publication precondition: both must visibly render the
+conservative hazard state before any archive/private-key object URL or download
+click. Outstanding bounded object-URL capabilities remain reported after failed
+revocation, and controller or key settlement MUST NOT be described as proof that
+they were revoked.
+Exact request/re-import verification currently applies only to Lite Create and
+its optional key export, not to Pro publication or Lite Restore output. Restore's
+tracked adapter still lacks verified, atomic, and durable publication. Raw
+`.qkey` bytes also remain a legacy unversioned representation rather than a
+crypto-agile key envelope.
+
+Multi-file QVPACK assembly copies the completed payload and then attempts to wipe
+every per-file plaintext view in a `finally` boundary, including partial-read or
+builder failures. The returned bundle remains caller-owned and JavaScript
+zeroization remains best-effort rather than a memory-forensics guarantee.
+
+Migration note: no cryptographic artifact format changed and previously created
+archives remain readable. The Lite browser workflow now uses opaque output names,
+explicit per-artifact requests and re-imports, and fixed operational input caps;
+automation coupled to the former names or fire-and-forget download burst must be
+updated. Archives made with a reused Lite key remain linkable and share one
+failure domain. Resharing the old private key does not isolate them. Isolation
+requires authorized decryption followed by full fresh-key re-encryption and new
+shards; preservation copies must not be silently deleted.
+
+`QVqcont-7` itself still stores a clear `privateKeyHash`, so suppressing that value
+at presentation boundaries does not make existing shard sets unlinkable. A new
+shard format and dual-language migration are required to remove the wire-level
+identifier. JavaScript callers that previously consumed raw fingerprint fields
+from `restoreFromShards()` must migrate to `qkeyOk` and
+`privateKeyHashMatchesMetadata`.
 
 ### 7.2 Encryption invariants for `.qenc`
 
 Current confidentiality and AEAD invariants:
 
 - parsers and decryptors MUST use explicit algorithm and profile identifiers, not heuristic inference
+- the current `.qenc` public metadata object and its `domainStrings` child are closed schemas; missing, unknown, or false-label fields MUST be rejected before decapsulation
+- the current ML-KEM-1024 encapsulated key is exactly 1568 bytes and current public metadata is capped at 4096 bytes by both writer and reader; caller options may only lower that cap
 - AES-GCM nonce size MUST remain 96 bits in the current format family
 - a `(key, nonce)` pair MUST NOT be reused
 - security-relevant header fields MUST remain inside the authenticated boundary
@@ -309,6 +445,7 @@ Current confidentiality and AEAD invariants:
 - key commitment is mandatory and MUST be verified before decryption
 - KMAC domain strings for KDF and IV derivation MUST remain explicit, non-colliding, and stable for the artifact instance
 - parsers MUST NOT interpret ciphertext or plaintext content based on unauthenticated metadata fields
+- authenticated ciphertext geometry MUST use checked safe-integer arithmetic and reject truncation and trailing bytes exactly
 
 These are hard invariants because AES-GCM authenticates only what the implementation actually binds. If a future variant moved security-relevant interpretation fields outside the authenticated boundary or allowed heuristic algorithm dispatch, a ciphertext could be structurally accepted under the wrong security interpretation.
 
@@ -325,7 +462,7 @@ Current successor invariants:
 - restore MUST fail closed when archive, state, cohort, or lifecycle-bundle selection remains ambiguous
 - restore MUST NOT auto-select a same-state fork winner or lifecycle-bundle variant by timestamp, attachment count, lexical order, or similar heuristic
 - if an operator explicitly selects a cohort or lifecycle-bundle variant in an otherwise ambiguous case, the result MUST be reported as an explicit operator choice with warning rather than as an automatic winner
-- self-verified PQ signatures that verified only with the key embedded in the `.qsig` itself MUST NOT count toward trust or archive policy unless bundled or user-supplied signer material also verified; a proof that establishes only its own embedded key is not enough to anchor signer identity outside the artifact being checked (counting rationale in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules))
+- signer material carried inside a `.qsig` or the mutable lifecycle bundle MUST NOT count toward archive policy by itself; a counted signature MUST also match independently supplied signer material (counting rationale in [`trust-and-policy.md#64-counting-rules`](trust-and-policy.md#64-counting-rules))
 - same-state resharing is maintenance, not archive re-approval
 
 The key design boundary is that archive approval attaches to one canonical, byte-stable object. Restore may collect additional evidence over time, but it MUST NOT reinterpret mutable lifecycle material as though it were part of the original archive-approval payload.
@@ -337,7 +474,19 @@ Current threshold and shard invariants:
 - shard cohort selection MUST be deterministic and MUST NOT use a "largest cohort wins" rule
 - threshold semantics MUST remain deterministic, with current threshold derived as `t = k + (n-k)/2`
 - Shamir share commitments MUST bind raw share bytes
+- the final byte of each current Shamir share MUST be a distinct coordinate in
+  `1..255`; coordinate `0` MUST be rejected before interpolation
 - fragment integrity validation MUST remain mandatory
+- allocation and RS geometry MUST come from a closed QENC header whose exact
+  bytes match the archive-state `containerId`, never from redundant outer shard
+  metadata
+- copied QENC-header validity, Shamir-share validity, and fragment-body validity
+  are independent facets; a malformed extra facet is quarantined within the
+  committed threshold/erasure budget rather than poisoning an otherwise valid
+  quorum
+- current fragment records MUST have their exact authenticated-derived lengths;
+  restore MUST NOT pad short fragments, truncate long fragments, or accept
+  trailing records
 - conflicting archive-state bytes, cohort-binding bytes, lifecycle-bundle digests, or incompatible cohorts MUST fail closed
 - fewer than threshold shards MUST NOT reconstruct the ML-KEM private key
 
@@ -375,7 +524,7 @@ Operational warnings emitted by resharing flows are advisory; they are not a sub
 | Threshold secrecy | Fewer than the required shards are available and Shamir invariants hold | Availability or recoverability |
 | Threshold recoverability | A sufficient consistent shard cohort is available and policy permits restore | That every shard source was honest or that provenance is strong |
 | A verified archive-approval signature | The signature cryptographically verifies over canonical archive-state bytes under a supported suite or wrapper | That the signer audited plaintext, approved archive class, or authorized migration |
-| Archive policy satisfied | The required valid archive-approval signature set exists under the current policy semantics | Signer pinning, timestamp evidence, maintenance approval, source-review approval, or broader organizational approval |
+| Archive policy satisfied | The required externally pinned, valid archive-approval signature set exists under the current policy semantics | Organizational authority beyond the supplied pins, timestamp evidence, maintenance approval, source-review approval, or broader institutional approval |
 | OTS evidence linked | The evidence object targets detached signature bytes under the supported linkage checks | A full independent third-party time proof or policy satisfaction by itself |
 
 Current long-horizon qualification:
@@ -391,11 +540,12 @@ Current long-horizon qualification:
 | Structural parse failure, unknown version, bad magic, bad length, or mismatched digest | Reject the artifact or cohort; do not continue as if compatible | Some unrelated external artifacts may still be inspectable, but the failed object is not trusted |
 | Inconsistent shard cohort or insufficient threshold | Do not reconstruct `.qenc` or the private key | Detached signatures or bundles may still be separately inspectable if available |
 | Invalid detached signature | Do not count it toward policy; do not upgrade provenance status | Structural integrity may still be known |
-| Self-verified PQ signature with no bundled or user pin | Do not count it toward trust or policy | The `.qsig` may still be a cryptographically valid self-signature artifact |
+| Signature verified only by embedded or bundled signer material | Do not count it toward policy or external signer authorization | The detached proof may still be cryptographically valid and `bundledKeyVerified` may report internal consistency |
 | Unsatisfied `any-signature` or `strong-pq-signature` policy | Block restore after integrity and reconstruction evaluation | Integrity may still be knowable even though restore is not authorized |
-| Missing signer pin | Report weaker provenance status; do not block restore by default | Signature validity and policy satisfaction may still hold |
+| Missing external signer pin | Block `any-signature` and `strong-pq-signature`; remain non-blocking for `integrity-only` | Cryptographic signature validity and structural integrity may still be reported separately |
 | Absent OTS evidence | Do not fail solely for absence | Integrity and signature validity may still be known |
 | Malformed or ambiguously linked OTS evidence | Reject the evidence path rather than silently trusting it | Other valid signatures or structural checks may still remain knowable |
+| Invalid authenticated `wrapped-v1` private metadata, or a private length/hash mismatch | Reject before returning or publishing plaintext; do not reflect private field values in the error | Public authenticated format metadata may still remain knowable |
 
 ## 10. CLI operator responsibilities
 
@@ -411,7 +561,11 @@ Operator responsibilities:
 - keep small detached, lifecycle, source-evidence, and key artifacts below the CLI's 32 MiB pre-read cap; large `.qenc` and `.qcont` artifacts remain on the core in-memory path and are not covered by that small-artifact cap
 - leave `QV_ALLOW_DETERMINISTIC` unset outside reproducible test fixtures; deterministic split flags are non-secret fixture controls, but when used their values are still visible through normal command-line argument inspection
 - understand that `--json` output is safe for automation but may contain file paths, archive identifiers, state identifiers, digests, and policy status
-- avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied
+- avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied before the command
+- treat `--force` as permission to replace existing regular output files only;
+  output symlinks, directories, and other non-files remain rejected, and a
+  multi-artifact plan with duplicate or ancestor/descendant destinations is
+  rejected before staging
 - preserve archive-state descriptors, cohort-binding sidecars, lifecycle bundles, detached signatures, signer pins, timestamps, and source-evidence objects alongside shards so future restore policy can be evaluated explicitly
 
 CLI network and policy boundaries:
@@ -419,7 +573,7 @@ CLI network and policy boundaries:
 - the CLI performs no hidden network use; timestamp evidence is read from disk and is not fetched or upgraded by the CLI
 - `qv verify` and `qv restore --dry-run` are the preferred automation gates before write-mode restore
 - `qv restore` blocks writes when `policy.satisfied !== true`; `--accept-policy-warnings` can acknowledge warnings but cannot override an unsatisfied policy
-- `qv verify --required-policy-level <level>` only tightens the bundle-declared policy requirement
+- `qv verify --required-policy-level <level>` and `qv restore --required-policy-level <level>` only tighten the bundle-declared policy requirement; a restore floor is checked before output creation
 
 These responsibilities do not weaken the browser model. They make explicit that the CLI host and filesystem become part of the operator's local security perimeter.
 
@@ -431,12 +585,48 @@ Current residual risks include:
 - side-channel leakage inherent to JavaScript runtimes
 - user error in shard custody, backup discipline, or artifact preservation
 - dependency or delivery-path compromise before the app is loaded
+- the main module has an HTML SRI attribute, while on-demand same-origin ESM
+  chunks (including the self-test) are covered by `BUILD.manifest.json` rather
+  than a per-import browser SRI attribute; deployments must publish and verify
+  the complete build as one artifact set
 - future cryptographic weakening of current PQ or symmetric primitives
 - incomplete long-term time-proof and evidence-renewal architecture
 - future ambiguity in trust roots, governance, or migration authority
 - per-chunk AEAD key reuse within one container: the current `per-chunk-aead` mode derives distinct IVs but uses a single `Kenc` across chunks, which is acceptable for the current size regime but may warrant future hardening for much larger payloads
+- QVPACK parsing and writing now share immutable count, name, per-entry,
+  aggregate, and encoded-size limits with checked framing, but browser and CLI
+  adapters still read whole source files before core rejection and the 1 GiB
+  boundary is not a streaming-memory guarantee
+- Lite Create and its optional raw-key export avoid automatic multi-download
+  bursts through one explicit request per artifact plus exact re-import, with
+  same-page two-archive and fault-injection coverage in Chromium. Pro publication
+  remains legacy fire-and-forget; Lite Restore URLs are bounded, tracked, and
+  late-cancel guarded, but output is still unverified and non-atomic. Browser
+  quota behavior and other browser engines remain unproved
+- Lite Restore excludes concurrent Create/Pro work, gates late plaintext output,
+  and poisons publication after URL cleanup/accounting failure, but it still
+  performs whole-buffer reads and may issue multiple downloads without verified
+  publication, atomicity, or a user-visible cancellation control
+- Lite preparation and RS work still use whole buffers on the main thread. Blob
+  and File hashing streams, but the complete plan remains resident as whole Blob
+  or byte-array sources. Input and publication profiles bound accepted work, but
+  worst-case peak memory has not been measured, preparation cancellation is
+  cooperative, and already-running cryptographic work may finish before cleanup
+- during Lite verification the browser temporarily holds a complete recovery set;
+  exact re-import proves neither durable/independent custody nor secure deletion,
+  object-URL revocation is best-effort, and requested downloads remain outside
+  page control
+- optional raw `.qkey` files have no magic, version, algorithm, role, or length
+  envelope. A crypto-agile successor requires a new explicitly versioned format
+  and JS/CLI/Rust interoperability vectors rather than silent reinterpretation
 - chosen-ciphertext feedback from verifier success or failure responses
 - correlated custodian failure: if multiple shard custodians share underlying infrastructure, network providers, organizational ownership, or physical co-location, the effective independent threshold may be lower than the formal Shamir parameter assumes; the model's threshold guarantees require genuinely independent custody rather than independence only in name
+- multi-file publication is not yet a crash-atomic transaction: `.qvpack`
+  extraction now validates, hashes, stages, and preflights the complete set before
+  publication, but process termination and failures during rename/link, rollback,
+  backup cleanup, or directory `fsync` can still leave partial or residual files;
+  case-insensitive or Unicode-normalizing paths, hard links, and symlinked-parent
+  races also remain outside the exact lexical alias checks
 
 ## 12. Future coverage retained for this document
 

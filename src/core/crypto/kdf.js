@@ -24,6 +24,16 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStr
         throw new Error('KMAC Kiv customization domain is required');
     }
 
+    if (!(sharedSecret instanceof Uint8Array)) {
+        throw new TypeError('sharedSecret must be Uint8Array');
+    }
+    if (!(salt instanceof Uint8Array)) {
+        throw new TypeError('salt must be Uint8Array');
+    }
+    if (!(metaBytes instanceof Uint8Array)) {
+        throw new TypeError('metaBytes must be Uint8Array');
+    }
+
     const kmacMessage = new Uint8Array(salt.length + metaBytes.length);
     kmacMessage.set(salt, 0);
     kmacMessage.set(metaBytes, salt.length);
@@ -59,7 +69,10 @@ export async function deriveKeyWithKmac(sharedSecret, salt, metaBytes, domainStr
         }
 
         completed = true;
-        return { Kraw, Kenc, Kiv, aesKey };
+        // Kraw is an internal master key. Never transfer it to callers: returning
+        // it either leaks master material or, when wiped in finally, exposes a
+        // misleading all-zero value.
+        return { Kenc, Kiv, aesKey };
     } finally {
         kmacMessage.fill(0);
         clearKeys(Kraw);

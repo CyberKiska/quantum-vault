@@ -37,7 +37,7 @@ export function formatAttachTargetBindingPreview({
 
   lines.push(`Signature family: ${attachSignatureFamilyDescription(channel)}`);
   lines.push(
-    `Signer public-key material: ${classified ? classified.pqPublicKeyFileBytesList.length : 0} pin file(s) (.pqpk / packaged pins)`
+    `Signer public-key material: ${classified ? classified.pqPublicKeyFileBytesList.length : 0} bundle verification key file(s) (.pqpk; not trust pins)`
   );
   lines.push(`Detached signatures loaded: ${classified ? classified.signatures.length : 0}`);
   lines.push(`OTS proofs loaded: ${classified ? classified.timestamps.length : 0}`);

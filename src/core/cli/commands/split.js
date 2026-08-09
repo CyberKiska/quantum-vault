@@ -1,7 +1,6 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
-import { fromHex, toHex } from '../../crypto/bytes.js';
+import { fromHex } from '../../crypto/bytes.js';
 import { parseQencHeader } from '../../crypto/qenc/format.js';
 import { buildLifecycleQcontShards } from '../../crypto/qcont/lifecycle-shard.js';
 import { validatePrivateKey } from '../../crypto/mlkem.js';
@@ -12,6 +11,7 @@ import { readBytesFromFile, writeArtifactSetAtomic } from '../lib/io.js';
 import { ensureErasureRuntime, ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readSecretBytes } from '../lib/secrets.js';
 import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 
 function usage(message) {
   return makeQvError(message, QV_CODE.USAGE);
@@ -27,10 +27,6 @@ function quorumRejected(message, cause) {
 
 function formatPolicy(message, cause) {
   return makeQvError(message, QV_CODE.FORMAT_POLICY_REJECT, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 async function blobToBytes(blob) {

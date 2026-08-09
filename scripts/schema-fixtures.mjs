@@ -152,6 +152,19 @@ function computeExpectedDigestHex(instance) {
   return toHex(sha3_512(canonicalizeJsonToBytes(instance)));
 }
 
+function emittedInstanceForRuntime(runtime, parsed) {
+  if (!parsed || !runtime?.artifact) return null;
+  const propertyByArtifact = {
+    'archive-state': 'archiveState',
+    'cohort-binding': 'cohortBinding',
+    'transition-record': 'transitionRecord',
+    'source-evidence': 'sourceEvidence',
+    'lifecycle-bundle': 'lifecycleBundle',
+  };
+  const property = propertyByArtifact[runtime.artifact];
+  return property ? parsed[property] : null;
+}
+
 export async function runSchemaFixtureCheck() {
   const registry = await loadSchemaRegistry();
   const index = await readJsonFile(resolve(schemaDir, 'fixtures/index.json'));
@@ -181,6 +194,14 @@ export async function runSchemaFixtureCheck() {
       let parsed = null;
       if (fixture.runtime) {
         parsed = await assertRuntimeExpectation(fixture, instance, rawJsonBytes);
+      }
+
+      if (fixture.expectSchemaValid === true && fixture.runtime?.expectParseSuccess === true) {
+        const emittedInstance = emittedInstanceForRuntime(fixture.runtime, parsed);
+        if (!emittedInstance) {
+          throw new Error(`runtime parser did not return a normalized ${fixture.runtime.artifact} instance`);
+        }
+        registry.validate(schemaUriForFile(fixture.schema), emittedInstance);
       }
 
       if (fixture.expectSchemaValid === false) {

@@ -1,10 +1,19 @@
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { bytesEqual, bytesToUtf8, toHex } from '../bytes.js';
 import { parseJsonBytesStrict } from '../manifest/strict-json.js';
-import { parseQencHeader } from '../qenc/format.js';
+import {
+  MAX_QENC_METADATA_BYTES,
+  buildQencHeader,
+  parseQencHeader,
+  parseQencMetadataBytes,
+} from '../qenc/format.js';
 import { DEFAULT_ARCHIVE_AUTH_POLICY_LEVEL } from '../constants.js';
 import { DEFAULT_CRYPTO_PROFILE, getNonceContractForAeadMode } from '../policy.js';
-import { decapsulate } from '../mlkem.js';
+import {
+  decapsulate,
+  ML_KEM_1024_ENCAPSULATED_KEY_SIZE,
+  ML_KEM_1024_PRIVATE_KEY_SIZE,
+} from '../mlkem.js';
 import { clearKeys, deriveKeyWithKmac, verifyKeyCommitment } from '../kdf.js';
 import { resolveErasureRuntime } from '../erasure-runtime.js';
 import {
@@ -32,17 +41,19 @@ import {
   rehydrateLifecycleBundleForCohort,
   reconstructLifecycleCohortMaterial,
 } from './lifecycle-cohort-shared.js';
+import { ensureEqual } from './validation.js';
 
 export const LIFECYCLE_QCONT_MAGIC = 'QVC1';
 export const LIFECYCLE_QCONT_FORMAT_VERSION = 'QVqcont-7';
 export const LIFECYCLE_ARTIFACT_FAMILY = 'successor-lifecycle-v1';
 
-const DIGEST_LEN = 64;
+export const LIFECYCLE_QCONT_DIGEST_BYTES = 64;
 /** Minimum prefix bytes validated before variable-length artifact bodies (tests flip bits in this range). */
-export const LIFECYCLE_QCONT_MIN_HEADER_BYTES = 4 + 2 + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + DIGEST_LEN + 4 + 12 + 16 + 2 + 1 + 2 + 2;
+export const LIFECYCLE_QCONT_MIN_HEADER_BYTES = 4 + 2 + 4 + LIFECYCLE_QCONT_DIGEST_BYTES + 4 + LIFECYCLE_QCONT_DIGEST_BYTES + 4 + LIFECYCLE_QCONT_DIGEST_BYTES + 4 + 12 + 16 + 2 + 1 + 2 + 2;
 const KEY_COMMITMENT_LEN = 32;
 const MAX_META_LEN = 65535;
-const MAX_ARTIFACT_LEN = 16 * 1024 * 1024;
+export const LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
+export const LIFECYCLE_QCONT_SHARE_BYTES = ML_KEM_1024_PRIVATE_KEY_SIZE + 1;
 const LOWER_HEX_RE = /^[0-9a-f]+$/;
 const RESHARE_OPERATIONAL_WARNINGS = Object.freeze([
   'Predecessor shard destruction cannot be proven by Quantum Vault; operators must handle custodial destruction outside the system.',
@@ -103,12 +114,6 @@ function ensurePositiveInteger(value, field, min = 1) {
     throw new Error(`Invalid ${field}`);
   }
   return value;
-}
-
-function ensureEqual(actual, expected, field) {
-  if (actual !== expected) {
-    throw new Error(`${field} mismatch (expected ${expected}, got ${actual})`);
-  }
 }
 
 export function isLifecycleParsedShard(shard) {
@@ -308,11 +313,15 @@ async function reconstructPredecessorMaterial(candidate, { erasureRuntime, onLog
       missingKeyCommitment: 'Predecessor shard is missing required key commitment',
       archiveStateMismatch: 'Exact archive-state byte mismatch inside predecessor cohort',
       cohortBindingMismatch: 'Exact cohort-binding byte mismatch inside predecessor cohort',
+      qencHeaderIgnored: (index) => `Predecessor shard ${index} carries QENC header fields that do not match the committed archive state; those header fields were ignored.`,
+      redundantMetadataMismatch: (index) => `Predecessor shard ${index} has inconsistent unauthenticated redundant metadata; committed archive-state/QENC geometry was used instead.`,
+      shareLayoutFailure: (index) => `Predecessor shard ${index} has an invalid Shamir share length. Share will be skipped.`,
       shareCommitmentFailure: (index) => `Share commitment verification failed for predecessor shard ${index}. Share will be skipped.`,
       notEnoughValidShares: (threshold, count) => `Not enough valid predecessor shards for Shamir reconstruction: need ${threshold}, have ${count}`,
       shareCommitmentSummary: (count) => `Predecessor share commitment failures: ${count} shard(s) rejected.`,
       shareCommitmentVerified: 'Predecessor share commitments verified.',
       shardBodyFailure: (index) => `Shard body hash verification failed for predecessor shard ${index}. Treating as erasure.`,
+      fragmentLayoutFailure: (index) => `Fragment layout validation failed for predecessor shard ${index}. Treating as erasure.`,
       shardBodyVerified: 'Predecessor shard body hashes verified.',
       tooManyMissingCorrupted: (allowed, total) => `Too many missing/corrupted predecessor shards for RS reconstruction: allowed ${allowed}, got ${total}`,
       fragmentStreamTrailing: (index) => `Fragment stream has trailing or missing data in predecessor shard ${index}`,
@@ -447,15 +456,21 @@ function buildSuccessorShardBlob({
     }
   };
   requireBytesLength(metaJSONBytes, 'Shard metadata', { max: MAX_META_LEN });
-  requireBytesLength(archiveStateBytes, 'Archive-state artifact', { max: MAX_ARTIFACT_LEN });
-  requireBytesLength(cohortBindingBytes, 'Cohort-binding artifact', { max: MAX_ARTIFACT_LEN });
-  requireBytesLength(lifecycleBundleBytes, 'Lifecycle-bundle artifact', { max: MAX_ARTIFACT_LEN });
-  requireBytesLength(encapsulatedKey, 'Encapsulated key', { max: 0xffffffff });
+  requireBytesLength(archiveStateBytes, 'Archive-state artifact', { max: LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES });
+  requireBytesLength(cohortBindingBytes, 'Cohort-binding artifact', { max: LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES });
+  requireBytesLength(lifecycleBundleBytes, 'Lifecycle-bundle artifact', { max: LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES });
+  requireBytesLength(encapsulatedKey, 'Encapsulated key', {
+    min: ML_KEM_1024_ENCAPSULATED_KEY_SIZE,
+    max: ML_KEM_1024_ENCAPSULATED_KEY_SIZE,
+  });
   requireBytesLength(containerNonce, 'Container nonce', { min: 12, max: 12 });
   requireBytesLength(kdfSalt, 'KDF salt', { min: 16, max: 16 });
-  requireBytesLength(qencMetaBytes, 'QENC metadata', { max: MAX_META_LEN });
+  requireBytesLength(qencMetaBytes, 'QENC metadata', { max: MAX_QENC_METADATA_BYTES });
   requireBytesLength(keyCommitment, 'Key commitment', { min: KEY_COMMITMENT_LEN, max: KEY_COMMITMENT_LEN });
-  requireBytesLength(share, 'Shamir share', { max: 0xffff });
+  requireBytesLength(share, 'Shamir share', {
+    min: LIFECYCLE_QCONT_SHARE_BYTES,
+    max: LIFECYCLE_QCONT_SHARE_BYTES,
+  });
   requireBytesLength(bodyBytes, 'Shard body', { max: 0xffffffff });
   if (!Number.isInteger(shardIndex) || shardIndex < 0 || shardIndex > 0xffff) {
     throw new Error('Shard index is outside uint16 wire range');
@@ -589,12 +604,11 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
   }
 
   let trialSharedSecret = null;
-  let trialKraw = null;
   let trialKenc = null;
   let trialKiv = null;
   try {
     trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
-    ({ Kraw: trialKraw, Kenc: trialKenc, Kiv: trialKiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
+    ({ Kenc: trialKenc, Kiv: trialKiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
       includeAesKey: false,
     }));
     const keyMatch = verifyKeyCommitment(trialKenc, keyCommitment);
@@ -608,7 +622,7 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     if (String(error?.message || error).includes('does not match')) throw error;
     throw new Error(`Key verification failed: ${error?.message || error}`);
   } finally {
-    clearKeys(trialSharedSecret, trialKraw, trialKenc, trialKiv);
+    clearKeys(trialSharedSecret, trialKenc, trialKiv);
   }
 
   const effectiveLength = meta.payloadLength || meta.originalLength;
@@ -867,13 +881,35 @@ export function rewriteLifecycleBundleInShard(shard, lifecycleBundleBytes) {
   };
 }
 
-async function parseLifecycleShardUnsafe(arr) {
+function prefixRequirement(requiredBytes, reason) {
+  const error = new Error(`Shard prefix requires ${requiredBytes} bytes: ${reason}`);
+  error.code = 'QV_QCONT_PREFIX_REQUIRED';
+  error.requiredBytes = requiredBytes;
+  return error;
+}
+
+export function isLifecycleShardPrefixRequirement(error) {
+  return (
+    error?.code === 'QV_QCONT_PREFIX_REQUIRED' &&
+    Number.isSafeInteger(error?.requiredBytes) &&
+    error.requiredBytes > 0
+  );
+}
+
+async function parseLifecycleShardHeaderUnsafe(arr, {
+  allowTruncatedPrefix = false,
+  includeShare = true,
+  validatePreviewHeader = false,
+} = {}) {
   if (!(arr instanceof Uint8Array)) {
     throw new Error('Shard must be a Uint8Array');
   }
 
   const minHeader = LIFECYCLE_QCONT_MIN_HEADER_BYTES;
   if (arr.length < minHeader) {
+    if (allowTruncatedPrefix) {
+      throw prefixRequirement(minHeader, 'minimum header');
+    }
     throw new Error('Shard is too small to contain a valid header');
   }
 
@@ -882,6 +918,9 @@ async function parseLifecycleShardUnsafe(arr) {
 
   const ensure = (need, reason) => {
     if (off + need > arr.length) {
+      if (allowTruncatedPrefix) {
+        throw prefixRequirement(off + need, reason);
+      }
       throw new Error(`Shard is truncated: ${reason}`);
     }
   };
@@ -935,11 +974,11 @@ async function parseLifecycleShardUnsafe(arr) {
   }
 
   const archiveStateLen = readU32('archive-state length');
-  if (archiveStateLen <= 0 || archiveStateLen > MAX_ARTIFACT_LEN) {
+  if (archiveStateLen <= 0 || archiveStateLen > LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES) {
     throw new Error('Invalid embedded archive-state length');
   }
   const archiveStateBytes = readBytes(archiveStateLen, 'archive-state bytes');
-  const archiveStateDigestBytes = readBytes(DIGEST_LEN, 'archive-state digest');
+  const archiveStateDigestBytes = readBytes(LIFECYCLE_QCONT_DIGEST_BYTES, 'archive-state digest');
   const computedArchiveStateDigestBytes = sha3_512(archiveStateBytes);
   if (!bytesEqual(archiveStateDigestBytes, computedArchiveStateDigestBytes)) {
     throw new Error('Embedded archive-state digest mismatch');
@@ -948,11 +987,11 @@ async function parseLifecycleShardUnsafe(arr) {
   const parsedArchiveState = parseArchiveStateDescriptorBytes(archiveStateBytes);
 
   const cohortBindingLen = readU32('cohort-binding length');
-  if (cohortBindingLen <= 0 || cohortBindingLen > MAX_ARTIFACT_LEN) {
+  if (cohortBindingLen <= 0 || cohortBindingLen > LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES) {
     throw new Error('Invalid embedded cohort-binding length');
   }
   const cohortBindingBytes = readBytes(cohortBindingLen, 'cohort-binding bytes');
-  const cohortBindingDigestBytes = readBytes(DIGEST_LEN, 'cohort-binding digest');
+  const cohortBindingDigestBytes = readBytes(LIFECYCLE_QCONT_DIGEST_BYTES, 'cohort-binding digest');
   const computedCohortBindingDigestBytes = sha3_512(cohortBindingBytes);
   if (!bytesEqual(cohortBindingDigestBytes, computedCohortBindingDigestBytes)) {
     throw new Error('Embedded cohort-binding digest mismatch');
@@ -961,11 +1000,11 @@ async function parseLifecycleShardUnsafe(arr) {
   const parsedCohortBinding = parseCohortBindingBytes(cohortBindingBytes);
 
   const lifecycleBundleLen = readU32('lifecycle-bundle length');
-  if (lifecycleBundleLen <= 0 || lifecycleBundleLen > MAX_ARTIFACT_LEN) {
+  if (lifecycleBundleLen <= 0 || lifecycleBundleLen > LIFECYCLE_QCONT_MAX_ARTIFACT_BYTES) {
     throw new Error('Invalid embedded lifecycle-bundle length');
   }
   const lifecycleBundleBytes = readBytes(lifecycleBundleLen, 'lifecycle-bundle bytes');
-  const lifecycleBundleDigestBytes = readBytes(DIGEST_LEN, 'lifecycle-bundle digest');
+  const lifecycleBundleDigestBytes = readBytes(LIFECYCLE_QCONT_DIGEST_BYTES, 'lifecycle-bundle digest');
   const computedLifecycleBundleDigestBytes = sha3_512(lifecycleBundleBytes);
   if (!bytesEqual(lifecycleBundleDigestBytes, computedLifecycleBundleDigestBytes)) {
     throw new Error('Embedded lifecycle-bundle digest mismatch');
@@ -974,8 +1013,10 @@ async function parseLifecycleShardUnsafe(arr) {
   const parsedLifecycleBundle = await parseLifecycleBundleBytes(lifecycleBundleBytes);
 
   const encapLen = readU32('encapsulatedKey length');
-  if (encapLen <= 0) {
-    throw new Error('Invalid encapsulated key length');
+  if (encapLen !== ML_KEM_1024_ENCAPSULATED_KEY_SIZE) {
+    throw new Error(
+      `Invalid encapsulated key length: expected ${ML_KEM_1024_ENCAPSULATED_KEY_SIZE}, got ${encapLen}`
+    );
   }
   const encapsulatedKey = readBytes(encapLen, 'encapsulatedKey');
 
@@ -983,11 +1024,13 @@ async function parseLifecycleShardUnsafe(arr) {
   const salt = readBytes(16, 'kdf salt');
 
   const qencMetaLen = readU16('qenc metadata length');
-  if (qencMetaLen <= 0 || qencMetaLen > MAX_META_LEN) {
+  if (qencMetaLen <= 0 || qencMetaLen > MAX_QENC_METADATA_BYTES) {
     throw new Error('Invalid qenc metadata length');
   }
   const qencMetaBytes = readBytes(qencMetaLen, 'qenc metadata');
-  const qencMetaJSON = readJsonStrict(qencMetaBytes, 'qenc metadata JSON');
+  const qencMetaJSON = validatePreviewHeader
+    ? parseQencMetadataBytes(qencMetaBytes).metadata
+    : readJsonStrict(qencMetaBytes, 'qenc metadata JSON');
 
   if (metaJSON?.hasKeyCommitment !== true) {
     throw new Error('Shard metadata must indicate hasKeyCommitment=true');
@@ -1003,14 +1046,15 @@ async function parseLifecycleShardUnsafe(arr) {
   }
 
   const shardIndex = readU16('shard index');
-  const shareLen = readU16('share length');
-  if (shareLen <= 0) {
-    throw new Error('Invalid Shamir share length');
-  }
-  const share = readBytes(shareLen, 'Shamir share');
-  const fragments = arr.subarray(off);
-  if (fragments.length === 0) {
-    throw new Error('Shard fragment payload is empty');
+  let share = null;
+  if (includeShare) {
+    const shareLen = readU16('share length');
+    if (shareLen !== LIFECYCLE_QCONT_SHARE_BYTES) {
+      throw new Error(
+        `Invalid Shamir share length: expected ${LIFECYCLE_QCONT_SHARE_BYTES}, got ${shareLen}`
+      );
+    }
+    share = readBytes(shareLen, 'Shamir share');
   }
 
   const stateId = deriveStateId(parsedArchiveState.archiveState);
@@ -1042,6 +1086,50 @@ async function parseLifecycleShardUnsafe(arr) {
   }
   if (Number(metaJSON?.shardIndex) !== shardIndex) {
     throw new Error('Shard metadata shardIndex mismatch');
+  }
+
+  if (validatePreviewHeader) {
+    const sharding = parsedCohortBinding.cohortBinding.sharding;
+    const supportedTuple = validateRuntimeSupportedCohortTuple({
+      n: sharding.reedSolomon.n,
+      k: sharding.reedSolomon.k,
+      parity: sharding.reedSolomon.parity,
+      threshold: sharding.shamir.threshold,
+      shareCount: sharding.shamir.shareCount,
+      codecId: sharding.reedSolomon.codecId,
+    }, 'embedded cohort parameters');
+    for (const [field, actual, expected] of [
+      ['n', Number(metaJSON?.n), supportedTuple.n],
+      ['k', Number(metaJSON?.k), supportedTuple.k],
+      ['m', Number(metaJSON?.m), supportedTuple.parity],
+      ['t', Number(metaJSON?.t), supportedTuple.threshold],
+    ]) {
+      if (actual !== expected) {
+        throw new Error(`Shard metadata ${field} mismatch`);
+      }
+    }
+    if (shardIndex < 0 || shardIndex >= supportedTuple.n) {
+      throw new Error('Shard index is outside committed cohort range');
+    }
+
+    assertArchiveStateMatchesQencMetadata(parsedArchiveState.archiveState, qencMetaJSON);
+    const qencHeader = buildQencHeader({
+      encapsulatedKey,
+      containerNonce: iv,
+      kdfSalt: salt,
+      metaBytes: qencMetaBytes,
+      keyCommitment: keyCommit,
+    });
+    const qencContainerId = computeDigestHex(qencHeader);
+    if (qencContainerId !== parsedArchiveState.archiveState.qenc.containerId) {
+      throw new Error('Embedded QENC header does not match archive-state containerId');
+    }
+    if (String(metaJSON?.containerId || '').toLowerCase() !== qencContainerId) {
+      throw new Error('Shard metadata containerId mismatch');
+    }
+    if (String(metaJSON?.encapBlobHash || '').toLowerCase() !== computeDigestHex(encapsulatedKey)) {
+      throw new Error('Shard metadata encapBlobHash mismatch');
+    }
   }
   if (parsedLifecycleBundle.lifecycleBundle.archiveStateDigest.value !== archiveStateDigestHex) {
     throw new Error('Embedded lifecycle-bundle archiveStateDigest mismatch');
@@ -1075,6 +1163,26 @@ async function parseLifecycleShardUnsafe(arr) {
     keyCommit,
     shardIndex,
     share,
+    headerLength: off,
+  };
+}
+
+export async function parseLifecycleShardPreviewPrefix(arr) {
+  return parseLifecycleShardHeaderUnsafe(arr, {
+    allowTruncatedPrefix: true,
+    includeShare: false,
+    validatePreviewHeader: true,
+  });
+}
+
+async function parseLifecycleShardUnsafe(arr) {
+  const header = await parseLifecycleShardHeaderUnsafe(arr);
+  const fragments = arr.subarray(header.headerLength);
+  if (fragments.length === 0) {
+    throw new Error('Shard fragment payload is empty');
+  }
+  return {
+    ...header,
     fragments,
     diagnostics: { errors: [], warnings: [] },
   };
@@ -1224,6 +1332,7 @@ export async function reshareSameState(predecessorShards, params, options = {}) 
       transitionRecordBytes: canonicalTransition.bytes,
       transitionRecordDigestHex: canonicalTransition.digest.value,
       verificationReport: {
+        ignoredQencHeaderIndices: reconstructed.ignoredQencHeaderIndices,
         invalidShareIndices: reconstructed.invalidShareIndices,
         corruptedShardIndices: reconstructed.corruptedShardIndices,
         missingShardIndices: reconstructed.missingShardIndices,

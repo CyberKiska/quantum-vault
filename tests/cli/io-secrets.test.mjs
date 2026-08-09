@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import test from 'node:test';
-import { readBytesFromFile, writeBytesAtomic, writeJsonAtomic } from '../../src/core/cli/lib/io.js';
+import {
+  readBytesFromFile,
+  writeArtifactSetAtomic,
+  writeBytesAtomic,
+  writeJsonAtomic,
+} from '../../src/core/cli/lib/io.js';
 import { readSecretBytes } from '../../src/core/cli/lib/secrets.js';
 
 async function makeTempDir() {
@@ -44,16 +49,120 @@ test('writeBytesAtomic refuses overwrite unless force is set', async () => {
   assert.deepEqual(new Uint8Array(await readFile(filePath)), Uint8Array.of(3));
 });
 
-test('writeBytesAtomic refuses to clobber a pre-existing temp file', async () => {
+test('writeBytesAtomic ignores and preserves a stale legacy temp file', async () => {
   const dir = await makeTempDir();
   const filePath = join(dir, 'artifact.bin');
   const tempPath = `${filePath}.tmp`;
   await writeFile(tempPath, Buffer.from([8, 8]));
-  await assert.rejects(
-    writeBytesAtomic(filePath, Uint8Array.of(1), { mode: 0o600 }),
-    { code: 'EEXIST' },
-  );
+  await writeBytesAtomic(filePath, Uint8Array.of(1), { mode: 0o600 });
+  assert.deepEqual(new Uint8Array(await readFile(filePath)), Uint8Array.of(1));
   assert.deepEqual(new Uint8Array(await readFile(tempPath)), Uint8Array.of(8, 8));
+});
+
+test('atomic writers refuse directory and symbolic-link destinations even with force', async () => {
+  const dir = await makeTempDir();
+  const directoryDestination = join(dir, 'directory-destination');
+  const directoryMarker = join(directoryDestination, 'keep.txt');
+  const symlinkTarget = join(dir, 'symlink-target.bin');
+  const symlinkDestination = join(dir, 'symlink-destination.bin');
+  const brokenSymlinkDestination = join(dir, 'broken-symlink-destination.bin');
+  await mkdir(directoryDestination);
+  await writeFile(directoryMarker, Buffer.from('keep'));
+  await writeFile(symlinkTarget, Buffer.from('target'));
+  await symlink(symlinkTarget, symlinkDestination);
+  await symlink(join(dir, 'missing-target.bin'), brokenSymlinkDestination);
+
+  for (const destination of [directoryDestination, symlinkDestination, brokenSymlinkDestination]) {
+    await assert.rejects(
+      writeBytesAtomic(destination, Uint8Array.of(1), { force: true }),
+      { qvCode: 'USAGE' },
+    );
+    await assert.rejects(
+      writeArtifactSetAtomic([{ path: destination, bytes: Uint8Array.of(2) }], { force: true }),
+      { qvCode: 'USAGE' },
+    );
+  }
+
+  assert.equal((await stat(directoryDestination)).isDirectory(), true);
+  assert.equal(await readFile(directoryMarker, 'utf8'), 'keep');
+  assert.equal((await lstat(symlinkDestination)).isSymbolicLink(), true);
+  assert.equal((await lstat(brokenSymlinkDestination)).isSymbolicLink(), true);
+  assert.equal(await readFile(symlinkTarget, 'utf8'), 'target');
+  assert.deepEqual(
+    (await readdir(dir)).filter((name) => name.includes('.tmp') || name.includes('.backup-')),
+    [],
+  );
+});
+
+test('artifact-set preflight rejects a later non-file destination without partial artifacts', async () => {
+  const dir = await makeTempDir();
+  const firstDestination = join(dir, 'first.bin');
+  const directoryDestination = join(dir, 'second.bin');
+  const markerPath = join(directoryDestination, 'keep.txt');
+  await mkdir(directoryDestination);
+  await writeFile(markerPath, Buffer.from('keep'));
+
+  await assert.rejects(
+    writeArtifactSetAtomic([
+      { path: firstDestination, bytes: Uint8Array.of(1) },
+      { path: directoryDestination, bytes: Uint8Array.of(2) },
+    ], { force: true }),
+    { qvCode: 'USAGE' },
+  );
+
+  await assert.rejects(() => stat(firstDestination), { code: 'ENOENT' });
+  assert.equal((await stat(directoryDestination)).isDirectory(), true);
+  assert.equal(await readFile(markerPath, 'utf8'), 'keep');
+  assert.deepEqual(
+    (await readdir(dir)).filter((name) => name.includes('.tmp') || name.includes('.backup-')),
+    [],
+  );
+});
+
+test('artifact-set preflight rejects ancestor and descendant destinations before writing', async () => {
+  const dir = await makeTempDir();
+  const ancestor = join(dir, 'artifact');
+  const descendant = join(ancestor, 'nested.bin');
+
+  for (const entries of [
+    [
+      { path: ancestor, bytes: Uint8Array.of(1) },
+      { path: descendant, bytes: Uint8Array.of(2) },
+    ],
+    [
+      { path: descendant, bytes: Uint8Array.of(2) },
+      { path: ancestor, bytes: Uint8Array.of(1) },
+    ],
+  ]) {
+    await assert.rejects(
+      writeArtifactSetAtomic(entries, { force: true }),
+      { qvCode: 'USAGE' },
+    );
+    await assert.rejects(() => lstat(ancestor), { code: 'ENOENT' });
+    assert.deepEqual(
+      (await readdir(dir)).filter((name) => name.includes('.tmp') || name.includes('.backup-')),
+      [],
+    );
+  }
+});
+
+test('artifact-set preflight rejects duplicate destinations before writing', async () => {
+  const dir = await makeTempDir();
+  const destination = join(dir, 'duplicate.bin');
+
+  await assert.rejects(
+    writeArtifactSetAtomic([
+      { path: destination, bytes: Uint8Array.of(1) },
+      { path: destination, bytes: Uint8Array.of(2) },
+    ], { force: true }),
+    { qvCode: 'USAGE' },
+  );
+
+  await assert.rejects(() => lstat(destination), { code: 'ENOENT' });
+  assert.deepEqual(
+    (await readdir(dir)).filter((name) => name.includes('.tmp') || name.includes('.backup-')),
+    [],
+  );
 });
 
 test('writeJsonAtomic writes newline-terminated JSON with public artifact mode', async () => {

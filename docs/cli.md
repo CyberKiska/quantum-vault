@@ -28,21 +28,39 @@ The package also exposes `qv` via the `bin` field when installed as a package.
 
 Global flags:
 
+Global flags must precede the command (`qv --allow-symlink inspect ...`), except
+for `--help` / `-h`, which may follow the command. Command-specific `--json`
+remains accepted in the command argument list.
+
 - `--help` / `-h` prints top-level help, and `qv help <command>` prints the same text as `qv <command> --help`
 - `--no-color` is accepted and is the default; current CLI output is plain text
 - `--color` is accepted as an explicit opt-in only when stderr is a TTY; current CLI output remains plain
 - `--quiet` is accepted for forward compatibility with future stderr progress output
-- `--allow-symlink` permits explicit symlink input paths and symlinked path components; without it, symlink reads fail closed
+- `--allow-symlink` permits explicit symlink input paths and symlinked path components; without it, symlink reads fail closed. This security-sensitive flag is recognized only before the command so an option value cannot accidentally enable it.
 
 Filesystem notes:
 
 - File modes are requested modes. The operating system umask may make resulting files more restrictive.
 - Small detached and lifecycle artifacts (`.qsig`, `.pqpk`, `.ots`, lifecycle JSON, source-evidence, and key inputs) are capped at 32 MiB before parsing. `.qenc` and `.qcont` are not subject to that small-artifact cap.
+- Input reads acquire a file descriptor with final-component no-follow semantics when supported and recheck the path around acquisition. Parent-directory replacement races cannot be eliminated portably with Node's current filesystem API; avoid hostile shared directories for sensitive inputs.
+- Output destinations may be absent or existing regular files only. Directories,
+  symbolic links (including broken links), and other non-files are rejected even
+  with `--force`.
+- A multi-artifact write rejects duplicate output paths and lexical
+  ancestor/descendant output pairs before staging any bytes. This preflight does
+  not make publication across multiple directories crash-atomic.
 
 `cliSchemaVersion` (currently `1`) labels the stdout JSON contract for automation:
 
 - Schema **v1** may add new object fields. It must not remove or rename fields, and must not change a field's type incompatibly (for example `string` → `number`, widening or narrowing arrays in ways that break parsers). Any incompatible change requires incrementing the schema version.
 - Error JSON from failed commands includes `command`, `ok: false`, `cliSchemaVersion`, `error`, and `qvCode` only (no success-only payload fields).
+- Missing operands, missing option values, and unknown options use `qvCode: "USAGE"` and exit status `2` consistently.
+- Filesystem failures that are not command-usage errors use `qvCode: "INPUT_IO_FAILED"` and exit status `1`; they are never reclassified by path or working-directory text.
+- Local QVPACK count/length/aggregate limit failures use
+  `qvCode: "RESOURCE_LIMIT"` with the fixed, non-reflective message
+  `QVPACK resource limit exceeded`. They retain exit status `4`, so automation
+  that needs to distinguish resource exhaustion from malformed input must inspect
+  `qvCode` rather than the numeric exit status or prose.
 
 ## Commands
 
@@ -113,13 +131,15 @@ Multi-file payloads:
 qv encrypt --pack <file-a> <file-b> [...] --public-key publicKey.qkey --out bundle.qenc --filename bundle.qvpack
 ```
 
-`--pack` builds a pre-encryption `.qvpack` payload with magic `QVB1`, then encrypts that payload into a normal `.qenc` container. Pack entry names are `basename()` values only, duplicate basenames are rejected, and `--filename` must end with `.qvpack`. An existing `.qvpack` file can also be passed as the single input; the CLI recognizes it by `QVB1` magic for reporting. Restore tooling must detect a decrypted pack by `QVB1` magic, not by filename alone.
+`--pack` builds a pre-encryption `.qvpack` payload with magic `QVB1`, then encrypts that payload into a normal `.qenc` container. Pack entry names are `basename()` values only, duplicate basenames are rejected, and `--filename` must end with `.qvpack`. An existing `.qvpack` file can also be passed as the single input; the CLI recognizes it by `QVB1` magic for reporting. Restore tooling must detect a decrypted pack by `QVB1` magic, not by filename alone. The shared current profile permits at most 4096 entries, 255 UTF-8 bytes per name, and 1 GiB each for an individual payload, aggregate payload bytes, and the complete encoded bundle; encoded framing means the complete-bundle cap is normally the tighter aggregate bound. Fatal UTF-8, checked lengths, exact framing, and exact duplicate-name rejection apply to both pack creation and parsing.
 
 Exit status:
 
 - `0` when the container was written
 - `2` for usage errors, including missing flags, duplicate pack entry names, or refused overwrite
-- `4` for format/policy rejection, including payloads above `MAX_FILE_SIZE`
+- `4` for format/policy rejection, including payloads above `MAX_FILE_SIZE`; a
+  structured QVPACK profile-limit rejection uses `qvCode: "RESOURCE_LIMIT"` at
+  the same compatible numeric status
 - `5` for invalid public key material
 - `1` for other failures
 
@@ -137,7 +157,7 @@ Exit status:
   "publicKeyPath": "string",
   "fmt": "QVv1-5-0",
   "aeadMode": "single-container-aead",
-  "chunkSize": 4194304,
+  "chunkSize": 8388608,
   "chunkCount": 1,
   "payloadLength": 12345,
   "plaintextLength": 123,
@@ -180,12 +200,26 @@ Output path selection:
 - By default, a decrypted `.qvpack` payload is written as exact `QVB1` bundle bytes.
 - `--extract-qvpack --out-dir <dir>` requires an authenticated `QVB1` payload and writes each pack entry as a separate `0600` file.
 - Extracted entry names are sanitized again: no path separators, no leading dot, no NUL/control bytes, and no overlong UTF-8 filename.
+- Extraction validates the complete destination set, rejects exact duplicate names
+  and an exact lexical alias of the input `.qenc`, computes every entry and report
+  digest, and stages the complete set before publication begins. A preflight or
+  report-construction failure therefore publishes no entry.
+- Multi-entry publication is a best-effort artifact-set operation, not a
+  crash-atomic directory transaction. Process termination, filesystem aliasing
+  (case/Unicode normalization, hard links, or symlinked parents), rollback
+  failure, or backup-cleanup failure can still leave a partial or residual set.
+
+This hardening does not change `QVB1` bytes or require archive migration. Existing
+packs remain readable; only unsafe or aliased extraction destinations that were
+previously reached during a sequential write are now rejected before publication.
 
 Exit status:
 
 - `0` when plaintext was written
 - `2` for usage errors, including conflicting output flags, unsafe recovered names, or refused overwrite
-- `4` for format/policy rejection, including malformed containers or malformed `.qvpack` payloads
+- `4` for format/policy rejection, including malformed containers or malformed
+  `.qvpack` payloads; an authenticated QVPACK profile-limit rejection instead
+  uses `qvCode: "RESOURCE_LIMIT"` at the same numeric status
 - `5` for invalid private key length
 - `6` for AEAD/key-commitment/authentication failure
 - `11` for restored plaintext hash mismatch against authenticated private metadata
@@ -204,7 +238,7 @@ Exit status:
   "alg": { "KEM": "ML-KEM-1024", "KDF": "KMAC256", "AEAD": "AES-256-GCM" },
   "fmt": "QVv1-5-0",
   "aeadMode": "single-container-aead",
-  "chunkSize": 4194304,
+  "chunkSize": 8388608,
   "chunkCount": 1,
   "payloadLength": 12345,
   "plaintextLength": 123,
@@ -310,7 +344,9 @@ Exit status:
 Security notes:
 
 - The CLI validates the private key size before split and core verifies the `.qenc` key commitment before shard generation.
-- Output paths are preflighted before any artifact write unless `--force` is supplied.
+- Output paths are preflighted before any artifact write. `--force` permits
+  replacement of an existing regular file only; it does not permit replacing a
+  directory, symbolic link, or other non-file.
 - The loaded private key, input container buffer, and emitted shard byte buffers are zeroized best-effort after write/report construction. Node.js memory zeroization remains best-effort and does not protect against swap, tracing, crash dumps, or hostile local administrators.
 
 ### `qv attach [--shards <glob-or-file> ...] [--bundle <file>] [options]`
@@ -558,9 +594,9 @@ Options:
 
 - `--bundle <file>`
 - `--sig <file>` repeatable
-- `--pqpk <file>` repeatable
+- `--pqpk <file>` repeatable; each file is an independently supplied PQ signer pin for this verification
 - `--ots <file>` repeatable
-- `--ed25519-signer <address>`
+- `--ed25519-signer <address>` supplies the independently expected Stellar signer
 - `--include-detached-summary` adds a byte-free detached-signature summary for automation
 - `--required-policy-level <integrity-only|any-signature|strong-pq-signature>` fails closed unless the bundle-declared policy is at least that strong and satisfied
 
@@ -570,6 +606,8 @@ Exit status:
 - `1` otherwise
 
 When `--bundle` is present and no extension flags are supplied, `--json` emits the same authenticity object shape produced by browser restore for the same inputs. The extension flags only add fields; they do not remove or weaken existing authenticity data.
+
+Signer material inside `--bundle` can make `bundledKeyVerified` true but cannot satisfy `any-signature` or `strong-pq-signature` by itself. Supply `--pqpk` or `--ed25519-signer` independently. Deprecated `bundlePinned` and bundle-pinned counters remain false/zero so stale automation fails closed.
 
 Stable top-level fields:
 
@@ -598,12 +636,17 @@ Stable top-level fields:
   "warnings": [],
   "status": {
     "integrityVerified": true,
+    "archiveApprovalCryptographicallyVerified": true,
+    "strongPqArchiveApprovalCryptographicallyVerified": false,
     "archiveApprovalSignatureVerified": true,
     "strongPqSignatureVerified": false,
-    "signerPinned": false,
+    "bundledKeyVerified": false,
+    "externallyPinned": true,
+    "authorizedForPolicy": true,
+    "signerPinned": true,
     "bundlePinned": false,
-    "userPinned": false,
-    "userPinProvided": false,
+    "userPinned": true,
+    "userPinProvided": true,
     "transitionRecordPresent": false,
     "transitionChainValid": false,
     "sourceEvidencePresent": false,
@@ -694,6 +737,9 @@ Verification options match `qv verify` and add explicit selection flags:
 - `--state-id <hex>`
 - `--cohort-id <hex>`
 - `--bundle-digest <hex>`
+- `--required-policy-level <integrity-only|any-signature|strong-pq-signature>`
+  applies an operator minimum in addition to the archive-declared policy; it can
+  only tighten restore and never changes archive bytes
 
 Write options:
 
@@ -714,6 +760,10 @@ Exit status:
 - `9` for ambiguous archive/state/cohort or lifecycle-bundle selection
 - `11` for restored `.qenc`, private-key, or plaintext integrity failure
 - `12` when restore is otherwise policy-satisfied but the selected cohort embeds multiple lifecycle-bundle digests and `--accept-policy-warnings` was not supplied
+
+When `--required-policy-level` is stronger than the selected archive's declared
+and satisfied policy, dry-run returns `wouldSucceed: false` and write mode fails
+with `POLICY_NOT_SATISFIED` before creating the output directory or files.
 
 `--dry-run --json` output shape remains:
 
@@ -742,6 +792,11 @@ Exit status:
   "outputs": null
 }
 ```
+
+When `--required-policy-level` is present, both dry-run and successful write-mode
+reports add a `requiredPolicy` object with the requested level, declared level,
+comparison result, archive-policy result, final `satisfied` decision, and reason.
+The field is absent when no operator floor was requested.
 
 Write-mode `--json` output includes the same fields with `dryRun: false` and an `outputs` block:
 
@@ -792,6 +847,9 @@ Dry-run guarantees:
 Write-mode security notes:
 
 - Core `restoreFromShards` enforces restore authenticity policy before reconstructing material. Policy failure writes no artifacts.
+- The CLI enforces `--required-policy-level` after core authenticity evaluation
+  and before any output preflight or directory creation. It cannot downgrade the
+  archive-declared policy and `--accept-policy-warnings` cannot override it.
 - The CLI writes recovered `.qenc` first with mode `0644` best-effort, then recovered private key with mode `0600` best-effort, then public sidecars with mode `0644`, then optional plaintext with mode `0600`.
 - Recovered `qencBytes`, `privKey`, optional plaintext bytes, and parsed shard share buffers are zeroized best-effort in `finally` blocks. Node.js memory zeroization does not protect against swap, tracing, crash dumps, or hostile local administrators.
 - `--decrypt` decrypts with the recovered key still in memory and verifies the authenticated private metadata plaintext hash before writing plaintext.

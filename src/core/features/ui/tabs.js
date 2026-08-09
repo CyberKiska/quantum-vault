@@ -19,7 +19,8 @@ export function initRovingTablist({ tabIds, panelByTabId, onActivate = null }) {
   }
 
   function activateTab(tabId, { focus = false } = {}) {
-    if (!orderedTabIds.includes(tabId)) return;
+    const requestedTab = document.getElementById(tabId);
+    if (!orderedTabIds.includes(tabId) || !isUsableTab(requestedTab)) return;
 
     orderedTabIds.forEach((currentTabId) => {
       const tabEl = document.getElementById(currentTabId);
@@ -46,8 +47,22 @@ export function initRovingTablist({ tabIds, panelByTabId, onActivate = null }) {
   function activateByOffset(currentTabId, offset) {
     const currentIndex = orderedTabIds.indexOf(currentTabId);
     if (currentIndex < 0) return;
-    const nextIndex = (currentIndex + offset + orderedTabIds.length) % orderedTabIds.length;
-    activateTab(orderedTabIds[nextIndex], { focus: true });
+    for (let distance = 1; distance <= orderedTabIds.length; distance += 1) {
+      const nextIndex = (
+        currentIndex + (offset * distance) + (orderedTabIds.length * distance)
+      ) % orderedTabIds.length;
+      const nextTabId = orderedTabIds[nextIndex];
+      if (isUsableTab(document.getElementById(nextTabId))) {
+        activateTab(nextTabId, { focus: true });
+        return;
+      }
+    }
+  }
+
+  function activateBoundaryTab(fromEnd) {
+    const candidates = fromEnd ? [...orderedTabIds].reverse() : orderedTabIds;
+    const target = candidates.find((tabId) => isUsableTab(document.getElementById(tabId)));
+    if (target) activateTab(target, { focus: true });
   }
 
   orderedTabIds.forEach((tabId) => {
@@ -67,10 +82,10 @@ export function initRovingTablist({ tabIds, panelByTabId, onActivate = null }) {
         activateByOffset(tabId, -1);
       } else if (event.key === 'Home') {
         event.preventDefault();
-        activateTab(orderedTabIds[0], { focus: true });
+        activateBoundaryTab(false);
       } else if (event.key === 'End') {
         event.preventDefault();
-        activateTab(orderedTabIds[orderedTabIds.length - 1], { focus: true });
+        activateBoundaryTab(true);
       } else if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         activateTab(tabId, { focus: true });

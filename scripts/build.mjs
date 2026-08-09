@@ -14,6 +14,7 @@ const BUILD_MANIFEST_TYPE = 'quantum-vault-build-manifest/v1';
 const BUILD_MANIFEST_VERSION = 1;
 const BUILD_TIMESTAMP_ENV = 'BUILD_TIMESTAMP';
 const ERASURE_JS_SHA256 = '83a5c2789808cc4f0236e3d184cc160a0e995f105094d844c0fe813bab069c3d';
+const MAX_INITIAL_BROWSER_JS_BYTES = 512 * 1024;
 
 function normalizeBasePath(value) {
   if (!value || value.trim() === '') return '/';
@@ -33,6 +34,35 @@ function hashHex(bytes, algorithm) {
 
 function sriSha384(bytes) {
   return `sha384-${createHash('sha384').update(bytes).digest('base64')}`;
+}
+
+function measureInitialBrowserJs(metafile, entryPoint) {
+  const outputs = metafile?.outputs || {};
+  const entryOutput = Object.entries(outputs).find(([, metadata]) => (
+    path.resolve(metadata.entryPoint || '') === path.resolve(entryPoint)
+  ));
+  if (!entryOutput) throw new Error('Build metadata is missing the main browser entry output');
+
+  let totalBytes = 0;
+  const visited = new Set();
+  const visit = (outputPath) => {
+    const normalized = normalizeRelativePath(path.normalize(outputPath));
+    if (visited.has(normalized)) return;
+    const metadata = outputs[normalized];
+    if (!metadata) throw new Error(`Build metadata is missing imported output ${normalized}`);
+    visited.add(normalized);
+    totalBytes += metadata.bytes;
+    for (const imported of metadata.imports || []) {
+      if (imported.external || imported.kind === 'dynamic-import') continue;
+      const importedPath = normalizeRelativePath(path.normalize(imported.path));
+      visit(outputs[importedPath]
+        ? importedPath
+        : path.join(path.dirname(normalized), imported.path));
+    }
+  };
+
+  visit(entryOutput[0]);
+  return { totalBytes, outputCount: visited.size };
 }
 
 function parseNpmVersionFromUserAgent(userAgent) {
@@ -211,17 +241,35 @@ export async function buildProject({
   }
   console.log(`Verified erasure.js integrity (SHA-256: ${erasureHash.slice(0, 16)}…)`);
 
-  await build({
-    entryPoints: [path.join(srcDir, 'main.js')],
-    outfile: path.join(assetsDir, 'main.js'),
+  const browserBuild = await build({
+    entryPoints: { main: path.join(srcDir, 'main.js') },
+    outdir: assetsDir,
     bundle: true,
+    splitting: true,
+    entryNames: '[name]',
+    chunkNames: 'chunks/[name]-[hash]',
     format: 'esm',
     platform: 'browser',
     target: ['es2022'],
     sourcemap: true,
     minify,
+    metafile: true,
     logLevel: 'info',
   });
+  const initialBrowserJs = measureInitialBrowserJs(
+    browserBuild.metafile,
+    path.join(srcDir, 'main.js')
+  );
+  if (minify && initialBrowserJs.totalBytes > MAX_INITIAL_BROWSER_JS_BYTES) {
+    throw new Error(
+      `Initial browser JavaScript exceeds ${MAX_INITIAL_BROWSER_JS_BYTES} bytes: ` +
+      `${initialBrowserJs.totalBytes} bytes across ${initialBrowserJs.outputCount} static outputs`
+    );
+  }
+  console.log(
+    `Initial browser JavaScript: ${initialBrowserJs.totalBytes} bytes ` +
+    `across ${initialBrowserJs.outputCount} static output(s); self-test remains on demand.`
+  );
 
   await copyPublicAssets(publicDir, distDir);
 

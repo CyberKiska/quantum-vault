@@ -1,14 +1,17 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { sha3_512 } from '@noble/hashes/sha3.js';
 import { decryptFile } from '../../crypto/index.js';
-import { toHex } from '../../crypto/bytes.js';
+import { digestSha3_512Hex } from '../lib/artifacts.js';
 import { parseQencHeader } from '../../crypto/qenc/format.js';
-import { isQvpackPayload, parseQvpackPayload } from '../../crypto/qvpack.js';
+import {
+  isQvpackPayload,
+  parseQvpackPayload,
+  QvpackResourceLimitError,
+} from '../../crypto/qvpack.js';
 import { validatePrivateKey } from '../../crypto/mlkem.js';
 import { takeValue } from '../lib/args.js';
 import { QV_CODE, makeQvError } from '../lib/exit.js';
-import { readBytesFromFile, writeBytesAtomic } from '../lib/io.js';
+import { readBytesFromFile, writeArtifactSetAtomic, writeBytesAtomic } from '../lib/io.js';
 import { ensureRuntimeCrypto } from '../lib/runtime.js';
 import { readSecretBytes } from '../lib/secrets.js';
 import { FILE_MODE, smallArtifactReadOptions } from '../lib/artifact-policy.js';
@@ -21,6 +24,10 @@ function usage(message) {
 
 function formatPolicy(message, cause) {
   return makeQvError(message, QV_CODE.FORMAT_POLICY_REJECT, { cause });
+}
+
+function resourceLimit(cause) {
+  return makeQvError('QVPACK resource limit exceeded', QV_CODE.RESOURCE_LIMIT, { cause });
 }
 
 function keyRejected(message, cause) {
@@ -37,10 +44,6 @@ function aeadFailed(cause) {
 
 function restoredIntegrityFailed(message, cause) {
   return makeQvError(message, QV_CODE.RESTORED_INTEGRITY_FAILED, { cause });
-}
-
-function digestSha3_512Hex(bytes) {
-  return toHex(sha3_512(bytes));
 }
 
 async function blobToBytes(blob) {
@@ -71,16 +74,6 @@ async function ensureDirectory(dirPath, label) {
     if (error?.code === 'ENOENT') {
       throw usage(`${label} does not exist: ${dirPath}`);
     }
-    throw error;
-  }
-}
-
-async function pathExists(filePath) {
-  try {
-    await stat(filePath);
-    return true;
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
     throw error;
   }
 }
@@ -215,6 +208,9 @@ function validateAndClonePrivateKey(bytes) {
 
 function classifyDecryptError(error) {
   if (typeof error?.qvCode === 'string') return error;
+  if (error instanceof QvpackResourceLimitError || error?.code === 'QVPACK_RESOURCE_LIMIT') {
+    return resourceLimit(error);
+  }
 
   const message = error?.message || String(error);
   if (/Invalid ML-KEM-1024 private key length|Private key must be Uint8Array/.test(message)) {
@@ -223,7 +219,10 @@ function classifyDecryptError(error) {
   if (/Refusing to overwrite existing file/.test(message)) {
     return usage(message);
   }
-  if (/Invalid file format|File is too small|Unsupported container format|Invalid metadata|Incomplete container|Invalid container|Unsupported AEAD mode|QVPACK/.test(message)) {
+  if (/Authenticated private metadata does not match the decrypted payload/.test(message)) {
+    return restoredIntegrityFailed(message, error);
+  }
+  if (/Invalid file format|File is too small|Unsupported container format|Invalid metadata|Invalid private metadata|Incomplete container|Invalid container|Unsupported AEAD mode|QVPACK/.test(message)) {
     return formatPolicy(message, error);
   }
   if (/Key commitment verification failed|KEM decapsulation failed|operation-specific|ciphertext|Encrypted payload/.test(message)) {
@@ -257,38 +256,36 @@ function createQvpackEntryReports(entries, outputPathByName = new Map()) {
   }));
 }
 
-async function writeExtractedQvpack({ entries, outDir, force }) {
-  await ensureDirectory(outDir, '--out-dir');
+function buildQvpackExtractionPlan({ entries, outDir, inputPath }) {
   const seen = new Set();
   const outputPathByName = new Map();
-  const planned = [];
+  const artifacts = [];
+  const resolvedInputPath = path.resolve(inputPath);
+  const resolvedOutDir = path.resolve(outDir);
 
   for (const entry of entries) {
     const safeName = sanitizeRecoveredFilename(entry.name, 'QVPACK entry filename');
     if (seen.has(safeName)) {
-      throw usage(`QVPACK contains duplicate output filename: ${safeName}`);
+      throw usage('QVPACK contains a duplicate output filename');
     }
     seen.add(safeName);
-    const outPath = path.join(path.resolve(outDir), safeName);
-    planned.push({ entry, outPath });
+    const outPath = path.join(resolvedOutDir, safeName);
+    if (outPath === resolvedInputPath) {
+      throw usage('Refusing to overwrite the input QENC with an extracted QVPACK entry');
+    }
+    artifacts.push({
+      path: outPath,
+      bytes: entry.bytes,
+      mode: FILE_MODE.SECRET_ARTIFACT,
+    });
     outputPathByName.set(entry.name, outPath);
   }
 
-  if (!force) {
-    for (const { outPath } of planned) {
-      if (await pathExists(outPath)) {
-        throw usage(`Refusing to overwrite existing file: ${outPath}`);
-      }
-    }
-  }
-
-  for (const { entry, outPath } of planned) {
-    await writeBytesAtomic(outPath, entry.bytes, {
-      mode: FILE_MODE.SECRET_ARTIFACT,
-      force,
-    });
-  }
-  return outputPathByName;
+  return {
+    artifacts,
+    outputPathByName,
+    outputPaths: artifacts.map((artifact) => artifact.path),
+  };
 }
 
 function verifyPlaintextHash(metadata, plaintextBytes) {
@@ -378,28 +375,29 @@ export async function runDecryptCommand(options, {
     let outputPath = null;
     let outputPaths = [];
     let outputPathByEntryName = new Map();
+    let extractionPlan = null;
 
     if (options.extractQvpack) {
       if (!isPack) {
         throw formatPolicy('decrypt --extract-qvpack requires a decrypted QVPACK payload');
       }
-      outputPathByEntryName = await writeExtractedQvpack({
+      extractionPlan = buildQvpackExtractionPlan({
         entries,
         outDir: options.outDir,
-        force: options.force,
+        inputPath: options.inputPath,
       });
-      outputPaths = entries.map((entry) => outputPathByEntryName.get(entry.name));
+      outputPathByEntryName = extractionPlan.outputPathByName;
+      outputPaths = extractionPlan.outputPaths;
     } else {
       outputPath = resolveOutputPath(options, metadata);
       await ensureOutputParentExists(outputPath);
-      await writeBytesAtomic(outputPath, plaintextBytes, {
-        mode: FILE_MODE.SECRET_ARTIFACT,
-        force: options.force,
-      });
       outputPaths = [outputPath];
     }
 
-    return buildDecryptReport({
+    // Complete all parsing, hashing, and report construction before any
+    // plaintext path is published. A report-building failure must leave no
+    // extracted subset behind.
+    const report = buildDecryptReport({
       options,
       parsedHeader,
       metadata,
@@ -412,6 +410,17 @@ export async function runDecryptCommand(options, {
       qvpackEntries: createQvpackEntryReports(entries, outputPathByEntryName),
       qvpackExtracted: options.extractQvpack,
     });
+
+    if (extractionPlan) {
+      await writeArtifactSetAtomic(extractionPlan.artifacts, { force: options.force });
+    } else {
+      await writeBytesAtomic(outputPath, plaintextBytes, {
+        mode: FILE_MODE.SECRET_ARTIFACT,
+        force: options.force,
+      });
+    }
+
+    return report;
   } catch (error) {
     throw classifyDecryptError(error);
   } finally {

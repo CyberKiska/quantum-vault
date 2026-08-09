@@ -5,6 +5,7 @@ import {
   exportSourceEvidenceForSigning,
 } from '../../crypto/qcont/lifecycle-attach.js';
 import {
+  canonicalizeSourceEvidence,
   deriveCohortId,
   parseLifecycleBundleBytes,
   parseSourceEvidenceBytes,
@@ -271,7 +272,13 @@ async function readSourceEvidence(options) {
         throw usage(msg.replace(/^Invalid Source evidence JSON:/, '--source-evidence: invalid JSON —'));
       }
       if (/Source evidence is not .* canonical JSON$/.test(msg)) {
-        return { sourceEvidence: parseJsonBytesStrict(bytes) };
+        try {
+          return {
+            sourceEvidenceBytes: canonicalizeSourceEvidence(parseJsonBytesStrict(bytes)).bytes,
+          };
+        } catch (canonicalError) {
+          throw usage(`--source-evidence: ${canonicalError?.message || canonicalError}`);
+        }
       }
       throw error;
     }
@@ -351,6 +358,7 @@ async function readAttachInputs(options, cwd) {
 
 function classifyAttachError(error) {
   if (typeof error?.qvCode === 'string') return error;
+  if (typeof error?.code === 'string') return error;
   const message = error?.message || String(error);
   if (/multiple embedded lifecycle-bundle digests|exactly one archive\/state\/cohort|multiple/i.test(message) && /lifecycle-bundle|archive\/state\/cohort|successor shards/i.test(message)) {
     return ambiguity(message, error);
@@ -358,7 +366,10 @@ function classifyAttachError(error) {
   if (/No successor lifecycle shards or lifecycle bundle|Attach requires --shards|not a supported successor shard|Refusing to overwrite/.test(message)) {
     return usage(message);
   }
-  return signatureImportFailed(message, error);
+  if (/signature|qsig|stellar-sig|publicKeyRef|\.pqpk|timestamp|OpenTimestamps|\.ots\b/i.test(message)) {
+    return signatureImportFailed(message, error);
+  }
+  return error;
 }
 
 function attachmentIdSets(previous, next) {

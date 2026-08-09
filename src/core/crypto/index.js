@@ -14,16 +14,109 @@ import {
     IV_STRATEGY_SINGLE_IV,
     IV_STRATEGY_KMAC_PREFIX64_CTR32_V3,
 } from './aead.js';
-import { toUint8, toHex } from './bytes.js';
+import { fromHex, timingSafeEqual, toUint8, toHex } from './bytes.js';
 import { CHUNK_SIZE, FORMAT_VERSION, MAX_FILE_SIZE } from './constants.js';
 import { buildQencHeader, parseQencHeader } from './qenc/format.js';
-import { parseJsonBytesStrict } from './manifest/strict-json.js';
+import { assertNoLoneSurrogates, parseJsonBytesStrict } from './manifest/strict-json.js';
 import {
     DEFAULT_CRYPTO_PROFILE,
     assertChunkCountWithinPolicy,
     buildPolicyMetadataFields,
     validateContainerPolicyMetadata,
 } from './policy.js';
+
+export const MAX_QENC_PRIVATE_METADATA_BYTES = 4096;
+
+const PRIVATE_METADATA_FIELDS = Object.freeze([
+    'originalFilename',
+    'timestamp',
+    'fileHash',
+    'originalLength',
+]);
+const SHA3_512_HEX_RE = /^[0-9a-f]{128}$/;
+const UTC_ISO_8601_MILLIS_RE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$/;
+const privateMetadataEncoder = new TextEncoder();
+
+function privateMetadataError(message) {
+    return new Error(`Invalid private metadata: ${message}`);
+}
+
+function assertBoundedPrivateMetadataString(value, field, { nullable = false } = {}) {
+    if (nullable && value === null) return;
+    if (typeof value !== 'string') {
+        throw privateMetadataError(`${field} must be ${nullable ? 'null or ' : ''}a string`);
+    }
+
+    // Reject before UTF-8 encoding when the UTF-16 length alone proves the byte
+    // bound cannot hold. This avoids a second unbounded allocation on writer input.
+    if (value.length > MAX_QENC_PRIVATE_METADATA_BYTES) {
+        throw privateMetadataError(`${field} exceeds the private metadata byte limit`);
+    }
+    try {
+        assertNoLoneSurrogates(value, 'private metadata string');
+    } catch {
+        throw privateMetadataError(`${field} contains invalid Unicode`);
+    }
+    let encodedValue = null;
+    try {
+        encodedValue = privateMetadataEncoder.encode(value);
+        if (encodedValue.length > MAX_QENC_PRIVATE_METADATA_BYTES) {
+            throw privateMetadataError(`${field} exceeds the private metadata byte limit`);
+        }
+    } finally {
+        if (encodedValue instanceof Uint8Array) encodedValue.fill(0);
+    }
+}
+
+function validateWrappedPrivateMetadata(privateMetadata, encodedLength) {
+    if (!privateMetadata || typeof privateMetadata !== 'object' || Array.isArray(privateMetadata)) {
+        throw privateMetadataError('expected a four-field object');
+    }
+    if (
+        !Number.isSafeInteger(encodedLength) ||
+        encodedLength < 1 ||
+        encodedLength > MAX_QENC_PRIVATE_METADATA_BYTES
+    ) {
+        throw privateMetadataError('encoded object exceeds the private metadata byte limit');
+    }
+
+    const expectedFields = new Set(PRIVATE_METADATA_FIELDS);
+    for (const field of Object.keys(privateMetadata)) {
+        if (!expectedFields.has(field)) {
+            throw privateMetadataError('object contains an unknown field');
+        }
+    }
+    for (const field of PRIVATE_METADATA_FIELDS) {
+        if (!Object.hasOwn(privateMetadata, field)) {
+            throw privateMetadataError('object is missing a required field');
+        }
+    }
+    if (Object.keys(privateMetadata).length !== PRIVATE_METADATA_FIELDS.length) {
+        throw privateMetadataError('expected exactly four fields');
+    }
+
+    assertBoundedPrivateMetadataString(privateMetadata.originalFilename, 'originalFilename', { nullable: true });
+    assertBoundedPrivateMetadataString(privateMetadata.timestamp, 'timestamp');
+    const timestampMillis = UTC_ISO_8601_MILLIS_RE.test(privateMetadata.timestamp)
+        ? Date.parse(privateMetadata.timestamp)
+        : Number.NaN;
+    if (
+        !Number.isFinite(timestampMillis) ||
+        new Date(timestampMillis).toISOString() !== privateMetadata.timestamp
+    ) {
+        throw privateMetadataError('timestamp must use canonical UTC ISO-8601 millisecond form');
+    }
+    if (typeof privateMetadata.fileHash !== 'string' || !SHA3_512_HEX_RE.test(privateMetadata.fileHash)) {
+        throw privateMetadataError('fileHash must be a 128-character lowercase SHA3-512 hex digest');
+    }
+    if (
+        !Number.isSafeInteger(privateMetadata.originalLength) ||
+        privateMetadata.originalLength <= 0 ||
+        privateMetadata.originalLength > MAX_FILE_SIZE
+    ) {
+        throw privateMetadataError('originalLength must be a positive safe integer within the file-size limit');
+    }
+}
 
 // Re-export utilities and sub-modules for convenience
 export { toHex, toUint8 } from './bytes.js';
@@ -80,8 +173,13 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         throw new Error(`File size ${fileBytes.length} exceeds maximum allowed size (${MAX_FILE_SIZE} bytes)`);
     }
 
+    // Preserve the current writer's falsy-to-null normalization while refusing
+    // truthy non-string values that would emit a private schema the reader cannot
+    // safely interpret.
+    const normalizedOriginalFilename = originalFilename || null;
+    assertBoundedPrivateMetadataString(normalizedOriginalFilename, 'originalFilename', { nullable: true });
+
     let sharedSecret = null;
-    let Kraw = null;
     let Kenc = null;
     let Kiv = null;
     let privateMetaBytes = null;
@@ -99,12 +197,13 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
 
         // Step 3: Build private metadata (encrypted inside payload — no cleartext leakage)
         const privateMeta = {
-            originalFilename: originalFilename || null,
+            originalFilename: normalizedOriginalFilename,
             timestamp: new Date().toISOString(),
             fileHash: await hashBytes(fileBytes),
             originalLength: fileBytes.length
         };
         privateMetaBytes = new TextEncoder().encode(JSON.stringify(privateMeta));
+        validateWrappedPrivateMetadata(privateMeta, privateMetaBytes.length);
 
         // Step 4: Wrap payload = [uint32be privateMetaLen][privateMetaJSON][fileBytes]
         const payloadLength = 4 + privateMetaBytes.length + fileBytes.length;
@@ -152,7 +251,6 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
 
         // Step 7: Derive encryption keys (SP 800-185 KMAC256)
         const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, domainStrings);
-        Kraw = derived.Kraw;
         Kenc = derived.Kenc;
         Kiv = derived.Kiv;
         const aesKey = derived.aesKey;
@@ -223,7 +321,7 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         if (payload instanceof Uint8Array) payload.fill(0);
         if (privateMetaBytes instanceof Uint8Array) privateMetaBytes.fill(0);
         if (metaBytes instanceof Uint8Array) metaBytes.fill(0);
-        clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+        clearKeys(sharedSecret, Kenc, Kiv);
     }
 }
 
@@ -260,7 +358,6 @@ export async function decryptFile(containerBytes, privateKey) {
     const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
     
     let sharedSecret = null;
-    let Kraw = null;
     let Kenc = null;
     let Kiv = null;
     let decryptedPayload = null;
@@ -274,7 +371,6 @@ export async function decryptFile(containerBytes, privateKey) {
         // Step 3: Derive decryption keys (SP 800-185)
         const ds = metadata.domainStrings;
         const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, ds);
-        Kraw = derived.Kraw;
         Kenc = derived.Kenc;
         Kiv = derived.Kiv;
         const aesKey = derived.aesKey;
@@ -347,24 +443,49 @@ export async function decryptFile(containerBytes, privateKey) {
         let mergedMetadata = { ...metadata };
         
         if (metadata.payloadFormat === 'wrapped-v1') {
+            if (decryptedPayload.length < 4) {
+                throw new Error('Invalid private metadata framing in decrypted payload');
+            }
             const payloadDv = new DataView(
                 decryptedPayload.buffer, decryptedPayload.byteOffset, decryptedPayload.byteLength
             );
             const privateMetaLen = payloadDv.getUint32(0, false);
             
-            if (privateMetaLen < 1 || privateMetaLen > decryptedPayload.length - 4) {
+            if (
+                privateMetaLen < 1 ||
+                privateMetaLen > MAX_QENC_PRIVATE_METADATA_BYTES ||
+                privateMetaLen > decryptedPayload.length - 4
+            ) {
                 throw new Error('Invalid private metadata length in decrypted payload');
             }
             
             const privateMetaBytes = decryptedPayload.subarray(4, 4 + privateMetaLen);
-            const privateMeta = parseJsonBytesStrict(privateMetaBytes);
+            let privateMeta;
+            try {
+                privateMeta = parseJsonBytesStrict(privateMetaBytes);
+            } catch {
+                // Private metadata may contain a sensitive filename or timestamp.
+                // Do not relay parser details or decrypted content through errors.
+                throw new Error('Invalid private metadata JSON in decrypted payload');
+            }
+            validateWrappedPrivateMetadata(privateMeta, privateMetaLen);
             fileBytes = decryptedPayload.subarray(4 + privateMetaLen);
 
-            if (
-                Number.isSafeInteger(privateMeta.originalLength) &&
-                privateMeta.originalLength !== fileBytes.length
-            ) {
-                throw new Error(`Decrypted file length mismatch: expected ${privateMeta.originalLength}, got ${fileBytes.length}`);
+            if (privateMeta.originalLength !== fileBytes.length) {
+                throw new Error('Authenticated private metadata does not match the decrypted payload');
+            }
+
+            let expectedFileHash = null;
+            let computedFileHash = null;
+            try {
+                expectedFileHash = fromHex(privateMeta.fileHash);
+                computedFileHash = sha3_512(fileBytes);
+                if (!timingSafeEqual(expectedFileHash, computedFileHash)) {
+                    throw new Error('Authenticated private metadata does not match the decrypted payload');
+                }
+            } finally {
+                if (expectedFileHash instanceof Uint8Array) expectedFileHash.fill(0);
+                if (computedFileHash instanceof Uint8Array) computedFileHash.fill(0);
             }
             
             // Public authenticated policy/format metadata is authoritative. Private
@@ -389,6 +510,6 @@ export async function decryptFile(containerBytes, privateKey) {
         }
         if (decryptedPayload instanceof Uint8Array) decryptedPayload.fill(0);
         if (fileBytesOut instanceof Uint8Array) fileBytesOut.fill(0);
-        clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+        clearKeys(sharedSecret, Kenc, Kiv);
     }
 }

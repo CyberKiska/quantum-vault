@@ -242,7 +242,7 @@
       "schema": "qv-lifecycle-bundle-v1.schema.json",
       "file": "fixtures/qv-lifecycle-bundle-v1.valid.json",
       "expectSchemaValid": true,
-      "expectedDigestHex": "8bb5b59ca01e5bac80babd9f8ec894bcd34d17f75b653ff265656108a449ebebecf5a76ec9c88799646eec3a029033f2391a9e0eea069f57868a57a28c5bf4ab",
+      "expectedDigestHex": "e1e48061afe30f421bb3d45d93ffe2a92424b1dc457154345d5fdcdf49e794b467ce6bf90f683e499882a3c1b26b76a41a350d48334a0d9dde8eabf2ff917929",
       "runtime": {
         "artifact": "lifecycle-bundle",
         "expectParseSuccess": true

@@ -15,6 +15,10 @@ npm run selftest
 npm run build
 ```
 
+Before release, run `npm run release:check`. It validates the installed dependency
+tree, all core/CLI/parity/schema/corpus gates, the production build, and the full
+browser suite. `npm run check` intentionally omits the slower browser tests.
+
 4. Open a pull request targeting `main`.
 5. Wait for GitHub Actions CI to pass.
 6. Address review feedback and update the pull request as needed.

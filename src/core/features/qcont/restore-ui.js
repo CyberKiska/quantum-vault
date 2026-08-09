@@ -31,6 +31,7 @@ import { buildRestoreRecoveryAction } from './restore-recovery-action.js';
 import { collectLifecycleAttachmentCounts, peekSuccessorSelectionState } from './successor-selection-ui.js';
 const RESTORE_INLINE_ERROR_ID = 'proRestoreInlineError';
 const RESTORE_PREFLIGHT_CARD_ID = 'restorePreflightDecision';
+const restorePreflightRenderEpochs = new Map();
 let proRestoreEvaluation = null;
 let restoreSelectionListenerRegistered = false;
 
@@ -92,6 +93,10 @@ function shouldShowPreflightAlertRow(decision) {
 }
 
 function renderRestorePreflightCard(containerId, decision, options = {}) {
+  restorePreflightRenderEpochs.set(
+    containerId,
+    (restorePreflightRenderEpochs.get(containerId) || 0) + 1,
+  );
   const compact = options.compact === true;
   const panel = document.getElementById(containerId);
   if (!panel) return;
@@ -143,7 +148,7 @@ function renderRestorePreflightCard(containerId, decision, options = {}) {
   );
 }
 
-function clearRestorePreflightCard(containerId) {
+export function clearRestorePreflightCard(containerId) {
   renderRestorePreflightCard(containerId, null);
 }
 
@@ -374,8 +379,13 @@ export function buildRestoreDecisionViewModel({
 
   const evidenceParts = [
     `${signatureCount} archive-approval signature artifact${signatureCount === 1 ? '' : 's'}`,
-    `${userPinnedPqKeyCount + embeddedPublicKeyCount} signer pin artifact${userPinnedPqKeyCount + embeddedPublicKeyCount === 1 ? '' : 's'}`,
   ];
+  if (userPinnedPqKeyCount > 0) {
+    evidenceParts.push(`${userPinnedPqKeyCount} external PQ signer pin${userPinnedPqKeyCount === 1 ? '' : 's'}`);
+  }
+  if (embeddedPublicKeyCount > 0) {
+    evidenceParts.push(`${embeddedPublicKeyCount} bundled verification key${embeddedPublicKeyCount === 1 ? '' : 's'} (not trust anchors)`);
+  }
   if (expectedEd25519Signer) evidenceParts.push('expected Ed25519 signer entered');
 
   return {
@@ -398,10 +408,14 @@ async function buildRestorePreflightDecisionForFiles({
   prefix = 'restore',
   files = [],
   expectedSignerInput,
+  expectedEd25519Signer = null,
 }) {
   const selected = peekSuccessorSelectionState(prefix) || {};
   const assessment = selected.assessment || null;
   const compact = prefix === 'liteRestore';
+  const expectedSignerConstraint = expectedEd25519Signer === null
+    ? String(expectedSignerInput?.value || '').trim()
+    : String(expectedEd25519Signer).trim();
   if (!files.length) return null;
 
   let classified;
@@ -414,7 +428,7 @@ async function buildRestorePreflightDecisionForFiles({
       parsedProvidedBundle: null,
       successorSelection: selected,
       classifyError: error?.message || String(error),
-      expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+      expectedEd25519Signer: expectedSignerConstraint,
       compact,
     });
   }
@@ -434,7 +448,7 @@ async function buildRestorePreflightDecisionForFiles({
     parsedProvidedBundle,
     successorSelection: selected,
     classifyError: null,
-    expectedEd25519Signer: String(expectedSignerInput?.value || '').trim(),
+    expectedEd25519Signer: expectedSignerConstraint,
     compact,
   });
 }
@@ -444,9 +458,22 @@ export async function renderRestorePreflightForFiles({
   containerId = RESTORE_PREFLIGHT_CARD_ID,
   files = [],
   expectedSignerInput = null,
+  expectedEd25519Signer = null,
   actionButton = null,
+  isCurrent: externalIsCurrent = () => true,
 }) {
-  const decision = await buildRestorePreflightDecisionForFiles({ prefix, files, expectedSignerInput });
+  const renderEpoch = (restorePreflightRenderEpochs.get(containerId) || 0) + 1;
+  restorePreflightRenderEpochs.set(containerId, renderEpoch);
+  const root = document.getElementById(containerId);
+  const isCurrent = () => restorePreflightRenderEpochs.get(containerId) === renderEpoch &&
+    externalIsCurrent() && root?.isConnected && document.getElementById(containerId) === root;
+  const decision = await buildRestorePreflightDecisionForFiles({
+    prefix,
+    files,
+    expectedSignerInput,
+    expectedEd25519Signer,
+  });
+  if (!isCurrent()) return null;
   renderRestorePreflightCard(containerId, decision, { compact: prefix === 'liteRestore' });
   applyRestorePreflightActionState(actionButton, decision, { prefix });
   return decision;
@@ -541,8 +568,8 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
   if (status) {
     const signatureStatus = formatAuthenticityStatusMessage(status);
     if (signatureStatus) {
-      if (status.signerPinned) onSuccess(signatureStatus);
-      else onWarn(`${signatureStatus.slice(0, -1)}; no signer pin is active.`);
+      if (status.externallyPinned === true) onSuccess(signatureStatus);
+      else onWarn(`${signatureStatus.slice(0, -1)}; no external signer pin is active.`);
     }
   }
 
@@ -567,7 +594,7 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
 
   const counts = verification.counts || {};
   onLog(
-    `Archive-approval counts: valid=${counts.validArchiveApproval ?? 0}, strong-pq=${counts.validArchiveApprovalStrongPq ?? 0}, pinned=${counts.archiveApprovalPinnedValidTotal ?? 0}, bundle-pinned=${counts.archiveApprovalBundlePinnedValidTotal ?? 0}, user-pinned=${counts.archiveApprovalUserPinnedValidTotal ?? 0}.`
+    `Archive-approval counts: cryptographically-valid=${counts.cryptographicallyValidArchiveApproval ?? 0}, strong-pq-valid=${counts.cryptographicallyValidArchiveApprovalStrongPq ?? 0}, policy-eligible=${counts.policyEligibleArchiveApproval ?? 0}, bundled-key-verified=${counts.archiveApprovalBundledKeyVerifiedTotal ?? 0}, externally-pinned=${counts.archiveApprovalExternallyPinnedValidTotal ?? 0}.`
   );
   onLog(
     `Maintenance counts: valid=${counts.validMaintenance ?? 0}, transition-records=${authenticity?.status?.transitionRecordPresent === true ? 1 : 0}.`
@@ -576,7 +603,7 @@ export function logVerificationSummary(authenticity, onLog, onWarn, onSuccess) {
     `Source-evidence counts: valid=${counts.validSourceEvidence ?? 0}, objects=${sourceEvidenceReport?.count ?? 0}.`
   );
   onLog(
-    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, pinned=${counts.pinnedValidTotal ?? 0}, bundle-pinned=${counts.bundlePinnedValidTotal ?? 0}, user-pinned=${counts.userPinnedValidTotal ?? 0}.`
+    `Detached signature totals across all families: valid=${counts.validTotal ?? 0}, strong-pq=${counts.validStrongPq ?? 0}, bundled-key-verified=${counts.bundledKeyVerifiedTotal ?? 0}, externally-pinned=${counts.externallyPinnedValidTotal ?? 0}.`
   );
   for (const warning of verification.warnings || []) {
     onWarn(warning);
@@ -768,9 +795,12 @@ export function initQcontRestoreUI() {
       logRestoreSelectionSummary(result, log);
       logVerificationSummary(result.authenticity, log, logWarning, logSuccess);
 
-      const { containerHash, privateKeyHash, recoveredQencHash, recoveredPrivHash, qencOk, qkeyOk } = result;
-      log(`Recovered .qenc SHA3-512=${recoveredQencHash} (expected ${containerHash})`);
-      log(`Recovered .qkey SHA3-512=${recoveredPrivHash}${privateKeyHash ? ` (expected ${privateKeyHash})` : ''}`);
+      const { qencOk, qkeyOk } = result;
+      log('Recovered container matched the committed archive-state digest.');
+      log('Recovered ML-KEM private key satisfied the authenticated QENC key commitment.');
+      if (result.privateKeyHashMatchesMetadata === false) {
+        logWarning('Unauthenticated shard key-fingerprint metadata did not match; QENC key commitment remained authoritative.');
+      }
 
       if (qencOk && qkeyOk && result.authenticity?.status?.policySatisfied) {
         proRestoreEvaluation = { result };
@@ -882,12 +912,17 @@ export function initQcontRestoreUI() {
   });
 }
 
-export async function collectRestoreVerificationOptions(prefix = 'restore', files = []) {
+export async function collectRestoreVerificationOptions(prefix = 'restore', files = [], {
+  expectedEd25519Signer = null,
+} = {}) {
   const expectedSignerInput = document.getElementById(`${prefix}ExpectedEdSigner`);
-
-  return readVerificationOptionsFromDom({
+  const verificationOptions = await readVerificationOptionsFromDom({
     prefix,
     allFiles: files,
     expectedSignerInput,
   });
+  if (expectedEd25519Signer !== null) {
+    verificationOptions.expectedEd25519Signer = String(expectedEd25519Signer).trim();
+  }
+  return verificationOptions;
 }

@@ -81,7 +81,11 @@ async function readStreamBytes(stream, { maxBytes = null, label = 'stdin secret'
     }
     throw makeQvError('stdin secret source yielded a non-byte chunk', QV_CODE.USAGE);
   }
-  return new Uint8Array(Buffer.concat(chunks));
+  const combined = Buffer.concat(chunks, total);
+  // Return a plain Uint8Array view over the one owned aggregate allocation.
+  // Constructing from the Buffer value would create a second secret copy that
+  // the caller's dispose() could not erase.
+  return new Uint8Array(combined.buffer, combined.byteOffset, combined.byteLength);
 }
 
 function getEnvFilePath(envName, env) {

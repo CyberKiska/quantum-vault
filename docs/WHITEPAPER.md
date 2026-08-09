@@ -115,20 +115,53 @@ Quantum Vault produces and consumes the following artifacts:
 | `QV-Lifecycle-Bundle` v1 | Mutable carrier of policy, signatures, signer keys, timestamps, transitions, and source evidence |
 | `.qsig` | Detached post-quantum signature over canonical archive-state bytes or another declared lifecycle target |
 | `.sig` | Detached Ed25519/Stellar signature proof following the same declared-target rule |
-| `.pqpk` | Detached post-quantum public key for signer pinning |
+| `.pqpk` | Detached post-quantum public key; bundle-carried verification material or independently supplied signer pin |
 | `.ots` | OpenTimestamps evidence linked to detached signature bytes |
 
 ### 3.2 Lifecycle
 
 The archive lifecycle proceeds through the following stages:
 
-1. **Key generation.** An ML-KEM-1024 keypair is generated client-side using the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`, with optional best-effort mixing of user interaction events.
+1. **Key generation.** An ML-KEM-1024 keypair is generated client-side using the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`, with optional best-effort mixing of user interaction events. Lite Create generates a fresh operation-local pair for each archive rather than reusing one session pair; existing archives created under an older reused pair remain cryptographically coupled until fully decrypted and re-encrypted under fresh keys.
 2. **Encryption.** The payload is encrypted into a `.qenc` container. ML-KEM encapsulates a shared secret; KMAC256 derives encryption and IV-derivation keys; AES-256-GCM provides authenticated encryption. A key commitment (`SHA3-256(Kenc)`) is embedded in the header.
 3. **Split.** The `.qenc` container is split into `QVqcont-7` shards. The ML-KEM private key is split using Shamir secret sharing; the ciphertext is split using Reed-Solomon erasure coding. Split also emits an archive-state descriptor, cohort binding, and lifecycle bundle.
 4. **Sign (external).** An external signer tool produces detached signatures (`.qsig` or `.sig`) over canonical archive-state bytes for archive approval, or over other declared lifecycle targets when maintenance or source-evidence signatures are created.
-5. **Attach.** The shipped attach workflow merges detached signatures, signer public keys, and timestamp evidence into the lifecycle bundle without altering canonical archive-state or cohort-binding bytes. The lifecycle format can also carry transition records and source-evidence objects; same-state resharing emits required transition records. Updated bundles may optionally be re-embedded into shards.
-6. **Restore.** A threshold of consistent shards is supplied, along with any optional external archive-state, lifecycle-bundle, signature, key, or timestamp material. The system verifies structural integrity, reconstructs the `.qenc` container and private key, verifies detached signatures, evaluates archive policy, and gates restoration accordingly.
+5. **Attach.** The shipped attach workflow merges detached signatures, signer public keys, and timestamp evidence into the lifecycle bundle without altering canonical archive-state or cohort-binding bytes. Keys carried by this mutable bundle constrain signature verification but are not trust anchors. The lifecycle format can also carry transition records and source-evidence objects; same-state resharing emits required transition records. Updated bundles may optionally be re-embedded into shards.
+6. **Restore.** A threshold of consistent shards is supplied, along with any optional external archive-state, lifecycle-bundle, signature, independently obtained signer pin, or timestamp material. The system verifies structural integrity, reconstructs the `.qenc` container and private key, verifies detached signatures, evaluates archive policy, and gates restoration accordingly.
 7. **Decrypt.** The restored `.qenc` container is decrypted using the reconstructed private key.
+
+The shipped Lite-only creation ceremony defaults to threshold-only custody. It
+requests no downloads automatically: all `n+2` primary artifacts require one
+explicit request each and exact name, size, and SHA3-512 digest re-import before
+the operation settles. Unless a default-off acknowledgement was captured for
+that create attempt, the operation-local keypair is then wiped on a best-effort
+basis. An acknowledged pair may instead enter a separate two-artifact optional
+raw-key export, which is explicitly a 1-of-1 recovery root. Re-import is evidence
+of equality to the browser session, not durable or independent custody. A pending
+acknowledged pair blocks a later Lite Create and mode switch until the operator
+completes the export or explicitly discards it, preventing silent supersession of
+recovery material. Active Lite preparation and export sessions also block mode
+switching until completion or visible explicit cancellation, preserving any
+external-copy warning. Those nonsecret hazard facts remain monotonic for the live
+document even when a persisted `pagehide` invalidates page-owned controllers and
+DOM state and requests cooperative best-effort cleanup. The warning is outside
+workflow/mode-specific subtrees, and a failed object-URL revocation remains
+reported separately from controller/key settlement. Setup failure
+returns a not-yet-published key pair to the pending decision, while re-import
+hashing is single-flight, aggregate-bounded, abortable, exact-length bound, and
+rejects non-progressing stream chunks. Missing or replaced critical export
+controls fail before custody handoff. Lite Restore and Lite Create exclude one
+another with an operation token; session wipe cancels Restore cooperatively and
+later plaintext-output boundaries, faultable logs, native click, and URL cleanup
+recheck the token. Restore URLs are bounded/accounted, a requested plaintext copy
+leaves a monotonic warning, and cleanup/accounting failure poisons later Lite
+publication. Missing/replaced policy,
+signer-constraint, or preflight controls cannot silently weaken a workflow, and
+generation checks stop pre-wipe classifiers/parsers from repopulating invalidated
+File-backed state; Restore also accepts only its exact initialized file input.
+Verified/atomic publication still does not cover Pro publication or Lite Restore
+output. Optional key retention also fails closed if its exact export/discard
+decision controls disappear or cannot be reached.
 
 ### 3.3 Current implementation boundary
 
@@ -141,6 +174,8 @@ The archive lifecycle proceeds through the following stages:
 - restore-time policy evaluation over archive-approval signatures only
 - fail-closed archive, state, cohort, and lifecycle-bundle selection
 - same-state resharing with required transition records
+- a Lite Create and optional key-export queue with zero automatic requests,
+  bounded plans, and exact re-import before key-custody settlement
 
 **Deferred roadmap**
 
@@ -158,7 +193,7 @@ The current artifact family deliberately separates cryptographic roles that are 
 | Post-quantum confidentiality | ML-KEM-1024 key encapsulation feeding a KMAC256 derivation tree and AES-256-GCM payload encryption inside `.qenc` [6][7][8][23] | This path protects ciphertext and authenticated metadata; it does not identify a signer or prove when an artifact existed |
 | Fixity and state binding | SHA3-512 / SHA3-256 digests and commitments over canonical bytes [10] | Hash agreement detects byte changes, but does not by itself prove provenance, policy satisfaction, or organizational authorization |
 | Detached provenance | `.qsig` / `.sig` signatures over canonical archive-state or other declared lifecycle targets [13][14][15] | Signature validity is distinct from signer identity pinning, organizational authority, and archive-policy satisfaction |
-| Policy-gated restore authorization | `authPolicyCommitment` plus restore-time counting rules over archive-approval signatures | Policy is a verifier rule over signatures; it is not carried by AEAD tags, hash digests, or timestamps alone |
+| Policy-gated restore authorization | `authPolicyCommitment` plus restore-time counting rules over externally pinned archive-approval signers | Policy is a verifier rule over signatures and independent signer expectations; it is not carried by mutable bundle keys, AEAD tags, hash digests, or timestamps alone |
 | Time evidence | OpenTimestamps linkage today, with renewable evidence benchmarked against RFC 4998 and contrasted with RFC 3161 [3][20] | Current `.ots` evidence is supplementary and does not satisfy archive signature policy by itself |
 
 ---
@@ -244,7 +279,7 @@ Quantum Vault splits archive material across `n` shards using two complementary 
 
 Share commitments are recorded in the cohort binding. During restoration, each submitted share is checked against its committed digest before entering reconstruction.
 
-**Reed-Solomon erasure coding** [12] splits the `.qenc` ciphertext into `k` data fragments and `n - k` parity fragments, such that any `k` of `n` fragments suffice to reconstruct the ciphertext. Per-shard fragment body hashes are also recorded in the cohort binding and verified during restoration.
+**Reed-Solomon erasure coding** [12] uses `k` data-share positions and `n - k` parity-share positions. The current `QV-RS-ErasureCodes-v1` decoder substitutes zero slices for missing or rejected shard bodies and invokes an error-correcting decoder without supplying erasure locations. It therefore supports at most `(n - k) / 2` missing or corrupt whole-shard slices, and current end-to-end recovery requires `t = k + (n - k) / 2` consistent shards—not merely any `k` shards. Per-shard fragment body hashes are recorded in the cohort binding and checked before reconstruction; the final authenticated `qencHash` remains mandatory.
 
 Each `QVqcont-7` shard carries one Shamir share, one set of Reed-Solomon fragments, and the embedded archive-state, cohort-binding, and lifecycle-bundle bytes for the selected cohort.
 
@@ -311,7 +346,7 @@ The derived `stateId` is `SHA3-512(canonical archive-state descriptor bytes)`.
 
 The lifecycle bundle is mutable by design. Detached archive-approval signatures do not sign lifecycle-bundle bytes; they sign canonical archive-state bytes. This lets new signatures, keys, timestamps, transition records, and source-evidence objects accumulate over time without invalidating existing archive-approval signatures.
 
-Archive policy is evaluated using `archiveApprovalSignatures` only. Maintenance and source-evidence signatures remain separate semantic channels and do not satisfy archive policy.
+Archive policy is evaluated using `archiveApprovalSignatures` only, and a counted signer must match signer material supplied independently at verify/restore time. Signer keys inside the mutable lifecycle bundle can establish internal cryptographic consistency but cannot authorize their own signatures. Maintenance and source-evidence signatures remain separate semantic channels and do not satisfy archive policy.
 
 This separation is a direct answer to the archival mutability problem. Archive approval must remain anchored to one byte-stable object so that detached signatures, proof counting, and restore policy all refer to the same payload over time. Evidence that naturally grows after creation therefore travels in the lifecycle bundle, while the archive-state descriptor remains the immutable approval target.
 
@@ -368,22 +403,23 @@ Archive authenticity policy is committed in the archive-state descriptor via `au
 | Level | Requirement | Unsigned restore | Ed25519-only sufficient |
 | --- | --- | --- | --- |
 | `integrity-only` | No detached archive-approval signature required | Yes | Yes, but not required |
-| `any-signature` | At least `minValidSignatures` valid archive-approval signatures | No | Yes |
-| `strong-pq-signature` | At least `minValidSignatures` valid archive-approval signatures, including at least one strong-PQ archive-approval signature | No | No |
+| `any-signature` | At least `minValidSignatures` valid archive-approval signatures from independently pinned unique signers | No | Yes |
+| `strong-pq-signature` | The same independently pinned threshold, including at least one valid strong-PQ archive-approval signature | No | No |
 
 ### 6.3 Separation of states
 
 The system maintains the following distinct states that must not be conflated:
 
 1. integrity verified
-2. archive-approval signature verified
-3. signer identity pinned
-4. archive policy satisfied
-5. maintenance signature verified
-6. source-evidence signature verified
-7. OTS evidence linked
+2. archive-approval signature verified cryptographically
+3. bundled signer key verified for internal consistency
+4. signer identity matched by an independent pin
+5. archive policy satisfied
+6. maintenance signature verified
+7. source-evidence signature verified
+8. OTS evidence linked
 
-Integrity does not imply provenance. Signature validity does not imply signer pinning. Signer pinning does not replace policy evaluation. Timestamp evidence does not satisfy archive policy. Maintenance and source-evidence signatures remain separate from archive policy by design.
+Integrity does not imply provenance. Signature validity does not imply signer authorization. Mutable bundle material cannot bootstrap its own trust. An independent signer pin is necessary but still does not replace threshold and suite evaluation. Timestamp evidence does not satisfy archive policy. Maintenance and source-evidence signatures remain separate from archive policy by design.
 
 ---
 
@@ -425,7 +461,9 @@ KMAC256 derivation steps use distinct, non-colliding customization strings. Thes
 
 ### 7.7 Signer pinning
 
-A detached signature may optionally reference bundled signer identity material via `publicKeyRef`. When this reference is present, the verifier must resolve it to a compatible bundled key entry and verify the signature against that key. Failure to resolve or verify a declared `publicKeyRef` is treated as a verification failure for that signature, not merely as an absence of pinning.
+A detached signature may optionally reference bundled signer identity material via `publicKeyRef`. When this reference is present, the verifier must resolve it to a compatible bundled key entry and verify the signature against that exact key. Failure to resolve or verify a declared `publicKeyRef` is a verification failure for that signature.
+
+This bundle linkage is not pinning: an attacker able to rewrite the mutable lifecycle bundle can replace both the signature and its referenced key. Current signature-required policy therefore counts an archive-approval signer only when the same PQ key is supplied independently as `.pqpk`, or the Stellar signer address is supplied independently as the expected signer. Bundle-only and embedded-key-only verification remain visible as cryptographic evidence but never authorize policy.
 
 ### 7.8 Timestamp evidence is not policy satisfaction
 
@@ -565,6 +603,26 @@ The current per-chunk mode derives distinct IVs per chunk but uses a single encr
 Key generation depends primarily on the browser or OS cryptographic RNG exposed via `crypto.getRandomValues()`. In the shipped implementation, `src/core/crypto/entropy.js` first obtains a 64-byte base seed from `crypto.getRandomValues()`, performs only a minimal consecutive-output sanity check, and optionally mixes user-supplied entropy bytes through KMAC256 under the `quantum-vault:entropy-mix:v2` domain. `src/app/browser-entropy-collector.js` summarizes mouse, keyboard, window, and touch events into coarse event records and periodically folds in fresh OS randomness before producing optional user-entropy bytes for ML-KEM key generation.
 
 This is a robustness measure, not a formal entropy-validation claim. NIST SP 800-90B distinguishes entropy-source assessment from later random-bit generation layers, and SP 800-90C defines full entropy-source-plus-DRBG constructions [19][39]. Quantum Vault does not currently claim that the browser build instantiates a standalone SP 800-90C-style random-bit generator inside the application. The current claim is narrower: the host platform CSPRNG is assumed to be suitable, and event-derived material is treated as best-effort augmentation rather than as a separately validated entropy source.
+
+### 9.8 Browser publication and custody limits
+
+Lite Create and its optional raw-key export now use bounded, explicit
+per-artifact requests and exact re-import, but preparation, erasure coding, and
+cryptographic orchestration remain main-thread work. Blob/File hashing streams,
+but the complete artifact plan is still retained as whole Blob or byte-array
+sources. Preparation cancellation is cooperative rather than immediate,
+worst-case peak memory is unmeasured, and the browser temporarily holds a
+complete recovery set. Re-import supplies no filesystem-atomic or
+durable-storage signal, object-URL revocation and JavaScript zeroization are
+best-effort, and already requested downloads cannot be deleted by the page. The
+real-download regression suite currently establishes Chromium behavior only;
+other engines, Pro publication, and Lite Restore verified output remain outside
+this gate. Lite Restore now has cross-workflow exclusion, parsed-shard/result
+zeroization, bounded tracked object URLs, monotonic plaintext-copy warnings, and
+late cancellation checks, but its adapter can still issue multiple unverified
+downloads and is not crash-atomic.
+Optional `.qkey` export is also still an unversioned legacy byte representation,
+not a crypto-agile successor key envelope.
 
 ---
 

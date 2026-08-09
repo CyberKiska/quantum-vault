@@ -24,12 +24,17 @@ import {
   parseTransitionRecordViewBytes,
 } from '../../src/app/artifact-intake-service.js';
 import {
+  canonicalizeLifecycleBundle,
   canonicalizeSourceEvidence,
   canonicalizeTransitionRecord,
 } from '../../src/core/crypto/lifecycle/artifacts.js';
+import { rewriteLifecycleBundleInShard } from '../../src/core/crypto/qcont/lifecycle-shard.js';
 import { classifyRestoreInputFiles } from '../../src/app/restore-inputs.js';
 import { classifyAttachFiles } from '../../src/core/features/qcont/attach-ui.js';
-import { assessShardSelection } from '../../src/app/shard-preview.js';
+import {
+  assessShardSelection,
+  parseQcontShardPreviewFile,
+} from '../../src/app/shard-preview.js';
 
 const FORBIDDEN_CLASSIFICATION_FIELDS = new Set(['trusted', 'policySatisfied', 'releaseAllowed']);
 let fixturePromise = null;
@@ -127,6 +132,7 @@ async function fixtures() {
       const sourceEvidenceBytes = canonicalizeSourceEvidence(verificationBundle.sourceEvidence).bytes;
 
       return {
+        sample,
         qcontBytes: await blobToBytes(sample.split.shards[0].blob),
         qsigBytes: qsig.qsigBytes,
         pqpkBytes: qsig.pqpkBytes,
@@ -413,4 +419,45 @@ test('shard preview attachment counts use bounded core preview classification fo
 
   assert.equal(assessment.ready, false);
   assert.match(assessment.message, /Attachments: 1 signature\(s\)\./);
+});
+
+test('shard preview accepts the same 16 MiB lifecycle artifact profile as core', async () => {
+  const fx = await fixtures();
+  const bundle = structuredClone(fx.sample.split.lifecycleBundle);
+  const stateDigest = fx.sample.split.archiveStateDigestHex;
+  bundle.attachments.archiveApprovalSignatures.push({
+    id: 'large-unpinned-preview-signature',
+    signatureFamily: 'archive-approval',
+    format: 'qsig',
+    suite: 'mldsa-87',
+    targetType: 'archive-state',
+    targetRef: `state:${stateDigest}`,
+    targetDigest: { alg: 'SHA3-512', value: stateDigest },
+    signatureEncoding: 'base64',
+    signature: 'A'.repeat((4 * 1024 * 1024) + 4),
+  });
+  const canonicalBundle = await canonicalizeLifecycleBundle(bundle);
+  assert.ok(canonicalBundle.bytes.length > 4 * 1024 * 1024);
+  const rewritten = rewriteLifecycleBundleInShard(fx.sample.parsed[0], canonicalBundle.bytes);
+  const shardBytes = await blobToBytes(rewritten.blob);
+
+  const preview = await parseQcontShardPreviewFile(sliceOnlyFileLike('large-bundle.qcont', shardBytes));
+  assert.equal(preview.lifecycleBundleDigestHex, canonicalBundle.digest.value);
+  assert.equal(preview.cohortId, fx.sample.split.cohortId);
+});
+
+test('shard preview verifies embedded artifact digests through the core prefix parser', async () => {
+  const fx = await fixtures();
+  const tampered = fx.qcontBytes.slice();
+  const view = new DataView(tampered.buffer, tampered.byteOffset, tampered.byteLength);
+  const metaLen = view.getUint16(4, false);
+  const archiveLengthOffset = 6 + metaLen;
+  const archiveLength = view.getUint32(archiveLengthOffset, false);
+  const archiveDigestOffset = archiveLengthOffset + 4 + archiveLength;
+  tampered[archiveDigestOffset] ^= 0x01;
+
+  await assert.rejects(
+    () => parseQcontShardPreviewFile(sliceOnlyFileLike('tampered.qcont', tampered)),
+    /Embedded archive-state digest mismatch/,
+  );
 });

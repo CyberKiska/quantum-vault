@@ -210,7 +210,14 @@
           "$ref": "qv-common-types.schema.json#/$defs/base64String"
         },
         "publicKeyRef": {
-          "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+          "oneOf": [
+            {
+              "$ref": "qv-common-types.schema.json#/$defs/nonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "oneOf": [

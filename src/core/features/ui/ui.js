@@ -1,7 +1,7 @@
 import { BrowserEntropyCollector } from '../../../app/browser-entropy-collector.js';
 import { encryptFile, decryptFile, hashBytes, generateKeyPair, runSelfTest } from '../../../app/crypto-service.js';
 import { registerSessionWipeHandler } from '../../../app/session-wipe.js';
-import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize, shortenHash } from '../../../utils.js';
+import { setWorkflowBusy, readFileAsUint8Array, download, formatFileSize } from '../../../utils.js';
 import { createBundlePayloadFromFiles, isBundlePayload, parseBundlePayload } from '../bundle-payload.js';
 import { log, logError, logSuccess, logWarning } from './logging.js';
 import { renderSuccessCallout, renderWarningCallout } from './callout.js';
@@ -17,6 +17,7 @@ import { initRovingTablist } from './tabs.js';
 // Pro mode state
 let collectedUserEntropy = null;
 let entropyCollector = null;
+let proSecretEpoch = 0;
 let proReviewStatusSeq = 0;
 let unregisterUiSessionWipe = null;
 
@@ -28,6 +29,7 @@ function wipeCollectedUserEntropy() {
 }
 
 function wipeProSessionSecrets() {
+    proSecretEpoch += 1;
     wipeCollectedUserEntropy();
     if (entropyCollector && typeof entropyCollector.dispose === 'function') {
         entropyCollector.dispose();
@@ -35,40 +37,32 @@ function wipeProSessionSecrets() {
     entropyCollector = null;
 }
 
-function shortFingerprint(value) {
-    if (typeof value !== 'string') return 'Loaded';
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return 'Loaded';
-    if (normalized === 'loaded') return 'Loaded';
-    return shortenHash(normalized);
-}
-
-export function updateSidebarStatus(pubHash, secHash) {
+export function updateSidebarStatus(publicKeyLoaded, privateKeyLoaded) {
     const sysDot = document.getElementById('sys-status-dot');
     const sysText = document.getElementById('sys-status-text');
-    const pubFp = document.getElementById('ctx-pub-fp');
-    const secFp = document.getElementById('ctx-sec-fp');
+    const pubStatus = document.getElementById('ctx-pub-status');
+    const secStatus = document.getElementById('ctx-sec-status');
 
-    const hasPub = !!pubHash;
-    const hasSec = !!secHash;
+    const hasPub = Boolean(publicKeyLoaded);
+    const hasSec = Boolean(privateKeyLoaded);
 
-    if (pubFp) {
+    if (pubStatus) {
         if (hasPub) {
-            pubFp.textContent = shortFingerprint(pubHash);
-            pubFp.className = 'context-val status-success';
+            pubStatus.textContent = 'Loaded';
+            pubStatus.className = 'context-val status-success';
         } else {
-            pubFp.textContent = 'Not Loaded';
-            pubFp.className = 'context-val status-muted';
+            pubStatus.textContent = 'Not Loaded';
+            pubStatus.className = 'context-val status-muted';
         }
     }
 
-    if (secFp) {
+    if (secStatus) {
         if (hasSec) {
-            secFp.textContent = shortFingerprint(secHash);
-            secFp.className = 'context-val status-warning';
+            secStatus.textContent = 'Loaded';
+            secStatus.className = 'context-val status-warning';
         } else {
-            secFp.textContent = 'Not Loaded';
-            secFp.className = 'context-val status-muted';
+            secStatus.textContent = 'Not Loaded';
+            secStatus.className = 'context-val status-muted';
         }
     }
 
@@ -323,33 +317,13 @@ export function initUI() {
         syncArchiveReviewHub('review');
     }
 
-    async function updateSidebarFingerprintsFromInputs() {
-        let pubHash = null;
-        let secHash = null;
-        try {
-            if (pubKeyInput?.files?.[0]) {
-                const pubBytes = await readFileAsUint8Array(pubKeyInput.files[0]);
-                pubHash = await hashBytes(pubBytes);
-            }
-            if (privKeyInput?.files?.[0]) {
-                const secBytes = await readFileAsUint8Array(privKeyInput.files[0]);
-                secHash = await hashBytes(secBytes);
-            }
-        } catch {
-            // Fall back to loaded/not-loaded state when fingerprint hashing fails.
-            pubHash = pubKeyInput?.files?.[0] ? 'Loaded' : null;
-            secHash = privKeyInput?.files?.[0] ? 'Loaded' : null;
-        }
-        updateSidebarStatus(pubHash, secHash);
-    }
-
     function updateProEncryptionControls() {
         const hasPublicKey = Boolean(pubKeyInput?.files?.[0]);
         const hasPrivateKey = Boolean(privKeyInput?.files?.[0]);
 
         if (encBtn) encBtn.disabled = !hasPublicKey;
         if (decBtn) decBtn.disabled = !hasPrivateKey;
-        void updateSidebarFingerprintsFromInputs();
+        updateSidebarStatus(hasPublicKey, hasPrivateKey);
 
         if (!proEncryptionWarning) return;
 
@@ -427,6 +401,8 @@ export function initUI() {
         const entropyHeuristicNote = el('entropyHeuristicNote');
         let progressInterval = null;
         let collectionSucceeded = false;
+        const collectionEpoch = proSecretEpoch;
+        const collector = new BrowserEntropyCollector();
 
         setWorkflowBusy('proViewIdentity', true);
         try {
@@ -435,28 +411,32 @@ export function initUI() {
             advancedEntropyBtn.textContent = '🎲 Collecting…';
             entropyHeuristicNote?.classList.remove('initially-hidden');
 
-            entropyCollector = new BrowserEntropyCollector();
+            entropyCollector = collector;
 
             progressInterval = setInterval(() => {
-                if (!entropyCollector) {
+                if (entropyCollector !== collector) {
                     return;
                 }
-                const progress = entropyCollector.getProgress();
+                const progress = collector.getProgress();
                 entropyBar.style.width = `${progress.percentage}%`;
                 entropyText.textContent = `Heuristic collection progress: ${progress.percentage}% · Events ${progress.collected}/${progress.required} · Queue ${progress.queueSize}`;
             }, 200);
 
-            const collectedSeed = await entropyCollector.startCollection();
+            const collectedSeed = await collector.startCollection();
             if (!(collectedSeed instanceof Uint8Array) || collectedSeed.length === 0) {
                 throw new Error('Advanced entropy collector returned no seed');
+            }
+            if (collectionEpoch !== proSecretEpoch || entropyCollector !== collector) {
+                collectedSeed.fill(0);
+                const error = new Error('Entropy collection completed after the session ended');
+                error.name = 'AbortError';
+                throw error;
             }
             wipeCollectedUserEntropy();
             collectedUserEntropy = collectedSeed;
 
-            if (entropyCollector && typeof entropyCollector.wipeSensitiveState === 'function') {
-                entropyCollector.wipeSensitiveState();
-            }
-            entropyCollector = null;
+            collector.wipeSensitiveState();
+            if (entropyCollector === collector) entropyCollector = null;
 
             collectionSucceeded = true;
             entropyText.textContent = '✅ Supplemental entropy collected and mixed into next key generation.';
@@ -469,10 +449,8 @@ export function initUI() {
             entropyText.textContent = '❌ Supplemental collection failed. Next key generation will use the browser CSPRNG only.';
             advancedEntropyBtn.textContent = 'Collect supplemental entropy (optional)';
             entropyHeuristicNote?.classList.remove('initially-hidden');
-            if (entropyCollector && typeof entropyCollector.dispose === 'function') {
-                entropyCollector.dispose();
-            }
-            entropyCollector = null;
+            collector.dispose();
+            if (entropyCollector === collector) entropyCollector = null;
         } finally {
             if (progressInterval !== null) {
                 clearInterval(progressInterval);
@@ -541,6 +519,8 @@ export function initUI() {
             }
         }
         
+        let generatedPrivateKey = null;
+        let generatedPublicKey = null;
         setWorkflowBusy('proViewIdentity', true);
         try {
             log('Generating ML-KEM-1024 keypair...');
@@ -556,24 +536,22 @@ export function initUI() {
             const { privateKey, publicKey, seedInfo } = await generateKeyPair({
                 userEntropyBytes: hasCollectedEntropy ? collectedUserEntropy : null
             });
+            generatedPrivateKey = privateKey;
+            generatedPublicKey = publicKey;
             wipeCollectedUserEntropy();
-            
-            const skHash = await hashBytes(privateKey);
-            const pkHash = await hashBytes(publicKey);
-            
+
             log(`Entropy source: ${seedInfo.source}${seedInfo.hasUserEntropy ? ' (supplemental user-event mixing applied)' : ''}`);
-            log(`Private Key: privateKey.qkey (${privateKey.length} B) SHA3-512=${skHash}`);
-            log(`Public Key: publicKey.qkey (${publicKey.length} B) SHA3-512=${pkHash}`);
+            log(`Generated privateKey.qkey (${privateKey.length} B) and publicKey.qkey (${publicKey.length} B).`);
             
             download(new Blob([privateKey]), 'privateKey.qkey');
             download(new Blob([publicKey]), 'publicKey.qkey');
             logSuccess('Keys generated and downloaded successfully.');
-            showToast('New keypair generated in memory.', 'success');
+            showToast('New keypair generated and downloaded.', 'success');
             
             // Clear inputs if they had files
             if (privKeyInput) privKeyInput.value = '';
             if (pubKeyInput) pubKeyInput.value = '';
-            updateSidebarStatus(pkHash, skHash);
+            updateSidebarStatus(true, true);
             
             // Reset entropy collection UI state
             if (advancedEntropyBtn) {
@@ -587,6 +565,8 @@ export function initUI() {
             el('entropyHeuristicNote')?.classList.add('initially-hidden');
             
         } catch (e) { logError(e); } finally {
+            generatedPrivateKey?.fill(0);
+            generatedPublicKey?.fill(0);
             setWorkflowBusy('proViewIdentity', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
@@ -597,39 +577,56 @@ export function initUI() {
     encBtn?.addEventListener('click', async () => {
         if (!pubKeyInput?.files?.[0]) { showToast('Load a public key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to encrypt.', 'warning'); return; }
+        let publicKey = null;
         setWorkflowBusy('proViewEncryption', true);
         try {
-            const publicKey = await readFileAsUint8Array(pubKeyInput.files[0]);
+            publicKey = await readFileAsUint8Array(pubKeyInput.files[0]);
             const selectedFiles = [...dataFileInput.files];
             const strategy = getEncryptionStrategy();
 
             if (strategy === 'pack' && selectedFiles.length > 1) {
                 const totalInputSize = selectedFiles.reduce((acc, file) => acc + file.size, 0);
-                const { bundleName, bundleBytes, fileCount } = await createBundlePayloadFromFiles(selectedFiles);
-                log(`Packing ${fileCount} files (${formatFileSize(totalInputSize)}) into one container...`);
+                let bundleBytes = null;
+                let encBytes = null;
+                try {
+                    const bundle = await createBundlePayloadFromFiles(selectedFiles);
+                    bundleBytes = bundle.bundleBytes;
+                    log(`Packing ${bundle.fileCount} files (${formatFileSize(totalInputSize)}) into one container...`);
 
-                const encBlob = await encryptFile(bundleBytes, publicKey, bundleName);
-                const encBytes = await readFileAsUint8Array(encBlob);
-                const encHash = await hashBytes(encBytes);
-                const outName = `${bundleName}.qenc`;
+                    const encBlob = await encryptFile(bundleBytes, publicKey, bundle.bundleName);
+                    encBytes = await readFileAsUint8Array(encBlob);
+                    const encHash = await hashBytes(encBytes);
+                    const outName = `${bundle.bundleName}.qenc`;
 
-                download(encBlob, outName);
-                log(`✅ Bundle encrypted: ${outName} (${encBlob.size} B) SHA3-512=${encHash}`);
+                    download(encBlob, outName);
+                    log(`✅ Bundle encrypted: ${outName} (${encBlob.size} B) SHA3-512=${encHash}`);
+                } finally {
+                    bundleBytes?.fill(0);
+                    encBytes?.fill(0);
+                }
             } else {
                 if (strategy === 'per-file' && selectedFiles.length > 1) {
                     log('Encrypting each selected file into a separate container...');
                 }
                 for (const file of selectedFiles) {
                     log(`Encrypting file ${file.name} (${file.size} B)...`);
-                    const fileBytes = await readFileAsUint8Array(file);
-                    const encBlob = await encryptFile(fileBytes, publicKey, file.name);
-                    const encBytes = await readFileAsUint8Array(encBlob);
-                    const encHash = await hashBytes(encBytes);
-                    download(encBlob, `${file.name}.qenc`);
-                    log(`✅ File encrypted: ${file.name}.qenc (${encBlob.size} B) SHA3-512=${encHash}`);
+                    let fileBytes = null;
+                    let encBytes = null;
+                    try {
+                        fileBytes = await readFileAsUint8Array(file);
+                        const encBlob = await encryptFile(fileBytes, publicKey, file.name);
+                        encBytes = await readFileAsUint8Array(encBlob);
+                        const encHash = await hashBytes(encBytes);
+                        download(encBlob, `${file.name}.qenc`);
+                        log(`✅ File encrypted: ${file.name}.qenc (${encBlob.size} B) SHA3-512=${encHash}`);
+                    } finally {
+                        fileBytes?.fill(0);
+                        encBytes?.fill(0);
+                    }
                 }
             }
         } catch (e) { logError(e); } finally {
+            publicKey?.fill(0);
             setWorkflowBusy('proViewEncryption', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();
@@ -642,45 +639,54 @@ export function initUI() {
     decBtn?.addEventListener('click', async () => {
         if (!privKeyInput?.files?.[0]) { showToast('Load a private key in Key Management.', 'warning'); return; }
         if (!dataFileInput?.files?.length) { showToast('Please select file(s) to decrypt (.qenc).', 'warning'); return; }
+        let privateKey = null;
         setWorkflowBusy('proViewEncryption', true);
         try {
-            const privateKey = await readFileAsUint8Array(privKeyInput.files[0]);
+            privateKey = await readFileAsUint8Array(privKeyInput.files[0]);
             for (const file of dataFileInput.files) {
                 if (!file.name.toLowerCase().endsWith('.qenc')) { log(`Skipping file ${file.name} as it is not a .qenc container.`); continue; }
                 log(`Decrypting file ${file.name} (${file.size} B)...`);
-                const containerBytes = await readFileAsUint8Array(file);
-                const containerHash = await hashBytes(containerBytes);
-                log(`Container hash: SHA3-512=${containerHash}`);
-                const { decryptedBlob, metadata } = await decryptFile(containerBytes, privateKey);
-                const decBytes = await readFileAsUint8Array(decryptedBlob);
-                const decHash = await hashBytes(decBytes);
+                let containerBytes = null;
+                let decBytes = null;
+                try {
+                    containerBytes = await readFileAsUint8Array(file);
+                    const containerHash = await hashBytes(containerBytes);
+                    log(`Container hash: SHA3-512=${containerHash}`);
+                    const { decryptedBlob, metadata } = await decryptFile(containerBytes, privateKey);
+                    decBytes = await readFileAsUint8Array(decryptedBlob);
+                    const decHash = await hashBytes(decBytes);
 
-                if (isBundlePayload(decBytes)) {
-                    const entries = parseBundlePayload(decBytes);
-                    for (const entry of entries) {
-                        download(new Blob([entry.bytes]), entry.name);
+                    if (isBundlePayload(decBytes)) {
+                        const entries = parseBundlePayload(decBytes);
+                        for (const entry of entries) {
+                            download(new Blob([entry.bytes]), entry.name);
+                        }
+                        log(`✅ Bundle decrypted: extracted ${entries.length} file(s) from ${file.name}`);
+                    } else {
+                        // Use original filename from metadata if available, otherwise fallback to stripping .qenc
+                        let outName = metadata.originalFilename;
+                        if (!outName) {
+                            // Backward compatibility: strip .qenc extension from input filename
+                            outName = file.name.replace(/\.qenc$/i, '');
+                        }
+                        download(decryptedBlob, outName);
+                        log(`✅ File decrypted: ${outName} (${decryptedBlob.size} B)`);
                     }
-                    log(`✅ Bundle decrypted: extracted ${entries.length} file(s) from ${file.name}`);
-                } else {
-                    // Use original filename from metadata if available, otherwise fallback to stripping .qenc
-                    let outName = metadata.originalFilename;
-                    if (!outName) {
-                        // Backward compatibility: strip .qenc extension from input filename
-                        outName = file.name.replace(/\.qenc$/i, '');
+                    log(`Original file hash (from metadata): ${metadata.fileHash}`);
+                    log(`Hash of decrypted content: ${decHash}`);
+                    if (metadata.fileHash === decHash) {
+                        log('Hashes match. File integrity verified.');
+                    } else {
+                        logWarning('Hashes do NOT match. File may be corrupted.');
                     }
-                    download(decryptedBlob, outName);
-                    log(`✅ File decrypted: ${outName} (${decryptedBlob.size} B)`);
+                    log(`Encrypted on (UTC): ${metadata.timestamp}`);
+                } finally {
+                    decBytes?.fill(0);
+                    containerBytes?.fill(0);
                 }
-                log(`Original file hash (from metadata): ${metadata.fileHash}`);
-                log(`Hash of decrypted content: ${decHash}`);
-                if (metadata.fileHash === decHash) {
-                    log('Hashes match. File integrity verified.');
-                } else {
-                    logWarning('Hashes do NOT match. File may be corrupted.');
-                }
-                log(`Encrypted on (UTC): ${metadata.timestamp}`);
             }
         } catch (e) { logError(e); } finally {
+            privateKey?.fill(0);
             setWorkflowBusy('proViewEncryption', false);
             updateProEncryptionControls();
             splitRsParamsUpdate();

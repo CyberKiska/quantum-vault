@@ -9,14 +9,30 @@ import { refreshRestoreInputPanel } from './restore-input-panel.js';
 
 export function createSuccessorShardInputRefreshController(options) {
   let seq = 0;
+  let boundInput = null;
+  let inputBindingActive = false;
 
   return {
+    bindInput(input) {
+      boundInput = input || null;
+      inputBindingActive = true;
+      seq += 1;
+    },
+    invalidate() {
+      seq += 1;
+    },
     async refresh() {
       const input = document.getElementById(options.inputId);
       const statusDiv = document.getElementById(options.statusDivId);
       const statusText = document.getElementById(options.statusTextId);
       const actionButton = document.getElementById(options.actionButtonId);
-      if (!input || !statusDiv || !statusText || !actionButton) {
+      if (
+        !input ||
+        (inputBindingActive && input !== boundInput) ||
+        !statusDiv ||
+        !statusText ||
+        !actionButton
+      ) {
         return { assessment: null };
       }
 

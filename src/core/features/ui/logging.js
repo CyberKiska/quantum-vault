@@ -102,12 +102,13 @@ export function formatSignatureResultSummary(result) {
         result?.signerFingerprintHex ||
         ''
     );
+    const bundledKeyVerified = result?.bundledKeyVerified === true || result?.bundlePinned === true;
+    const externallyPinned = result?.externallyPinned === true || result?.userPinned === true;
     const detailParts = [suite];
     if (signer) detailParts.push(`signer ${signer}`);
     if (result?.selfSigned) detailParts.push('self-signed');
-    if (result?.bundlePinned) detailParts.push('bundle-pinned');
-    if (result?.userPinned) detailParts.push('user-pinned');
-    if (!result?.bundlePinned && !result?.userPinned && result?.signerPinned) detailParts.push('pinned');
+    if (bundledKeyVerified) detailParts.push('bundled key verified (not a trust anchor)');
+    if (externallyPinned) detailParts.push('external signer pin matched');
     const detail = detailParts.join(', ');
 
     const referenceName = typeof result?.name === 'string' ? result.name.trim() : '';
@@ -118,25 +119,31 @@ export function formatSignatureResultSummary(result) {
 }
 
 export function formatAuthenticityStatusMessage(status = {}) {
-    const signatureVerified = status?.archiveApprovalSignatureVerified ?? status?.signatureVerified;
+    const signatureVerified = (
+        status?.archiveApprovalCryptographicallyVerified ??
+        status?.archiveApprovalSignatureVerified ??
+        status?.signatureVerified
+    );
     if (signatureVerified !== true) {
         return '';
     }
     const label = Object.prototype.hasOwnProperty.call(status, 'archiveApprovalSignatureVerified')
-        ? 'Archive-approval signatures verified'
+        ? 'Archive-approval signatures cryptographically verified'
         : 'Signatures verified';
+    const bundledKeyVerified = status?.bundledKeyVerified === true || status?.bundlePinned === true;
+    const externallyPinned = status?.externallyPinned === true || status?.userPinned === true;
     const details = [];
-    if (status?.strongPqSignatureVerified === true) {
-        details.push('strong PQ present');
+    if (
+        status?.strongPqArchiveApprovalCryptographicallyVerified === true ||
+        status?.strongPqSignatureVerified === true
+    ) {
+        details.push('strong PQ cryptographically valid');
     }
-    if (status?.bundlePinned === true) {
-        details.push('bundle pin active');
+    if (bundledKeyVerified) {
+        details.push('bundled key verified; not a trust anchor');
     }
-    if (status?.userPinned === true) {
-        details.push('user pin matched');
-    }
-    if (status?.signerPinned === true && status?.bundlePinned !== true && status?.userPinned !== true) {
-        details.push('signer pin active');
+    if (externallyPinned) {
+        details.push('external signer pin matched');
     }
     return details.length > 0
         ? `${label} (${details.join(', ')}).`
@@ -148,25 +155,6 @@ export function logHash(label, hash, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;
     const displayHash = isLiteMode ? shortenHash(hash) : hash;
     log(`${label}: ${displayHash}`, { elementId, isLiteMode });
-}
-
-// Log key generation event
-export function logKeyGeneration(privateKeyHash, publicKeyHash, seedInfo, options = {}) {
-    const { isLiteMode = true, elementId = 'log' } = options;
-    
-    if (isLiteMode) {
-        log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
-        logHash('Private Key', privateKeyHash, { isLiteMode, elementId });
-        logHash('Public Key', publicKeyHash, { isLiteMode, elementId });
-    } else {
-        log('New ML-KEM keypair generated in memory.', { elementId, isLiteMode });
-        log(`Entropy source: ${seedInfo.source}`, { elementId, isLiteMode });
-        if (seedInfo.hasUserEntropy) {
-            log('User entropy successfully collected and mixed.', { elementId, isLiteMode });
-        }
-        logHash('Private Key Hash', privateKeyHash, { isLiteMode, elementId });
-        logHash('Public Key Hash', publicKeyHash, { isLiteMode, elementId });
-    }
 }
 
 // Log file encryption progress
@@ -209,27 +197,16 @@ export function logRestoration(shardCount, containerId, options = {}) {
 }
 
 // Determine if a filename is meaningful (not a hash)
-export function isMeaningfulFilename(filename) {
-    if (!filename.includes('.')) {
-        return !/^[a-f0-9]+$/i.test(filename);
-    }
-    const namePart = filename.split('.')[0];
-    if (/^[a-f0-9]+$/i.test(namePart)) {
-        return false;
-    }
-    return /[a-zA-Z]/.test(namePart) || /\s/.test(namePart) || /[-_]/.test(namePart);
-}
-
 // Log successful restoration
 export function logRestorationSuccess(filename, fileSize, encryptionTime, integrityOk, options = {}) {
     const { isLiteMode = true, elementId = 'log' } = options;
 
     if (isLiteMode) {
         if (integrityOk) {
-            const displayName = isMeaningfulFilename(filename) ? filename :
-                (filename.includes('.') ?
-                    `${shortenHash(filename.split('.')[0])}.${filename.split('.').pop()}` : filename);
-            logSuccess(`Restored: ${displayName} (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
+            // A successful Restore may intentionally publish the recovered file
+            // under its authenticated name, but that plaintext name must not be
+            // duplicated into the long-lived operations log.
+            logSuccess(`Restored payload (${fileSize} bytes) - Encrypted on: ${encryptionTime}`, { elementId, isLiteMode });
         } else {
             logError('Hashes do NOT match. File integrity verification failed.', { elementId, isLiteMode, skipToast: true });
         }

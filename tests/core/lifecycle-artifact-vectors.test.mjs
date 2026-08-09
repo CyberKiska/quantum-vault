@@ -18,6 +18,7 @@ import {
   parseLifecycleBundleBytes,
   parseSourceEvidenceBytes,
   parseTransitionRecordBytes,
+  validateRuntimeSupportedCohortTuple,
 } from '../../src/core/crypto/lifecycle/artifacts.js';
 
 const schemaDir = path.resolve('docs/schema');
@@ -51,6 +52,75 @@ const artifactHandlers = {
     valueField: 'lifecycleBundle',
   },
 };
+
+test('current Shamir/RS profile enforces normative shard-count bounds', () => {
+  assert.deepEqual(
+    validateRuntimeSupportedCohortTuple({
+      n: 5,
+      k: 3,
+      parity: 2,
+      threshold: 4,
+      shareCount: 5,
+      codecId: 'QV-RS-ErasureCodes-v1',
+    }),
+    {
+      n: 5,
+      k: 3,
+      parity: 2,
+      threshold: 4,
+      shareCount: 5,
+      codecId: 'QV-RS-ErasureCodes-v1',
+      derivedThreshold: 4,
+      allowedFailures: 1,
+    },
+  );
+  assert.throws(
+    () => validateRuntimeSupportedCohortTuple({
+      n: 4,
+      k: 2,
+      parity: 2,
+      threshold: 3,
+      shareCount: 4,
+      codecId: 'QV-RS-ErasureCodes-v1',
+    }),
+    /n >= 5/,
+  );
+  assert.throws(
+    () => validateRuntimeSupportedCohortTuple({
+      n: 256,
+      k: 254,
+      parity: 2,
+      threshold: 255,
+      shareCount: 256,
+      codecId: 'QV-RS-ErasureCodes-v1',
+    }),
+    /n <= 255/,
+  );
+});
+
+test('lifecycle runtime binds every signature array to its declared family and target', async () => {
+  const fixture = JSON.parse(await readFile(
+    path.join(schemaDir, 'fixtures/qv-lifecycle-bundle-v1.valid.json'),
+    'utf8',
+  ));
+
+  const wrongFamily = structuredClone(fixture);
+  wrongFamily.attachments.archiveApprovalSignatures[0].signatureFamily = 'maintenance';
+  wrongFamily.attachments.archiveApprovalSignatures[0].targetType = 'transition-record';
+  await assert.rejects(
+    () => canonicalizeLifecycleBundle(wrongFamily),
+    /archiveApprovalSignatures entry has wrong signatureFamily/,
+  );
+
+  const wrongTarget = structuredClone(fixture);
+  wrongTarget.attachments.archiveApprovalSignatures[0].targetRef = `state:${'f'.repeat(128)}`;
+  wrongTarget.attachments.archiveApprovalSignatures[0].targetDigest.value = 'f'.repeat(128);
+  await assert.rejects(
+    () => canonicalizeLifecycleBundle(wrongTarget),
+    /archiveApprovalSignatures targetRef mismatch/,
+  );
+
+});
 
 async function loadFixtureIndex() {
   return JSON.parse(await readFile(fixturesIndexPath, 'utf8'));

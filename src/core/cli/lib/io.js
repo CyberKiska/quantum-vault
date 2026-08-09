@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { link, lstat, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { link, lstat, open, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { QV_CODE, makeQvError } from './exit.js';
 
@@ -45,22 +46,40 @@ export async function assertNoSymlinkPath(filePath) {
 
 export async function readBytesFromFile(filePath, options = {}) {
   const allowSymlink = options.allowSymlink ?? currentIoPolicy().allowSymlink === true;
+  const resolved = path.resolve(filePath);
+  let handle = null;
   if (!allowSymlink) {
-    await assertNoSymlinkPath(filePath);
-  } else {
-    await lstat(filePath);
+    await assertNoSymlinkPath(resolved);
   }
-  if (Number.isSafeInteger(options.maxBytes)) {
-    const stats = await stat(filePath);
-    if (stats.size > options.maxBytes) {
+
+  try {
+    const noFollow = Number.isInteger(constants.O_NOFOLLOW) ? constants.O_NOFOLLOW : 0;
+    handle = await open(resolved, constants.O_RDONLY | (allowSymlink ? 0 : noFollow));
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw makeQvError(`Input path is not a regular file: ${resolved}`, QV_CODE.USAGE);
+    }
+    if (!allowSymlink) {
+      // Narrow the path-swap window around descriptor acquisition. Node does not
+      // expose portable openat(2), so parent-directory race resistance remains
+      // best effort and is documented as such.
+      await assertNoSymlinkPath(resolved);
+    }
+    if (Number.isSafeInteger(options.maxBytes) && stats.size > options.maxBytes) {
       const label = options.label || 'Input file';
       throw makeQvError(
-        `${label} exceeds CLI read limit (${stats.size} > ${options.maxBytes} bytes): ${filePath}`,
+        `${label} exceeds CLI read limit (${stats.size} > ${options.maxBytes} bytes): ${resolved}`,
         QV_CODE.FORMAT_POLICY_REJECT,
       );
     }
+    const buffer = await handle.readFile();
+    // Preserve Uint8Array slice/copy semantics used by parsers without copying
+    // the file buffer. Buffer.prototype.slice() would alias security-sensitive
+    // parser fields and let cleanup unexpectedly corrupt sibling state.
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  } finally {
+    await handle?.close();
   }
-  return new Uint8Array(await readFile(filePath));
 }
 
 export const readBytes = readBytesFromFile;
@@ -84,13 +103,53 @@ function bytesToBuffer(bytes) {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
-async function pathExists(filePath) {
+async function lstatIfExists(filePath) {
   try {
-    await stat(filePath);
-    return true;
+    return await lstat(filePath);
   } catch (error) {
-    if (error?.code === 'ENOENT') return false;
+    if (error?.code === 'ENOENT') return null;
     throw error;
+  }
+}
+
+async function preflightOutputDestination(destination, force) {
+  const stats = await lstatIfExists(destination);
+  if (!stats) return;
+  if (stats.isSymbolicLink()) {
+    throw makeQvError(
+      `Refusing to replace symbolic-link output destination: ${destination}`,
+      QV_CODE.USAGE,
+    );
+  }
+  if (!stats.isFile()) {
+    throw makeQvError(
+      `Refusing to replace non-file output destination: ${destination}`,
+      QV_CODE.USAGE,
+    );
+  }
+  if (!force) {
+    throw makeQvError(`Refusing to overwrite existing file: ${destination}`, QV_CODE.USAGE);
+  }
+}
+
+function assertIndependentOutputPaths(destinations) {
+  const destinationSet = new Set(destinations);
+  if (destinationSet.size !== destinations.length) {
+    throw makeQvError('Artifact output paths must be distinct', QV_CODE.USAGE);
+  }
+  for (const destination of destinations) {
+    let ancestor = path.dirname(destination);
+    while (true) {
+      if (destinationSet.has(ancestor)) {
+        throw makeQvError(
+          'Artifact output paths must not be ancestors or descendants of one another',
+          QV_CODE.USAGE,
+        );
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
   }
 }
 
@@ -132,15 +191,13 @@ export async function writeBytesAtomic(filePath, bytes, {
   force = false,
 } = {}) {
   const destination = path.resolve(filePath);
-  const tempPath = `${destination}.tmp`;
+  const tempPath = uniqueTempPath(destination);
   const parentDir = path.dirname(destination);
   const buffer = bytesToBuffer(bytes);
   let handle = null;
   let createdTemp = false;
 
-  if (!force && await pathExists(destination)) {
-    throw new Error(`Refusing to overwrite existing file: ${destination}`);
-  }
+  await preflightOutputDestination(destination, force);
 
   try {
     handle = await open(tempPath, 'wx', mode);
@@ -151,13 +208,18 @@ export async function writeBytesAtomic(filePath, bytes, {
     handle = null;
 
     if (force) {
+      // The destination may have changed while the private temp file was being
+      // written. Re-check immediately before publication; rename replaces a
+      // path entry without following it, but callers still require symlink and
+      // non-file destinations to fail closed.
+      await preflightOutputDestination(destination, true);
       await rename(tempPath, destination);
     } else {
       try {
         await link(tempPath, destination);
       } catch (error) {
         if (error?.code === 'EEXIST') {
-          throw new Error(`Refusing to overwrite existing file: ${destination}`);
+          throw makeQvError(`Refusing to overwrite existing file: ${destination}`, QV_CODE.USAGE);
         }
         throw error;
       }
@@ -209,17 +271,9 @@ export async function writeArtifactSetAtomic(entries, { force = false } = {}) {
     bytes: entry.bytes,
     mode: entry.mode ?? 0o600,
   }));
-  const destinationSet = new Set(normalized.map((entry) => entry.path));
-  if (destinationSet.size !== normalized.length) {
-    throw makeQvError('Artifact output paths must be distinct', QV_CODE.USAGE);
-  }
-
-  if (!force) {
-    for (const entry of normalized) {
-      if (await pathExists(entry.path)) {
-        throw makeQvError(`Refusing to overwrite existing file: ${entry.path}`, QV_CODE.USAGE);
-      }
-    }
+  assertIndependentOutputPaths(normalized.map((entry) => entry.path));
+  for (const entry of normalized) {
+    await preflightOutputDestination(entry.path, force);
   }
 
   const staged = [];
@@ -234,7 +288,9 @@ export async function writeArtifactSetAtomic(entries, { force = false } = {}) {
 
     if (force) {
       for (const entry of staged) {
-        if (await pathExists(entry.path)) {
+        const destinationStats = await lstatIfExists(entry.path);
+        if (destinationStats) {
+          await preflightOutputDestination(entry.path, true);
           const backupPath = uniqueBackupPath(entry.path);
           await rename(entry.path, backupPath);
           backups.push({ path: entry.path, backupPath });

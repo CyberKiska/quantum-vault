@@ -9,7 +9,10 @@ import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import { base64ToBytes, bytesEqual, toHex } from '../bytes.js';
 import { packPqpk, verifyQsigAgainstBytes } from '../auth/qsig.js';
 import { getSignatureSuiteInfo, normalizeSignatureSuite } from '../auth/signature-suites.js';
-import { verifyStellarSigAgainstBytes } from '../auth/stellar-sig.js';
+import {
+  decodeStellarEd25519PublicKey,
+  verifyStellarSigAgainstBytes,
+} from '../auth/stellar-sig.js';
 import {
   normalizeAuthPolicy,
   computeAuthPolicyCommitment,
@@ -136,8 +139,6 @@ const LIFECYCLE_SIGNATURE_FAMILY_BY_NAME = new Map(
 const LIFECYCLE_SIGNATURE_FAMILY_BY_FIELD = new Map(
   LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS.map((descriptor) => [descriptor.field, descriptor])
 );
-const STELLAR_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-const STRKEY_VERSION_ED25519_PUBLIC = 6 << 3;
 
 function assertCanonicalBytes(bytes, canonicalBytes, field, canonicalizationLabel) {
   if (!(bytes instanceof Uint8Array)) {
@@ -307,62 +308,13 @@ function normalizeSourceEvidenceDescriptiveFieldOptIn(value) {
   return optIn;
 }
 
-function crc16Xmodem(bytes) {
-  let crc = 0x0000;
-  for (let i = 0; i < bytes.length; i += 1) {
-    crc ^= bytes[i] << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      if ((crc & 0x8000) !== 0) crc = ((crc << 1) ^ 0x1021) & 0xffff;
-      else crc = (crc << 1) & 0xffff;
-    }
-  }
-  return crc;
-}
-
-function base32Decode(text) {
-  const clean = String(text || '').trim().replace(/=+$/g, '');
-  if (!clean) {
-    throw new Error('Invalid bundled public key');
-  }
-  let bits = 0;
-  let value = 0;
-  const out = [];
-  for (let i = 0; i < clean.length; i += 1) {
-    const index = STELLAR_BASE32_ALPHABET.indexOf(clean[i]);
-    if (index < 0) {
-      throw new Error('Invalid bundled public key');
-    }
-    value = (value << 5) | index;
-    bits += 5;
-    if (bits >= 8) {
-      out.push((value >>> (bits - 8)) & 0xff);
-      bits -= 8;
-    }
-  }
-  return Uint8Array.from(out);
-}
-
 function decodeStellarAddress(value) {
-  const text = String(value || '').trim();
-  if (text.length !== 56 || !text.startsWith('G') || !/^[A-Z2-7]+$/.test(text)) {
+  try {
+    return decodeStellarEd25519PublicKey(value);
+  } catch {
+    // Lifecycle parsing keeps its fixed non-reflective public-key error surface.
     throw new Error('Invalid bundled public key');
   }
-  const decoded = base32Decode(text);
-  if (decoded.length < 3) {
-    throw new Error('Invalid bundled public key');
-  }
-  const payload = decoded.subarray(0, decoded.length - 2);
-  const checksumBytes = decoded.subarray(decoded.length - 2);
-  const expectedCrc = crc16Xmodem(payload);
-  const actualCrc = checksumBytes[0] | (checksumBytes[1] << 8);
-  if (expectedCrc !== actualCrc || payload[0] !== STRKEY_VERSION_ED25519_PUBLIC) {
-    throw new Error('Invalid bundled public key');
-  }
-  const raw = payload.subarray(1);
-  if (raw.length !== 32) {
-    throw new Error('Invalid bundled public key');
-  }
-  return raw;
 }
 
 function decodeBundledPublicKey(publicKey, field) {
@@ -542,8 +494,8 @@ export function validateRuntimeSupportedCohortTuple(tuple, field = 'cohort param
   const shareCount = Number(tuple?.shareCount);
   const codecId = String(tuple?.codecId || '');
 
-  if (!Number.isInteger(n) || n < 2 || !Number.isInteger(k) || k < 2 || k >= n) {
-    throw new Error(`Invalid ${normalizedField}: require 2 <= k < n`);
+  if (!Number.isInteger(n) || n < 5 || n > 255 || !Number.isInteger(k) || k < 2 || k >= n) {
+    throw new Error(`Invalid ${normalizedField}: require 2 <= k < n <= 255 and n >= 5`);
   }
   if (!Number.isInteger(shareCount) || shareCount < 2 || shareCount !== n) {
     throw new Error(`Unsupported ${normalizedField}: shareCount must equal n`);
@@ -1298,9 +1250,9 @@ async function assertDeclaredPublicKeyRefCompatibility(signature, bundle, target
       messageBytes: targetBytes,
       qsigBytes: signatureBytes,
       bundlePqPublicKeyFileBytes: verificationMaterial.bundlePqPublicKeyFileBytes,
-      authoritativeBundlePqPublicKey: true,
+      requireBundledPqKeyMatch: true,
     });
-    if (!verification.ok || verification.bundlePinned !== true) {
+    if (!verification.ok || verification.bundledKeyVerified !== true) {
       throw new Error(`${field} publicKeyRef did not verify detached signature`);
     }
     return { publicKey, verification, signatureBytes };
@@ -1312,7 +1264,7 @@ async function assertDeclaredPublicKeyRefCompatibility(signature, bundle, target
     bundleSigner: verificationMaterial.bundleSigner,
     expectedSigner: expectedEd25519Signer,
   });
-  if (!verification.ok || verification.bundlePinned !== true) {
+  if (!verification.ok || verification.bundledKeyVerified !== true) {
     throw new Error(`${field} publicKeyRef did not verify detached signature`);
   }
   return { publicKey, verification, signatureBytes };
@@ -1427,7 +1379,15 @@ async function validateLifecycleBundleSemantics(bundle) {
   assertUniqueIds(bundle.attachments.timestamps, 'timestamp');
   const allSignatureEntries = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(allSignatureEntries, 'detached signature');
-  buildLifecycleTargetRegistry(bundle);
+  const targetRegistry = buildLifecycleTargetRegistry(bundle);
+  for (const descriptor of LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS) {
+    for (const signature of bundle.attachments[descriptor.field]) {
+      validateLifecycleSignatureTargetEntry(signature, targetRegistry, {
+        expectedFamily: descriptor.family,
+        expectedField: descriptor.field,
+      });
+    }
+  }
   return { lifecycleBundle: bundle };
 }
 

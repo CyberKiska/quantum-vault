@@ -2,6 +2,7 @@ import { classifyArtifactBytes } from '../core/crypto/artifact-classification.js
 import { bytesEqual } from '../core/crypto/bytes.js';
 import {
   canonicalizeArchiveStateDescriptor,
+  deriveCohortId,
   parseArchiveStateDescriptorBytes,
   parseLifecycleBundleBytes,
   parseSourceEvidenceBytes,
@@ -83,6 +84,12 @@ export async function parseLifecycleBundleArchiveStateViewBytes(bytes) {
   const parsed = await parseLifecycleBundleViewBytes(bytes);
   const archiveState = canonicalizeArchiveStateDescriptor(parsed.lifecycleBundle.archiveState);
   const digestHex = archiveState.digest?.value || '';
+  const cohortBindingDigest = parsed.lifecycleBundle.currentCohortBindingDigest;
+  const cohortId = deriveCohortId({
+    archiveId: archiveState.archiveState.archiveId,
+    stateId: digestHex,
+    cohortBindingDigest,
+  });
   return {
     lifecycleBundle: parsed.lifecycleBundle,
     lifecycleBundleDigest: parsed.digest,
@@ -91,6 +98,9 @@ export async function parseLifecycleBundleArchiveStateViewBytes(bytes) {
     stateId: archiveState.stateId,
     digest: archiveState.digest,
     digestHex,
+    cohortBindingDigest,
+    cohortBindingDigestHex: cohortBindingDigest.value,
+    cohortId,
     canonicalBytes: archiveState.bytes,
   };
 }
