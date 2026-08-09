@@ -391,7 +391,7 @@ function rewriteSuccessorPrivateKeyHash(parsedShards, privateKeyHash) {
 
 function assertZeroizedRecoveredKeyValidationMaterial(refs, label) {
   const entries = Object.entries(refs || {});
-  assert(entries.length === 4, `${label} should expose all temporary validation buffers`);
+  assert(entries.length === 3, `${label} should expose all caller-owned temporary validation buffers`);
   for (const [field, value] of entries) {
     assert(value instanceof Uint8Array, `${label} missing ${field} buffer`);
     assert(value.every((byte) => byte === 0), `${label} did not zeroize ${field}`);

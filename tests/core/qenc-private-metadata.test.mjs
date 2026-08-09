@@ -51,7 +51,6 @@ async function buildAuthenticatedPrivateMetadataContainer({
 }) {
   const encodedPrivateMetadata = privateMetadataBytes || encoder.encode(JSON.stringify(privateMetadata));
   let sharedSecret = null;
-  let Kraw = null;
   let Kenc = null;
   let Kiv = null;
   let metaBytes = null;
@@ -92,7 +91,6 @@ async function buildAuthenticatedPrivateMetadataContainer({
       metaBytes,
       metadata.domainStrings,
     );
-    Kraw = derived.Kraw;
     Kenc = derived.Kenc;
     Kiv = derived.Kiv;
     keyCommitment = computeKeyCommitment(Kenc);
@@ -109,14 +107,13 @@ async function buildAuthenticatedPrivateMetadataContainer({
     if (payload instanceof Uint8Array) payload.fill(0);
     if (metaBytes instanceof Uint8Array) metaBytes.fill(0);
     if (keyCommitment instanceof Uint8Array) keyCommitment.fill(0);
-    clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+    clearKeys(sharedSecret, Kenc, Kiv);
   }
 }
 
 async function inspectWriterPrivateMetadataText(containerBytes, privateKey) {
   const parsed = parseQencHeader(containerBytes);
   let sharedSecret = null;
-  let Kraw = null;
   let Kenc = null;
   let Kiv = null;
   let payload = null;
@@ -128,7 +125,6 @@ async function inspectWriterPrivateMetadataText(containerBytes, privateKey) {
       parsed.metaBytes,
       parsed.metadata.domainStrings,
     );
-    Kraw = derived.Kraw;
     Kenc = derived.Kenc;
     Kiv = derived.Kiv;
     assert.equal(verifyKeyCommitment(Kenc, parsed.storedKeyCommitment), true);
@@ -147,7 +143,7 @@ async function inspectWriterPrivateMetadataText(containerBytes, privateKey) {
     return decoder.decode(payload.subarray(4, 4 + privateMetadataLength));
   } finally {
     if (payload instanceof Uint8Array) payload.fill(0);
-    clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+    clearKeys(sharedSecret, Kenc, Kiv);
   }
 }
 

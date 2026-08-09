@@ -176,13 +176,12 @@ async function validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privK
   const failureMessage = messages.recoveredPrivateKeyCommitmentFailure
     || 'Recovered ML-KEM secret key does not satisfy the embedded .qenc key commitment.';
   let sharedSecret = null;
-  let Kraw = null;
   let Kenc = null;
   let Kiv = null;
 
   try {
     sharedSecret = await decapsulate(base.encapsulatedKey, privKey);
-    ({ Kraw, Kenc, Kiv } = await deriveKeyWithKmac(
+    ({ Kenc, Kiv } = await deriveKeyWithKmac(
       sharedSecret,
       base.salt,
       base.qencMetaBytes,
@@ -200,9 +199,9 @@ async function validateRecoveredMlKemPrivateKeyAgainstQencCommitment(base, privK
     }
     throw new Error(`${failureMessage} ${detail}`.trim());
   } finally {
-    clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+    clearKeys(sharedSecret, Kenc, Kiv);
     if (typeof keyValidationHooks?.onFinally === 'function') {
-      keyValidationHooks.onFinally({ sharedSecret, Kraw, Kenc, Kiv });
+      keyValidationHooks.onFinally({ sharedSecret, Kenc, Kiv });
     }
   }
 }

@@ -593,12 +593,11 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
   }
 
   let trialSharedSecret = null;
-  let trialKraw = null;
   let trialKenc = null;
   let trialKiv = null;
   try {
     trialSharedSecret = await decapsulate(encapsulatedKey, privKeyBytes);
-    ({ Kraw: trialKraw, Kenc: trialKenc, Kiv: trialKiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
+    ({ Kenc: trialKenc, Kiv: trialKiv } = await deriveKeyWithKmac(trialSharedSecret, kdfSalt, metaBytes, ds, {
       includeAesKey: false,
     }));
     const keyMatch = verifyKeyCommitment(trialKenc, keyCommitment);
@@ -612,7 +611,7 @@ export async function buildLifecycleQcontShards(qencBytes, privKeyBytes, params,
     if (String(error?.message || error).includes('does not match')) throw error;
     throw new Error(`Key verification failed: ${error?.message || error}`);
   } finally {
-    clearKeys(trialSharedSecret, trialKraw, trialKenc, trialKiv);
+    clearKeys(trialSharedSecret, trialKenc, trialKiv);
   }
 
   const effectiveLength = meta.payloadLength || meta.originalLength;

@@ -180,7 +180,6 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
     assertBoundedPrivateMetadataString(normalizedOriginalFilename, 'originalFilename', { nullable: true });
 
     let sharedSecret = null;
-    let Kraw = null;
     let Kenc = null;
     let Kiv = null;
     let privateMetaBytes = null;
@@ -252,7 +251,6 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
 
         // Step 7: Derive encryption keys (SP 800-185 KMAC256)
         const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, domainStrings);
-        Kraw = derived.Kraw;
         Kenc = derived.Kenc;
         Kiv = derived.Kiv;
         const aesKey = derived.aesKey;
@@ -323,7 +321,7 @@ export async function encryptFile(fileBytes, publicKey, originalFilename) {
         if (payload instanceof Uint8Array) payload.fill(0);
         if (privateMetaBytes instanceof Uint8Array) privateMetaBytes.fill(0);
         if (metaBytes instanceof Uint8Array) metaBytes.fill(0);
-        clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+        clearKeys(sharedSecret, Kenc, Kiv);
     }
 }
 
@@ -360,7 +358,6 @@ export async function decryptFile(containerBytes, privateKey) {
     const profile = validateContainerPolicyMetadata(metadata, { allowLegacyWithoutProfile: false });
     
     let sharedSecret = null;
-    let Kraw = null;
     let Kenc = null;
     let Kiv = null;
     let decryptedPayload = null;
@@ -374,7 +371,6 @@ export async function decryptFile(containerBytes, privateKey) {
         // Step 3: Derive decryption keys (SP 800-185)
         const ds = metadata.domainStrings;
         const derived = await deriveKeyWithKmac(sharedSecret, kdfSalt, metaBytes, ds);
-        Kraw = derived.Kraw;
         Kenc = derived.Kenc;
         Kiv = derived.Kiv;
         const aesKey = derived.aesKey;
@@ -514,6 +510,6 @@ export async function decryptFile(containerBytes, privateKey) {
         }
         if (decryptedPayload instanceof Uint8Array) decryptedPayload.fill(0);
         if (fileBytesOut instanceof Uint8Array) fileBytesOut.fill(0);
-        clearKeys(sharedSecret, Kraw, Kenc, Kiv);
+        clearKeys(sharedSecret, Kenc, Kiv);
     }
 }
