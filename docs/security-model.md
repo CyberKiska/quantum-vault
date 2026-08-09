@@ -294,6 +294,12 @@ Current runtime invariants:
 - secret material MUST remain in runtime memory only and MUST NOT be stored in `localStorage`, `sessionStorage`, `IndexedDB`, or cookies
 - zeroization is best-effort but MUST still be attempted for secret buffers as soon as practical
 - session-level wiping on unload or `pagehide` remains part of the current security posture
+- Pro encryption and decryption MUST wipe application-owned plaintext, decrypted
+  plaintext, and imported ML-KEM key byte arrays in `finally` paths; browser-owned
+  `File`, `Blob`, and already-requested download storage remain outside that guarantee
+- supplemental browser entropy collection MUST cancel listeners and scheduled work
+  on session wipe, erase queued summaries and hash/KMAC intermediates, and reject any
+  completion whose session epoch is no longer current
 - each Lite archive creation MUST generate a fresh operation-local ML-KEM pair;
   failure, cancellation, a late key-generation result after cancellation,
   and session wipe MUST attempt to erase the owned arrays; attempted supersession

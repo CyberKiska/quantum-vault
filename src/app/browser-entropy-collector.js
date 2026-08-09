@@ -69,6 +69,12 @@ export class BrowserEntropyCollector {
         this.lastMouseX = 0;
         this.lastMouseY = 0;
         this.mouseInitialized = false;
+        this.collectionEpoch = 0;
+        this.collectionTimeout = null;
+        this.progressTimeout = null;
+        this.queueTimeout = null;
+        this.pendingCollection = null;
+        this.disposed = false;
     }
 
     async startCollection() {
@@ -78,37 +84,82 @@ export class BrowserEntropyCollector {
         if (this.isCollecting) {
             throw new Error('Entropy collection already in progress');
         }
+        if (this.disposed) {
+            throw new Error('Entropy collector has been disposed');
+        }
 
-        return new Promise((resolve) => {
+        const epoch = ++this.collectionEpoch;
+        return new Promise((resolve, reject) => {
             this.isCollecting = true;
             this.startTime = performance.now();
             this.lastEventTime = this.startTime;
             this.events = [];
             this.processingQueue = [];
+            this.eventCount = 0;
+            this.mouseInitialized = false;
+            this.pendingCollection = { epoch, resolve, reject };
 
             this.setupEventListeners();
 
-            const timeout = setTimeout(() => {
-                this.stopCollection();
-                resolve(this.generateFinalSeed());
+            this.collectionTimeout = setTimeout(() => {
+                this.completeCollection(epoch);
             }, CONFIG.maxCollectionMs);
 
             const checkEntropy = () => {
+                if (!this.isCollectionActive(epoch)) return;
                 if (this.events.length >= CONFIG.minEvents) {
-                    clearTimeout(timeout);
-                    this.stopCollection();
-                    resolve(this.generateFinalSeed());
-                } else if (this.isCollecting) {
-                    setTimeout(checkEntropy, 100);
+                    this.completeCollection(epoch);
+                } else {
+                    this.progressTimeout = setTimeout(checkEntropy, 100);
                 }
             };
 
-            setTimeout(checkEntropy, 100);
+            this.progressTimeout = setTimeout(checkEntropy, 100);
         });
+    }
+
+    isCollectionActive(epoch) {
+        return this.isCollecting
+            && !this.disposed
+            && this.collectionEpoch === epoch
+            && this.pendingCollection?.epoch === epoch;
+    }
+
+    clearScheduledWork() {
+        for (const timer of [this.collectionTimeout, this.progressTimeout, this.queueTimeout]) {
+            if (timer !== null) clearTimeout(timer);
+        }
+        this.collectionTimeout = null;
+        this.progressTimeout = null;
+        this.queueTimeout = null;
+    }
+
+    completeCollection(epoch) {
+        if (!this.isCollectionActive(epoch)) return;
+        const pending = this.pendingCollection;
+        let finalSeed = null;
+        try {
+            this.clearScheduledWork();
+            this.processQueue(epoch);
+            this.stopCollection();
+            finalSeed = this.generateFinalSeed();
+            this.pendingCollection = null;
+            this.wipeSensitiveState();
+            pending.resolve(finalSeed);
+            finalSeed = null;
+        } catch (error) {
+            this.pendingCollection = null;
+            this.stopCollection();
+            this.wipeSensitiveState();
+            pending.reject(error);
+        } finally {
+            if (finalSeed instanceof Uint8Array) finalSeed.fill(0);
+        }
     }
 
     stopCollection() {
         this.isCollecting = false;
+        this.clearScheduledWork();
         this.removeEventListeners();
     }
 
@@ -226,90 +277,135 @@ export class BrowserEntropyCollector {
             }
         }
         this.processingQueue = [];
+        this.events = [];
+        this.eventCount = 0;
+        this.isProcessing = false;
     }
 
     dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
+        const pending = this.pendingCollection;
+        this.pendingCollection = null;
+        this.collectionEpoch += 1;
         this.stopCollection();
         this.wipeSensitiveState();
-    }
-
-    processEventAsync(summary) {
-        this.processingQueue.push(summary);
-        if (!this.isProcessing) {
-            this.isProcessing = true;
-            setTimeout(() => this.processQueue(), 0);
+        if (pending) {
+            const error = new Error('Entropy collection was cancelled');
+            error.name = 'AbortError';
+            pending.reject(error);
         }
     }
 
-    async processQueue() {
+    processEventAsync(summary) {
+        if (!this.isCollecting || this.disposed) {
+            summary.fill(0);
+            return;
+        }
+        this.processingQueue.push(summary);
+        if (!this.isProcessing) {
+            this.isProcessing = true;
+            const epoch = this.collectionEpoch;
+            this.queueTimeout = setTimeout(() => {
+                this.queueTimeout = null;
+                this.processQueue(epoch);
+            }, 0);
+        }
+    }
+
+    processQueue(epoch = this.collectionEpoch) {
+        if (!this.isCollectionActive(epoch)) {
+            for (const summary of this.processingQueue) summary.fill(0);
+            this.processingQueue = [];
+            this.isProcessing = false;
+            return;
+        }
         while (this.processingQueue.length > 0) {
             const summary = this.processingQueue.shift();
-            await this.processEventSummary(summary);
-            if (this.processingQueue.length > 0) {
-                await new Promise((resolve) => setTimeout(resolve, 0));
-            }
+            this.processEventSummary(summary, epoch);
         }
         this.isProcessing = false;
     }
 
-    async processEventSummary(summary) {
-        this.eventCount++;
+    processEventSummary(summary, epoch = this.collectionEpoch) {
+        let periodicRandom = null;
+        let periodicInput = null;
+        let eventRandom = null;
+        let eventInput = null;
+        let digest = null;
+        let stateInput = null;
+        let nextState = null;
+        try {
+            if (!this.isCollectionActive(epoch)) return;
+            this.eventCount += 1;
 
-        if (this.eventCount % CONFIG.mixOsEveryNEvents === 0) {
-            const osRandom = crypto.getRandomValues(new Uint8Array(32));
-            const combinedInput = new Uint8Array(this.entropyState.length + osRandom.length);
-            combinedInput.set(this.entropyState, 0);
-            combinedInput.set(osRandom, this.entropyState.length);
-            this.entropyState = sha3_512(combinedInput);
+            if (this.eventCount % CONFIG.mixOsEveryNEvents === 0) {
+                periodicRandom = crypto.getRandomValues(new Uint8Array(32));
+                periodicInput = new Uint8Array(this.entropyState.length + periodicRandom.length);
+                periodicInput.set(this.entropyState, 0);
+                periodicInput.set(periodicRandom, this.entropyState.length);
+                nextState = sha3_512(periodicInput);
+                this.entropyState.fill(0);
+                this.entropyState = nextState;
+                nextState = null;
+            }
+
+            eventRandom = crypto.getRandomValues(new Uint8Array(16));
+            eventInput = new Uint8Array(summary.length + eventRandom.length);
+            eventInput.set(summary, 0);
+            eventInput.set(eventRandom, summary.length);
+
+            digest = sha3_512(eventInput);
+            stateInput = new Uint8Array(this.entropyState.length + digest.length);
+            stateInput.set(this.entropyState, 0);
+            stateInput.set(digest, this.entropyState.length);
+            nextState = sha3_512(stateInput);
+            this.entropyState.fill(0);
+            this.entropyState = nextState;
+            nextState = null;
+        } finally {
+            for (const bytes of [summary, periodicRandom, periodicInput, eventRandom, eventInput, digest, stateInput, nextState]) {
+                if (bytes instanceof Uint8Array) bytes.fill(0);
+            }
         }
-
-        const osRandom = crypto.getRandomValues(new Uint8Array(16));
-        const combinedInput = new Uint8Array(summary.length + osRandom.length);
-        combinedInput.set(summary, 0);
-        combinedInput.set(osRandom, summary.length);
-
-        const digest = sha3_512(combinedInput);
-        const stateInput = new Uint8Array(this.entropyState.length + digest.length);
-        stateInput.set(this.entropyState, 0);
-        stateInput.set(digest, this.entropyState.length);
-        this.entropyState = sha3_512(stateInput);
-        summary.fill(0);
     }
 
     generateFinalSeed() {
-        if (this.processingQueue.length > 0) {
-            this.processingQueue.forEach((summary) => {
-                this.processEventSummary(summary);
+        let finalOsRandom = null;
+        let finalInput = null;
+        let mixedState = null;
+        let counter = null;
+        let firstBlock = null;
+        let secondBlock = null;
+        let finalSeed = null;
+        try {
+            finalOsRandom = crypto.getRandomValues(new Uint8Array(32));
+            finalInput = new Uint8Array(this.entropyState.length + finalOsRandom.length);
+            finalInput.set(this.entropyState, 0);
+            finalInput.set(finalOsRandom, this.entropyState.length);
+            mixedState = sha3_512(finalInput);
+
+            counter = new Uint8Array(4);
+            firstBlock = kmac256(mixedState, counter, {
+                customization: 'quantum-vault:final-seed:v2',
             });
-            this.processingQueue = [];
+
+            counter[0] = 1;
+            secondBlock = kmac256(mixedState, counter, {
+                customization: 'quantum-vault:final-seed:v2',
+            });
+
+            finalSeed = new Uint8Array(CONFIG.seedLength);
+            finalSeed.set(firstBlock, 0);
+            finalSeed.set(secondBlock, 32);
+            const result = finalSeed;
+            finalSeed = null;
+            return result;
+        } finally {
+            for (const bytes of [finalOsRandom, finalInput, mixedState, counter, firstBlock, secondBlock, finalSeed]) {
+                if (bytes instanceof Uint8Array) bytes.fill(0);
+            }
         }
-
-        const finalOsRandom = crypto.getRandomValues(new Uint8Array(32));
-        const finalInput = new Uint8Array(this.entropyState.length + finalOsRandom.length);
-        finalInput.set(this.entropyState, 0);
-        finalInput.set(finalOsRandom, this.entropyState.length);
-        this.entropyState = sha3_512(finalInput);
-
-        const counter = new Uint8Array(4);
-        counter[0] = 0;
-        const firstBlock = kmac256(this.entropyState, counter, {
-            customization: 'quantum-vault:final-seed:v2',
-        });
-
-        counter[0] = 1;
-        const secondBlock = kmac256(this.entropyState, counter, {
-            customization: 'quantum-vault:final-seed:v2',
-        });
-
-        const finalSeed = new Uint8Array(CONFIG.seedLength);
-        finalSeed.set(firstBlock, 0);
-        finalSeed.set(secondBlock, 32);
-
-        const stateUpdate = new Uint8Array(this.entropyState.length + finalSeed.length);
-        stateUpdate.set(this.entropyState, 0);
-        stateUpdate.set(finalSeed, this.entropyState.length);
-        this.entropyState = sha3_512(stateUpdate);
-        return finalSeed;
     }
 
     getProgress() {
