@@ -5,6 +5,7 @@ import {
   exportSourceEvidenceForSigning,
 } from '../../crypto/qcont/lifecycle-attach.js';
 import {
+  canonicalizeSourceEvidence,
   deriveCohortId,
   parseLifecycleBundleBytes,
   parseSourceEvidenceBytes,
@@ -271,7 +272,13 @@ async function readSourceEvidence(options) {
         throw usage(msg.replace(/^Invalid Source evidence JSON:/, '--source-evidence: invalid JSON —'));
       }
       if (/Source evidence is not .* canonical JSON$/.test(msg)) {
-        return { sourceEvidence: parseJsonBytesStrict(bytes) };
+        try {
+          return {
+            sourceEvidenceBytes: canonicalizeSourceEvidence(parseJsonBytesStrict(bytes)).bytes,
+          };
+        } catch (canonicalError) {
+          throw usage(`--source-evidence: ${canonicalError?.message || canonicalError}`);
+        }
       }
       throw error;
     }

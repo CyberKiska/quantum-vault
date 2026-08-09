@@ -6,7 +6,10 @@ import test from 'node:test';
 import { sha3_512 } from '@noble/hashes/sha3.js';
 import { toHex } from '../../src/core/crypto/bytes.js';
 import { exportSourceEvidenceForSigning } from '../../src/core/crypto/qcont/lifecycle-attach.js';
-import { parseLifecycleBundleBytes } from '../../src/core/crypto/lifecycle/artifacts.js';
+import {
+  canonicalizeSourceEvidence,
+  parseLifecycleBundleBytes,
+} from '../../src/core/crypto/lifecycle/artifacts.js';
 import { parseLifecycleShard } from '../../src/core/crypto/qcont/lifecycle-shard.js';
 import { buildOtsFixture, buildQsigFixture } from '../../src/core/crypto/selftest.js';
 import { runQvCli } from '../../src/core/cli/qv.js';
@@ -255,6 +258,57 @@ test('attach imports typed source-evidence signatures with explicit targets', as
   assert.equal(report.addedAttachments.sourceEvidence.length, 1);
   assert.equal(report.addedAttachments.sourceEvidenceSignatures.length, 1);
   assert.equal(report.addedAttachments.publicKeys.length, 1);
+});
+
+test('attach canonicalizes source evidence without dropping opted-in media type', async () => {
+  const baseDir = await makeTempDir();
+  const split = await makeSplitFixture(baseDir);
+  const sourceEvidence = {
+    schema: 'quantum-vault-source-evidence/v1',
+    version: 1,
+    sourceEvidenceType: 'source-evidence',
+    canonicalization: 'QV-JSON-RFC8785-v1',
+    relationType: 'reviewed-source',
+    sourceObjectType: 'archive-state-descriptor',
+    sourceDigests: [
+      { alg: 'SHA3-512', value: split.archiveStateDigestHex },
+    ],
+    mediaType: 'application/json',
+  };
+  const canonical = canonicalizeSourceEvidence(sourceEvidence);
+  const exported = exportSourceEvidenceForSigning({ sourceEvidenceBytes: canonical.bytes });
+  const qsig = buildQsigFixture(canonical.bytes);
+  const sourceEvidencePath = join(baseDir, 'source-evidence.pretty.json');
+  const qsigPath = join(baseDir, 'source-evidence-media.qsig');
+  const pqpkPath = join(baseDir, 'source-evidence-media.pqpk');
+  const outputPath = join(baseDir, 'source-media.lifecycle-bundle.json');
+  await writeFile(sourceEvidencePath, `${JSON.stringify(sourceEvidence, null, 2)}\n`);
+  await writeFile(qsigPath, qsig.qsigBytes);
+  await writeFile(pqpkPath, qsig.pqpkBytes);
+
+  const result = await runCli([
+    'attach',
+    '--bundle', split.lifecycleBundleBytesPath,
+    '--source-evidence', sourceEvidencePath,
+    '--sig-import', JSON.stringify({
+      file: qsigPath,
+      signatureFamily: 'source-evidence',
+      targetType: 'source-evidence',
+      targetRef: exported.targetRef,
+      targetDigest: exported.sourceEvidenceDigestHex,
+    }),
+    '--pqpk', pqpkPath,
+    '--out-bundle', outputPath,
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 0);
+  const parsed = await parseLifecycleBundleBytes(new Uint8Array(await readFile(outputPath)));
+  assert.equal(parsed.lifecycleBundle.sourceEvidence[0].mediaType, 'application/json');
+  assert.equal(
+    canonicalizeSourceEvidence(parsed.lifecycleBundle.sourceEvidence[0]).digest.value,
+    canonical.digest.value,
+  );
 });
 
 test('attach rejects malformed signature import descriptors as usage errors', async () => {

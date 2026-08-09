@@ -1427,7 +1427,15 @@ async function validateLifecycleBundleSemantics(bundle) {
   assertUniqueIds(bundle.attachments.timestamps, 'timestamp');
   const allSignatureEntries = listLifecycleSignatureEntries(bundle);
   assertUniqueIds(allSignatureEntries, 'detached signature');
-  buildLifecycleTargetRegistry(bundle);
+  const targetRegistry = buildLifecycleTargetRegistry(bundle);
+  for (const descriptor of LIFECYCLE_SIGNATURE_FAMILY_DESCRIPTORS) {
+    for (const signature of bundle.attachments[descriptor.field]) {
+      validateLifecycleSignatureTargetEntry(signature, targetRegistry, {
+        expectedFamily: descriptor.family,
+        expectedField: descriptor.field,
+      });
+    }
+  }
   return { lifecycleBundle: bundle };
 }
 

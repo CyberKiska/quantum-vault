@@ -98,6 +98,30 @@ test('current Shamir/RS profile enforces normative shard-count bounds', () => {
   );
 });
 
+test('lifecycle runtime binds every signature array to its declared family and target', async () => {
+  const fixture = JSON.parse(await readFile(
+    path.join(schemaDir, 'fixtures/qv-lifecycle-bundle-v1.valid.json'),
+    'utf8',
+  ));
+
+  const wrongFamily = structuredClone(fixture);
+  wrongFamily.attachments.archiveApprovalSignatures[0].signatureFamily = 'maintenance';
+  wrongFamily.attachments.archiveApprovalSignatures[0].targetType = 'transition-record';
+  await assert.rejects(
+    () => canonicalizeLifecycleBundle(wrongFamily),
+    /archiveApprovalSignatures entry has wrong signatureFamily/,
+  );
+
+  const wrongTarget = structuredClone(fixture);
+  wrongTarget.attachments.archiveApprovalSignatures[0].targetRef = `state:${'f'.repeat(128)}`;
+  wrongTarget.attachments.archiveApprovalSignatures[0].targetDigest.value = 'f'.repeat(128);
+  await assert.rejects(
+    () => canonicalizeLifecycleBundle(wrongTarget),
+    /archiveApprovalSignatures targetRef mismatch/,
+  );
+
+});
+
 async function loadFixtureIndex() {
   return JSON.parse(await readFile(fixturesIndexPath, 'utf8'));
 }
