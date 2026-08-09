@@ -585,6 +585,10 @@ Current residual risks include:
 - side-channel leakage inherent to JavaScript runtimes
 - user error in shard custody, backup discipline, or artifact preservation
 - dependency or delivery-path compromise before the app is loaded
+- the main module has an HTML SRI attribute, while on-demand same-origin ESM
+  chunks (including the self-test) are covered by `BUILD.manifest.json` rather
+  than a per-import browser SRI attribute; deployments must publish and verify
+  the complete build as one artifact set
 - future cryptographic weakening of current PQ or symmetric primitives
 - incomplete long-term time-proof and evidence-renewal architecture
 - future ambiguity in trust roots, governance, or migration authority

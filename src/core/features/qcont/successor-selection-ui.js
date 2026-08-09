@@ -5,7 +5,10 @@ import {
 } from '../../../app/artifact-intake-service.js';
 import { classifyRestoreInputFiles } from '../../../app/restore-inputs.js';
 import { readFileAsUint8Array } from '../../../utils.js';
-import { mergeLifecycleShardIntoCohortGroups } from '../../crypto/qcont/lifecycle-cohort-shared.js';
+import {
+  buildSuccessorSelectionModel,
+  collectLifecycleAttachmentCounts,
+} from '../../crypto/qcont/successor-selection-model.js';
 import { syncArchiveReviewHub } from '../ui/archive-review-hub.js';
 import {
   createDigestDetailEntry,
@@ -18,6 +21,8 @@ import { buildSuccessorSelectionUiMode } from './successor-selection-view-model.
 
 const successorSelectionState = new Map();
 const successorRefreshEpochs = new Map();
+
+export { buildSuccessorSelectionModel, collectLifecycleAttachmentCounts };
 
 function presentationBestEffort(action) {
   try { action(); } catch { /* State invalidation must survive mutable DOM faults. */ }
@@ -108,24 +113,6 @@ function uniqueStrings(values) {
 
 function describePolicyLevels(policyLevels = []) {
   return policyLevels.length > 0 ? policyLevels.join(', ') : 'unknown';
-}
-
-export function collectLifecycleAttachmentCounts(lifecycleBundles = []) {
-  const archiveApprovalIds = new Set();
-  const publicKeyIds = new Set();
-  for (const bundle of lifecycleBundles) {
-    const attachments = bundle?.attachments || {};
-    for (const signature of attachments.archiveApprovalSignatures || []) {
-      archiveApprovalIds.add(String(signature?.id || signature?.signature || archiveApprovalIds.size));
-    }
-    for (const publicKey of attachments.publicKeys || []) {
-      publicKeyIds.add(String(publicKey?.id || publicKey?.value || publicKeyIds.size));
-    }
-  }
-  return {
-    archiveApprovalSignatureCount: archiveApprovalIds.size,
-    publicKeyCount: publicKeyIds.size,
-  };
 }
 
 function syncArchiveInspectorForPrefix(prefix, files = []) {
@@ -414,69 +401,6 @@ export function resetSuccessorSelectionSession(prefix = 'restore', actionButton 
     syncArchiveReviewHub(prefix, successorSelectionState.get(prefix), { collapseWhenClear: true });
   });
   return successorSelectionState.get(prefix);
-}
-
-export function buildSuccessorSelectionModel(parsedShards = []) {
-  const byIdentity = new Map();
-  for (const shard of parsedShards) {
-    mergeLifecycleShardIntoCohortGroups(byIdentity, shard, {
-      groupLabel: 'restore candidate set',
-      missingIdentityMessage: 'Successor shard is missing archive/state/cohort identity',
-    });
-  }
-
-  const statesByKey = new Map();
-  for (const candidate of byIdentity.values()) {
-    const key = buildStateSelectionKey(candidate.archiveId, candidate.stateId);
-    if (!statesByKey.has(key)) {
-      statesByKey.set(key, {
-        key,
-        archiveId: candidate.archiveId,
-        stateId: candidate.stateId,
-        cohorts: [],
-      });
-    }
-    const firstShard = candidate.shards[0];
-    const sourceFileNames = uniqueStrings(candidate.shards.map((shard) => shard.sourceFileName));
-    const policyLevels = uniqueStrings(candidate.shards.map((shard) => shard.lifecycleBundle?.authPolicy?.level));
-    const attachmentCounts = collectLifecycleAttachmentCounts(candidate.shards.map((shard) => shard.lifecycleBundle));
-    const bundleSourceFileNamesByDigest = {};
-    for (const digestHex of candidate.embeddedLifecycleBundles.keys()) {
-      bundleSourceFileNamesByDigest[digestHex] = uniqueStrings(
-        candidate.shards
-          .filter((shard) => shard.lifecycleBundleDigestHex === digestHex)
-          .map((shard) => shard.sourceFileName)
-      );
-    }
-    statesByKey.get(key).cohorts.push({
-      archiveId: candidate.archiveId,
-      stateId: candidate.stateId,
-      cohortId: candidate.cohortId,
-      bundleDigests: [...candidate.embeddedLifecycleBundles.keys()].sort(),
-      bundleSourceFileNamesByDigest,
-      sourceFileNames,
-      policyLevels,
-      archiveApprovalSignatureCount: attachmentCounts.archiveApprovalSignatureCount,
-      publicKeyCount: attachmentCounts.publicKeyCount,
-      shardCount: candidate.shards.length,
-      n: Number(firstShard?.metaJSON?.n || 0),
-      t: Number(firstShard?.metaJSON?.t || 0),
-    });
-  }
-
-  const states = [...statesByKey.values()]
-    .map((state) => ({
-      ...state,
-      cohorts: state.cohorts.sort((a, b) => a.cohortId.localeCompare(b.cohortId)),
-    }))
-    .sort((a, b) => a.key.localeCompare(b.key));
-
-  return {
-    states,
-    hasAmbiguity: states.length > 1 || states.some((state) => (
-      state.cohorts.length > 1 || state.cohorts.some((cohort) => cohort.bundleDigests.length > 1)
-    )),
-  };
 }
 
 /** Resolve optional external selectors only after proving model membership. */

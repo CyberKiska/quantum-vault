@@ -395,6 +395,11 @@ npm run build
 npm run selftest
 ```
 
+Production builds split the optional cryptographic self-test into an on-demand
+ES module chunk. `BUILD.manifest.json` records every emitted entry, shared chunk,
+source map, and public asset; deployment must publish the complete `dist/` tree,
+not only `assets/main.js`.
+
 ### Deploy to GitHub Pages
 
 CI runs on pull requests targeting `main` and merge-queue `merge_group` checks.
