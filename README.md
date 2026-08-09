@@ -317,7 +317,7 @@ CLI security notes:
 
 - `qv restore` and `qv verify` fail closed on archive/state/cohort ambiguity, lifecycle-bundle ambiguity, target mismatch, and unsatisfied archive policy.
 - Secret inputs are explicit file/stdin/env-path sources; private key bytes are never printed.
-- Direct symlink input paths are rejected unless `--allow-symlink` is supplied.
+- Direct symlink input paths are rejected unless `--allow-symlink` is supplied before the command (for example, `qv --allow-symlink inspect ...`).
 - Node.js memory zeroization is best-effort only; operators remain responsible for swap, crash dumps, shell history, tracing, filesystem permissions, and local host compromise.
 
 Full command reference and browser-to-CLI migration notes are in [`docs/cli.md`](docs/cli.md).

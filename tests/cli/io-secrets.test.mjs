@@ -49,15 +49,13 @@ test('writeBytesAtomic refuses overwrite unless force is set', async () => {
   assert.deepEqual(new Uint8Array(await readFile(filePath)), Uint8Array.of(3));
 });
 
-test('writeBytesAtomic refuses to clobber a pre-existing temp file', async () => {
+test('writeBytesAtomic ignores and preserves a stale legacy temp file', async () => {
   const dir = await makeTempDir();
   const filePath = join(dir, 'artifact.bin');
   const tempPath = `${filePath}.tmp`;
   await writeFile(tempPath, Buffer.from([8, 8]));
-  await assert.rejects(
-    writeBytesAtomic(filePath, Uint8Array.of(1), { mode: 0o600 }),
-    { code: 'EEXIST' },
-  );
+  await writeBytesAtomic(filePath, Uint8Array.of(1), { mode: 0o600 });
+  assert.deepEqual(new Uint8Array(await readFile(filePath)), Uint8Array.of(1));
   assert.deepEqual(new Uint8Array(await readFile(tempPath)), Uint8Array.of(8, 8));
 });
 

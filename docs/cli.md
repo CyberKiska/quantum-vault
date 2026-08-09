@@ -28,16 +28,21 @@ The package also exposes `qv` via the `bin` field when installed as a package.
 
 Global flags:
 
+Global flags must precede the command (`qv --allow-symlink inspect ...`), except
+for `--help` / `-h`, which may follow the command. Command-specific `--json`
+remains accepted in the command argument list.
+
 - `--help` / `-h` prints top-level help, and `qv help <command>` prints the same text as `qv <command> --help`
 - `--no-color` is accepted and is the default; current CLI output is plain text
 - `--color` is accepted as an explicit opt-in only when stderr is a TTY; current CLI output remains plain
 - `--quiet` is accepted for forward compatibility with future stderr progress output
-- `--allow-symlink` permits explicit symlink input paths and symlinked path components; without it, symlink reads fail closed
+- `--allow-symlink` permits explicit symlink input paths and symlinked path components; without it, symlink reads fail closed. This security-sensitive flag is recognized only before the command so an option value cannot accidentally enable it.
 
 Filesystem notes:
 
 - File modes are requested modes. The operating system umask may make resulting files more restrictive.
 - Small detached and lifecycle artifacts (`.qsig`, `.pqpk`, `.ots`, lifecycle JSON, source-evidence, and key inputs) are capped at 32 MiB before parsing. `.qenc` and `.qcont` are not subject to that small-artifact cap.
+- Input reads acquire a file descriptor with final-component no-follow semantics when supported and recheck the path around acquisition. Parent-directory replacement races cannot be eliminated portably with Node's current filesystem API; avoid hostile shared directories for sensitive inputs.
 - Output destinations may be absent or existing regular files only. Directories,
   symbolic links (including broken links), and other non-files are rejected even
   with `--force`.
@@ -49,6 +54,7 @@ Filesystem notes:
 
 - Schema **v1** may add new object fields. It must not remove or rename fields, and must not change a field's type incompatibly (for example `string` → `number`, widening or narrowing arrays in ways that break parsers). Any incompatible change requires incrementing the schema version.
 - Error JSON from failed commands includes `command`, `ok: false`, `cliSchemaVersion`, `error`, and `qvCode` only (no success-only payload fields).
+- Filesystem failures that are not command-usage errors use `qvCode: "INPUT_IO_FAILED"` and exit status `1`; they are never reclassified by path or working-directory text.
 - Local QVPACK count/length/aggregate limit failures use
   `qvCode: "RESOURCE_LIMIT"` with the fixed, non-reflective message
   `QVPACK resource limit exceeded`. They retain exit status `4`, so automation

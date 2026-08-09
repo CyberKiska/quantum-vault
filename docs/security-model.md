@@ -555,7 +555,7 @@ Operator responsibilities:
 - keep small detached, lifecycle, source-evidence, and key artifacts below the CLI's 32 MiB pre-read cap; large `.qenc` and `.qcont` artifacts remain on the core in-memory path and are not covered by that small-artifact cap
 - leave `QV_ALLOW_DETERMINISTIC` unset outside reproducible test fixtures; deterministic split flags are non-secret fixture controls, but when used their values are still visible through normal command-line argument inspection
 - understand that `--json` output is safe for automation but may contain file paths, archive identifiers, state identifiers, digests, and policy status
-- avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied
+- avoid following symlinks by default; the CLI rejects direct symlink inputs unless `--allow-symlink` is supplied before the command
 - treat `--force` as permission to replace existing regular output files only;
   output symlinks, directories, and other non-files remain rejected, and a
   multi-artifact plan with duplicate or ancestor/descendant destinations is

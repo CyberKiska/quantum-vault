@@ -21,10 +21,10 @@ function createCaptureStream() {
   };
 }
 
-async function runJsonCommand(args) {
+async function runJsonCommand(args, options = {}) {
   const stdout = createCaptureStream();
   const stderr = createCaptureStream();
-  const exitCode = await runQvCli(args, { stdout, stderr });
+  const exitCode = await runQvCli(args, { stdout, stderr, ...options });
   const stdoutText = stdout.text();
   return {
     exitCode,
@@ -89,6 +89,13 @@ test('verify accepts --json before the archive-state path', async () => {
   assert.equal(result.json.ok, false);
   assert.equal(result.json.cliSchemaVersion, 1);
   assert.equal(result.json.policy.level, 'unresolved');
+});
+
+test('global --json is accepted before the command', async () => {
+  const result = await runJsonCommand(['--json', 'version']);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stderrText, '');
+  assert.equal(result.json.command, 'version');
 });
 
 test('canonicalize --json emits stable CLI envelope', async () => {
@@ -192,7 +199,7 @@ test('command help and global color/quiet flags are accepted without parser erro
     assert.equal(viaHelp.stdoutText, direct.stdoutText, command);
   }
 
-  const version = await runJsonCommand(['--no-color', '--quiet', 'version', '--color', '--json']);
+  const version = await runJsonCommand(['--no-color', '--quiet', '--color', 'version', '--json']);
   assert.equal(version.exitCode, 0);
   assert.equal(version.stderrText, '');
   assert.equal(version.json.command, 'version');
@@ -208,9 +215,43 @@ test('direct symlink inputs fail closed unless --allow-symlink is explicit', asy
   assert.equal(refused.json.qvCode, 'USAGE');
   assert.match(refused.json.error, /Refusing to read symlink/);
 
-  const allowed = await runJsonCommand(['inspect', linkPath, '--allow-symlink', '--json']);
+  const allowed = await runJsonCommand(['--allow-symlink', 'inspect', linkPath, '--json']);
   assert.equal(allowed.exitCode, 0);
   assert.equal(allowed.json.artifactType, 'archive-state-descriptor/v1');
+});
+
+test('a command option value cannot enable the global symlink policy', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'qv-cli-symlink-value-'));
+  const linkPath = join(dir, 'archive-state.link.json');
+  await symlink(join(process.cwd(), archiveStateFixture), linkPath);
+
+  const result = await runJsonCommand([
+    'verify',
+    linkPath,
+    '--bundle',
+    '--allow-symlink',
+    '--json',
+  ]);
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.json.qvCode, 'USAGE');
+  assert.match(result.json.error, /Refusing to read symlink/);
+});
+
+test('filesystem exit classification is independent of cwd text', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'qv-cli-exit-cwd-'));
+  const cwdA = join(root, 'aa');
+  const cwdRs = join(root, 'dirs');
+  await mkdir(cwdA);
+  await mkdir(cwdRs);
+
+  for (const cwd of [cwdA, cwdRs]) {
+    const result = await runJsonCommand(
+      ['restore', '--shards', 'missing.qcont', '--json'],
+      { cwd },
+    );
+    assert.equal(result.exitCode, 1, cwd);
+    assert.equal(result.json.qvCode, 'INPUT_IO_FAILED', cwd);
+  }
 });
 
 test('symlinked parent path components fail closed unless --allow-symlink is explicit', async () => {
@@ -228,7 +269,7 @@ test('symlinked parent path components fail closed unless --allow-symlink is exp
   assert.equal(refused.json.qvCode, 'USAGE');
   assert.match(refused.json.error, /Refusing to read symlink/);
 
-  const allowed = await runJsonCommand(['inspect', linkedArchivePath, '--allow-symlink', '--json']);
+  const allowed = await runJsonCommand(['--allow-symlink', 'inspect', linkedArchivePath, '--json']);
   assert.equal(allowed.exitCode, 0);
   assert.equal(allowed.json.artifactType, 'archive-state-descriptor/v1');
 });

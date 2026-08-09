@@ -110,6 +110,7 @@ const COMMAND_HELP = Object.freeze({
 function globalHelpText() {
   return [
     'Global flags:',
+    '  Global flags must precede the command, except --help / -h.',
     '  --json             Emit a single stable JSON document on stdout.',
     '  --no-color         Disable ANSI color. This is the default.',
     '  --color            Opt in to color only when stderr is a TTY. Current output remains plain.',
@@ -170,33 +171,40 @@ function parseGlobalFlags(rawArgs, stderr) {
   const args = [];
   const options = {
     help: false,
+    json: false,
     quiet: false,
     color: false,
     allowSymlink: false,
   };
 
+  let commandSeen = false;
   for (const arg of rawArgs) {
     if (arg === '--help' || arg === '-h') {
       options.help = true;
       continue;
     }
-    if (arg === '--quiet') {
+    if (!commandSeen && arg === '--json') {
+      options.json = true;
+      continue;
+    }
+    if (!commandSeen && arg === '--quiet') {
       options.quiet = true;
       continue;
     }
-    if (arg === '--no-color') {
+    if (!commandSeen && arg === '--no-color') {
       options.color = false;
       continue;
     }
-    if (arg === '--color') {
+    if (!commandSeen && arg === '--color') {
       options.color = stderr?.isTTY === true;
       continue;
     }
-    if (arg === '--allow-symlink') {
+    if (!commandSeen && arg === '--allow-symlink') {
       options.allowSymlink = true;
       continue;
     }
     args.push(arg);
+    commandSeen = true;
   }
   return { ...options, args };
 }
@@ -216,6 +224,9 @@ export async function runQvCli(argv, {
   const globalOptions = parseGlobalFlags([...argv], stderr);
   const args = [...globalOptions.args];
   const command = String(args.shift() || '').trim();
+  if (globalOptions.json && !args.includes('--json')) {
+    args.push('--json');
+  }
 
   if (!command) {
     writeText(stdout, `${helpText()}\n`);

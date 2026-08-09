@@ -794,7 +794,7 @@ The Node.js CLI is a non-browser adapter over the same successor lifecycle parse
 - `qv restore --dry-run` and write-mode `qv restore` MUST apply the same archiveId, stateId, cohortId, exact archive-state bytes, exact cohort-binding bytes, lifecycle-bundle selection, signature target, and authenticity-policy checks.
 - `qv restore` write mode MUST write no output when archive policy is not satisfied.
 - `qv reshare` MUST preserve exact archive-state bytes and stateId; same-state resharing is not archive re-approval.
-- Direct symlink input paths MUST be rejected unless the operator explicitly supplies `--allow-symlink`.
+- Direct symlink input paths MUST be rejected unless the operator explicitly supplies `--allow-symlink` before the command. Security-sensitive global flags MUST NOT be inferred from command option values.
 - CLI JSON errors MUST preserve a stable `qvCode` so automation can distinguish usage errors, quorum failures, ambiguity, policy failure, and restored-integrity failure without parsing prose.
 
 ## 10. Compatibility and version policy

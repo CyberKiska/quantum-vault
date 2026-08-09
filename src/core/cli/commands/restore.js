@@ -354,11 +354,12 @@ async function readRestoreVerification(options) {
 
 function classifyRestoreError(error) {
   if (typeof error?.qvCode === 'string') return error;
+  if (typeof error?.code === 'string') return error;
   const message = error?.message || String(error);
   if (error?.authenticity?.policy?.satisfied === false) {
     return policyNotSatisfied(message, error);
   }
-  if (/Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|RS|erasure|quorum/i.test(message)) {
+  if (/Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|\bRS\b|Reed-Solomon|erasure|quorum/i.test(message)) {
     return quorumRejected(message, error);
   }
   if (/multiple|fork|ambiguous|exactly one|Selected .* not present|bundle digest/i.test(message)) {

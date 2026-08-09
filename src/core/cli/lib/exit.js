@@ -24,6 +24,7 @@ export const QV_CODE = Object.freeze({
   AEAD_FAILED: 'AEAD_FAILED',
   QUORUM_UNREACHABLE: 'QUORUM_UNREACHABLE',
   SIGNATURE_IMPORT_FAILED: 'SIGNATURE_IMPORT_FAILED',
+  INPUT_IO_FAILED: 'INPUT_IO_FAILED',
   AMBIGUOUS_INPUTS: 'AMBIGUOUS_INPUTS',
   RESHARE_CONTRACT_VIOLATION: 'RESHARE_CONTRACT_VIOLATION',
   RESTORED_INTEGRITY_FAILED: 'RESTORED_INTEGRITY_FAILED',
@@ -41,6 +42,7 @@ const QV_CODE_TO_EXIT = Object.freeze({
   [QV_CODE.AEAD_FAILED]: EXIT.AEAD,
   [QV_CODE.QUORUM_UNREACHABLE]: EXIT.QUORUM,
   [QV_CODE.SIGNATURE_IMPORT_FAILED]: EXIT.SIGNATURE_IMPORT,
+  [QV_CODE.INPUT_IO_FAILED]: EXIT.ERROR,
   [QV_CODE.AMBIGUOUS_INPUTS]: EXIT.AMBIGUITY,
   [QV_CODE.RESHARE_CONTRACT_VIOLATION]: EXIT.RESHARE_CONTRACT,
   [QV_CODE.RESTORED_INTEGRITY_FAILED]: EXIT.RESTORED_INTEGRITY,
@@ -62,24 +64,7 @@ const ERROR_KIND_TO_QV_CODE = Object.freeze({
   'reshare-contract-violation': QV_CODE.RESHARE_CONTRACT_VIOLATION,
 });
 
-const CORE_ERROR_QV_CODE_RULES = Object.freeze([
-  {
-    pattern: /authenticity policy|policy is not satisfied|policy not satisfied|No archive authenticity policy/i,
-    qvCode: QV_CODE.POLICY_NOT_SATISFIED,
-  },
-  {
-    pattern: /Need at least|Not enough valid shards|Too many missing\/corrupted|Shamir|RS|erasure|quorum/i,
-    qvCode: QV_CODE.QUORUM_UNREACHABLE,
-  },
-  {
-    pattern: /multiple|fork|ambiguous|exactly one|Selected .* not present|bundle digest/i,
-    qvCode: QV_CODE.AMBIGUOUS_INPUTS,
-  },
-  {
-    pattern: /qkeyOk|qencOk|hash does not match|private key hash|key commitment/i,
-    qvCode: QV_CODE.RESTORED_INTEGRITY_FAILED,
-  },
-]);
+const INPUT_IO_ERROR_CODES = new Set(['EACCES', 'EIO', 'EISDIR', 'ENOENT', 'ENOTDIR', 'EPERM']);
 
 export function makeQvError(message, qvCode = QV_CODE.UNEXPECTED, options = {}) {
   const error = new Error(message, options);
@@ -98,11 +83,8 @@ export function getErrorQvCode(error) {
   if (error?.authenticity?.policy && error.authenticity.policy.satisfied === false) {
     return QV_CODE.POLICY_NOT_SATISFIED;
   }
-  const message = error?.message || String(error);
-  for (const rule of CORE_ERROR_QV_CODE_RULES) {
-    if (rule.pattern.test(message)) {
-      return rule.qvCode;
-    }
+  if (INPUT_IO_ERROR_CODES.has(error?.code)) {
+    return QV_CODE.INPUT_IO_FAILED;
   }
   return QV_CODE.UNEXPECTED;
 }

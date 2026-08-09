@@ -322,3 +322,18 @@ test('attach maps signature routing and verification failures to SIGNATURE_IMPOR
   assert.equal(error.ok, false);
   assert.equal(error.qvCode, 'SIGNATURE_IMPORT_FAILED');
 });
+
+test('attach preserves filesystem failures instead of reporting signature import failure', async () => {
+  const baseDir = await makeTempDir();
+  const result = await runCli([
+    'attach',
+    '--shards',
+    join(baseDir, 'missing-directory', '*.qcont'),
+    '--json',
+  ]);
+
+  assert.equal(result.exitCode, 1);
+  const error = JSON.parse(result.stdoutText);
+  assert.equal(error.command, 'attach');
+  assert.equal(error.qvCode, 'INPUT_IO_FAILED');
+});
