@@ -154,7 +154,23 @@
   ],
   "attachments": {
     "publicKeys": [],
-    "archiveApprovalSignatures": [],
+    "archiveApprovalSignatures": [
+      {
+        "id": "sig-unpinned-fixture",
+        "signatureFamily": "archive-approval",
+        "format": "qsig",
+        "suite": "mldsa-87",
+        "targetType": "archive-state",
+        "targetRef": "state:e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117",
+        "targetDigest": {
+          "alg": "SHA3-512",
+          "value": "e72be26038375f48a0de6a43f3d04f2c0988f0c6634b688e60772877066180dbc19a6054ae2220ba202f945aee24e79b99be40171b391f7d91bd904a355e5117"
+        },
+        "signatureEncoding": "base64",
+        "signature": "AA==",
+        "publicKeyRef": null
+      }
+    ],
     "maintenanceSignatures": [],
     "sourceEvidenceSignatures": [],
     "timestamps": []
