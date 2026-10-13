@@ -42,7 +42,7 @@
     "shamir-secret-sharing": "0.0.4"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.64.0",
     "esbuild": "0.28.1"
   }
 }
